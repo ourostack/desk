@@ -1081,6 +1081,11 @@ try {
       assert.equal(big.run(["fixture", ...fake, "--concurrency", "1"], { FAKE_MODE: "bigdiff" }).status, 0);
       assert.match(big.calls()[1].prompt, /Production-code diff against the baseline:\n[\s\S]*\[truncated\]/u);
 
+      const unlocked = runFixture(withRepo({ "src/code.js": "original\n" }));
+      const noInstall = unlocked.run(["fixture", ...fake, "--concurrency", "1"]);
+      assert.equal(noInstall.status, 0, noInstall.stderr);
+      assert.doesNotMatch(noInstall.stdout, /frozen dependencies/u, "a fixture with no lockfile installs nothing");
+
       const broken = runFixture(withRepo({ ...files, "package-lock.json": "not json" }));
       const failed = broken.run(["fixture", ...fake]);
       assert.equal(failed.status, 1);
