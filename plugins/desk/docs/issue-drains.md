@@ -42,14 +42,14 @@ An issue is news when something other than the drain changed it since the revisi
 
 ## Seeing a gap
 
-`status` (and the `status` lines `poll` prints) start with the Desk in use (`desk 3.2.123 (ourostack/desk@release 1a2b3c4d, the launcher's own copy)`; the JSON also has `desk.version` and `desk.release`) and then show, per drain, the last poll that read GitHub without an error and its lag (`last ok poll … (lag 2m)`), the last attempt, and how long the oldest waiting event has waited (`2 waiting (oldest 5h)`). A poll that keeps failing shows a growing lag and its last error; a wake that is made but never delivered shows a growing wait. Each recorded event carries `seenAt`, the time the poll first saw it, and `why`, the one change that made it news (`new issue`, `title or body edited`, `comment <id> by <login>`, `labeled <name>`, `unlabeled <name>`, `reopened`), so a wake nobody expected can be traced to a signal.
+`status` (and the `status` lines `poll` prints) start with the Desk in use (`desk <version> (ourostack/desk@release 1a2b3c4d, the launcher's own copy)`; the JSON also has `desk.version` and `desk.release`) and then show, per drain, the last poll that read GitHub without an error and its lag (`last ok poll … (lag 2m)`), the last attempt, and how long the oldest waiting event has waited (`2 waiting (oldest 5h)`). A poll that keeps failing shows a growing lag and its last error; a wake that is made but never delivered shows a growing wait. Each recorded event carries `seenAt`, the time the poll first saw it, and `why`, the one change that made it news (`new issue`, `title or body edited`, `comment <id> by <login>`, `labeled <name>`, `unlabeled <name>`, `reopened`), so a wake nobody expected can be traced to a signal.
 
 ## Delivering a wake
 
 `poll` prints one JSON value:
 
 ```json
-{ "at": "…", "status": ["desk 3.2.123 (ourostack/desk@release 1a2b3c4d, the launcher's own copy)", "issue drain owner/name -> 58fbd57e: last ok poll 2026-11-13T23:43:29.106Z (lag 2m), polled just now, 7 open, 0 waiting, last wake 12m ago (1 issue)"],
+{ "at": "…", "status": ["desk <version> (ourostack/desk@release 1a2b3c4d, the launcher's own copy)", "issue drain owner/name -> 58fbd57e: last ok poll 2026-11-13T23:43:29.106Z (lag 2m), polled just now, 7 open, 0 waiting, last wake 12m ago (1 issue)"],
   "errors": [{ "repo": "owner/name", "error": "GitHub answered HTTP 502" }],
   "wakes": [{ "id": "…", "repo": "owner/name", "session": "…", "message": "New or changed issues in owner/name: #12 Title. Drain them.", "events": [], "done": ["node", ".../drains.js", "ack", "--repo", "owner/name", "--wake", "…"] }] }
 ```
