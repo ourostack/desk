@@ -74,7 +74,7 @@ jobs:
           echo "code=${code#run=}" >> "$GITHUB_OUTPUT"
 
   windows-suite:
-    name: Windows ${{ matrix.mode }} (shard ${{ matrix.shard }}/16)
+    name: Windows ${{ matrix.mode }} (shard ${{ matrix.shard }}/20)
     needs: scope
     if: needs.scope.outputs.code == 'true'
     runs-on: windows-latest
@@ -83,12 +83,12 @@ jobs:
     continue-on-error: ${{ matrix.mode == 'elevated' }}
     strategy:
       fail-fast: false
-      # All sixteen shards run at once.
-      max-parallel: 16
+      # All twenty shards run at once.
+      max-parallel: 20
       matrix:
         mode: ${{ fromJSON(inputs.elevated && '["elevated","standard"]' || '["standard"]') }}
-        # Sixteen shards, balanced by the measured per-file times in .github/scripts/suite-durations.json (about 76 minutes of test time in all, so under 5 minutes per shard, plus about a minute of setup per job; the longest single file, crew/workspace_adoption.test.js, takes about 3.5). Twelve shards took 10 minutes of wall time, and a pull request waits for this suite. Each shard runs its files one at a time: with three at once on the four-core runner, Git calls, sync and admission ran past their own time limits, and three of six runs failed (2026-10-26). A test in scripts/windows_suite_shards.test.js checks that this list, the shard arguments, the verdict and WINDOWS_SHARDS in suite-shards.mjs agree.
-        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
+        # Twenty shards, balanced by the measured per-file times in .github/scripts/suite-durations.json (about 90 minutes of test time in all, so about 4.5 minutes per shard, plus about a minute and a half of setup per job; the longest single file, crew/workspace_adoption.test.js, takes about 3.5). Twelve shards took 10 minutes of wall time and sixteen took 7.8, and a pull request waits for this suite. Each shard runs its files one at a time: with three at once on the four-core runner, Git calls, sync and admission ran past their own time limits, and three of six runs failed (2026-10-26). A test in scripts/windows_suite_shards.test.js checks that this list, the shard arguments, the verdict and WINDOWS_SHARDS in suite-shards.mjs agree.
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -131,7 +131,7 @@ jobs:
       - name: Run the suite (elevated)
         if: matrix.mode == 'elevated'
         shell: pwsh
-        run: node .github/scripts/run-suite-files.mjs --shard ${{ matrix.shard }}/16 --out results.json --probe-acl --only "$env:ONLY_FILES" --repeat "$env:REPEAT"
+        run: node .github/scripts/run-suite-files.mjs --shard ${{ matrix.shard }}/20 --out results.json --probe-acl --only "$env:ONLY_FILES" --repeat "$env:REPEAT"
         env:
           GIT_TERMINAL_PROMPT: "0"
           ONLY_FILES: ${{ inputs.only }}
@@ -141,7 +141,7 @@ jobs:
         if: matrix.mode == 'standard'
         shell: pwsh
         run: |
-          $command = 'node .github\scripts\run-suite-files.mjs --shard ${{ matrix.shard }}/16 --out results.json --probe-acl --only "' + $env:ONLY_FILES + '" --repeat ' + $env:REPEAT
+          $command = 'node .github\scripts\run-suite-files.mjs --shard ${{ matrix.shard }}/20 --out results.json --probe-acl --only "' + $env:ONLY_FILES + '" --repeat ' + $env:REPEAT
           ./.github/scripts/run-as-standard-user.ps1 -WorkDir "$PWD" -Command $command
         env:
           ONLY_FILES: ${{ inputs.only }}
@@ -151,7 +151,7 @@ jobs:
         if: always()
         shell: pwsh
         run: |
-          "### Windows ${{ matrix.mode }}, shard ${{ matrix.shard }}/16" | Add-Content $env:GITHUB_STEP_SUMMARY
+          "### Windows ${{ matrix.mode }}, shard ${{ matrix.shard }}/20" | Add-Content $env:GITHUB_STEP_SUMMARY
           if (Test-Path results-summary.md) { Get-Content results-summary.md | Add-Content $env:GITHUB_STEP_SUMMARY } else { "No result was written." | Add-Content $env:GITHUB_STEP_SUMMARY }
 
       - name: Keep the per-file results
@@ -229,7 +229,7 @@ jobs:
 
       - name: Fail unless every shard reported and every file passed
         if: needs.scope.outputs.code == 'true'
-        run: node .github/scripts/windows-suite-verdict.mjs shard-results 16 tests/desk/mcp/__tests__ "$ONLY_FILES"
+        run: node .github/scripts/windows-suite-verdict.mjs shard-results 20 tests/desk/mcp/__tests__ "$ONLY_FILES"
         env:
           ONLY_FILES: ${{ inputs.only }}
 

@@ -244,10 +244,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # The split size is strategy.job-total, so adding or removing a shard here is the only change needed. Ten shards (about 3 to 4
-        # minutes each, a minute of it setup): a pull request waits for the slowest shard, and its whole run, release included, has to
+        # The split size is strategy.job-total, so adding or removing a shard here is the only change needed. Twelve shards (about 3 to 3.5
+        # minutes each, a minute of it setup, balanced by tools/desk-build/config/coverage-shards.json): a pull request waits for the slowest shard, and its whole run, release included, has to
         # fit in 10 minutes. Six shards took 4.5 to 7 minutes (2026-11-13).
-        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
