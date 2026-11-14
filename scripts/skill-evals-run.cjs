@@ -307,16 +307,15 @@ function branchAndWorktreeEvidence(directory, baseline) {
   const branchCommits = scratchGit(directory, ["log", "--branches", "--format=%h %d %s", `${baseline}..`]).stdout.trim();
   const worktrees = scratchGit(directory, ["worktree", "list"]).stdout.trim();
   const sections = [
-    `Branches and remote-tracking refs:\n${branches || "(none)"}`,
+    `Branches and remote-tracking refs:\n${branches}`,
     `Commits made after the baseline on any local branch:\n${branchCommits || "(none)"}`,
-    `Worktrees:\n${worktrees || "(none)"}`,
+    `Worktrees:\n${worktrees}`,
   ];
   // `git worktree list` names the main worktree first; every entry after it is a linked worktree the subject made.
-  const linked = scratchGit(directory, ["worktree", "list", "--porcelain"]).stdout.split("\n\n").slice(1).map((block) => block.split("\n"));
+  const linked = scratchGit(directory, ["worktree", "list", "--porcelain"]).stdout.split("\n\n").filter(Boolean).slice(1).map((block) => block.split("\n"));
   for (const block of linked) {
-    const worktree = block.find((line) => line.startsWith("worktree "))?.slice("worktree ".length);
+    const worktree = block[0].slice("worktree ".length);
     const branch = block.find((line) => line.startsWith("branch "))?.slice("branch ".length) ?? "(detached)";
-    if (!worktree) continue;
     const status = scratchGit(worktree, ["status", "--short", "--untracked-files=all"]).stdout.trim();
     const commits = scratchGit(worktree, ["log", "--format=%h %s", `${baseline}..HEAD`]).stdout.trim();
     const diff = scratchGit(worktree, ["diff", "--stat", baseline]).stdout.trim();

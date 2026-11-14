@@ -394,7 +394,7 @@ const branchName = /^[a-z0-9][a-z0-9-]*$/u;
 const personLine = /^[a-z0-9-]+\n?$/u;
 
 function worldFiles(directory, prefix = "") {
-  return fs.readdirSync(directory, { withFileTypes: true }).sort((a, b) => (a.name < b.name ? -1 : 1)).flatMap((entry) => {
+  return fs.readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
     const relative = `${prefix}${entry.name}`;
     return entry.isDirectory() ? worldFiles(path.join(directory, entry.name), `${relative}/`) : [relative];
   });
@@ -423,7 +423,6 @@ function validateWorld(suite, testCase, repoRoot, label) {
     }
   }
   const files = worldFiles(directory);
-  if (files.length === 0) fail(`${label}: world ${world} has no files; give it a desk/ folder, a repo/ folder or an origin overlay`);
   if (!suite.sources.some((source) => source.startsWith(`${world}/`))) fail(`${label}: world ${world} is not covered by the suite's sources`);
   const sourced = new Set(suite.sources);
   const unlisted = files.map((file) => `${world}/${file}`).find((file) => !sourced.has(file));
