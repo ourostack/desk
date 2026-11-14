@@ -36,7 +36,6 @@
   "ci/factory_maintainer_login.test.js": 3.1,
   "ci/factory_reason_text.test.js": 0.5,
   "ci/file_identity_arithmetic.test.js": 0.3,
-  "ci/main_ci_gate.test.js": 0.2,
   "ci/quick_checks.test.js": 0.5,
   "ci/required_ci_gate.test.js": 0.3,
   "ci/revision_request_range.test.js": 1.2,

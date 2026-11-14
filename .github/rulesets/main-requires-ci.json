@@ -31,7 +31,8 @@
         "required_status_checks": [
           { "context": "CI gate", "integration_id": 15368 },
           { "context": "Validate skills", "integration_id": 15368 },
-          { "context": "Claude Code plugin load", "integration_id": 15368 }
+          { "context": "Claude Code plugin load", "integration_id": 15368 },
+          { "context": "Windows suite", "integration_id": 15368 }
         ]
       }
     }
