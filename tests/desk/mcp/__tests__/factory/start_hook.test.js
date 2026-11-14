@@ -8,6 +8,7 @@ import assert from "node:assert/strict"
 import { execFileSync, spawnSync } from "node:child_process"
 import { existsSync, promises as fs, readFileSync } from "node:fs"
 import * as path from "node:path"
+import { createRequire } from "node:module"
 import { fileURLToPath, pathToFileURL } from "node:url"
 
 import { factoryStateRoot, quarantine, readStatus, requestEvaluation, requestFinalize, setConsent, writeStatus } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
@@ -430,13 +431,15 @@ function runHook(host, env, desk) {
 
 // `checks` is the boot pre-checks line a speaking check adds ("\n\nDesk boot pre-checks: ..."). Both hosts add it to the startup
 // direction, which opens the context (Claude Code keeps only a 2 KB preview of a context past 10,000 characters, so the boot imperative leads).
+const { PLAIN_LANGUAGE_POINTER } = createRequire(import.meta.url)("../../../../../plugins/desk/hooks/lib/child-agent.cjs")
+
 function expectedContext(host, env, desk, checks = "") {
   const skill = readFileSync(path.join(PLUGIN, "skills", "using-desk", "SKILL.md"), "utf8")
   const rfc = path.join(PLUGIN, "docs", "agentic-engineering-v2-rfc.md")
   // Copilot's hook drops the foundation's frontmatter and adds the worker pointer, which Claude Code's agent setting makes unnecessary.
-  if (host === "copilot") return `${copilotStartupDirection({ env, sessionFolder: desk })}${checks}\n\nUnless started with \`--agent\` or the stand-down rule above applies (then skip this read too), act as Desk's worker: read ${path.join(PLUGIN, "agents", "worker.agent.md")} first.\n\n${skill.replace(/^---\n[\s\S]*?\n---\n\s*/u, "").trimEnd()}\n\nDesk RFC: ${rfc}`
+  if (host === "copilot") return `${copilotStartupDirection({ env, sessionFolder: desk })}${checks}\n\n${PLAIN_LANGUAGE_POINTER}\n\nUnless started with \`--agent\` or the stand-down rule above applies (then skip this read too), act as Desk's worker: read ${path.join(PLUGIN, "agents", "worker.agent.md")} first.\n\n${skill.replace(/^---\n[\s\S]*?\n---\n\s*/u, "").trimEnd()}\n\nDesk RFC: ${rfc}`
   // Bash command substitution drops the file's trailing newlines, as `trimEnd` does for the newline-only tail.
-  return `${claudeStartupDirection({ env })}${checks}\n\n${skill.replace(/\n+$/u, "")}\n\nDesk RFC: ${rfc}\n`
+  return `${claudeStartupDirection({ env })}${checks}\n\n${skill.replace(/\n+$/u, "")}\n\n${PLAIN_LANGUAGE_POINTER}\n\nDesk RFC: ${rfc}\n`
 }
 
 function envelope(host, context) {

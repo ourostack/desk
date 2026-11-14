@@ -220,6 +220,11 @@ async function startFactory() {
   }
 }
 
+// The pointer to the on-demand Plain Language skill, with its blank line; a copy of the hook without the library adds nothing.
+function plainLanguagePointer() {
+  try { return `${require("./lib/child-agent.cjs").PLAIN_LANGUAGE_POINTER}\n\n`; } catch { return ""; }
+}
+
 function emit(additionalContext) {
   // The host waits for this process to end, not for its output: once the output is written, nothing left running (a
   // check past its budget, a migration block being stopped) may hold it for long. Cancelled children get a moment to close
@@ -244,7 +249,7 @@ function emit(additionalContext) {
     const foundation = fs.readFileSync(foundationPath, "utf8").replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n\s*/u, "").trimEnd();
     const direction = await startupDirection();
     // The startup line leads, as in the Claude hook: a host that keeps only a preview of a long context still shows the boot imperative.
-    const output = `${direction}${memory ? `\n\n${memory}` : ""}\n\n${workerPointer}\n\n${foundation}\n\nDesk RFC: ${rfcPath}`;
+    const output = `${direction}${memory ? `\n\n${memory}` : ""}\n\n${plainLanguagePointer()}${workerPointer}\n\n${foundation}\n\nDesk RFC: ${rfcPath}`;
     // Factory delivery starts detached only once the output is built; it never delays or changes it.
     if (!optionalLinesTimedOut) await startFactory();
     emit(output);
