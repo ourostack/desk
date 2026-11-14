@@ -22,7 +22,7 @@ function parseCard(raw, filePath) {
     return matter(raw, {})
   } catch (error) {
     // Name the file and keep the parser's own reason, so the card can be repaired.
-    throw new Error(`${filePath}: the frontmatter is not valid YAML, so the card was left unchanged: ${error.message}`, { cause: error })
+    throw Object.assign(new Error(`${filePath}: Fix the card's frontmatter YAML: the frontmatter is not valid YAML, so the card was left unchanged: ${error.message}`, { cause: error }), { code: "fm_fix_the_card_s_frontmatter" })
   }
 }
 
@@ -62,7 +62,7 @@ export async function readMarkdown(filePath) {
     raw = await fs.readFile(filePath, "utf8")
   } catch (err) {
     if (err.code === "ENOENT") {
-      throw new Error(`file does not exist: ${filePath}`)
+      throw Object.assign(new Error(`file does not exist: ${filePath}`), { code: "fm_file_does_not_exist" })
     }
     throw err
   }
@@ -362,7 +362,7 @@ export async function pathExists(p) {
 /** Find the actual directory entry that is canonically case-equivalent to a path. */
 export async function findFilenameEquivalent(filePath, resolveCandidate) {
   if (typeof resolveCandidate !== "function") {
-    throw new Error("filename-equivalent lookup requires a confined candidate resolver")
+    throw Object.assign(new Error("Pass a confined candidate resolver: filename-equivalent lookup requires a confined candidate resolver"), { code: "fm_pass_a_confined_candidate_resolver" })
   }
   let names
   try {

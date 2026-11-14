@@ -91,7 +91,7 @@ async function nativeMemoryLine() {
     if (result.line) process.stderr.write(result.line + "\n");
     return "Desk memory: repair native memory now.";
   } catch {
-    process.stderr.write("Desk memory: native settings helper failed; use the supported memory:false setting before continuing.\n");
+    process.stderr.write("Desk memory: Use the supported memory:false setting before continuing: native settings helper failed; use the supported memory:false setting before continuing.\n");
     return "Desk memory: repair native memory now.";
   }
 }

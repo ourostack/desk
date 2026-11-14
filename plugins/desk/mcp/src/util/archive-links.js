@@ -83,7 +83,7 @@ function relinkDestination(link, { filePath, oldPath, sourcePrefix, destinationP
  * desk-relative path after the move. Returns `{ text, rewritten, unresolved }`; `text` is the input string when nothing changed.
  */
 export function rewriteForMove({ text, filePath, sourcePrefix, destinationPrefix }) {
-  if (typeof text !== "string") throw new TypeError("rewriteForMove requires the file's text")
+  if (typeof text !== "string") throw Object.assign(new TypeError("Pass the file's text to rewriteForMove: rewriteForMove requires the file's text"), { code: "archive_links_pass_the_file_s_text" })
   const oldPath = under(filePath, destinationPrefix)
     ? sourcePrefix + filePath.slice(destinationPrefix.length) : filePath
   const parsed = extractMarkdownLinks(text)

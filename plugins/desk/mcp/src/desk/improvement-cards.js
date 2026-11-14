@@ -217,7 +217,7 @@ export function cardFile(deskRoot, personPrefix, key) {
 
 function toDate(now) {
   const date = now === undefined ? new Date() : new Date(now)
-  if (Number.isNaN(date.getTime())) throw new TypeError("Pass `now` as a Date or a millisecond number")
+  if (Number.isNaN(date.getTime())) throw Object.assign(new TypeError("Pass `now` as a Date or a millisecond number"), { code: "improvement_cards_pass_now_as_a_date" })
   return date
 }
 

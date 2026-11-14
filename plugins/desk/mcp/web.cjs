@@ -763,7 +763,7 @@ function createController(options) {
       return { content: [{ type: "text", text: typeof value === "string" ? value : JSON.stringify(value) }], isError: false };
     }, function (error) {
       var safe = safeErrorData(error);
-      return { content: [{ type: "text", text: safe ? safe.message : "Desk's browser hit an unexpected problem: BROWSER_INTERNAL_FAILURE." }], isError: true };
+      return { content: [{ type: "text", text: safe ? safe.message : "Call the browser tool again: Desk's browser hit an unexpected problem: BROWSER_INTERNAL_FAILURE." }], isError: true };
     });
   }
   function context(input) {

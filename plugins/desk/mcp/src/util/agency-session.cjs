@@ -20,7 +20,7 @@ function agencySessionPluginParents(pluginRoot) {
       .sort((a, b) => Number(a.name.slice(5)) - Number(b.name.slice(5)))
       .map(entry => path.join(container, entry.name));
   } catch {
-    const error = new Error(`desk-mcp: Agency session composition cannot be read: ${container}. Desk does not fall back to another desk.`);
+    const error = Object.assign(new Error(`desk-mcp: Check that the Agency session composition can be read: Agency session composition cannot be read: ${container}. Desk does not fall back to another desk.`), { code: "agency_session.cjs_desk_mcp_check_that_the" });
     Object.assign(error, { code: "DESK_ROOT_UNAVAILABLE", path: container, source: "agency-session", problem: "cannot be read", tried: [] });
     throw error;
   }

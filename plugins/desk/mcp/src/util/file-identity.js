@@ -5,7 +5,7 @@ import { promises as fsp } from "node:fs"
 export const EXACT = Object.freeze({ bigint: true })
 
 function exact(stat) {
-  if (typeof stat.ino !== "bigint" || typeof stat.dev !== "bigint") throw new TypeError("file identity needs a stat read with { bigint: true }")
+  if (typeof stat.ino !== "bigint" || typeof stat.dev !== "bigint") throw Object.assign(new TypeError("file identity needs a stat read with { bigint: true }"), { code: "file_identity_file_identity_needs_a_stat" })
   return stat
 }
 
@@ -35,6 +35,6 @@ export async function lstatExactIfPresent(target, { label, subject }) {
     return await fsp.lstat(target, EXACT)
   } catch (error) {
     if (error.code === "ENOENT") return null
-    throw new Error(`${label}: private ${subject} path ${target} could not be inspected (${error.code})`)
+    throw Object.assign(new Error(`${label}: Check that the path can be read: private ${subject} path ${target} could not be inspected (${error.code})`), { code: "file_identity_check_that_the_path_can" })
   }
 }

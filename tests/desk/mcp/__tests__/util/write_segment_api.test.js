@@ -9,7 +9,7 @@ test("validateWriteSegment exports the existing pure segment-validation contract
   }
   for (const segment of [undefined, null, 42, {}, [], "", " \t ", ".", "..", "safe..name", "/absolute", "safe/child", "safe\\child"]) {
     assert.throws(() => paths.validateWriteSegment(segment), {
-      message: `desk-mcp: invalid write path segment ${JSON.stringify(segment)} — segments must be non-empty single path components with no ".." or separators.`,
+      message: `desk-mcp: Give non-empty single path segments with no .. or separators: invalid write path segment ${JSON.stringify(segment)} — segments must be non-empty single path components with no ".." or separators.`,
     })
   }
 })

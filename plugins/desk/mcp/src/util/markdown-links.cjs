@@ -87,8 +87,8 @@ function decodeDestination(raw) {
  * checker policy; consumers needing full Unicode folding supply their pure policy.
  */
 function extractMarkdownLinks(text, { foldLabel = value => value.toLowerCase() } = {}) {
-  if (typeof text !== "string") throw new TypeError("Markdown extraction requires a string");
-  if (typeof foldLabel !== "function") throw new TypeError("Markdown label folding requires a function");
+  if (typeof text !== "string") throw Object.assign(new TypeError("Pass a string to the Markdown extraction: Markdown extraction requires a string"), { code: "markdown_links.cjs_pass_a_string_to_the" });
+  if (typeof foldLabel !== "function") throw Object.assign(new TypeError("Pass a function for the label folding: Markdown label folding requires a function"), { code: "markdown_links.cjs_pass_a_function_for_the" });
   const normalizeReferenceLabel = label => foldLabel(label.trim().replace(/\s+/gu, " "));
   const hidden = new Uint8Array(text.length);
   const escaped = new Uint8Array(text.length);
@@ -109,7 +109,7 @@ function extractMarkdownLinks(text, { foldLabel = value => value.toLowerCase() }
   const inline = [];
   const inlineBlocks = [];
   let work = Math.max(256, text.length * 16);
-  const limit = Object.assign(new Error("Markdown extraction work budget exceeded"), { code: "parse_budget_exceeded" });
+  const limit = Object.assign(new Error("Use a smaller Markdown file: Markdown extraction work budget exceeded"), { code: "parse_budget_exceeded" });
   const tick = () => { if (--work < 0) throw limit; };
   const location = at => {
     let lo = 0, hi = lines.length;

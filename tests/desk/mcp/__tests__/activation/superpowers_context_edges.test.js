@@ -11,13 +11,13 @@ import { resolveSuperpowersContext } from "../../../../../plugins/desk/mcp/src/a
 const cli = fileURLToPath(new URL("../../../../../plugins/desk/mcp/src/activation/superpowers-context.js", import.meta.url))
 const input = { deskRoot: "/desk", taskPath: "/desk/task", iterationPath: "/desk/task/iteration", planPath: "/desk/task/iteration/planning.md", evidenceRoot: "/evidence", step: 1, attempt: 1 }
 for (const [args, expected] of [
-  [["--step"], "value required for --step"],
-  [["--step", "--attempt", "2"], "value required for --step"],
-  [["--progress-path"], "value required for --progress-path"],
-  [["--progress-path", "--plan-path", "/desk/plan.md"], "value required for --progress-path"],
-  [["--progress", "/desk/progress.md"], "unknown argument --progress"],
-  [["constructor", "2"], "unknown argument constructor"],
-  [["__proto__", "2"], "unknown argument __proto__"],
+  [["--step"], "Pass a value for the flag: value required for --step"],
+  [["--step", "--attempt", "2"], "Pass a value for the flag: value required for --step"],
+  [["--progress-path"], "Pass a value for the flag: value required for --progress-path"],
+  [["--progress-path", "--plan-path", "/desk/plan.md"], "Pass a value for the flag: value required for --progress-path"],
+  [["--progress", "/desk/progress.md"], "Remove the unknown argument: unknown argument --progress"],
+  [["constructor", "2"], "Remove the unknown argument: unknown argument constructor"],
+  [["__proto__", "2"], "Remove the unknown argument: unknown argument __proto__"],
 ]) {
   test(`context CLI refuses ${args.join(" ")} with its exact diagnostic`, () => {
     const result = spawnSync(process.execPath, [cli, ...args], { encoding: "utf8" })
@@ -27,23 +27,23 @@ for (const [args, expected] of [
   })
 }
 test("context rejects a whitespace-only evidence root", async () => {
-  await assert.rejects(resolveSuperpowersContext({ ...input, evidenceRoot: " 	 " }), { message: "Superpowers context: evidenceRoot must be a non-empty path when supplied" })
+  await assert.rejects(resolveSuperpowersContext({ ...input, evidenceRoot: " 	 " }), { message: "Superpowers context: Pass evidenceRoot as a non-empty path: evidenceRoot must be a non-empty path when supplied" })
 })
 for (const key of ["planPath", "progressPath"]) {
   test(`context rejects a supplied but empty ${key} without filesystem work`, async () => {
     await assert.rejects(resolveSuperpowersContext({ ...input, [key]: " \t " }), {
-      message: `Superpowers context: ${key} must be a non-empty path when supplied`,
+      message: `Superpowers context: Pass ${key} as a non-empty path: ${key} must be a non-empty path when supplied`,
     })
   })
   test(`context rejects a non-string ${key} without filesystem work`, async () => {
     await assert.rejects(resolveSuperpowersContext({ ...input, [key]: 7 }), {
-      message: `Superpowers context: ${key} must be a non-empty path when supplied`,
+      message: `Superpowers context: Pass ${key} as a non-empty path: ${key} must be a non-empty path when supplied`,
     })
   })
 }
 for (const key of ["step", "attempt"]) {
   test(`context rejects non-integer ${key} without filesystem work`, async () => {
-    await assert.rejects(resolveSuperpowersContext({ ...input, [key]: 1.5 }), { message: `Superpowers context: ${key} must be a positive integer` })
+    await assert.rejects(resolveSuperpowersContext({ ...input, [key]: 1.5 }), { message: `Superpowers context: Pass ${key} as a positive integer: ${key} must be a positive integer` })
   })
 }
 test("context preserves an unexpected canonical-file stat error", async (t) => {
@@ -59,7 +59,7 @@ test("context preserves an unexpected canonical-file stat error", async (t) => {
   t.mock.method(fs, "stat", async () => { throw failure })
   syncBuiltinESMExports()
   try {
-    await assert.rejects(resolveSuperpowersContext({ ...input, deskRoot: root, taskPath, iterationPath, planPath: path.join(iterationPath, "planning.md") }), { message: "desk-mcp: cannot read the desk root (EACCES)" })
+    await assert.rejects(resolveSuperpowersContext({ ...input, deskRoot: root, taskPath, iterationPath, planPath: path.join(iterationPath, "planning.md") }), { message: "desk-mcp: Check that the file can be read: cannot read the desk root (EACCES)" })
   } finally {
     t.mock.restoreAll()
     syncBuiltinESMExports()
@@ -69,7 +69,7 @@ test("context preserves an unexpected canonical-file stat error", async (t) => {
 test("a missing iterationPath says exactly what to pass, with an example under the task's folder, and creates nothing", async () => {
   const { iterationPath, ...rest } = input
   await assert.rejects(resolveSuperpowersContext(rest), (error) => {
-    assert.match(error.message, /^Superpowers context: iterationPath is required: pass --iteration-path <task folder>\/<repo>\/<YYYY-MM-DD>-<slug>, a folder under the task's own folder, for example .*\/<repo>\/2026-09-30-<slug>\. The mapper only reads and creates nothing, so do not mkdir it first$/u)
+    assert.match(error.message, /^Superpowers context: Pass iterationPath: iterationPath is required: pass --iteration-path <task folder>\/<repo>\/<YYYY-MM-DD>-<slug>, a folder under the task's own folder, for example .*\/<repo>\/2026-09-30-<slug>\. The mapper only reads and creates nothing, so do not mkdir it first$/u)
     assert.ok(error.message.includes(`${input.taskPath.replace(/\/+$/u, "")}/<repo>/`), "the example sits under the task folder that was passed")
     return true
   })

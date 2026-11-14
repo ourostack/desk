@@ -117,8 +117,8 @@ export function resolveDeskRootWithSource({
     const problem = explicitRootProblem(resolved)
     if (problem === null) return { root: resolved, source: "explicit-root", tried }
     throw codedError(
-      `desk-mcp: --root path ${problem}: ${resolved}. ` +
-        `Pass --root <path> pointing at an existing desk workspace. Desk does not fall back to another desk.`,
+      `desk-mcp: Pass --root <path> pointing at an existing desk workspace: --root path ${problem}: ${resolved}. ` +
+        `Desk does not fall back to another desk.`,
       DESK_ROOT_UNAVAILABLE,
       { path: resolved, source: "explicit-root", problem, tried },
     )
@@ -130,7 +130,7 @@ export function resolveDeskRootWithSource({
     const problem = explicitRootProblem(resolved)
     if (problem === null) return { root: resolved, source: "host-session-root", tried }
     throw codedError(
-      `desk-mcp: host/session root path ${problem}: ${resolved}. Desk does not fall back to another desk.`,
+      `desk-mcp: Start the session from an existing desk workspace: host/session root path ${problem}: ${resolved}. Desk does not fall back to another desk.`,
       DESK_ROOT_UNAVAILABLE,
       { path: resolved, source: "host-session-root", problem, tried },
     )
@@ -176,7 +176,7 @@ export function resolveDeskRootWithSource({
     const problem = explicitRootProblem(resolved)
     if (problem === null) return { root: resolved, source: "activation-config", tried }
     throw codedError(
-      `desk-mcp: the saved desk binding ${configPath} names ${resolved}, which ${problem}. ` +
+      `desk-mcp: Fix the saved desk binding to name an existing desk: the saved desk binding ${configPath} names ${resolved}, which ${problem}. ` +
         `Desk does not fall back to another desk.`,
       DESK_ROOT_UNAVAILABLE,
       { path: resolved, source: "activation-config", problem, activation_config: configPath, tried },
@@ -191,7 +191,7 @@ export function resolveDeskRootWithSource({
     const problem = explicitRootProblem(resolved)
     if (problem === null) return { root: resolved, source: "env:DESK", tried }
     throw codedError(
-      `desk-mcp: $DESK names ${resolved}, which ${problem}. Desk does not fall back to another desk.`,
+      `desk-mcp: Set $DESK to an existing desk workspace: $DESK names ${resolved}, which ${problem}. Desk does not fall back to another desk.`,
       DESK_ROOT_UNAVAILABLE,
       { path: resolved, source: "env:DESK", problem, tried },
     )
@@ -225,11 +225,10 @@ export function resolveDeskRootWithSource({
 
   // Fail with diagnostic listing every path tried. $DESK never reaches here: a
   // set $DESK either binds or fails as DESK_ROOT_UNAVAILABLE.
-  const error = new Error(
-    `desk-mcp: no desk workspace found. Tried (in order):\n` +
+  const error = Object.assign(new Error(
+    `desk-mcp: Pass --root <path> pointing at an existing desk workspace, or set $DESK: no desk workspace found. Tried (in order):\n` +
       tried.map((entry) => `  - ${entry.path}`).join("\n") +
-      `\nPass --root <path> pointing at an existing desk workspace, or set $DESK.`,
-  )
+      `\nPass --root <path> pointing at an existing desk workspace, or set $DESK.`), { code: "paths_desk_mcp_pass_root_path" })
   error.code = DESK_ROOT_NOT_FOUND
   error.tried = tried
   throw error
@@ -330,19 +329,19 @@ export function loadActivationConfig({ configPath, cwd = process.cwd(), homeDir 
   try {
     raw = read(resolvedPath, "utf8")
   } catch {
-    throw codedError(`desk-mcp: activation config ${resolvedPath} could not be read`, ACTIVATION_CONFIG_INVALID, { path: resolvedPath })
+    throw codedError(`desk-mcp: Check that the activation config can be read: activation config ${resolvedPath} could not be read`, ACTIVATION_CONFIG_INVALID, { path: resolvedPath })
   }
   let parsed
   try {
     parsed = JSON.parse(raw)
   } catch {
-    throw codedError(`desk-mcp: activation config ${resolvedPath} must be valid JSON`, ACTIVATION_CONFIG_INVALID, { path: resolvedPath })
+    throw codedError(`desk-mcp: Fix the activation config's JSON: activation config ${resolvedPath} must be valid JSON`, ACTIVATION_CONFIG_INVALID, { path: resolvedPath })
   }
   if (parsed?.schema_version !== 1) {
-    throw codedError("desk-mcp: activation config schema_version must be 1", ACTIVATION_CONFIG_INVALID, { path: resolvedPath })
+    throw codedError("desk-mcp: Set the activation config's schema_version to 1: activation config schema_version must be 1", ACTIVATION_CONFIG_INVALID, { path: resolvedPath })
   }
   if (!hasText(parsed?.desk?.root)) {
-    throw codedError("desk-mcp: activation config desk.root must be a non-empty string", ACTIVATION_CONFIG_INVALID, { path: resolvedPath })
+    throw codedError("desk-mcp: Set the activation config's desk.root to a non-empty string: activation config desk.root must be a non-empty string", ACTIVATION_CONFIG_INVALID, { path: resolvedPath })
   }
   return parsed
 }
@@ -423,10 +422,9 @@ export function personPrefix(deskRoot, person) {
     alias.includes("\\") ||
     path.isAbsolute(alias)
   ) {
-    throw new Error(
-      `desk-mcp: invalid --person alias ${JSON.stringify(person)} — ` +
-        `an alias must be a single path segment with no ".." or path separators.`,
-    )
+    throw Object.assign(new Error(
+      `desk-mcp: Pass --person as a single path segment: invalid --person alias ${JSON.stringify(person)} — ` +
+        `an alias must be a single path segment with no ".." or path separators.`), { code: "paths_desk_mcp_pass_person_as" })
   }
 
   return path.join(deskRoot, "desks", alias)
@@ -455,7 +453,7 @@ function readRefusal(deskRoot, candidate, error) {
   if (typeof error?.code !== "string") return error
   const message = String(error.message)
   const reason = message.startsWith(`${error.code}: `) ? message.split(", ")[0] : error.code
-  return new Error(`desk-mcp: cannot read ${deskRelative(deskRoot, candidate)} (${reason})`)
+  return Object.assign(new Error(`desk-mcp: Check that the file can be read: cannot read ${deskRelative(deskRoot, candidate)} (${reason})`), { code: "paths_desk_mcp_check_that_the" })
 }
 
 export async function resolveWriteTarget({
@@ -465,7 +463,7 @@ export async function resolveWriteTarget({
   createPersonRoot = true,
 }) {
   if (!Array.isArray(segments) || segments.length === 0) {
-    throw new Error("desk-mcp: write target requires at least one path segment")
+    throw Object.assign(new Error("desk-mcp: Pass at least one path segment for the write target: write target requires at least one path segment"), { code: "paths_desk_mcp_pass_at_least" })
   }
   for (const segment of segments) {
     validateWriteSegment(segment)
@@ -476,7 +474,7 @@ export async function resolveWriteTarget({
   // Segment validation makes this invariant redundant by construction; retain the lexical boundary as defense in depth if validation evolves.
   /* node:coverage ignore next 3 */
   if (!isPathContained(effectiveRoot, target)) {
-    throw new Error(`desk-mcp: write target is outside effective write root: ${deskRelative(deskRoot, target) ?? segments.join("/")}`)
+    throw Object.assign(new Error(`desk-mcp: Keep the write target inside the effective write root: write target is outside effective write root: ${deskRelative(deskRoot, target) ?? segments.join("/")}`), { code: "paths_desk_mcp_keep_the_write" })
   }
 
   const realEffectiveRoot = await prepareEffectiveRoot({
@@ -503,10 +501,9 @@ export function validateWriteSegment(segment) {
     segment.includes("/") ||
     segment.includes("\\")
   ) {
-    throw new Error(
-      `desk-mcp: invalid write path segment ${JSON.stringify(segment)} — ` +
-        `segments must be non-empty single path components with no ".." or separators.`,
-    )
+    throw Object.assign(new Error(
+      `desk-mcp: Give non-empty single path segments with no .. or separators: invalid write path segment ${JSON.stringify(segment)} — ` +
+        `segments must be non-empty single path components with no ".." or separators.`), { code: "paths_desk_mcp_give_non_empty" })
   }
 }
 
@@ -526,7 +523,7 @@ async function prepareEffectiveRoot({ deskRoot, effectiveRoot, createPersonRoot 
     const stat = await lstatIfExists(deskRoot, lexicalCursor)
     if (stat === null) {
       if (createPersonRoot === false) {
-        throw new Error(`${EFFECTIVE_ROOT_MISSING}: ${deskRelative(deskRoot, lexicalCursor)}`)
+        throw Object.assign(new Error(`${EFFECTIVE_ROOT_MISSING}: Create the missing effective write root first: ${deskRelative(deskRoot, lexicalCursor)}`), { code: "paths_create_the_missing_effective_write" })
       }
       // A missing person root is not created here: a call that fails afterwards (a task that does not exist, a name
       // the rules refuse) would leave an empty `desks/<alias>/` behind. The write itself creates it with its
@@ -535,14 +532,12 @@ async function prepareEffectiveRoot({ deskRoot, effectiveRoot, createPersonRoot 
     }
     const resolved = await realpathOrSymlinkError(deskRoot, lexicalCursor)
     if (resolved !== realCursor) {
-      throw new Error(
-        `desk-mcp: effective write root resolves outside its canonical person path: ${deskRelative(deskRoot, lexicalCursor)}`,
-      )
+      throw Object.assign(new Error(
+        `desk-mcp: Keep the effective write root inside its canonical person path: effective write root resolves outside its canonical person path: ${deskRelative(deskRoot, lexicalCursor)}`), { code: "paths_desk_mcp_keep_the_effective" })
     }
     if (!stat.isDirectory()) {
-      throw new Error(
-        `desk-mcp: effective write root component is not a directory: ${deskRelative(deskRoot, lexicalCursor)}`,
-      )
+      throw Object.assign(new Error(
+        `desk-mcp: Remove that file, or choose another person path: effective write root component is not a directory: ${deskRelative(deskRoot, lexicalCursor)}`), { code: "paths_desk_mcp_remove_that_file" })
     }
   }
 
@@ -566,17 +561,15 @@ async function validateExistingTarget({
       // Nothing in the segments can climb (validateWriteSegment refuses `..`), so a path that leaves is always leaving through a link. Say whether
       // it leaves the desk or only the person folder, and never where it leads.
       const where = isPathContained(await realpathOrSymlinkError(deskRoot, deskRoot), resolved) ? "effective write root" : "the desk"
-      throw new Error(
-        `desk-mcp: ${deskRelative(deskRoot, cursor)} resolves outside ${where} (via a symbolic link)`,
-      )
+      throw Object.assign(new Error(
+        `desk-mcp: Remove the symbolic link that leaves the write root: ${deskRelative(deskRoot, cursor)} resolves outside ${where} (via a symbolic link)`), { code: "paths_desk_mcp_remove_the_symbolic" })
     }
     // Something on the way to the last segment must be a folder. Windows reports a path under a file as missing and
     // POSIX reports ENOTDIR, so the next lstat would differ by platform (and mkdir would fail with a raw error):
     // stop at the file here, with the same refusal everywhere. A link is judged by what it leads to.
     if (index < segments.length - 1 && !(stat.isSymbolicLink() ? await statOrRefusal(deskRoot, cursor, resolved) : stat).isDirectory()) {
-      throw new Error(
-        `desk-mcp: write target runs under a file, not a folder: ${deskRelative(deskRoot, cursor)}`,
-      )
+      throw Object.assign(new Error(
+        `desk-mcp: Move the file out of the way, or choose another path: write target runs under a file, not a folder: ${deskRelative(deskRoot, cursor)}`), { code: "paths_desk_mcp_move_the_file" })
     }
   }
 }
@@ -587,11 +580,11 @@ async function realDirectory(candidate) {
   try {
     stat = await fs.stat(candidate)
   } catch (error) {
-    if (error?.code === "ENOENT") throw new Error("desk-mcp: the desk root does not exist")
+    if (error?.code === "ENOENT") throw Object.assign(new Error("desk-mcp: Create the desk root, or pass --root with an existing desk: the desk root does not exist"), { code: "paths_desk_mcp_create_the_desk" })
     throw readRefusal(candidate, candidate, error)
   }
   if (!stat.isDirectory()) {
-    throw new Error("desk-mcp: the desk root is not a directory")
+    throw Object.assign(new Error("desk-mcp: Point the desk root at a directory: the desk root is not a directory"), { code: "paths_desk_mcp_point_the_desk" })
   }
   return realpathOrSymlinkError(candidate, candidate)
 }
@@ -609,7 +602,7 @@ async function realpathOrSymlinkError(deskRoot, candidate) {
     return await fs.realpath(candidate)
   } catch (error) {
     if (error?.code === "ENOENT") {
-      throw new Error(`desk-mcp: broken symlink in write target: ${deskRelative(deskRoot, candidate)}`)
+      throw Object.assign(new Error(`desk-mcp: Remove the broken symbolic link, or point it at an existing path: broken symlink in write target: ${deskRelative(deskRoot, candidate)}`), { code: "paths_desk_mcp_remove_the_broken" })
     }
     throw readRefusal(deskRoot, candidate, error)
   }

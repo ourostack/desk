@@ -42,10 +42,10 @@ test("a path under a file is refused by its desk-relative path, at any depth and
   await fs.mkdir(path.join(root, "desks", "ari", "dir"), { recursive: true })
   await fs.writeFile(path.join(root, "desks", "ari", "dir", "file.md"), "x")
   await fs.writeFile(path.join(root, "README.md"), "x")
-  assert.equal(await refusalOf({ deskRoot: root, segments: ["README.md", "sub", "x.md"] }, root), "desk-mcp: write target runs under a file, not a folder: README.md")
+  assert.equal(await refusalOf({ deskRoot: root, segments: ["README.md", "sub", "x.md"] }, root), "desk-mcp: Move the file out of the way, or choose another path: write target runs under a file, not a folder: README.md")
   assert.equal(
     await refusalOf({ deskRoot: root, person: "ari", segments: ["dir", "file.md", "x.md"] }, root),
-    "desk-mcp: write target runs under a file, not a folder: desks/ari/dir/file.md",
+    "desk-mcp: Move the file out of the way, or choose another path: write target runs under a file, not a folder: desks/ari/dir/file.md",
   )
 })
 
@@ -57,9 +57,9 @@ test("a link out of the desk is refused by the link's desk-relative path, never 
   await fs.symlink(path.join(outside, "secret.md"), path.join(root, "leaf.md"))
   assert.equal(
     await refusalOf({ deskRoot: root, segments: ["track", "link", "task.md"] }, root),
-    "desk-mcp: track/link resolves outside the desk (via a symbolic link)",
+    "desk-mcp: Remove the symbolic link that leaves the write root: track/link resolves outside the desk (via a symbolic link)",
   )
-  assert.equal(await refusalOf({ deskRoot: root, segments: ["leaf.md"] }, root), "desk-mcp: leaf.md resolves outside the desk (via a symbolic link)")
+  assert.equal(await refusalOf({ deskRoot: root, segments: ["leaf.md"] }, root), "desk-mcp: Remove the symbolic link that leaves the write root: leaf.md resolves outside the desk (via a symbolic link)")
   const message = await refusalOf({ deskRoot: root, segments: ["track", "link", "task.md"] }, outside)
   assert.equal(message.includes(path.basename(outside)), false)
 })
@@ -71,7 +71,7 @@ test("a link that leaves the person folder for another folder of the desk says s
   await fs.symlink(path.join(root, "desks", "bo", "track"), path.join(root, "desks", "ari", "track"))
   assert.equal(
     await refusalOf({ deskRoot: root, person: "ari", segments: ["track", "task.md"] }, root),
-    "desk-mcp: desks/ari/track resolves outside effective write root (via a symbolic link)",
+    "desk-mcp: Remove the symbolic link that leaves the write root: desks/ari/track resolves outside effective write root (via a symbolic link)",
   )
 })
 
@@ -82,15 +82,15 @@ test("a person folder that is a link, a file or missing is named by its desk-rel
   await fs.writeFile(path.join(root, "desks", "filed"), "x")
   assert.equal(
     await refusalOf({ deskRoot: root, person: "linked", segments: ["t", "task.md"] }, root),
-    "desk-mcp: effective write root resolves outside its canonical person path: desks/linked",
+    "desk-mcp: Keep the effective write root inside its canonical person path: effective write root resolves outside its canonical person path: desks/linked",
   )
   assert.equal(
     await refusalOf({ deskRoot: root, person: "filed", segments: ["t", "task.md"] }, root),
-    "desk-mcp: effective write root component is not a directory: desks/filed",
+    "desk-mcp: Remove that file, or choose another person path: effective write root component is not a directory: desks/filed",
   )
   assert.equal(
     await refusalOf({ deskRoot: root, person: "gone", segments: ["t", "task.md"], createPersonRoot: false }, root),
-    `${EFFECTIVE_ROOT_MISSING}: desks/gone`,
+    `${EFFECTIVE_ROOT_MISSING}: Create the missing effective write root first: desks/gone`,
   )
 })
 
@@ -98,7 +98,7 @@ test("a broken link is named by its desk-relative path, not where it pointed", {
   const { root, outside } = await scene()
   await fs.mkdir(path.join(root, "track"))
   await fs.symlink(path.join(outside, "missing.md"), path.join(root, "track", "task.md"))
-  assert.equal(await refusalOf({ deskRoot: root, segments: ["track", "task.md"] }, root), "desk-mcp: broken symlink in write target: track/task.md")
+  assert.equal(await refusalOf({ deskRoot: root, segments: ["track", "task.md"] }, root), "desk-mcp: Remove the broken symbolic link, or point it at an existing path: broken symlink in write target: track/task.md")
   assertNoAbsolutePath(await refusalOf({ deskRoot: root, segments: ["track", "task.md"] }, root), outside)
 })
 
@@ -107,8 +107,8 @@ test("a desk root that is missing or is a file is refused as the desk root, with
   const missing = path.join(root, "nowhere")
   const file = path.join(root, "a-file")
   await fs.writeFile(file, "x")
-  assert.equal(await refusalOf({ deskRoot: missing, segments: ["t.md"] }, root), "desk-mcp: the desk root does not exist")
-  assert.equal(await refusalOf({ deskRoot: file, segments: ["t.md"] }, root), "desk-mcp: the desk root is not a directory")
+  assert.equal(await refusalOf({ deskRoot: missing, segments: ["t.md"] }, root), "desk-mcp: Create the desk root, or pass --root with an existing desk: the desk root does not exist")
+  assert.equal(await refusalOf({ deskRoot: file, segments: ["t.md"] }, root), "desk-mcp: Point the desk root at a directory: the desk root is not a directory")
 })
 
 test("a desk root that cannot be read is refused as the desk root, with its error code and no path", { skip: NO_POSIX_MODES }, async () => {
@@ -119,7 +119,7 @@ test("a desk root that cannot be read is refused as the desk root, with its erro
   try {
     assert.equal(
       await refusalOf({ deskRoot: path.join(closed, "desk"), segments: ["t.md"] }, root),
-      "desk-mcp: cannot read the desk root (EACCES: permission denied)",
+      "desk-mcp: Check that the file can be read: cannot read the desk root (EACCES: permission denied)",
     )
   } finally {
     await fs.chmod(closed, 0o700)
@@ -133,7 +133,7 @@ test("a symbolic link loop is refused by its desk-relative path with ELOOP, and 
   await fs.symlink("a", path.join(root, "t", "b"))
   assert.equal(
     await refusalOf({ deskRoot: root, segments: ["t", "a", "x.md"] }, root),
-    "desk-mcp: cannot read t/a (ELOOP: too many symbolic links encountered)",
+    "desk-mcp: Check that the file can be read: cannot read t/a (ELOOP: too many symbolic links encountered)",
   )
   await fs.mkdir(path.join(root, "closed", "inner"), { recursive: true })
   await fs.symlink(path.join(root, "closed", "inner", "gone"), path.join(root, "t", "dangling"))
@@ -141,11 +141,11 @@ test("a symbolic link loop is refused by its desk-relative path with ELOOP, and 
   try {
     assert.equal(
       await refusalOf({ deskRoot: root, segments: ["t", "dangling", "x.md"] }, root),
-      "desk-mcp: cannot read t/dangling (EACCES: permission denied)",
+      "desk-mcp: Check that the file can be read: cannot read t/dangling (EACCES: permission denied)",
     )
     assert.equal(
       await refusalOf({ deskRoot: root, segments: ["closed", "inner", "x.md"] }, root),
-      "desk-mcp: cannot read closed/inner (EACCES: permission denied)",
+      "desk-mcp: Check that the file can be read: cannot read closed/inner (EACCES: permission denied)",
     )
   } finally {
     await fs.chmod(path.join(root, "closed"), 0o700)
@@ -162,7 +162,7 @@ test("a link whose target cannot be inspected is refused by the link's desk-rela
     return stat(candidate, ...rest)
   })
   try {
-    assert.equal(await refusalOf({ deskRoot: root, segments: ["dirlink", "x.md"] }, root), "desk-mcp: cannot read dirlink (EIO: i/o error)")
+    assert.equal(await refusalOf({ deskRoot: root, segments: ["dirlink", "x.md"] }, root), "desk-mcp: Check that the file can be read: cannot read dirlink (EIO: i/o error)")
   } finally {
     t.mock.restoreAll()
   }

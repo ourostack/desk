@@ -25,9 +25,9 @@ async function modelFile(dir, name, { model, fetchImpl }) {
     if (sha256(bytes) === model.files[name]) return bytes
   } catch { /* not downloaded yet */ }
   const response = await fetchImpl(`${model.url}/${name}`)
-  if (!response.ok) throw new Error(`downloading ${name} failed with HTTP ${response.status}`)
+  if (!response.ok) throw Object.assign(new Error(`Run it again to retry the download: downloading ${name} failed with HTTP ${response.status}`), { code: "embedder_run_it_again_to_retry" })
   const bytes = Buffer.from(await response.arrayBuffer())
-  if (sha256(bytes) !== model.files[name]) throw new Error(`downloaded ${name} does not match its pinned hash`)
+  if (sha256(bytes) !== model.files[name]) throw Object.assign(new Error(`Run it again to download a fresh copy: downloaded ${name} does not match its pinned hash`), { code: "embedder_run_it_again_to_download" })
   await mkdir(dir, { recursive: true })
   const partial = `${file}.${process.pid}.partial`
   await writeFile(partial, bytes)

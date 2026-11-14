@@ -168,49 +168,49 @@ function withNewTable({ lines, fenced }, rows) {
  * and changing nothing, for a step Desk cannot place (see the task_update schema for the rules).
  */
 export function applyStep(body, input, tool, repos, prVerdict) {
-  const refuse = (message) => { throw new Error(`${tool}: ${message}; no step was changed.`) }
+  const refuse = (message, { code }) => { throw Object.assign(new Error(`${tool}: ${message}; no step was changed.`), { code }) }
   const names = (value, field) => {
-    if (!Array.isArray(value) || value.some((item) => typeof item !== "string")) refuse(`Pass \`${field}\` as a list of step names; step ${JSON.stringify(input.id)} gave something else`)
+    if (!Array.isArray(value) || value.some((item) => typeof item !== "string")) refuse(`Pass \`${field}\` as a list of step names; step ${JSON.stringify(input.id)} gave something else`, { code: "steps_pass_as_a_list_of" })
     return value.map((item) => item.trim())
   }
   const unknown = Object.keys(input).filter((key) => !STEP_FIELDS.includes(key))
-  if (unknown.length > 0) refuse(`Remove the unknown field${unknown.length === 1 ? "" : "s"} ${unknown.map((key) => `\`${key}\``).join(", ")}; it takes ${STEP_FIELDS.map((key) => `\`${key}\``).join(", ")}`)
+  if (unknown.length > 0) refuse(`Remove the unknown field${unknown.length === 1 ? "" : "s"} ${unknown.map((key) => `\`${key}\``).join(", ")}; it takes ${STEP_FIELDS.map((key) => `\`${key}\``).join(", ")}`, { code: "steps_remove_the_unknown_field_unknown" })
   const id = typeof input.id === "string" ? input.id.trim() : ""
   const named = `step ${JSON.stringify(id)}`
   const read = readSteps(body)
-  if (read.found && read.rows === undefined) refuse(`Fix the \`## Steps\` table by hand, or leave steps out of this card: the table is left as prose because ${read.reason}, so ${named} cannot be written there`)
+  if (read.found && read.rows === undefined) refuse(`Fix the \`## Steps\` table by hand, or leave steps out of this card: the table is left as prose because ${read.reason}, so ${named} cannot be written there`, { code: "steps_fix_the_steps_table_by" })
   const rows = read.rows ?? []
   const existing = rows.find((row) => row.id === id)
   if (input.expect !== undefined && (existing === undefined || existing.state !== String(input.expect).trim().toLowerCase())) {
-    refuse(`Read the card, then retry with the step's current state in \`expect\`: ${named} is not as you last saw it (expect ${JSON.stringify(input.expect)}); now ${existing === undefined ? "there is no such step" : describeRow(existing)}`)
+    refuse(`Read the card, then retry with the step's current state in \`expect\`: ${named} is not as you last saw it (expect ${JSON.stringify(input.expect)}); now ${existing === undefined ? "there is no such step" : describeRow(existing)}`, { code: "steps_read_the_card_then_retry" })
   }
-  if (existing === undefined && (input.repo === undefined || input.depends_on === undefined)) refuse(`Add \`repo\` (a repo of the card, or "—") and \`depends_on\` (a list of step names, empty for none): ${named} is new, so it needs both`)
+  if (existing === undefined && (input.repo === undefined || input.depends_on === undefined)) refuse(`Add \`repo\` (a repo of the card, or "—") and \`depends_on\` (a list of step names, empty for none): ${named} is new, so it needs both`, { code: "steps_add_repo_a_repo_of" })
   const state = input.state === undefined ? (existing?.state ?? "pending") : String(input.state).trim().toLowerCase()
   const changed = existing === undefined || state !== existing.state
-  if (existing !== undefined && existing.state !== "pending" && (input.depends_on !== undefined || input.repo !== undefined)) refuse(`Set ${named} to pending in one call, then rewire it in the next: it is ${existing.state}, and its \`depends_on\` and \`repo\` change only while it is pending`)
-  if (existing !== undefined && SETTLED.includes(existing.state) && changed && input.expect === undefined) refuse(`Pass \`expect: "${existing.state}"\` with the call: ${named} is ${existing.state}; moving it out of ${existing.state} needs \`expect: "${existing.state}"\`, so a step another session settled is not reopened by accident`)
+  if (existing !== undefined && existing.state !== "pending" && (input.depends_on !== undefined || input.repo !== undefined)) refuse(`Set ${named} to pending in one call, then rewire it in the next: it is ${existing.state}, and its \`depends_on\` and \`repo\` change only while it is pending`, { code: "steps_set_to_pending_in_one" })
+  if (existing !== undefined && SETTLED.includes(existing.state) && changed && input.expect === undefined) refuse(`Pass \`expect: "${existing.state}"\` with the call: ${named} is ${existing.state}; moving it out of ${existing.state} needs \`expect: "${existing.state}"\`, so a step another session settled is not reopened by accident`, { code: "steps_pass_expect_with_the_call" })
   const reason = typeof input.reason === "string" ? input.reason.trim() : ""
-  if (NEEDS_REASON.includes(state) && changed && reason === "") refuse(`Add a \`reason\` for ${named}: it cannot become ${state} without a \`reason\``)
+  if (NEEDS_REASON.includes(state) && changed && reason === "") refuse(`Add a \`reason\` for ${named}: it cannot become ${state} without a \`reason\``, { code: "steps_add_a_reason_for_it" })
   const proof = reason === "" ? (typeof input.evidence === "string" ? input.evidence : "") : reason
   // Desk derives in review, merged and delivered where it can read them (a GitHub pull request, a delegated card); elsewhere (an Azure DevOps pull request, a commit) the agent declares them, with evidence.
   let declared = false
   if (input.state !== undefined && DERIVED_STATES.includes(state) && changed) {
     const shown = proof !== "" ? proof : evidenceBehind(existing)
-    if (isDerivable(shown)) refuse(`Leave the state to Desk; ${named} cannot be set to ${state}: Desk sets in review, merged and delivered from the step's GitHub PR or delegated card, and its evidence has one`)
-    if (shown === "") refuse(`Add \`evidence\` to set ${named} to ${state}; it cannot be set to ${state} without evidence: Desk derives the state from a GitHub PR URL (or \`task:<track>/<slug>\`) in \`evidence\`; for a PR or commit elsewhere, put it in \`evidence\` and the state is yours to declare`)
+    if (isDerivable(shown)) refuse(`Leave the state to Desk; ${named} cannot be set to ${state}: Desk sets in review, merged and delivered from the step's GitHub PR or delegated card, and its evidence has one`, { code: "steps_leave_the_state_to_desk" })
+    if (shown === "") refuse(`Add \`evidence\` to set ${named} to ${state}; it cannot be set to ${state} without evidence: Desk derives the state from a GitHub PR URL (or \`task:<track>/<slug>\`) in \`evidence\`; for a PR or commit elsewhere, put it in \`evidence\` and the state is yours to declare`, { code: "steps_add_evidence_to_set_to" })
     declared = true
   }
   const depends = input.depends_on === undefined ? existing.depends_on : names(input.depends_on, "depends_on")
   let repo = existing?.repo ?? null
   if (input.repo !== undefined) repo = NONE.test(String(input.repo).trim()) ? null : String(input.repo).trim()
-  if (repo !== null && !repos.includes(repo)) refuse(`Name one of the card's repos, or "—": ${named} names repo ${JSON.stringify(repo)}, which is not one of the card's repos (${repos.join(", ") || "none"})`)
+  if (repo !== null && !repos.includes(repo)) refuse(`Name one of the card's repos, or "—": ${named} names repo ${JSON.stringify(repo)}, which is not one of the card's repos (${repos.join(", ") || "none"})`, { code: "steps_name_one_of_the_card" })
   // A GitHub PR given as a step's new evidence must be in the step's repo (the match `done-evidence.js` makes for done evidence: the repo's recorded name or its clone's remotes). A step with no repo on a card that has repos cannot take one.
   // A repo with no GitHub identity Desk can match (a plain name that is only a label, no clone remote on GitHub) accepts any PR. Evidence that is not used (a reason on a blocked or dropped step) is not checked.
   const pathBack = `set ${named} to pending (with \`expect\` when it is settled), then give \`repo\` and \`evidence\``
   if (proof !== "" && !NEEDS_REASON.includes(state) && repos.length > 0) {
     for (const pr of findPullRequests(proof)) {
-      if (repo === null) refuse(`Set ${named} to pending (with \`expect\` when it is settled), then give \`repo\` (one of ${repos.join(", ")}) and \`evidence\`: ${named} has no repo, so a GitHub PR (${pr.url}) cannot be its evidence`)
-      if (prVerdict(repo, pr.repo) === "mismatch") refuse(`Give the PR in ${repo}, or if the repo is wrong, ${pathBack}: ${named} is in repo ${JSON.stringify(repo)}, but its PR ${pr.url} is in ${pr.repo}`)
+      if (repo === null) refuse(`Set ${named} to pending (with \`expect\` when it is settled), then give \`repo\` (one of ${repos.join(", ")}) and \`evidence\`: ${named} has no repo, so a GitHub PR (${pr.url}) cannot be its evidence`, { code: "steps_set_to_pending_with_expect" })
+      if (prVerdict(repo, pr.repo) === "mismatch") refuse(`Give the PR in ${repo}, or if the repo is wrong, ${pathBack}: ${named} is in repo ${JSON.stringify(repo)}, but its PR ${pr.url} is in ${pr.repo}`, { code: "steps_give_the_pr_in_or" })
     }
   }
   // Evidence is kept unless the call gives new text; a blocked or dropped step keeps what it had behind its reason.
@@ -228,7 +228,7 @@ export function applyStep(body, input, tool, repos, prVerdict) {
     }
   }
   const invalid = checkRows(next)
-  if (invalid !== null) refuse(invalid)
+  if (invalid !== null) refuse(invalid, { code: "steps_invalid_step_input" })
   const lines = read.found ? [...read.lines] : null
   let out
   if (lines === null) out = withNewTable(read, next)

@@ -199,7 +199,7 @@ async function readEach(items, read, signal) {
 
 const timeOf = (now) => {
   const at = now instanceof Date ? now.getTime() : now
-  if (typeof at !== "number" || !Number.isFinite(at)) throw new TypeError("Pass `now` as a time in milliseconds")
+  if (typeof at !== "number" || !Number.isFinite(at)) throw Object.assign(new TypeError("Pass `now` as a time in milliseconds"), { code: "unsigned_deliveries_pass_now_as_a_time" })
   return at
 }
 
