@@ -44,7 +44,7 @@
   {"match":"the track's regular Git file state could not be qualified","reason":"tools/archive-state.js: not yet in the Ouro AX problem shape"},
   {"match":"the admitted Git mode/type metadata could not be staged","reason":"tools/archive-state.js: not yet in the Ouro AX problem shape"},
   {"match":"the existing archive's Git publication could not be qualified","reason":"tools/archive-state.js: not yet in the Ouro AX problem shape"},
-  {"match":"a task card in `paths` has an unstaged change, is untracked, or git could not check it; run task_update for a card edit, or git restore --staged and git restore the card, and pass only cards that task_move, track_rename or git mv staged as moves","reason":"tools/desk-save.js: not yet in the Ouro AX problem shape"},
+  {"match":"a task card in `paths` has an unstaged change, is untracked, or git could not check it; run task_update for a card edit, or unstage and restore the card, and pass only cards that task_move, track_rename or a Git move staged as moves","reason":"tools/desk-save.js: not yet in the Ouro AX problem shape"},
   {"match":"could not read the default branch of ${store}","reason":"tools/shared-write.js: not yet in the Ouro AX problem shape"},
   {"match":"the archived task could not be brought back (${error.message}); nothing was recorded. Bring it back with task_move (unarchive: true), then call task_signoff again.","reason":"tools/task-signoff.js: not yet in the Ouro AX problem shape"},
   {"match":"Git could not place these paths in the repository","reason":"util/cas-commit.js: not yet in the Ouro AX problem shape"},
