@@ -1035,7 +1035,7 @@ requires("plugins/desk/skills/task-lifecycle/SKILL.md", "task-lifecycle records 
 requires("plugins/desk/skills/session-start/details.md", "session-start owns the Factory lines and the evaluator answer",
   /## Factory lines[\s\S]+Factory evaluator:[\s\S]+quarantined waste labels[\s\S]+`ready` → start a fresh `desk:observer` subagent in the background[\s\S]+`desk:factory-evaluator`[\s\S]+nothing else from this conversation[\s\S]+`no_sessions`[\s\S]+never reopens a task/u);
 // The factory's one-time consent question (M3-11): asked once per store, in plain words, recorded yes or no
-// through `factory.js consent`, never asked again, and never asked in a noninteractive session.
+// through `desk_doctor`'s `factory_consent`, never asked again, and never asked in a noninteractive session.
 const sessionStart = "plugins/desk/skills/session-start/SKILL.md";
 const bootSource = "plugins/desk/mcp/src/runtime/boot.js";
 contract("session-start asks the factory contribution question once, in plain words, and records either answer", () => {
@@ -1044,7 +1044,7 @@ contract("session-start asks the factory contribution question once, in plain wo
   assert.ok(step.includes("factory?.consent"), "the boot script builds the factory consent instruction");
   assert.match(step, /consent === "undecided" && !noninteractive/u);
   // Once per store, not once per session: the agent that said the sentence records it, and a later boot says not to raise it.
-  assert.match(step, /consent --store \$\{store\} --mentioned yes/u);
+  assert.match(step, /desk_doctor with \{"factory_told": true\}/u);
   assert.match(step, /the operator was already told that Desk can contribute to it: do not raise it again/u);
   assert.match(step, /never asked again|is never asked again/u);
   const question = step.split("\n", 2)[0];
@@ -1055,17 +1055,15 @@ contract("session-start asks the factory contribution question once, in plain wo
     assert.match(question, new RegExp(`What it never publishes:[^.]*${never}`, "u"), `the question says it never publishes ${never}`);
   }
   assert.match(question, /is a public repository/u);
-  assert.match(question, /GitHub account \\`\$\{login\}\\` appears as the author of the intake pull requests/u);
-  assert.match(step, /consent --store \$\{store\} --contribute yes --account <login>/u);
-  assert.match(step, /consent --store \$\{store\} --contribute no/u);
+  assert.match(question, /signed-in GitHub accounts[^.]*appears as the author of the intake pull requests/u);
+  assert.match(step, /desk_doctor with \{"factory_consent": "yes"\} or \{"factory_consent": "no"\}/u);
+  assert.doesNotMatch(step, /node \$\{|factory\.js/u, "the boot never tells an agent to run the factory script");
   assert.match(step, /a no is a decision too/u);
   assert.match(step, /never comes before the work the operator asked for[\s\S]+defer the notice to a later turn and preserve the required sign-off/u);
   assert.match(step, /raise it at most once as this statement/u);
   assert.match(step, /if \(!consentUndecided\(factory, noninteractive\)\) return \[\]/u);
-  assert.doesNotMatch(step, /consent\.json/u, "the script records consent only through factory.js");
-  assert.match(step, /never assume gh's active account/u);
-  assert.match(step, /account --store \$\{store\}/u);
-  assert.match(step, /no_account_can_deliver/u);
+  assert.doesNotMatch(step, /consent\.json/u, "the boot records consent only through the tool");
+  assert.match(step, /not_recorded/u);
   assert.doesNotMatch(step, /gh api user/u, "the active account is never assumed");
   assert.doesNotMatch(text(sessionStart), /noninteractive session/u, "the skill leaves the consent wording to the boot instructions");
 });
@@ -1107,7 +1105,7 @@ contract("archive-workflow stages only the paths it moved", () => {
   assert.match(body, /`git-hygiene`[^\n]+targeted staging/u);
 });
 requires("plugins/desk/skills/first-run-bootstrap/SKILL.md", "first-run-bootstrap asks the factory question once at the converged endpoint",
-  /### Converged endpoint[\s\S]+factory contribution question once[\s\S]+`desk:session-start`'s boot script puts in its `instructions`[\s\S]+factory\.js consent/u);
+  /### Converged endpoint[\s\S]+factory contribution question once[\s\S]+`desk:session-start`'s boot script puts in its `instructions`[\s\S]+`desk_doctor` with `\{ "factory_consent"/u);
 requires("plugins/desk/skills/task-lifecycle/SKILL.md", "task-lifecycle says done writes the report link and never waits for the store",
   /transitioning to `done`[^\n]+`task_update`[^\n]+`factory_report: <link>`[^\n]+resolved store has consent and the desk is known to be private[^\n]+`factory_report_unavailable: <reason code>`[^\n]+finalize request[^\n]+fills a missing link by itself[^\n]+`done` does not wait for the store[^\n]+resolves once the store merges/u);
 contract("task-card-format documents the optional factory_report field", () => {

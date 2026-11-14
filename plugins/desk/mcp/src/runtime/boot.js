@@ -1026,7 +1026,7 @@ function emptyResult({ status, degraded, pending, instructions = [], root, host 
   }
 }
 
-const FACTORY_QUESTION = (store, login) => `Desk can contribute measurement data about your finished tasks to \`${store}\`, which builds a report for each finished job. What it publishes: durations, counts, tool kinds, plugin and model versions, and references to public repositories. What it never publishes: prompt, assistant or tool content, names, or dates and times of day. \`${store}\` is a public repository, and your GitHub account \`${login}\` appears as the author of the intake pull requests that deliver the data. Contribute? (yes or no)`
+const FACTORY_QUESTION = (store) => `Desk can contribute measurement data about your finished tasks to \`${store}\`, which builds a report for each finished job. What it publishes: durations, counts, tool kinds, plugin and model versions, and references to public repositories. What it never publishes: prompt, assistant or tool content, names, or dates and times of day. \`${store}\` is a public repository, and one of your signed-in GitHub accounts, which Desk picks and names when you answer, appears as the author of the intake pull requests that deliver the data. Contribute? (yes or no)`
 
 export { isNoninteractive }
 
@@ -1054,26 +1054,24 @@ export function improvementInstructions(summary) {
 // nothing; the next interactive session asks).
 const consentUndecided = (factory, noninteractive) => factory?.consent === "undecided" && !noninteractive
 
-// The command an agent runs when it tells the operator about the store, so that the boot of a later session does not hand the sentence
-// out again (`consent-mentioned.js`). A reply ends the turn, so the command comes before the reply that carries the sentence; a command
+// The call an agent makes when it tells the operator about the store, so that the boot of a later session does not hand the sentence
+// out again (`consent-mentioned.js`). A reply ends the turn, so the call comes before the reply that carries the sentence; a call
 // that fails costs nothing but a repeat in a later session, so it is never retried and never raised with the operator.
-const mentionedStep = (store, cli) => `In the same turn, just before the reply that includes it, run \`node ${cli} consent --store ${store} --mentioned yes\`, so that no later session says it again; if the command fails or is refused, say the sentence anyway, do not retry and do not mention it. If you already said the sentence in this session, do not say it again. A child agent never says it and never runs the command.`
+const MENTIONED_STEP = `In the same turn, just before the reply that includes it, call desk_doctor with {"factory_told": true}, so that no later session says it again; if the call fails or is refused, say the sentence anyway, do not retry and do not mention it. If you already said the sentence in this session, do not say it again. A child agent never says it and never makes the call.`
 
 // The whole consent block once the operator was told: the question is asked once at setup, so nothing is raised again.
 function factoryMentionedLine(factory, pluginRoot) {
   const details = path.join(pluginRoot, "skills", "session-start", "details.md")
-  return `Factory consent is undecided for ${factory.store}, and the operator was already told that Desk can contribute to it: do not raise it again. Only if they say 'factory details' (or ask what Desk sends), follow "Factory consent" in ${details}; the script is \`node ${path.join(pluginRoot, "mcp", "scripts", "factory.js")}\`.`
+  return `Factory consent is undecided for ${factory.store}, and the operator was already told that Desk can contribute to it: do not raise it again. Only if they say 'factory details' (or ask what Desk sends), follow "Factory consent" in ${details}.`
 }
 
 function factoryInstructions(factory, pluginRoot, { noninteractive, mentioned }) {
   if (!consentUndecided(factory, noninteractive)) return []
   if (mentioned) return [factoryMentionedLine(factory, pluginRoot)]
   const store = factory.store
-  const cli = path.join(pluginRoot, "mcp", "scripts", "factory.js")
   return [
-    `Factory consent is undecided for ${store}. It never comes before the work the operator asked for, and never instead of it: do that work first. If this reply delivers a task, defer the notice to a later turn and preserve the required sign-off. Otherwise, only if the operator is in the conversation, raise it at most once as this statement: "Desk can contribute measurement data about finished tasks to ${store}; say 'factory details' to see what it sends." ${mentionedStep(store, cli)} Only if they ask for 'factory details' (or ask what is sent), find the account that would open the intake pull requests with \`node ${cli} account --store ${store}\` (never assume gh's active account).`,
-    `With result account_found, ask this, naming that account as the login: "${FACTORY_QUESTION(store, "<login>")}" With no_account_can_deliver, do not ask: say in one line that no signed-in GitHub account can open pull requests on ${store} (give each account's reason), and that signing in a personal account with \`gh auth login\` lets a later session ask.`,
-    `Record the answer only with \`node ${cli} consent --store ${store} --contribute yes --account <login>\` or \`node ${cli} consent --store ${store} --contribute no\`; a no is a decision too and is never asked again.`,
+    `Factory consent is undecided for ${store}. It never comes before the work the operator asked for, and never instead of it: do that work first. If this reply delivers a task, defer the notice to a later turn and preserve the required sign-off. Otherwise, only if the operator is in the conversation, raise it at most once as this statement: "Desk can contribute measurement data about finished tasks to ${store}; say 'factory details' to see what it sends." ${MENTIONED_STEP} Only if they ask for 'factory details' (or ask what is sent), ask this: "${FACTORY_QUESTION(store)}"`,
+    `Record the answer only by calling desk_doctor with {"factory_consent": "yes"} or {"factory_consent": "no"}; Desk finds the GitHub account itself. After a yes, tell the operator which account the answer names. If the answer is not_recorded, follow its fix. After a no, or a recorded yes, the question is never asked again; a no is a decision too.`,
   ]
 }
 
@@ -1188,12 +1186,12 @@ function remoteRepoInstruction(names, root) {
   return `The named task's remote-only repos (no local clone): ${names.join(", ")}. Do not clone any of them unless the next step needs its code. If it does, clone into the operator's code location (\`defaults.clone_root\` in ${root.path}/.machine-local.yml, default ~/code/), never /tmp, and record the clone on the card with task_update (the repo's \`local_path\`, with \`mode: local\`).`
 }
 
-// The factory consent line the plain-text boot prints in place of the three long instructions `--json` keeps: one short
-// line, after the work, with the pointer to the script that runs only if the operator says yes.
+// The factory consent line the plain-text boot prints in place of the two long instructions `--json` keeps: one short
+// line, after the work, with the pointer to the details that apply only if the operator says yes.
 function factoryTextLine(factory, pluginRoot) {
   const store = factory.store
   const details = path.join(pluginRoot, "skills", "session-start", "details.md")
-  return `Factory consent is undecided for ${store}. Only after the operator's work is done, and only if they are in the conversation, raise this statement once: "Desk can contribute measurement data about finished tasks to ${store}; say 'factory details' to see what it sends." If this reply delivers a task, defer the notice to a later turn and preserve the required sign-off. ${mentionedStep(store, path.join(pluginRoot, "mcp", "scripts", "factory.js"))} Only if they then say 'factory details' (or ask what is sent), follow "Factory consent" in ${details}; the script is \`node ${path.join(pluginRoot, "mcp", "scripts", "factory.js")}\`.`
+  return `Factory consent is undecided for ${store}. Only after the operator's work is done, and only if they are in the conversation, raise this statement once: "Desk can contribute measurement data about finished tasks to ${store}; say 'factory details' to see what it sends." If this reply delivers a task, defer the notice to a later turn and preserve the required sign-off. ${MENTIONED_STEP} Only if they then say 'factory details' (or ask what is sent), follow "Factory consent" in ${details}.`
 }
 
 // The instructions as `{ text, plain }` pairs: `text` is what `--json` carries, `plain` the shorter wording the text boot

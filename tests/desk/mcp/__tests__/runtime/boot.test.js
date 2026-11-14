@@ -1900,26 +1900,27 @@ test("bootOnce: undecided factory consent, interactive, is raised only after the
   assert.match(text, /never comes before the work the operator asked for, and never instead of it: do that work first/u)
   assert.match(text, /raise it at most once as this statement/u)
   assert.match(text, /If this reply delivers a task, defer the notice to a later turn and preserve the required sign-off/u)
-  assert.match(text, /factory\.js account --store ourostack\/factory-intake/u)
-  assert.match(text, /consent --store ourostack\/factory-intake --contribute yes --account <login>/u)
+  assert.match(text, /calling desk_doctor with \{"factory_consent": "yes"\} or \{"factory_consent": "no"\}/u)
+  assert.match(text, /call desk_doctor with \{"factory_told": true\}/u)
+  assert.doesNotMatch(result.instructions.filter((line) => /[Ff]actory consent|factory_consent/u.test(line)).join("\n"), /factory\.js|node /u, "no instruction to run a script")
   assert.match(text, /Contribute\? \(yes or no\)/u)
   const handoff = result.instructions.findIndex((line) => line.includes("desk:session-resumption"))
   const consent = result.instructions.findIndex((line) => line.startsWith("Factory consent is undecided"))
   assert.ok(handoff !== -1 && consent > handoff, "the resume hand-off comes before any consent instruction")
 })
 
-test("bootOnce: the text boot gives undecided factory consent as one short line last, pointing at the script; --json keeps the long instructions", async () => {
+test("bootOnce: the text boot gives undecided factory consent as one short line last, pointing at the details; --json keeps the long instructions", async () => {
   const root = await mkDeskWorkspace()
   await writeCard(root, "track-a", "open-task", VALID_CARD)
   const result = await healthyBoot(root, { factoryStatusFn: UNDECIDED })
   const plain = result.text_instructions
   assert.equal(plain.filter((line) => /[Ff]actory consent/u.test(line)).length, 1, "one consent line in the text boot")
-  assert.match(plain.at(-1), /^Factory consent is undecided for ourostack\/factory-intake\. Only after the operator's work is done, and only if they are in the conversation, raise this statement once: "Desk can contribute measurement data about finished tasks to ourostack\/factory-intake; say 'factory details' to see what it sends\." If this reply delivers a task, defer the notice to a later turn and preserve the required sign-off\. In the same turn, just before the reply that includes it, run `node [^`]*mcp.scripts.factory\.js consent --store ourostack\/factory-intake --mentioned yes`, so that no later session says it again; if the command fails or is refused, say the sentence anyway, do not retry and do not mention it\. If you already said the sentence in this session, do not say it again\. A child agent never says it and never runs the command\. Only if they then say 'factory details' \(or ask what is sent\), follow "Factory consent" in .*skills.session-start.details\.md; the script is `node [^`]*mcp.scripts.factory\.js`\.$/u)
+  assert.match(plain.at(-1), /^Factory consent is undecided for ourostack\/factory-intake\. Only after the operator's work is done, and only if they are in the conversation, raise this statement once: "Desk can contribute measurement data about finished tasks to ourostack\/factory-intake; say 'factory details' to see what it sends\." If this reply delivers a task, defer the notice to a later turn and preserve the required sign-off\. In the same turn, just before the reply that includes it, call desk_doctor with \{"factory_told": true\}, so that no later session says it again; if the call fails or is refused, say the sentence anyway, do not retry and do not mention it\. If you already said the sentence in this session, do not say it again\. A child agent never says it and never makes the call\. Only if they then say 'factory details' \(or ask what is sent\), follow "Factory consent" in .*skills.session-start.details\.md\.$/u)
   const sentence = /"(Desk can contribute[^"]*)"/u.exec(plain.at(-1))[1]
   assert.doesNotMatch(sentence, /\?|want the details|yes or no/iu, "the sentence relayed to the operator is a statement, not a question")
   assert.equal(asksForConsent(sentence), false, "the harness does not read it as an ask")
-  assert.doesNotMatch(plain.join("\n"), /--contribute|Contribute\? \(yes or no\)|account_found/u, "the script is behind the pointer")
-  assert.ok(result.instructions.some((line) => /consent --store ourostack\/factory-intake --contribute yes/u.test(line)), "--json keeps the script")
+  assert.doesNotMatch(plain.join("\n"), /factory_consent|Contribute\? \(yes or no\)|account_found/u, "the question and the recording call are behind the pointer")
+  assert.ok(result.instructions.some((line) => /\{"factory_consent": "yes"\}/u.test(line)), "--json keeps the recording call")
   const printed = formatBootText(result)
   assert.equal(printed.split("Factory consent is undecided").length, 2)
   const decided = await healthyBoot(root)
