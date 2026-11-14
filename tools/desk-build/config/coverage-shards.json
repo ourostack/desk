@@ -412,6 +412,7 @@
     "tests/desk/mcp/__tests__/runtime/production_runtime_pack.test.js": 3.7,
     "tests/desk/mcp/__tests__/runtime/publication_mode.test.js": 0.6,
     "tests/desk/mcp/__tests__/runtime/release_alert.test.js": 1,
+    "tests/desk/mcp/__tests__/runtime/relays.test.js": 1,
     "tests/desk/mcp/__tests__/runtime/remote_identity.test.js": 0.8,
     "tests/desk/mcp/__tests__/runtime/runtime_cli_entrypoints.test.js": 0.4,
     "tests/desk/mcp/__tests__/runtime/runtime_dependency_packs.test.js": 7,

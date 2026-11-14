@@ -496,7 +496,7 @@ function ago(iso, now) {
 const lastOk = (state) => state.lastOkAt ?? (state.lastError ? null : state.lastPollAt)
 
 /** The newest quota reading among the drains that poll with `account`: the account's quota is shared by all of them. */
-function freshestQuota(drains, states, account) {
+export function freshestQuota(drains, states, account) {
   return drains
     .filter((drain) => drain.account === account)
     .map((drain) => states[drain.repo]?.quota)
@@ -598,7 +598,7 @@ export async function connectGithub(account, { spawn = spawnSync, fetchImpl = fe
       meter.notModified += 1
       return { notModified: true }
     }
-    if (!response.ok) throw Object.assign(new Error(`Check gh auth status, then try again: GitHub answered HTTP ${response.status} for ${route.split("?")[0]}`), { code: "drains_check_gh_auth_status_then" })
+    if (!response.ok) throw Object.assign(new Error(`Check gh auth status, then try again: GitHub answered HTTP ${response.status} for ${route.split("?")[0]}`), { code: "drains_check_gh_auth_status_then", status: response.status })
     return { body: await response.json(), next: /rel="next"/u.test(response.headers.get("link") ?? ""), etag: response.headers.get("etag") }
   }
   const all = async (route) => {
@@ -611,6 +611,17 @@ export async function connectGithub(account, { spawn = spawnSync, fetchImpl = fe
       more = next
     }
     return items
+  }
+  // A write: the answer is returned, never thrown on, because a refused merge or dispatch is an outcome the caller reports.
+  const send = async (method, route, payload) => {
+    const response = await fetchImpl(`https://api.github.com${route}`, {
+      method,
+      headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json", "User-Agent": "desk-issue-drains", ...(payload === undefined ? {} : { "Content-Type": "application/json" }) },
+      ...(payload === undefined ? {} : { body: JSON.stringify(payload) }),
+      signal: AbortSignal.timeout(30_000),
+    })
+    meter.total += 1
+    return { ok: response.ok, status: response.status, body: await response.json().catch(() => ({})) }
   }
   // Who the token really is decides which comments are the drain's own, so each drain's account is resolved from the token that polls its repository.
   const login = knownLogin || (await get("/user").then(({ body }) => String(body.login ?? ""), () => "")) || account || ""
@@ -631,6 +642,8 @@ export async function connectGithub(account, { spawn = spawnSync, fetchImpl = fe
       }
       return { issues: items, etag: first.etag }
     },
+    get,
+    send,
     quota: () => meter.quota,
     calls: () => ({ total: meter.total, notModified: meter.notModified }),
     timeline: (repo, issue) => all(`/repos/${repo}/issues/${issue}/timeline`),
