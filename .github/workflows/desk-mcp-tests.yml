@@ -65,7 +65,7 @@ jobs:
         run: |
           set -euo pipefail
           code="$(node .github/scripts/changed-scope.mjs --outside "$BASE" docs/ SETUP.md LICENSE)"
-          evals="$(node .github/scripts/changed-scope.mjs "$BASE" evals/ scripts/skill-evals.cjs scripts/test-skill-evals.cjs plugins/desk/mcp/package.json plugins/desk/mcp/package-lock.json .github/workflows/desk-mcp-tests.yml .github/scripts/changed-scope.mjs)"
+          evals="$(node .github/scripts/changed-scope.mjs "$BASE" evals/ scripts/skill-evals.cjs scripts/skill-evals-run.cjs scripts/test-skill-evals.cjs plugins/desk/mcp/package.json plugins/desk/mcp/package-lock.json .github/workflows/desk-mcp-tests.yml .github/scripts/changed-scope.mjs)"
           echo "code=${code#run=}" >> "$GITHUB_OUTPUT"
           echo "evals=${evals#run=}" >> "$GITHUB_OUTPUT"
           echo "Can affect the code: ${code#run=}; can affect the offline eval tests: ${evals#run=}" >> "$GITHUB_STEP_SUMMARY"
