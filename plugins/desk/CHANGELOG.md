@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.136 — 2026-11-14
+
+A proof session's published Factory record that no flush had recorded is now withdrawn through the owner-checked retraction, once the store holds exactly the bytes this machine would publish for it. Any other file at that path is refused, audited and left on the store, and a missing file needs nothing. The [factory documentation](docs/factory-local-capture.md#proof-sessions) describes the rule.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.135 — 2026-11-14
 
 Every error and failure reply in Desk's factory code (the evaluator, the loop, the pipeline, the Windows ACL and protection helpers, the headless ledger, the store routes and the problem filer) now carries a stable `code`, such as `attention_pass_turn_as_an_object` or `reconcile_failed_unexpectedly`, so a caller can branch on it. The messages are unchanged. The two `reconcile` failure results gain a `code` beside their `error`.
