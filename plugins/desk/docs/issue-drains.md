@@ -12,7 +12,7 @@ node <desk>/plugins/desk/mcp/scripts/drains.js status    # one health line per d
 
 Every `drains.js` command (`poll`, `status`; `ack` skips it) first refreshes `drains/run.mjs` in the state folder below. It is a copy of [drains-launcher.mjs](../mcp/scripts/drains-launcher.mjs), so the file at that stable path always matches the Desk that wrote it, and a new machine gets it from its first `drains.js status`. The command's JSON names the installed path and its SHA-256 under `launcher`. A runner calls `node <state>/ouroboros-skills/desk/drains/run.mjs poll` instead of a path inside a Desk checkout.
 
-The launcher finds the newest `ourostack/desk` `plugins/desk@release` entry in Agency's plugin cache (`~/.local/agency/plugins/cache/cache_index.json`, then `entries/<dir_name>/mcp/scripts/drains.js`) and runs it with the same arguments. If that cannot be resolved, it runs the last path that worked (`last-good-script`), or when Agency has dropped that entry too (it does while it refreshes), the private copy of the last resolved release kept in `release/` beside the launcher, and logs one line to stderr and `resolve.log`; with neither it exits 1.
+Each start, the launcher asks GitHub for the head of `ourostack/desk`'s `release` branch (one `git ls-remote`) and, when it moved, fetches it into its own shallow, sparse clone (`desk-release/` beside `run.mjs`) and runs `plugins/desk/mcp/scripts/drains.js` from there with `DESK_DRAINS_RELEASE` set to the commit. A Desk release therefore reaches the drains within one cycle, with no Agency cache or Desk checkout involved. If GitHub cannot be reached, the clone already there runs and one line goes to stderr and `resolve.log`. With no clone yet, the launcher falls back to the newest `plugins/desk@release` entry in Agency's plugin cache (`~/.local/agency/plugins/cache/cache_index.json`, then `entries/<dir_name>/mcp/scripts/drains.js`), then to the last path that worked (`last-good-script`); with none of them it exits 1. `drains.js` needs `git` on the runner's PATH for the own copy.
 
 ## Config and state
 
@@ -38,18 +38,18 @@ An issue is news when something other than the drain changed it since the revisi
 - labels starting with `drain:`, and any label in the drain's `ignoredLabels`;
 - body lines that start with a key in `ignoredBodyTrailers` (`Active-at: …`), so a lane's scheduled beat does not wake the drain;
 - comments that fit an `ignoreComments` rule: written by its `author` (case-insensitive) and, when the rule has a `match`, a body that matches the regular expression. A rule without `match` skips every comment by that author; the same bot's other comments still wake the drain;
-- closes and assignments, and cross-references: a `cross-referenced` event is never news, including the one the drain's own marked comment, or the drain's own pull request (branch `drain-<n>-…`), creates when it names this issue. The poll reads comments and the issue events feed, which has no cross-references, and a pull request's merge or close is not news: the drain learns a fix landed from its own PR. A closed issue is not polled at all.
+- closes and assignments, and cross-references: a cross-reference the drain made itself. When an issue's `updated_at` moved and nothing above was news, the poll reads its timeline, and a `cross-referenced` event after the last marker wakes the drain unless its source is the drain's own work: a body with the `<!-- ouro-drain-status -->` marker, a pull request on a `drain-…` branch, or the drain's marked comment on that issue that names this one around then. Any other cross-reference is news, and its event says where it came from. A pull request's merge or close is not news: the drain learns a fix landed from its own PR. A closed issue is not polled at all.
 
 ## Seeing a gap
 
-`status` (and the `status` lines `poll` prints) show, per drain, the last poll that read GitHub without an error and its lag (`last ok poll … (lag 2m)`), the last attempt, and how long the oldest waiting event has waited (`2 waiting (oldest 5h)`). A poll that keeps failing shows a growing lag and its last error; a wake that is made but never delivered shows a growing wait. Each recorded event carries `seenAt`, the time the poll first saw it, and `why`, the one change that made it news (`new issue`, `title or body edited`, `comment <id> by <login>`, `labeled <name>`, `unlabeled <name>`, `reopened`), so a wake nobody expected can be traced to a signal.
+`status` (and the `status` lines `poll` prints) start with the Desk in use (`desk <version> (ourostack/desk@release 1a2b3c4d, the launcher's own copy)`; the JSON also has `desk.version` and `desk.release`) and then show, per drain, the last poll that read GitHub without an error and its lag (`last ok poll … (lag 2m)`), the last attempt, and how long the oldest waiting event has waited (`2 waiting (oldest 5h)`). A poll that keeps failing shows a growing lag and its last error; a wake that is made but never delivered shows a growing wait. Each recorded event carries `seenAt`, the time the poll first saw it, and `why`, the one change that made it news (`new issue`, `title or body edited`, `comment <id> by <login>`, `labeled <name>`, `unlabeled <name>`, `reopened`), so a wake nobody expected can be traced to a signal.
 
 ## Delivering a wake
 
 `poll` prints one JSON value:
 
 ```json
-{ "at": "…", "status": ["issue drain owner/name -> 58fbd57e: last ok poll 2026-11-13T23:43:29.106Z (lag 2m), polled just now, 7 open, 0 waiting, last wake 12m ago (1 issue)"],
+{ "at": "…", "status": ["desk <version> (ourostack/desk@release 1a2b3c4d, the launcher's own copy)", "issue drain owner/name -> 58fbd57e: last ok poll 2026-11-13T23:43:29.106Z (lag 2m), polled just now, 7 open, 0 waiting, last wake 12m ago (1 issue)"],
   "errors": [{ "repo": "owner/name", "error": "GitHub answered HTTP 502" }],
   "wakes": [{ "id": "…", "repo": "owner/name", "session": "…", "message": "New or changed issues in owner/name: #12 Title. Drain them.", "events": [], "done": ["node", ".../drains.js", "ack", "--repo", "owner/name", "--wake", "…"] }] }
 ```
