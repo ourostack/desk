@@ -387,15 +387,60 @@ test("`drains why owner/name#n` prints the recorded reasons", async () => {
   await cli(["poll", "--config", config, "--state", state], { connect, now: () => NOW })
   updated = "2026-11-13T02:00:00Z"
   await cli(["poll", "--config", config, "--state", state], { connect, now: () => NOW })
+  updated = "2026-11-13T03:00:00Z"
+  await cli(["poll", "--config", config, "--state", state], { connect, now: () => NOW, env: { ...process.env, DESK_DRAINS_RELEASE: "0123456789abcdef0123456789abcdef01234567" } })
   const asked = await cli(["why", "acme/widgets#1", "--state", state])
   assert.equal(asked.code, 0, asked.err)
   const printed = JSON.parse(asked.out)
   assert.equal(printed.wakes[0].why, "title or body edited")
+  assert.match(printed.wakes[0].desk, /^\d+\.\d+\.\d+ 01234567$/u, "the launcher's own copy is named by its release commit")
+  assert.match(printed.wakes[1].desk, /^\d+\.\d+\.\d+$/u, "the history says which Desk polled")
   assert.equal(printed.waiting, true)
   assert.equal(JSON.parse((await cli(["why", "acme/widgets#7", "--state", state])).out).wakes.length, 0)
   const bad = await cli(["why", "nonsense"])
   assert.equal(bad.code, 2)
   assert.match(bad.err, /why needs an issue such as owner\/name#123/u)
+})
+
+test("self is resolved per repository from the account that polls it: a personal and a work drain in one poll", async () => {
+  const dir = await mkTempRoot("desk-drains-")
+  const paths = { config: path.join(dir, "config.json"), state: path.join(dir, "state.json"), lock: path.join(dir, "poll.lock") }
+  const drains = [
+    { repo: "acme/widgets", session: "58fbd57e-e371-4169-b013-2f413ab4a046", account: "personal" },
+    { repo: "corp/tools", session: "48a0f0ab-56ad-406d-8831-5352815be337", account: "work-account" },
+  ]
+  writeFileSync(paths.config, JSON.stringify({ drains }))
+  const logins = { personal: "ari", "work-account": "ari_corp" }
+  const issues = { "acme/widgets": [issue(1, T(0))], "corp/tools": [issue(1, T(0))] }
+  const comments = { "acme/widgets": [], "corp/tools": [] }
+  const events = { "acme/widgets": [], "corp/tools": [] }
+  const connect = async (account) => ({
+    login: logins[account],
+    openIssues: async (repo) => issues[repo],
+    comments: async (repo) => comments[repo],
+    issueEvents: async (repo) => events[repo],
+    timeline: async () => [],
+    pull: async () => ({}),
+  })
+  const poll = (at = NOW) => pollDrains({ paths, connect, now: at, ackCommand: ["node", "drains.js"] })
+  await poll()
+  // Each repo's drain writes its own marked comment and label, as its own account: neither wakes.
+  const own = (id, login, at = T(5)) => ({ id, body: `Triaged.\n${DRAIN_STATUS_MARKER}`, created_at: at, updated_at: at, user: { login } })
+  issues["acme/widgets"] = [issue(1, T(5))]
+  issues["corp/tools"] = [issue(1, T(5))]
+  comments["acme/widgets"] = [own(10, "ari")]
+  comments["corp/tools"] = [own(11, "ari_corp")]
+  for (const repo of Object.keys(events)) events[repo] = [labelEvent(T(5), "drain: triaged")]
+  const quietRound = await poll(NOW + 1)
+  assert.deepEqual(quietRound.wakes, [])
+  assert.deepEqual(quietRound.errors, [])
+  // The same comments under the other repository's account are someone else's: each wakes.
+  issues["acme/widgets"] = [issue(1, T(9))]
+  issues["corp/tools"] = [issue(1, T(9))]
+  comments["acme/widgets"] = [own(12, "ari_corp", T(9))]
+  comments["corp/tools"] = [own(13, "ari", T(9))]
+  const loudRound = await poll(NOW + 2)
+  assert.deepEqual(loudRound.wakes.map((wake) => [wake.repo, wake.events[0].why]), [["acme/widgets", "comment 12 by ari_corp"], ["corp/tools", "comment 13 by ari"]])
 })
 
 test("a cross-reference from the drain's own marked comment, marked body or drain branch wakes nobody, and the marker still advances", async () => {
@@ -893,6 +938,7 @@ test("lists open issues without pull requests across pages and reads comments si
   const spawned = []
   const spawn = (...args) => { spawned.push(args); return { status: 0, stdout: "tok\n" } }
   const answers = [
+    response({ login: "Maintainer-Real" }),
     response([issue(1, "u1"), { ...issue(2, "u2"), pull_request: {} }], { link: '<next>; rel="next"' }),
     response([issue(3, "u3")]),
     response([{ body: "c", updated_at: "u" }]),
@@ -906,19 +952,20 @@ test("lists open issues without pull requests across pages and reads comments si
   const api = await connectGithub("maintainer", { spawn, fetchImpl, env: { PATH: "/bin", GH_TOKEN: "ambient", GITHUB_TOKEN: "ambient", GH_HOST: "x" } })
   assert.deepEqual(spawned[0].slice(0, 2), ["gh", ["auth", "token", "--hostname", "github.com", "--user", "maintainer"]])
   assert.deepEqual(Object.keys(spawned[0][2].env).filter((name) => /TOKEN|HOST/u.test(name)), [])
-  assert.equal(api.login, "maintainer")
+  assert.equal(api.login, "Maintainer-Real", "the token decides who the drain is, not the configured name")
   assert.deepEqual((await api.openIssues("o/r")).map((item) => item.number), [1, 3])
-  assert.equal(urls[0], "https://api.github.com/repos/o/r/issues?state=open&sort=updated&direction=desc&per_page=100&page=1")
-  assert.ok(urls[1].endsWith("&page=2"))
-  assert.equal(headers[0].Authorization, "Bearer tok")
+  assert.equal(urls[0], "https://api.github.com/user")
+  assert.equal(urls[1], "https://api.github.com/repos/o/r/issues?state=open&sort=updated&direction=desc&per_page=100&page=1")
+  assert.ok(urls[2].endsWith("&page=2"))
+  assert.equal(headers[1].Authorization, "Bearer tok")
   assert.deepEqual(await api.comments("o/r", 5, "2026-11-13T01:00:00Z"), [{ body: "c", updated_at: "u" }])
-  assert.equal(urls[2], "https://api.github.com/repos/o/r/issues/5/comments?since=2026-11-13T01%3A00%3A00Z&per_page=100&page=1")
+  assert.equal(urls[3], "https://api.github.com/repos/o/r/issues/5/comments?since=2026-11-13T01%3A00%3A00Z&per_page=100&page=1")
   assert.deepEqual(await api.issueEvents("o/r", 5), [{ id: 1, event: "reopened", created_at: "u" }])
-  assert.equal(urls[3], "https://api.github.com/repos/o/r/issues/5/events?per_page=100&page=1")
+  assert.equal(urls[4], "https://api.github.com/repos/o/r/issues/5/events?per_page=100&page=1")
   assert.deepEqual(await api.timeline("o/r", 5), [{ id: 2, event: "cross-referenced", created_at: "u" }])
-  assert.equal(urls[4], "https://api.github.com/repos/o/r/issues/5/timeline?per_page=100&page=1")
+  assert.equal(urls[5], "https://api.github.com/repos/o/r/issues/5/timeline?per_page=100&page=1")
   assert.deepEqual(await api.pull("o/r", 7), { head: { ref: "drain-5-x" } })
-  assert.equal(urls[5], "https://api.github.com/repos/o/r/pulls/7")
+  assert.equal(urls[6], "https://api.github.com/repos/o/r/pulls/7")
 })
 
 test("asks GitHub who the active account is when none is configured", async () => {
@@ -929,6 +976,10 @@ test("asks GitHub who the active account is when none is configured", async () =
   assert.equal((await connectGithub(undefined, { spawn, fetchImpl })).login, "ari")
   assert.deepEqual(spawned[0][1], ["auth", "token", "--hostname", "github.com"])
   assert.equal((await connectGithub(undefined, { spawn, fetchImpl })).login, "")
+  // When GitHub will not say, the configured account stands in; with neither the login is empty.
+  const refused = async () => response({}, { status: 401 })
+  assert.equal((await connectGithub("work_microsoft", { spawn, fetchImpl: refused })).login, "work_microsoft")
+  assert.equal((await connectGithub(undefined, { spawn, fetchImpl: refused })).login, "")
 })
 
 test("fails with a fix when the CLI has no token, and names the HTTP status without the query when GitHub refuses", async () => {

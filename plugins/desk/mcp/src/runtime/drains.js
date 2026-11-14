@@ -322,7 +322,7 @@ async function crossReference(api, repo, issue, since) {
 }
 
 /** Poll one drain's repository and record what changed. A failure is recorded in its state and leaves every marker where it was. */
-export async function pollDrain(drain, states, { connect, now }) {
+export async function pollDrain(drain, states, { connect, now, desk }) {
   const state = states[drain.repo] ?? (states[drain.repo] = blank())
   try {
     const api = await connect(drain.account)
@@ -350,7 +350,7 @@ export async function pollDrain(drain, states, { connect, now }) {
     const open = new Set(issues.map((issue) => issue.number))
     const numbers = new Set(recorded.map((event) => event.number))
     state.pending = [...state.pending.filter((event) => open.has(event.number) && !numbers.has(event.number)), ...recorded]
-    state.history = [...(state.history ?? []), ...recorded].slice(-HISTORY)
+    state.history = [...(state.history ?? []), ...recorded.map((event) => (desk ? { ...event, desk } : event))].slice(-HISTORY)
     state.seen = seen
     state.seeded = true
     state.openCount = issues.length
@@ -395,11 +395,11 @@ export function drainStatusLines(drains, states, now) {
  * stays pending and comes back with the next poll. Repositories dropped from the config lose their state.
  * Each wake carries `done`, the command that reports its delivery: the runner appends `--error <text>` when delivery failed.
  */
-export async function pollDrains({ paths, connect, now, ackCommand, ackFlags = [] }) {
+export async function pollDrains({ paths, connect, now, ackCommand, ackFlags = [], desk }) {
   const drains = readDrainConfig(paths.config)
   const stored = readDrainStates(paths.state)
   const states = Object.fromEntries(drains.map((drain) => [drain.repo, stored[drain.repo] ?? blank()]))
-  for (const drain of drains) await pollDrain(drain, states, { connect, now })
+  for (const drain of drains) await pollDrain(drain, states, { connect, now, desk })
   writeDrainStates(paths.state, states)
   const wakes = drains.filter((drain) => states[drain.repo].pending.length > 0).map((drain) => {
     const events = states[drain.repo].pending
@@ -456,7 +456,8 @@ export async function connectGithub(account, { spawn = spawnSync, fetchImpl = fe
     }
     return items
   }
-  const login = account ?? String((await get("/user")).body.login ?? "")
+  // Who the token really is decides which comments are the drain's own, so each drain's account is resolved from the token that polls its repository.
+  const login = (await get("/user").then(({ body }) => String(body.login ?? ""), () => "")) || account || ""
   return {
     login,
     openIssues: async (repo) => (await all(`/repos/${repo}/issues?state=open&sort=updated&direction=desc`)).filter((issue) => !issue.pull_request),

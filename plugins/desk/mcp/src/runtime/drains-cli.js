@@ -16,6 +16,9 @@ const USAGE = [
 
 const usageFailure = (code, thing, fix) => deskFailure({ code, thing, probably: "the command line does not match the drains usage", look: "run drains.js --help", keepWorking: "nothing was polled or changed", fix })
 
+/** The Desk a poll ran from, for the history: its version, and the release commit when the launcher's own copy ran. */
+const deskLabel = ({ version, release }) => (release ? `${version} ${release.slice(0, 8)}` : version)
+
 const VALUED = { poll: ["--config", "--state"], ack: ["--repo", "--wake", "--error", "--state"], status: ["--config", "--state"], why: ["--state"] }
 
 export function parseDrainsArgs(argv) {
@@ -66,7 +69,7 @@ export async function runDrainsCli({ argv, script, env = process.env, io = proce
     let result
     if (command === "poll") {
       const ackFlags = flags.state ? ["--state", paths.state] : []
-      result = await withDrainLock(paths.lock, () => pollDrains({ paths, connect, now: now(), ackCommand: [process.execPath, path.resolve(script)], ackFlags }))
+      result = await withDrainLock(paths.lock, () => pollDrains({ paths, connect, now: now(), ackCommand: [process.execPath, path.resolve(script)], ackFlags, desk: deskLabel(deskInUse({ script, env })) }))
     } else if (command === "ack") {
       result = await withDrainLock(paths.lock, () => ackWake({ paths, repo: flags.repo, wake: flags.wake, error: flags.error, now: now() }))
     } else if (command === "why") {
