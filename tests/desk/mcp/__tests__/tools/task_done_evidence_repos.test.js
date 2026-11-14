@@ -313,8 +313,8 @@ test("a commit URL is held to the same exact shapes", async () => {
 test("commit errors say to git fetch in the recorded clone first", async () => {
   const { clone, unpushed } = await makeClone("acme/widgets")
   const root = await codeTask([{ name: "acme/widgets", local_path: clone, mode: "local" }])
-  await assert.rejects(done(root, { kind: "commit", ref: unpushed }), /run `git fetch` in that clone and repeat this call.*Otherwise push the branch/s)
-  await assert.rejects(done(root, { kind: "commit", ref: "a1b2c3d4" }), /run `git fetch` in the recorded clone first and repeat this call/)
+  await assert.rejects(done(root, { kind: "commit", ref: unpushed }), /fetch that clone and repeat this call.*Otherwise push the branch/s)
+  await assert.rejects(done(root, { kind: "commit", ref: "a1b2c3d4" }), /fetch the recorded clone first and repeat this call/)
 })
 
 test("a relative local_path resolves against the desk root, not the process's working directory", async () => {
