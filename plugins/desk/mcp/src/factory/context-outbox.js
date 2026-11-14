@@ -29,6 +29,10 @@ const PREPARATION_MS = 2000
 const CARD_LIMIT = 1000
 const deferred = () => Object.assign(new Error("context_preparation_deferred"), { code: "context_preparation_deferred" })
 const withinBudget = (deadline, clock) => { if (clock() >= deadline) throw deferred() }
+// `deadline` is absolute, in `clock` units. The Git timeout is the budget left, floored so a nearly spent or fake clock still lets a slow process start finish. The deadline still caps each call inside `readDeskRemote` and `resolveJobIdentity`.
+const GIT_TIMEOUT_FLOOR_MS = 2000
+const GIT_TIMEOUT_CEILING_MS = 10000
+const gitTimeoutMs = (deadline, clock) => Math.min(GIT_TIMEOUT_CEILING_MS, Math.max(GIT_TIMEOUT_FLOOR_MS, deadline - clock()))
 const sha = (value) => createHash("sha256").update(stableStringify(value)).digest("hex")
 const result = (name, extra = {}) => ({ result: name, ...extra })
 const sameStore = (left, right) => typeof left === "string" && left.toLowerCase() === right.toLowerCase()
@@ -259,7 +263,7 @@ function* taskCardIndex(deskRoot, personPrefix, { wanted, cursor, deadline, cloc
   const within = () => withinBudget(deadline, clock)
   try {
     within()
-    const remote = readRemote({ deskRoot, deadline, clock, timeoutMs: 500 })
+    const remote = readRemote({ deskRoot, deadline, clock, timeoutMs: gitTimeoutMs(deadline, clock) })
     within()
     if (remote === null) return { cards, incomplete: false, cursor: 0 }
     const root = realpathSync(deskRoot)
@@ -270,7 +274,7 @@ function* taskCardIndex(deskRoot, personPrefix, { wanted, cursor, deadline, cloc
       const key = `${task.track}/${task.slug}`
       if (!isTaskSegment(task.track) || !isTaskSegment(task.slug) || inspected.has(key)) return
       inspected.add(key)
-      const birth = resolveIdentity({ deskRoot, personPrefix, track: task.track, slug: task.slug, deadline, clock, timeoutMs: 500 })
+      const birth = resolveIdentity({ deskRoot, personPrefix, track: task.track, slug: task.slug, deadline, clock, timeoutMs: gitTimeoutMs(deadline, clock) })
       within()
       const job = jobId({ deskRemote: remote, personPrefix, ...birth })
       if (!wanted.has(job)) return

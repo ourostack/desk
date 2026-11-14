@@ -770,13 +770,26 @@ test("preparation is source-current, idempotent and protected without publishing
   assert.deepEqual(await queue.readyTaskContexts(f.env, { store: STORE, entries: f.entries }), [])
 })
 
+test("a Factory context's Git lookups get the remaining budget, not a fixed 500 ms", async () => {
+  const f = await cardFixture()
+  const requested = []
+  await queue.prepareTaskContexts(f.env, {
+    ...f.options, deadline: 2000, clock: () => 0,
+    readRemote: ({ timeoutMs }) => { requested.push(["remote", timeoutMs]); return "https://github.com/synthetic/desk.git" },
+    resolveIdentity: ({ track, slug, timeoutMs }) => { requested.push(["identity", timeoutMs]); return { track, slug } },
+  })
+  assert.ok(requested.some(([kind]) => kind === "remote"))
+  assert.ok(requested.some(([kind]) => kind === "identity"))
+  for (const [, timeoutMs] of requested) assert.ok(timeoutMs >= 2000 && timeoutMs <= 10000, `timeoutMs ${timeoutMs} must stay within the floor and ceiling`)
+})
+
 test("an unavailable optional card does not hide verified session evidence", async () => {
   const f = await cardFixture()
   let elapsed = 0
   const counts = await queue.prepareTaskContexts(f.env, {
     ...f.options, deadline: 2000, clock: () => elapsed,
     resolveIdentity: ({ timeoutMs }) => {
-      assert.equal(timeoutMs, 500)
+      assert.equal(timeoutMs, 2000)
       elapsed += 500
       throw Object.assign(new Error("git_deadline"), { code: "git_deadline" })
     },
@@ -1048,7 +1061,7 @@ test("successive bounded passes refresh every previous association rather than r
       ...options, deadline: 2000, clock: () => elapsed,
       resolveIdentity: ({ track, slug, deadline, timeoutMs }) => {
         assert.ok(deadline <= 1000)
-        assert.equal(timeoutMs, 500)
+        assert.equal(timeoutMs, 2000)
         elapsed += 200
         return { track, slug }
       },
@@ -1096,7 +1109,7 @@ test("a resumed mixed discovery cursor refreshes known work without traversing t
     ...options, pluginVersion: version, deadline: 2000, clock: () => elapsed,
     resolveIdentity: ({ track, slug, deadline, timeoutMs }) => {
       assert.ok(deadline <= 1000)
-      assert.equal(timeoutMs, 500)
+      assert.equal(timeoutMs, 2000)
       elapsed += 200
       return { track, slug }
     },
@@ -1164,7 +1177,7 @@ test("a previous association Git timeout cannot starve later prior and renamed c
       ...options, entries, deadline: 2000, clock: () => elapsed,
       resolveIdentity: ({ track, slug, deadline, timeoutMs }) => {
         assert.ok(deadline <= 1000)
-        assert.equal(timeoutMs, 500)
+        assert.equal(timeoutMs, 2000)
         elapsed += slug === "a-failing" ? 500 : 200
         if (slug === "a-failing") throw Object.assign(new Error("git_deadline"), { code: "git_deadline" })
         return { track, slug: slug === "z-renamed" ? "birth-name" : slug }
@@ -1247,7 +1260,7 @@ test("interrupted ordered saves revisit discovered cards before advancing discov
           ...f.options, entries, deadline: 2000, clock: () => elapsed,
           readRemote: () => { elapsed += 200; return "https://github.com/synthetic/desk.git" },
           resolveIdentity: ({ track, slug, timeoutMs }) => {
-            assert.equal(timeoutMs, 500)
+            assert.equal(timeoutMs, 2000)
             elapsed += 400
             return { track, slug }
           },

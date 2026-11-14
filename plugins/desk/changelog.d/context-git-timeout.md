@@ -1,0 +1,1 @@
+A Factory context's task-card lookup on a slow machine no longer drops its card. Each Git call now gets the time left in its preparation budget, at least 2 s and at most 10 s, instead of a fixed 500 ms.
