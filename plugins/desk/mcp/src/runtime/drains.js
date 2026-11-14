@@ -254,9 +254,12 @@ function newsEvent(event, ignoredLabels) {
   return name.startsWith(DRAIN_LABEL_PREFIX) || ignoredLabels.includes(name) ? null : `${event.event} ${name}`
 }
 
+/** An issue the drain filed or already triaged: a label in its `drain:` namespace, or its status marker in the body, is there before the poll first sees it, so it is already seen. */
+const filedByDrain = (issue) => (issue.labels ?? []).some((label) => (label?.name ?? "").toLowerCase().startsWith(DRAIN_LABEL_PREFIX)) || (issue.body ?? "").includes(DRAIN_STATUS_MARKER)
+
 /** What someone but the drain changed since `before` (a new issue, an edit, another comment, a reopen or a label outside the drain's own), or null. The reason travels with the event. */
 async function changedByOthers(api, repo, issue, before, digest, ignored, ignoredLabels, ignoredComments) {
-  if (!before) return "new issue"
+  if (!before) return filedByDrain(issue) ? null : "new issue"
   if (before.digest && (before.ignored ?? "") === ignored && before.digest !== digest) return "title or body edited"
   const since = before.updatedAt
   const comments = (await api.comments(repo, issue.number, since)).filter((comment) => comment.updated_at > since)
