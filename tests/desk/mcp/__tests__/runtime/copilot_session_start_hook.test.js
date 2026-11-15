@@ -89,7 +89,7 @@ test("the plugin registers only Desk's own boundary hooks for Copilot", () => {
   assert.equal(hooks.preToolUse, undefined, "Desk registers no hook on the host's tool calls")
   assert.deepEqual(commands("postToolUse"), ['node "${PLUGIN_ROOT}/hooks/copilot-intake-context.cjs"'])
   assert.equal(hooks.postToolUse[0].matcher, "skill")
-  assert.deepEqual(commands("agentStop"), ['node "${PLUGIN_ROOT}/hooks/factory-end.cjs" copilot'])
+  assert.equal(hooks.agentStop, undefined, "Desk registers no per-turn hook: the factory runs nothing after a turn")
   assert.deepEqual(commands("userPromptSubmitted"), ['node "${PLUGIN_ROOT}/hooks/copilot-boot-prompt.cjs"'])
 })
 

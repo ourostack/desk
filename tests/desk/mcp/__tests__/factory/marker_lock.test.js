@@ -12,7 +12,7 @@ import { MAX_MARKER_BYTES } from "../../../../../plugins/desk/mcp/src/factory/ma
 import { ID, scratch, session } from "./_session_helpers.js"
 
 import { runHook } from "../../../../../plugins/desk/hooks/lib/factory-end.cjs"
-const SESSION_END = fileURLToPath(new URL("../../../../../plugins/desk/hooks/session-end.cjs", import.meta.url))
+const SESSION_END = fileURLToPath(new URL("../../../../../plugins/desk/hooks/factory-end.cjs", import.meta.url))
 const WAIT_MS = 20000
 
 const payload = (ctx, marker, event) => ({ session_id: ID, cwd: ctx.desk, transcript_path: marker.log_path, hook_event_name: event, ...(event === "SessionEnd" ? { reason: "prompt_input_exit" } : {}) })

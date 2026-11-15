@@ -11,14 +11,12 @@ import * as path from "node:path"
 import { createRequire } from "node:module"
 import { fileURLToPath, pathToFileURL } from "node:url"
 
-import { factoryStateRoot, quarantine, readStatus, requestEvaluation, requestFinalize, setConsent, writeStatus } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
-import { indexJob } from "./_index_helper.js"
-import { jobId } from "../../../../../plugins/desk/mcp/src/factory/binding.js"
+import { readStatus, setConsent } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 import { resolveDeskStateDir, writeLastStart } from "../../../../../plugins/desk/mcp/src/runtime/last-start.js"
 import { copilotStartupDirection, claudeStartupDirection } from "../../../../../plugins/desk/mcp/src/util/startup-direction.js"
 import { bootFixtureEnv } from "../_boot_fixture.js"
 import { STORE, scratch as scratchSession } from "./_session_helpers.js"
-import { TOTAL_BUDGET_MS, andonCheck, checks, deskHealthCheck, factoryCheck, labelsCheck, launchCommand, recordSkipped, runBootChecks, startFactory } from "../../../../../plugins/desk/hooks/lib/boot-checks.cjs"
+import { TOTAL_BUDGET_MS, checks, deskHealthCheck, launchCommand, runBootChecks } from "../../../../../plugins/desk/hooks/lib/boot-checks.cjs"
 import { metadata } from "../../../../../plugins/desk/mcp/src/factory/plugin-sources.cjs"
 import { main as factoryStartMain, DEADLINE_MS as factoryDeadlineMs } from "../../../../../plugins/desk/hooks/factory-start.cjs"
 
@@ -26,7 +24,6 @@ const HOOKS = fileURLToPath(new URL("../../../../../plugins/desk/hooks/", import
 const PLUGIN = path.dirname(HOOKS)
 const BOOT = path.join(HOOKS, "boot-checks.cjs") // the command-line entry; the registry is in lib/
 const START = path.join(HOOKS, "factory-start.cjs")
-const DAY = 24 * 60 * 60 * 1000
 
 // A session start in an ordinary interactive session, whatever runs the tests (a CI runner sets CI; a headless Claude run sets the entry point).
 const interactive = (env) => {
@@ -36,7 +33,7 @@ const interactive = (env) => {
 }
 // Every control here is an ordinary interactive start; the headless suppression has its own tests elsewhere.
 const scratch = (run) => scratchSession(({ env, ...rest }) => run({ ...rest, env: interactive(env) }))
-const quiet = { env: interactive(process.env), launchRepair: async () => {}, launch: async () => {}, record: async () => {} }
+const quiet = { env: interactive(process.env), launchRepair: async () => {}, launch: async () => {} }
 const check = (id, run, budgetMs = 100) => ({ id, budgetMs, run })
 
 // ---------------------------------------------------------------------------
@@ -44,7 +41,7 @@ const check = (id, run, budgetMs = 100) => ({ id, budgetMs, run })
 // ---------------------------------------------------------------------------
 
 test("the registry runs publication inspection before workspace tidy within the shared budget", () => {
-  assert.deepEqual(checks.map((entry) => entry.id), ["factory", "labels", "andon", "desk-health", "workspace-tidy", "improvement"])
+  assert.deepEqual(checks.map((entry) => entry.id), ["desk-health", "workspace-tidy"])
   assert.equal(TOTAL_BUDGET_MS, 300)
   assert.ok(checks.every((entry) => entry.budgetMs <= 300))
 })
@@ -61,16 +58,13 @@ test("no line from any check means no output at all; lines join into exactly one
   assert.equal(spoken.split("\n").length, 1)
 })
 
-test("an exhausted registry budget skips the checks it has no time for with total_budget", async (t) => {
+test("an exhausted registry budget skips the checks it has no time for", async (t) => {
   let tick = 0
   t.mock.method(performance, "now", () => (tick += 1000))
   const order = []
-  const recorded = []
-  const out = await runBootChecks({ ...quiet, record: async (_env, skipped) => { recorded.push(skipped) }, checks: [check("a", async () => { order.push("a"); return {} }), check("b", async () => { order.push("b"); return {} })] })
+  const out = await runBootChecks({ ...quiet, checks: [check("a", async () => { order.push("a"); return {} }), check("b", async () => { order.push("b"); return {} })] })
   assert.equal(out, "")
   assert.ok(!order.includes("b"))
-  assert.equal(recorded.length, 1)
-  assert.ok(recorded[0].some((entry) => entry.id === "b" && entry.reason === "total_budget"))
 })
 
 test("repairs start detached after every check has run, and a repair that cannot start is ignored", async () => {
@@ -94,14 +88,12 @@ test("repairs start detached after every check has run, and a repair that cannot
   assert.deepEqual(events, [["check", "a"], ["check", "b"], ["check", "c"], ["repair", ["fails"]], ["repair", ["node", "x.js"]]])
 })
 
-test("a check that overruns its budget is skipped silently, but a check that throws is skipped, recorded and reported as a Desk problem: block; the rest still run", async (t) => {
-  // This asserts skip, record and report semantics, not the registry total; a frozen clock keeps scheduling and filer work on a loaded runner from spending the 300ms total before "fine" runs. The slow check still overruns on its real 50ms timer.
+test("a check that overruns its budget is skipped silently, but a check that throws is skipped and reported as a Desk problem: block; the rest still run", async (t) => {
+  // This asserts skip and report semantics, not the registry total; a frozen clock keeps scheduling and filer work on a loaded runner from spending the 300ms total before "fine" runs. The slow check still overruns on its real 50ms timer.
   t.mock.method(performance, "now", () => 0)
-  const recorded = []
   let aborted = false
   const line = await runBootChecks({
     ...quiet,
-    record: async (_env, skipped) => { recorded.push(...skipped) },
     checks: [
       check("slow", (ctx) => new Promise(() => { ctx.signal.addEventListener("abort", () => { aborted = true }) }), 50),
       check("self-stopped", async () => { throw Object.assign(new Error("over"), { code: "boot_check_budget" }) }),
@@ -119,8 +111,6 @@ test("a check that overruns its budget is skipped silently, but a check that thr
   ].join("\n"))
   // The overrunning check never answers on its own, so the run returning at all means it did not wait for it.
   assert.ok(aborted, "the overrunning check is told to stop")
-  assert.deepEqual(recorded.map(({ id, reason }) => ({ id, reason })), [{ id: "slow", reason: "budget" }, { id: "self-stopped", reason: "budget" }, { id: "broken", reason: "error" }])
-  assert.ok(recorded.every((entry) => Number.isSafeInteger(entry.elapsed_ms) && entry.elapsed_ms >= 0))
 })
 
 // A check that never yields, on a clock the test owns: the boot runner reads `performance.now()`, so blocking advances that clock by exactly `ms`. A real busy loop would let a loaded machine add time to every check and change which budget each one overruns.
@@ -131,13 +121,11 @@ const useVirtualClock = (t) => {
   t.mock.method(performance, "now", () => virtualNow)
 }
 
-test("checks that block synchronously past their budgets are skipped with their real time, and that time counts against the total", async (t) => {
+test("checks that block synchronously past their budgets are skipped, and their real time counts against the total", async (t) => {
   useVirtualClock(t)
-  const recorded = []
   const repairs = []
   const line = await runBootChecks({
     ...quiet,
-    record: async (_env, skipped) => { recorded.push(...skipped) },
     launchRepair: async (command) => repairs.push(command),
     checks: [
       check("a", () => { block(250); return { line: "a-late", repair: { command: ["node", "a.js"] } } }, 100),
@@ -147,88 +135,59 @@ test("checks that block synchronously past their budgets are skipped with their 
   })
   assert.equal(line, "Desk boot pre-checks: b", "a overran its own budget; c overran the 10 ms the total had left after a's real 250 ms")
   assert.deepEqual(repairs, [["node", "b.js"]], "an overrunning check's repair never starts")
-  const byId = Object.fromEntries(recorded.map((entry) => [entry.id, entry]))
-  assert.equal(byId.a.reason, "budget")
-  assert.ok(byId.a.elapsed_ms >= 250, JSON.stringify(byId.a))
-  assert.equal(byId.c.reason, "budget")
-  assert.ok(byId.c.elapsed_ms >= 140, JSON.stringify(byId.c))
-  assert.equal(byId.b, undefined, JSON.stringify(recorded))
   assert.equal(virtualNow, 250 + 40 + 140, "every check ran to its end on the owned clock")
 })
 
 test("the real elapsed time of each check is charged, so a total spent by blocking skips the rest without running them", async (t) => {
   useVirtualClock(t)
-  const recorded = []
   let ran = false
   const line = await runBootChecks({
     ...quiet,
     totalBudgetMs: 100,
-    record: async (_env, skipped) => { recorded.push(...skipped) },
     checks: [check("first", () => { block(60); return { line: "first" } }, 80), check("second", () => { block(60); return { line: "second" } }, 80), check("third", () => { ran = true; return { line: "third" } }, 80)],
   })
   assert.equal(line, "Desk boot pre-checks: first")
-  assert.equal(recorded[0].id, "second")
-  assert.equal(recorded[0].reason, "budget")
-  assert.deepEqual(recorded.slice(1).map(({ id, reason }) => ({ id, reason })), [{ id: "third", reason: "total_budget" }])
   assert.equal(ran, false)
 })
 
 test("a check timer that fires before the clock reaches the total still spends it, so the next check is skipped", async (t) => {
   // Node's timers run on libuv's cached loop time, so one can fire a little before performance.now() reaches its budget.
   useVirtualClock(t)
-  const recorded = []
+  let ran = false
   const line = await runBootChecks({
     ...quiet,
     totalBudgetMs: 20,
-    record: async (_env, skipped) => { recorded.push(...skipped) },
     checks: [
       check("first", (ctx) => { block(ctx.budgetMs - 1.5); return new Promise(() => {}) }, 1000),
-      check("second", async () => ({ line: "never" })),
+      check("second", async () => { ran = true; return { line: "never" } }),
     ],
   })
   assert.equal(line, "")
-  assert.deepEqual(recorded.map((entry) => entry.reason), ["budget", "total_budget"])
+  assert.equal(ran, false)
 })
 
 test("the total budget caps every check, and checks after it are skipped", async () => {
-  const recorded = []
   const budgets = []
+  let ran = false
   const line = await runBootChecks({
     ...quiet,
     totalBudgetMs: 120,
-    record: async (_env, skipped) => { recorded.push(...skipped) },
     checkBudgets: { first: 1000 },
     checks: [
       check("first", (ctx) => { budgets.push(ctx.budgetMs); return new Promise(() => {}) }, 50),
-      check("second", async () => ({ line: "never" })),
+      check("second", async () => { ran = true; return { line: "never" } }),
     ],
   })
   assert.equal(line, "")
   assert.ok(budgets[0] <= 120)
-  assert.deepEqual(recorded.map((entry) => entry.reason), ["budget", "total_budget"])
-  const quick = await runBootChecks({ ...quiet, record: async () => { throw new Error("cannot record") }, checks: [check("x", () => new Promise(() => {}), 10)] })
-  assert.equal(quick, "")
+  assert.equal(ran, false)
 })
 
-test("skips are recorded in the protected factory status only when factory state already exists", () => scratch(async ({ env, base }) => {
-  assert.equal(await recordSkipped(env, [{ id: "x", reason: "budget" }]), false)
+test("a session start leaves factory state alone: a skipped check records nothing in the factory status", () => scratch(async ({ env, base }) => {
+  await runBootChecks({ env, launchRepair: async () => {}, checks: [check("stalled", () => new Promise(() => {}), 10)] })
   assert.equal(existsSync(path.join(base, "state")), false)
   await setConsent(env, { store: STORE, contribute: false })
   await runBootChecks({ env, launchRepair: async () => {}, checks: [check("stalled", () => new Promise(() => {}), 10)] })
-  const status = await readStatus(env)
-  assert.deepEqual(status.boot_checks.skipped.map(({ id, reason }) => ({ id, reason })), [{ id: "stalled", reason: "budget" }])
-  assert.ok(status.boot_checks.skipped[0].elapsed_ms >= 9)
-  assert.match(status.boot_checks.at, /^\d{4}-\d{2}-\d{2}T/u)
-}))
-
-test("a skip is not recorded while another writer holds the factory status lock, so session start never waits on it", () => scratch(async ({ env }) => {
-  await setConsent(env, { store: STORE, contribute: false })
-  const lock = path.join(await factoryStateRoot(env, { create: false }), "status.json.lock")
-  await fs.writeFile(lock, JSON.stringify({ pid: 999999, started_at: new Date().toISOString() }))
-  const started = Date.now()
-  assert.equal(await recordSkipped(env, [{ id: "x", reason: "budget" }]), false)
-  assert.ok(Date.now() - started < 2000, "returned without waiting on the lock")
-  assert.equal(readFileSync(lock, "utf8").includes("999999"), true, "the other writer's lock is left alone")
   assert.equal((await readStatus(env)).boot_checks, undefined)
 }))
 
@@ -257,68 +216,12 @@ test("launchCommand starts detached with ignored stdio and never waits for the c
 })
 
 // ---------------------------------------------------------------------------
-// The factory and desk-health checks inside the registry.
+// The desk-health check inside the registry. The factory has no check here.
 // ---------------------------------------------------------------------------
 
-test("the factory check says nothing when the bound desk's store has no decision (the boot script owns the question), and is silent without a desk", () => scratch(async ({ env, desk }) => {
-  const run = (options) => runBootChecks({ ...quiet, checks: [factoryCheck], checkBudgets: { factory: 2000 }, totalBudgetMs: 2000, ...options })
-  assert.equal(await run({ host: "claude", env }), "")
-  assert.equal(await run({ host: "copilot", env, sessionFolder: desk }), "")
-  const unbound = { ...env, DESK: "" }
-  delete unbound.DESK
-  assert.equal(await run({ host: "claude", env: { ...unbound, HOME: path.join(desk, "..", "empty-home") } }), "")
-}))
-
-test("the factory check starts one detached finalize for finished jobs whose facts are not delivered", () => scratch(async ({ env, desk }) => {
-  await setConsent(env, { store: STORE, contribute: true, account: "contributor" })
-  const folder = path.join(desk, "alpha", "shipped")
-  await fs.mkdir(folder, { recursive: true })
-  await fs.writeFile(path.join(folder, "task.md"), `---\nstatus: done\nupdated: ${new Date(Date.now() - DAY).toISOString()}\n---\n`)
-  const job = jobId({ deskRemote: `local:${await fs.realpath(desk)}`, personPrefix: "", track: "alpha", slug: "shipped" })
-  await requestFinalize(env, { job, deskRoot: desk })
-  // A Claude Code plugin registry that lists this Desk and no overlay: a missing registry, or one without this Desk, holds the route, and with it every finalize.
-  await fs.mkdir(path.join(env.HOME, ".claude", "plugins"), { recursive: true })
-  await fs.writeFile(path.join(env.HOME, ".claude", "plugins", "installed_plugins.json"), JSON.stringify({ version: 2, plugins: { "desk@ourostack": [{ version: "1.0.0", installPath: PLUGIN }] } }))
-  const repairs = []
-  const line = await runBootChecks({ ...quiet, host: "claude", env, checks: [factoryCheck], checkBudgets: { factory: 2000 }, totalBudgetMs: 2000, launchRepair: async (command) => repairs.push(command) })
-  assert.equal(line, "")
-  assert.deepEqual(repairs, [[process.execPath, BOOT, "--compatible", path.join(PLUGIN, "mcp", "scripts", "factory.js"), "finalize", "--job", job]], "finalize starts through the compatible-Node launcher")
-  const person = []
-  await runBootChecks({ ...quiet, host: "claude", env: { ...env, DESK_PERSON: "../bad" }, checks: [factoryCheck], checkBudgets: { factory: 2000 }, totalBudgetMs: 2000, launchRepair: async (command) => person.push(command) })
-  assert.equal(person.length, 1, "an invalid person alias falls back to the desk's own tracks")
-  const none = []
-  await runBootChecks({ ...quiet, host: "claude", env: { ...env, DESK_PERSON: "sam" }, checks: [factoryCheck], checkBudgets: { factory: 2000 }, totalBudgetMs: 2000, launchRepair: async (command) => none.push(command) })
-  assert.deepEqual(none, repairs, "a pending request is finalized whatever person prefix the task tools bound it under")
-}))
-
-test("the labels check names how many finished jobs wait for labels and what the plugin is doing, and starts nothing", () => scratch(async ({ env, desk }) => {
-  const repairs = []
-  env = interactive(env)
-  const run = (options = {}) => runBootChecks({ ...quiet, host: "claude", env, checks: [labelsCheck], checkBudgets: { labels: 2000 }, totalBudgetMs: 2000, launchRepair: async (command) => repairs.push(command), ...options })
-  // No consent, or nothing retained: silent, and no factory state is created.
-  assert.equal(await run(), "")
-  assert.equal(existsSync(path.join(env.XDG_STATE_HOME, "ouroboros-skills")), false)
-  await setConsent(env, { store: STORE, contribute: true, account: "contributor" })
-  assert.equal(await run(), "")
-  await requestEvaluation(env, { job: "9f2c4b1a7d3e5f60718293a4b5c6d7e8", deskRoot: desk })
-  await requestEvaluation(env, { job: "5e6f708192a3b4c5d6e7f8091a2b3c4d", deskRoot: desk })
-  await fs.writeFile(path.join(await factoryStateRoot(env), "evaluate-requests", "notes.txt"), "x")
-  assert.equal(await run(), "Desk boot pre-checks: Factory evaluator: 2 finished jobs wait for labels (oldest 0 days); the plugin labels them in the background, no result recorded yet")
-  assert.deepEqual(repairs, [], "the plugin runs the evaluator itself: the boot check starts no repair")
-  // Labels quarantined with their facts are reported, and a job whose every session is held back is not counted as waiting.
-  const root = await factoryStateRoot(env)
-  await indexJob(env, "5e6f708192a3b4c5d6e7f8091a2b3c4d", "claude-code-00000001-0000-4000-8000-000000000001.json")
-  await quarantine(env, STORE, "labels/5e6f708192a3b4c5d6e7f8091a2b3c4d/00000001-0000-4000-8000-000000000001.json", "facts_quarantined", { facts: "claude-code-00000001-0000-4000-8000-000000000001.json" })
-  assert.equal(await run(), "Desk boot pre-checks: Factory evaluator: 1 finished job waits for labels (oldest 0 days); the plugin labels them in the background, no result recorded yet; Factory: 1 finished job has quarantined waste labels; no card is open for it yet")
-  // Quarantined labels alone are reported without a repair.
-  await fs.rm(path.join(root, "evaluate-requests", "9f2c4b1a7d3e5f60718293a4b5c6d7e8.json"))
-  repairs.length = 0
-  assert.equal(await run(), "Desk boot pre-checks: Factory: 1 finished job has quarantined waste labels; no card is open for it yet")
-  assert.deepEqual(repairs, [])
-  // A declined store keeps the check silent.
-  await setConsent(env, { store: STORE, contribute: false, account: "contributor" })
-  assert.equal(await run(), "")
-}))
+test("the registry has no factory, labels, andon or improvement check, and starts no factory delivery", () => {
+  for (const id of ["factory", "labels", "andon", "improvement"]) assert.equal(checks.some((entry) => entry.id === id), false, id)
+})
 
 test("the desk-health check reports a degraded last start and otherwise asks for the fast-forward", () => scratch(async ({ env, desk, base }) => {
   const run = (options) => runBootChecks({ ...quiet, checks: [deskHealthCheck], checkBudgets: { "desk-health": 2000 }, totalBudgetMs: 2000, ...options })
@@ -352,42 +255,10 @@ test("the fast-forward repair entry point runs the detached fast-forward and rep
 }))
 
 // ---------------------------------------------------------------------------
-// Starting delivery.
+// Delivery runs only where someone starts it.
 // ---------------------------------------------------------------------------
 
-test("startFactory starts factory-start.cjs detached only when a store has contribute: true", () => scratch(async ({ env }) => {
-  const launched = []
-  const launch = async (command, childEnv) => launched.push({ command, childEnv })
-  assert.equal(await startFactory({ env, launch }), false)
-  await setConsent(env, { store: STORE, contribute: false })
-  assert.equal(await startFactory({ env, launch }), false)
-  await setConsent(env, { store: STORE, contribute: true, account: "contributor" })
-  assert.equal(await startFactory({ env, launch }), true)
-  assert.deepEqual(launched.map((entry) => entry.command), [[process.execPath, BOOT, "--compatible", START], [process.execPath, BOOT, "--compatible", path.join(HOOKS, "loop-start.cjs")]], "delivery, then the loop worker's launcher, start through the compatible-Node launcher")
-  assert.equal(launched[0].childEnv, env)
-  assert.equal(await startFactory({ env, launch: async () => { throw new Error("spawn failed") } }), false)
-}))
-
-test("the andon check names each contributing store's open andon issues in one line, with no repair", () => scratch(async ({ env: raw }) => {
-  const env = interactive(raw)
-  const repairs = []
-  const run = () => runBootChecks({ ...quiet, host: "claude", env, checks: [andonCheck], checkBudgets: { andon: 2000 }, totalBudgetMs: 2000, launchRepair: async (command) => repairs.push(command) })
-  assert.equal(await run(), "")
-  assert.equal(existsSync(path.join(env.XDG_STATE_HOME, "ouroboros-skills")), false)
-  await setConsent(env, { store: STORE, contribute: true, account: "contributor" })
-  await setConsent(env, { store: "acme/work", contribute: true, account: "worker" })
-  // No refresh has run yet for either store: said out loud, never silent.
-  assert.equal(await run(), "Desk boot pre-checks: Factory: andon state unknown for acme/work (never refreshed) (not_refreshed); Factory: andon state unknown for ourostack/factory (never refreshed) (not_refreshed)")
-  const at = new Date().toISOString()
-  await writeStatus(env, { andon: { [STORE]: { checked_at: at, issues: [{ number: 41, title: "Andon: desk 3.4.0 tool_failures other" }] }, "acme/work": { checked_at: at, issues: [] } } })
-  assert.equal(await run(), "Desk boot pre-checks: Factory: 1 open andon issue in ourostack/factory (#41); it has no improvement card yet, and gets one at the next background step")
-  // A failed refresh after the last good one: unknown, beside the last known issues.
-  await writeStatus(env, { andon: { [STORE]: { checked_at: at, issues: [{ number: 41, title: "x" }], failure: "auth_failed", failed_at: new Date(Date.parse(at) + 1000).toISOString() }, "acme/work": { checked_at: at, issues: [] } } })
-  assert.equal(await run(), `Desk boot pre-checks: Factory: andon state unknown for ourostack/factory since ${at.slice(0, 10)} (auth_failed); Factory: 1 open andon issue in ourostack/factory (#41); it has no improvement card yet, and gets one at the next background step`)
-  assert.deepEqual(repairs, [])
-}))
-
-test("factory-start.cjs runs sweep and flush for consented stores, prints nothing and exits 0", () => scratch(async ({ env }) => {
+test("factory-start.cjs runs sweep and flush for consented stores when started by hand, prints nothing and exits 0", () => scratch(async ({ env }) => {
   const start = { main: factoryStartMain, DEADLINE_MS: factoryDeadlineMs }
   assert.equal(start.DEADLINE_MS, 120000)
   assert.deepEqual(await start.main({ env }), { stores: {} })
@@ -408,16 +279,14 @@ test("factory-start.cjs runs sweep and flush for consented stores, prints nothin
 // Startup output, byte for byte.
 // ---------------------------------------------------------------------------
 
-// The fixture checks and factory start, through the test-only preload (`_boot_fixture_preload.cjs`), for the hook itself only.
-async function overridesFor(dir, { lines = null, calls }) {
+// The fixture checks, through the test-only preload (`_boot_fixture_preload.cjs`), for the hook itself only.
+async function overridesFor(dir, { lines = null }) {
   const file = path.join(dir, `overrides-${Math.random().toString(16).slice(2)}.cjs`)
   await fs.writeFile(file, `
-const fs = require("node:fs");
 require("node:test").mock.method(performance, "now", () => 0);
 module.exports = {
   migrationLine: async () => "",
   checks: ${JSON.stringify(lines ?? [])}.map((line, index) => ({ id: "fixture-" + index, budgetMs: 100, run: async () => ({ line }) })),
-  startFactory: async () => { fs.appendFileSync(${JSON.stringify(calls)}, "started\\n"); return true; },
 };
 `)
   return file
@@ -452,14 +321,13 @@ const jqLine = (stdout) => process.platform === "win32" ? stdout.replace(/\r\n$/
 
 for (const host of ["claude", "copilot"]) {
   test(`${host} session-start output is byte-identical when no boot check speaks, and gains exactly one line when they do`, () => scratch(async ({ env, desk, base }) => {
-    const calls = path.join(base, "calls.txt")
     const hookEnv = { ...env, PLUGIN_ROOT: PLUGIN, CLAUDE_PLUGIN_ROOT: PLUGIN, CLAUDE_PROJECT_DIR: desk }
     if (host === "copilot") {
       const home = hookEnv.COPILOT_HOME || path.join(hookEnv.HOME, ".copilot")
       await fs.mkdir(home, { recursive: true })
       await fs.writeFile(path.join(home, "settings.json"), JSON.stringify({ memory: false, includeCoAuthoredBy: false, askUser: false }))
     }
-    const silent = await overridesFor(base, { calls })
+    const silent = await overridesFor(base, {})
     const quietRun = runHook(host, bootFixtureEnv(hookEnv, silent), desk)
     assert.equal(quietRun.status, 0, quietRun.stderr)
     const context = expectedContext(host, hookEnv, desk)
@@ -476,13 +344,13 @@ for (const host of ["claude", "copilot"]) {
     assert.equal(parsed.additionalContext ?? parsed.hookSpecificOutput.additionalContext, context)
     assert.doesNotMatch(quietRun.stdout, /Desk boot pre-checks:/u)
 
-    const speaking = await overridesFor(base, { lines: ["one", "two"], calls })
+    const speaking = await overridesFor(base, { lines: ["one", "two"] })
     const spokenRun = runHook(host, bootFixtureEnv(hookEnv, speaking), desk)
     assert.equal(spokenRun.status, 0, spokenRun.stderr)
     const spoken = JSON.parse(spokenRun.stdout)
     assert.equal(spoken.additionalContext ?? spoken.hookSpecificOutput.additionalContext, expectedContext(host, hookEnv, desk, "\n\nDesk boot pre-checks: one; two"))
     if (host === "copilot" || hasJq) assert.equal(jqLine(spokenRun.stdout), envelope(host, expectedContext(host, hookEnv, desk, "\n\nDesk boot pre-checks: one; two")))
-    assert.equal(readFileSync(calls, "utf8"), "started\nstarted\n", "each start launches factory delivery once, after its output is built")
+    assert.equal(existsSync(path.join(base, "state", "ouroboros-skills", "desk", "factory")), false, "a session start starts no factory delivery and creates no factory state")
   }))
 }
 
@@ -502,25 +370,25 @@ test("the real hooks with a bound desk and no decision add no factory boot line 
   assert.equal(existsSync(path.join(base, "state", "ouroboros-skills", "desk", "factory")), false, "startup never creates factory state")
 }))
 
-test("the Claude resolver appends the boot line only when there is one and starts delivery afterwards", async () => {
+test("the Claude resolver appends the boot line only when there is one", async () => {
   const { main } = await import(pathToFileURL(path.join(PLUGIN, "mcp", "scripts", "resolve-desk-root.js")).href)
   const events = []
-  const loadBoot = async () => ({ migrationLine: async () => { events.push("migrations"); return "" }, runBootChecks: async () => { events.push("checks"); return "" }, startFactory: async () => { events.push("factory") } })
+  const loadBoot = async () => ({ migrationLine: async () => { events.push("migrations"); return "" }, runBootChecks: async () => { events.push("checks"); return "" } })
   let output = ""
   await main({ argv: ["--startup-line", "--boot-checks"], env: { HOME: "/nonexistent-home" }, write: (text) => { output = text; events.push("write") }, loadBoot })
-  assert.deepEqual(events, ["migrations", "checks", "factory", "write"], "the migration check starts before the boot checks and runs alongside them")
+  assert.deepEqual(events, ["migrations", "checks", "write"], "the migration check starts before the boot checks and runs alongside them")
   assert.doesNotMatch(output, /\n\n$/u)
   assert.doesNotMatch(output, /Desk boot|Desk migrations/u)
-  const speaking = async () => ({ migrationLine: async () => "Desk migrations: y", runBootChecks: async () => "Desk boot pre-checks: x", startFactory: async () => {} })
+  const speaking = async () => ({ migrationLine: async () => "Desk migrations: y", runBootChecks: async () => "Desk boot pre-checks: x" })
   await main({ argv: ["--startup-line", "--boot-checks"], env: { HOME: "/nonexistent-home" }, write: (text) => { output = text }, loadBoot: speaking })
   assert.match(output, /\n\nDesk boot pre-checks: x\n\nDesk migrations: y$/u)
-  const migrationsOnly = async () => ({ migrationLine: async () => "Desk migrations: y", runBootChecks: async () => "", startFactory: async () => {} })
+  const migrationsOnly = async () => ({ migrationLine: async () => "Desk migrations: y", runBootChecks: async () => "" })
   await main({ argv: ["--startup-line", "--boot-checks"], env: { HOME: "/nonexistent-home" }, write: (text) => { output = text }, loadBoot: migrationsOnly })
   assert.match(output, /[^\n]\n\nDesk migrations: y$/u)
   assert.doesNotMatch(output, /Desk boot/u)
 })
 
-test("the plugin scan stops at the check's deadline and the factory check is then skipped, never guessed", () => scratch(async ({ env, desk }) => {
+test("the plugin scan stops at its deadline and reports itself incomplete, never guessing", () => scratch(async ({ env, desk }) => {
   const { readSmallText } = await import(pathToFileURL(path.join(PLUGIN, "mcp", "src", "factory", "marker.js")).href)
   const { PATTERNS } = await import(pathToFileURL(path.join(PLUGIN, "mcp", "src", "factory", "schema.js")).href)
   const home = env.HOME
@@ -533,10 +401,6 @@ test("the plugin scan stops at the check's deadline and the factory check is the
     const fine = metadata({ host, pluginRoot: path.join(PLUGIN), home, env, readSmallText, PATTERNS })
     assert.equal(fine.timedOut, false)
   }
-  const recorded = []
-  const line = await runBootChecks({ ...quiet, host: "claude", env, checks: [{ ...factoryCheck, run: (ctx) => factoryCheck.run({ ...ctx, deadline: 0 }) }], record: async (_env, skipped) => recorded.push(...skipped) })
-  assert.equal(line, "")
-  assert.equal(recorded[0].reason, "budget")
 }))
 
 // ---------------------------------------------------------------------------
@@ -565,7 +429,6 @@ require("node:test").mock.method(performance, "now", () => 0);
 module.exports = {
   checks: [{ id: "fixture", budgetMs: 100, run: async () => ({ line: ${JSON.stringify(precheck)} }) }],
   migrationLine: async () => ${JSON.stringify(migration)},
-  startFactory: async () => true,
 };
 `)
     const hookEnv = bootFixtureEnv({ ...env, PLUGIN_ROOT: root, CLAUDE_PLUGIN_ROOT: root, CLAUDE_PROJECT_DIR: desk, DESK: desk, DESK_AUTO_BOOT: "0" }, overrides)

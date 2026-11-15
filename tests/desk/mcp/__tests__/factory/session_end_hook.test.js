@@ -1,6 +1,6 @@
 // Session end is one hook command per host: hooks/session-end.cjs reads the payload once and hands it to one detached worker that
-// runs both the factory capture (lib/factory-end.cjs) and the unpushed-commit check (lib/sync-end.cjs). On Windows each registered
-// command is its own PowerShell process, about 0.75 s before any work, so one command instead of two is the saving.
+// runs the unpushed-commit check (lib/sync-end.cjs). Since Epoch 3 the factory capture (lib/factory-end.cjs) is not part of it. On
+// Windows each registered command is its own PowerShell process, about 0.75 s before any work, so one detached worker is the saving.
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { spawnSync } from "node:child_process"
@@ -25,9 +25,9 @@ test("each host registers exactly one session-end command, and it is session-end
   assert.deepEqual(claude.SessionEnd, [
     { hooks: [{ type: "command", command: 'node "${CLAUDE_PLUGIN_ROOT}/hooks/session-end.cjs" claude', timeout: 5 }] },
   ])
-  // The per-turn events keep only the factory end hook: the unpushed check never runs on every turn.
-  const perTurn = [...claude.Stop.flatMap((group) => group.hooks.map((hook) => hook.command)), ...copilot.agentStop.flatMap((hook) => [hook.bash, hook.powershell])]
-  for (const command of perTurn) assert.match(command, /factory-end\.cjs/u)
+  // No per-turn event is registered: the factory runs nothing after a turn.
+  assert.equal(claude.Stop, undefined)
+  assert.equal(copilot.agentStop, undefined)
 })
 
 function git(root, args) {
@@ -58,7 +58,7 @@ async function until(check) {
   return check()
 }
 
-test("one session-end run exits at once and its one detached worker records both the factory marker and the unpushed check", (t) => scratch(async (ctx) => {
+test("one session-end run exits at once and its one detached worker runs the unpushed check and records no factory marker", (t) => scratch(async (ctx) => {
   await unpushedDesk(ctx)
   const marker = await session(ctx)
   // Makes only the worker slow, as starting Node, loading Desk and running Git is on a loaded machine.
@@ -74,22 +74,19 @@ test("one session-end run exits at once and its one detached worker records both
   assert.equal(result.stdout, "")
   assert.equal(result.stderr, "")
   assert.ok(elapsed < 3000, `the session-end hook took ${Math.round(elapsed)} ms, past Copilot's 3000 ms`)
-  assert.equal((await listMarkers(ctx.env)).length, 0, "the hook returned before its worker wrote the marker")
-  assert.equal(await until(async () => (await listMarkers(ctx.env)).length === 1), true, "the worker wrote the factory marker")
-  const [saved] = await listMarkers(ctx.env)
-  assert.equal(saved.session_id, ID)
-  assert.equal(saved.end_reason, "prompt_input_exit")
-  assert.equal(await until(async () => readSyncStatus({ root: ctx.desk, env: ctx.env })?.reason === "unpushed_at_session_end"), true, "the same worker ran the unpushed check")
+  assert.notEqual(readSyncStatus({ root: ctx.desk, env: ctx.env })?.reason, "unpushed_at_session_end", "the hook returned before its worker ran the unpushed check")
+  assert.equal(await until(async () => readSyncStatus({ root: ctx.desk, env: ctx.env })?.reason === "unpushed_at_session_end"), true, "the worker ran the unpushed check")
+  assert.equal((await listMarkers(ctx.env)).filter((saved) => saved.end_reason === "prompt_input_exit").length, 0, "no factory capture ran at session end")
 }))
 
-test("a Copilot sessionEnd payload reaches both jobs too", () => scratch(async (ctx) => {
+test("a Copilot sessionEnd payload reaches the unpushed check too", () => scratch(async (ctx) => {
   await unpushedDesk(ctx)
   await session(ctx, "copilot-cli")
   const input = JSON.stringify({ sessionId: ID, cwd: ctx.desk, timestamp: Date.now(), reason: "complete" })
   const result = spawnSync(process.execPath, [SCRIPT, "copilot"], { env: { ...ctx.env, NODE_OPTIONS: "" }, input, encoding: "utf8", timeout: 5000 })
   assert.equal(result.status, 0, result.stderr)
-  assert.equal(await until(async () => (await listMarkers(ctx.env)).some((marker) => marker.host === "copilot-cli" && marker.end_reason === "complete")), true)
   assert.equal(await until(async () => readSyncStatus({ root: ctx.desk, env: ctx.env })?.reason === "unpushed_at_session_end"), true)
+  assert.equal((await listMarkers(ctx.env)).some((saved) => saved.end_reason === "complete"), false)
 }))
 
 test("malformed stdin, and a headless session, exit zero with no output and start no worker", () => scratch(async (ctx) => {

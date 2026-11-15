@@ -4,8 +4,8 @@
 // `--root-only` prints just the root (empty when none); `--startup-line` prints
 // the `Desk startup:` line the Claude hook appends; `--boot-checks` appends the
 // one `Desk boot pre-checks:` line when a boot check has something to say and the one
-// `Desk migrations:` line when one of Desk's own migrations is pending, then
-// starts factory delivery detached. Always exits 0: a hook must not block session
+// `Desk migrations:` line when one of Desk's own migrations is pending.
+// Always exits 0: a hook must not block session
 // start.
 import process from "node:process"
 import * as os from "node:os"
@@ -36,8 +36,8 @@ export function resolveHookDeskRoot({ env = process.env, cwd = process.cwd(), ho
 
 // Named, so that what the registry exports and nothing here uses is reported as unused code.
 async function loadBootChecks() {
-  const { migrationLine, runBootChecks, startFactory } = await import("../../hooks/lib/boot-checks.cjs")
-  return { migrationLine, runBootChecks, startFactory }
+  const { migrationLine, runBootChecks } = await import("../../hooks/lib/boot-checks.cjs")
+  return { migrationLine, runBootChecks }
 }
 
 export async function main({ argv = process.argv.slice(2), env = process.env, write = (text) => process.stdout.write(text), loadBoot = loadBootChecks } = {}) {
@@ -46,7 +46,7 @@ export async function main({ argv = process.argv.slice(2), env = process.env, wr
   if (argv.includes("--root-only")) output = result.root ?? ""
   if (argv.includes("--startup-line")) output = claudeStartupDirection({ env })
   if (argv.includes("--boot-checks")) {
-    const { migrationLine, runBootChecks, startFactory } = await loadBoot()
+    const { migrationLine, runBootChecks } = await loadBoot()
     // Desk's own migration Detect blocks run alongside the boot checks, and
     // add one line only when a migration is pending.
     const migrations = migrationLine({ host: "claude", env })
@@ -55,8 +55,6 @@ export async function main({ argv = process.argv.slice(2), env = process.env, wr
     if (line) output += `\n\n${line}`
     const pending = await migrations
     if (pending) output += `\n\n${pending}`
-    // Factory delivery starts detached only once the output is built.
-    await startFactory({ env })
   }
   write(output)
 }

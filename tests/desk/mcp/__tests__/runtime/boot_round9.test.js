@@ -88,7 +88,7 @@ test("boot also carries the person's own AGENTS.md in a shared workspace, where 
   assert.equal(solo.person_agents_md, null, "a solo desk's own AGENTS.md is the root one")
   const throwing = await boot(root, { env: { DESK: root, DESK_PERSON: "ari" }, personFn: async () => { throw new Error("denied") } })
   assert.equal(throwing.person_agents_md, null)
-  assert.ok(throwing.degraded.includes("improvement: denied"), "the one person lookup's failure is still reported where the improvement cards say it")
+  assert.deepEqual(throwing.degraded.filter((line) => /denied/u.test(line)), [], "a person lookup that fails degrades nothing")
   const unreadable = await boot(root, { env: { DESK: root, DESK_PERSON: "ari" }, agentsFn: (dir) => {
     if (dir.endsWith("ari")) throw new Error("EACCES")
     return readAgentsMd(dir)

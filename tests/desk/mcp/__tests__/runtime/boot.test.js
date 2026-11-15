@@ -6,7 +6,6 @@
 // `fakeGh` convention — nothing here reaches a real `gh`, `jq` or network.
 
 import { formatBootText } from "../../../../../plugins/desk/mcp/src/runtime/boot-text.js"
-import { asksForConsent } from "../../../../../evals/boot-acceptance/scenarios.mjs"
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { promises as fs } from "node:fs"
@@ -1105,19 +1104,14 @@ test("bootOnce: each step's own failure degrades only that part, never the whole
     walkFn: () => {
       throw new Error("walk exploded")
     },
-    factoryStatusFn: () => {
-      throw new Error("factory exploded")
-    },
   })
   assert.equal(result.boot_complete, true)
   assert.equal(result.status, "degraded")
   assert.ok(result.degraded.some((line) => line.startsWith("sync:")))
   assert.ok(result.degraded.some((line) => line.startsWith("active_tasks:")))
   assert.ok(result.degraded.some((line) => line.startsWith("card_validation:")))
-  assert.ok(result.degraded.some((line) => line.startsWith("factory:")))
   assert.equal(result.sync, null)
   assert.equal(result.active_tasks, null)
-  assert.equal(result.factory, null)
 })
 
 test("bootOnce: a push-account step that itself throws degrades only push_accounts, never the whole call", async () => {
@@ -1892,55 +1886,6 @@ test("isNoninteractive: headless Claude Code, an unattended session and CI runne
   assert.equal(isNoninteractive({}), false)
 })
 
-test("bootOnce: undecided factory consent, interactive, is raised only after the work, as one short line, never first", async () => {
-  const root = await mkDeskWorkspace()
-  await writeCard(root, "track-a", "open-task", VALID_CARD)
-  const result = await healthyBoot(root, { taskQuery: "open-task", factoryStatusFn: UNDECIDED })
-  const text = result.instructions.join("\n")
-  assert.match(text, /never comes before the work the operator asked for, and never instead of it: do that work first/u)
-  assert.match(text, /raise it at most once as this statement/u)
-  assert.match(text, /If this reply delivers a task, defer the notice to a later turn and preserve the required sign-off/u)
-  assert.match(text, /calling desk_doctor with \{"factory_consent": "yes"\} or \{"factory_consent": "no"\}/u)
-  assert.match(text, /call desk_doctor with \{"factory_told": true\}/u)
-  assert.doesNotMatch(result.instructions.filter((line) => /[Ff]actory consent|factory_consent/u.test(line)).join("\n"), /factory\.js|node /u, "no instruction to run a script")
-  assert.match(text, /Contribute\? \(yes or no\)/u)
-  const handoff = result.instructions.findIndex((line) => line.includes("desk:session-resumption"))
-  const consent = result.instructions.findIndex((line) => line.startsWith("Factory consent is undecided"))
-  assert.ok(handoff !== -1 && consent > handoff, "the resume hand-off comes before any consent instruction")
-})
-
-test("bootOnce: the text boot gives undecided factory consent as one short line last, pointing at the details; --json keeps the long instructions", async () => {
-  const root = await mkDeskWorkspace()
-  await writeCard(root, "track-a", "open-task", VALID_CARD)
-  const result = await healthyBoot(root, { factoryStatusFn: UNDECIDED })
-  const plain = result.text_instructions
-  assert.equal(plain.filter((line) => /[Ff]actory consent/u.test(line)).length, 1, "one consent line in the text boot")
-  assert.match(plain.at(-1), /^Factory consent is undecided for ourostack\/factory-intake\. Only after the operator's work is done, and only if they are in the conversation, raise this statement once: "Desk can contribute measurement data about finished tasks to ourostack\/factory-intake; say 'factory details' to see what it sends\." If this reply delivers a task, defer the notice to a later turn and preserve the required sign-off\. In the same turn, just before the reply that includes it, call desk_doctor with \{"factory_told": true\}, so that no later session says it again; if the call fails or is refused, say the sentence anyway, do not retry and do not mention it\. If you already said the sentence in this session, do not say it again\. A child agent never says it and never makes the call\. Only if they then say 'factory details' \(or ask what is sent\), follow "Factory consent" in .*skills.session-start.details\.md\.$/u)
-  const sentence = /"(Desk can contribute[^"]*)"/u.exec(plain.at(-1))[1]
-  assert.doesNotMatch(sentence, /\?|want the details|yes or no/iu, "the sentence relayed to the operator is a statement, not a question")
-  assert.equal(asksForConsent(sentence), false, "the harness does not read it as an ask")
-  assert.doesNotMatch(plain.join("\n"), /factory_consent|Contribute\? \(yes or no\)|account_found/u, "the question and the recording call are behind the pointer")
-  assert.ok(result.instructions.some((line) => /\{"factory_consent": "yes"\}/u.test(line)), "--json keeps the recording call")
-  const printed = formatBootText(result)
-  assert.equal(printed.split("Factory consent is undecided").length, 2)
-  const decided = await healthyBoot(root)
-  assert.ok(!decided.text_instructions.some((line) => /[Ff]actory consent/u.test(line)))
-})
-
-test("bootOnce: the factory findings (orphan pass, retention, a store check that keeps failing) are plain-text boot lines before the consent line", async () => {
-  const root = await mkDeskWorkspace()
-  await writeCard(root, "track-a", "open-task", VALID_CARD)
-  const findings = () => ({ ...UNDECIDED(), orphans: "pass_failed", retention: "prune_failed", capture_check_unavailable: [{ store: "ourostack/factory-intake", times: 3 }] })
-  const plain = (await healthyBoot(root, { factoryStatusFn: findings })).text_instructions
-  const at = (pattern) => plain.findIndex((line) => pattern.test(line))
-  assert.ok(at(/^Factory: orphan pass needs attention: pass_failed\. /u) !== -1)
-  assert.ok(at(/^Factory: local retention needs attention: prune_failed\. /u) !== -1)
-  assert.ok(at(/^Factory: ourostack\/factory-intake: capture record not landing, the store's own check could not read it 3 times in a row\. /u) !== -1)
-  assert.match(plain.at(-1), /^Factory consent is undecided/u, "consent stays last")
-  const quiet = (await healthyBoot(root, { factoryStatusFn: () => null })).text_instructions
-  assert.equal(quiet.some((line) => line.startsWith("Factory: ")), false, "no factory status, no finding line")
-})
-
 test("bootOnce: the text boot folds the rules into short closing wording, drops the host list, and keeps the tool hint", async () => {
   const root = await mkDeskWorkspace()
   await writeCard(root, "track-a", "open-task", VALID_CARD)
@@ -1951,12 +1896,6 @@ test("bootOnce: the text boot folds the rules into short closing wording, drops 
   assert.ok(plain.some((line) => /`desk-task_update`/u.test(line)), "the host's tool names stay")
   assert.ok(!plain.some((line) => /hosts/u.test(line)))
   assert.match(plain.at(-1), /^In every reply: if the next step needs something that is not on this machine .* say what is missing and stop, and never recreate or simulate it; .* say 'done' only for a task whose status is done; do not print Desk skill step headings\.$/u)
-})
-
-test("bootOnce: undecided factory consent in a noninteractive session emits no consent instruction at all", async () => {
-  const root = await mkDeskWorkspace()
-  const result = await healthyBoot(root, { env: { DESK: root, CLAUDE_CODE_ENTRYPOINT: "sdk-cli" }, factoryStatusFn: UNDECIDED })
-  assert.ok(!result.instructions.some((line) => /[Ff]actory consent|consent --store/u.test(line)))
 })
 
 test("bootOnce: a sync that outlives the budget is pending, not a hang", async () => {
@@ -2071,15 +2010,14 @@ test("bootOnce: delivered tasks that await sign-off are listed, the one instruct
   assert.equal(JSON.stringify(signoff).includes("shipped"), false)
 })
 
-test("bootOnce: with consent undecided and one unsigned delivery, the sign-off line comes before consent, and consent stays the last instruction", async () => {
+test("bootOnce: the boot says nothing about the factory or the improvement cards, whatever the factory's state", async () => {
   const root = await mkDeskWorkspace()
   await writeCard(root, "track-a", "shipped", DELIVERED_CARD("Shipped thing", new Date(Date.now() - 86_400_000).toISOString()))
-  const result = await healthyBoot(root, { factoryStatusFn: UNDECIDED })
-  const list = result.text_instructions
-  const signoff = list.findIndex((line) => /awaits sign-off/u.test(line))
-  assert.ok(signoff !== -1 && signoff < list.length - 1, "the sign-off instruction is present and not last")
-  assert.match(list.at(-1), /^Factory consent is undecided/u)
-  assert.ok(result.instructions.findIndex((line) => /awaits sign-off/u.test(line)) < result.instructions.findIndex((line) => line.startsWith("Factory consent is undecided")))
+  const result = await healthyBoot(root, { factoryStatusFn: UNDECIDED, improvementFn: async () => ({ status: "ok", open: 3 }) })
+  const all = [...result.instructions, ...result.text_instructions, formatBootText(result)].join("\n")
+  assert.doesNotMatch(all, /factory|improvement card/iu)
+  assert.ok(!("factory" in result))
+  assert.ok(result.text_instructions.some((line) => /awaits sign-off/u.test(line)), "the sign-off line stays")
 })
 
 test("bootOnce: a noninteractive session lists the tasks but is given no sign-off instruction; a desk with nothing unsigned has no section", async () => {
