@@ -95,7 +95,7 @@ const clip = (text, cap) => {
 }
 
 /** Runs a schedule's `when` argv with no shell. Resolves `{ exit, stdout, stderr, timedOut, startError, signal }` and never rejects. */
-function runWhenGate(argv, timeoutSeconds = GATE_DEFAULT_TIMEOUT_S) {
+function runWhenGate(argv, timeoutSeconds) {
   return new Promise((resolve) => {
     let stdout = ""
     let stderr = ""
@@ -110,31 +110,31 @@ function runWhenGate(argv, timeoutSeconds = GATE_DEFAULT_TIMEOUT_S) {
     try {
       child = spawn(argv[0], argv.slice(1), { shell: false, stdio: ["ignore", "pipe", "pipe"], windowsHide: true })
     } catch (error) {
-      resolve({ stdout, stderr, startError: error.code ?? error.message })
+      resolve({ stdout, stderr, startError: error.code })
       return
     }
-    const keep = (current, chunk) => (current.length > GATE_OUTPUT_CAP * 2 ? current : current + chunk)
+    const keep = (current, chunk) => (current + chunk).slice(0, GATE_OUTPUT_CAP * 2)
     child.stdout.setEncoding("utf8").on("data", (chunk) => { stdout = keep(stdout, chunk) })
     child.stderr.setEncoding("utf8").on("data", (chunk) => { stderr = keep(stderr, chunk) })
     const timer = setTimeout(() => {
       child.kill("SIGKILL")
-      finish({ timedOut: true })
+      finish({ timedOut: timeoutSeconds })
     }, timeoutSeconds * 1000)
-    child.on("error", (error) => finish({ startError: error.code ?? error.message }))
+    child.on("error", (error) => finish({ startError: error.code }))
     child.on("close", (exit, signal) => finish({ exit, signal }))
   })
 }
 
 /** What a gate run means: whether to send, the text added to the prompt and the record kept for status. */
-function judgeGate(schedule, run, now) {
+function judgeGate(run, now) {
   const at = new Date(now).toISOString()
   if (run.exit === 0) {
     const why = clip(run.stdout, GATE_OUTPUT_CAP)
     return { send: true, addition: why ? `Why now: ${why}` : "", record: { at, result: "delivered (when: exit 0)", ...(why ? { why: clip(why.split("\n")[0], GATE_STDERR_CAP) } : {}) } }
   }
   if (run.exit === 1) return { send: false, record: { at, result: GATE_SKIPPED } }
-  const how = run.timedOut ? `timed out after ${schedule.whenTimeoutSeconds ?? GATE_DEFAULT_TIMEOUT_S}s` : run.startError ? `could not start (${run.startError})` : run.exit === null || run.exit === undefined ? `ended by signal ${run.signal}` : `exited ${run.exit}`
-  const detail = clip(String(run.stderr).trim().split("\n")[0] ?? "", GATE_STDERR_CAP)
+  const how = run.timedOut ? `timed out after ${run.timedOut}s` : run.startError ? `could not start (${run.startError})` : run.signal ? `ended by signal ${run.signal}` : `exited ${run.exit}`
+  const detail = clip(run.stderr.trim().split("\n")[0], GATE_STDERR_CAP)
   const reason = `${how}${detail ? `: ${detail}` : ""}`
   return { send: true, addition: `Note: this schedule's \`when\` gate failed (${reason}), so the prompt is delivered anyway.`, record: { at, result: `gate failed (${reason}), prompt delivered anyway` } }
 }
@@ -175,14 +175,9 @@ export async function pollSchedules({ paths, now, ackCommand, ackFlags = [], gat
   for (const schedule of schedules) {
     const previous = stored[schedule.name]
     const reseed = !previous?.nextAt || previous.everyMinutes !== schedule.everyMinutes || previous.whenEveryMinutes !== schedule.whenEveryMinutes
+    const { lastSentAt, lastGate } = previous ?? {}
     states[schedule.name] = reseed
-      ? {
-          ...(previous?.lastSentAt ? { lastSentAt: previous.lastSentAt } : {}),
-          ...(previous?.lastGate ? { lastGate: previous.lastGate } : {}),
-          everyMinutes: schedule.everyMinutes,
-          ...(schedule.whenEveryMinutes ? { whenEveryMinutes: schedule.whenEveryMinutes } : {}),
-          nextAt: new Date(now + (schedule.whenEveryMinutes ?? schedule.everyMinutes) * MINUTE_MS).toISOString(),
-        }
+      ? { lastSentAt, lastGate, everyMinutes: schedule.everyMinutes, whenEveryMinutes: schedule.whenEveryMinutes, nextAt: new Date(now + (schedule.whenEveryMinutes ?? schedule.everyMinutes) * MINUTE_MS).toISOString() }
       : { ...previous }
     if (!schedule.when) {
       delete states[schedule.name].lastGate
@@ -198,7 +193,7 @@ export async function pollSchedules({ paths, now, ackCommand, ackFlags = [], gat
     if (schedule.when && state.offered === id && typeof state.offeredMessage === "string") {
       message = state.offeredMessage
     } else if (schedule.when) {
-      const judged = judgeGate(schedule, await gate(schedule.when, schedule.whenTimeoutSeconds), now)
+      const judged = judgeGate(await gate(schedule.when, schedule.whenTimeoutSeconds ?? GATE_DEFAULT_TIMEOUT_S), now)
       state.lastGate = judged.record
       if (!judged.send) {
         delete state.offered

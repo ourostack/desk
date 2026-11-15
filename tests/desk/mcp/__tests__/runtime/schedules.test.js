@@ -200,7 +200,7 @@ test("a gate that exits 2, times out or cannot start still delivers the prompt, 
     [gateOf(0, { sleep: 20_000 }), 1, /gate failed \(timed out after 1s\)/u],
     [["definitely-not-a-program-desk"], undefined, /gate failed \(could not start \(ENOENT\)\)/u],
     [["bad\0program"], undefined, /gate failed \(could not start \(ERR_INVALID_ARG_VALUE\)\)/u],
-    [[process.execPath, "-e", "process.kill(process.pid, 'SIGKILL')"], undefined, /gate failed \(ended by signal SIGKILL\)/u],
+    ...(process.platform === "win32" ? [] : [[[process.execPath, "-e", "process.kill(process.pid, 'SIGKILL')"], undefined, /gate failed \(ended by signal SIGKILL\)/u]]),
   ]
   for (const [when, whenTimeoutSeconds, note] of cases) {
     const w = await world([{ ...WATCHDOG, when, ...(whenTimeoutSeconds ? { whenTimeoutSeconds } : {}) }])
