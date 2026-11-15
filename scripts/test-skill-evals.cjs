@@ -1054,7 +1054,13 @@ try {
       const onceLog = path.join(path.dirname(receiptFile), "once.jsonl");
       const once = run(["fixture", ...fake], { FAKE_MODE: "empty-once", FAKE_LOG: onceLog });
       assert.equal(once.status, 0, once.stderr);
-      assert.match(once.stdout, /case-1: the subject produced no final response; running the case once more/u);
+      assert.match(once.stdout, /fixture\/case-1: the subject produced no final response; running the case once more/u);
+      const startedHanging = Date.now();
+      const hung = run(["fixture", ...fake, "--suite-timeout-seconds", "2"], { FAKE_MODE: "hang-subject" });
+      assert.equal(hung.status, 1);
+      assert.match(hung.stdout, /fixture: timed out after 2 s with 0\/1 case\(s\) finished\. No receipt written/u, "a suite that runs out of time says so and stops its processes");
+      assert.ok(Date.now() - startedHanging < 30000, "the suite timeout cuts the hanging subject short");
+      assert.match(spawnSync(process.execPath, [cli, "run", "fixture", "--suite-timeout-seconds", "0"], { cwd: path.dirname(path.dirname(receiptFile)), encoding: "utf8" }).stderr, /--suite-timeout-seconds must be a positive whole number/u);
       const blankCase = run(["fixture", ...fake, "--case", ","]);
       assert.equal(blankCase.status, 1);
       assert.match(blankCase.stderr, /--case needs at least one case id/u);
@@ -1473,7 +1479,9 @@ try {
       fs.writeFileSync(path.join(dir, "evals", "added.json"), `${JSON.stringify(added, null, 2)}\n`);
       const changed = run(["--changed", ...fake, "--base", "main"]);
       assert.equal(changed.status, 0, changed.stderr);
-      assert.match(changed.stdout, /Running added:[\s\S]*Recorded evals\/receipts\/added\.json[\s\S]*Running fixture:[\s\S]*Recorded evals\/receipts\/fixture\.json/u, "a moved suite and a new suite both run");
+      assert.match(changed.stdout, /Running added:[\s\S]*Running fixture:|Running fixture:[\s\S]*Running added:/u, "a moved suite and a new suite both run");
+      assert.match(changed.stdout, /Recorded evals\/receipts\/added\.json/u);
+      assert.match(changed.stdout, /Recorded evals\/receipts\/fixture\.json/u);
       assert.equal(JSON.parse(fs.readFileSync(path.join(dir, "evals", "receipts", "fixture.json"), "utf8")).contractFingerprint, contractFingerprint(moved));
       assert.match(run(["--changed", ...fake, "--base", "no-such-ref"]).stderr, /cannot find no-such-ref/u);
 

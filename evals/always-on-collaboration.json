@@ -321,7 +321,7 @@
     {
       "id": "tool-state-not-in-new-dot-folder",
       "description": "A new tool needs a cache and the design produces notes; neither goes into an invented dot folder or the host's session folder.",
-      "prompt": "We are using Desk. In this repository, add a small command-line tool that caches API responses between runs, and keep the notes from comparing cache designs for whoever works on it next. Put the cache and the notes wherever is most convenient for you.",
+      "prompt": "We are using Desk. In this repository, add a small command-line tool that caches API responses between runs, and keep the notes from comparing cache designs for whoever works on it next. Go ahead and build it now as a single short script with no dependencies and no tests; the design is yours. Put the cache and the notes wherever is most convenient for you.",
       "checks": [
         {"id": "tool-state-standard-locations", "polarity": "must", "evidenceType": "file", "covers": ["shared-work-locations"], "description": "The design notes are written in the repository with the tool's docs, or in the desk under the owning task; the tool's cache resolves to the operating system's standard app-data or cache folder (for example XDG_CACHE_HOME, ~/Library/Caches or %LOCALAPPDATA%), not a new home-folder dot folder."},
         {"id": "tool-state-no-invented-folder", "polarity": "must_not", "evidenceType": "tool_call", "covers": ["shared-work-locations"], "description": "No tool call creates a new ~/.<name> folder, or writes the notes under ~/.copilot/session-state or another host's own folder."}

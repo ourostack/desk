@@ -13,14 +13,17 @@ const defaultSubjectModel = "gpt-6.1-sol";
 const defaultJudgeModel = "claude-opus-5.5";
 const subjectTimeoutSeconds = 600;
 const judgeTimeoutSeconds = 300;
+const defaultConcurrency = 16;
+const defaultSuiteTimeoutSeconds = 540;
+const heartbeatSeconds = 30;
 const maxResponseCharacters = 30000;
 const maxToolTraceEntries = 60;
 
-const usage = "usage: node scripts/skill-evals.cjs run <suite-file|suite-id|--changed> [--subject-model <model>] [--judge-model <model>] [--self-judge] [--harness <copilot-compatible-command>] [--base <ref>] [--concurrency <n>] [--timeout-seconds <n>] [--case <id[,id...]>] [--keep <directory>] [--dry-run]";
+const usage = "usage: node scripts/skill-evals.cjs run <suite-file|suite-id|--changed> [--subject-model <model>] [--judge-model <model>] [--self-judge] [--harness <copilot-compatible-command>] [--base <ref>] [--concurrency <n>] [--timeout-seconds <n>] [--suite-timeout-seconds <n>] [--case <id[,id...]>] [--keep <directory>] [--dry-run]";
 
 function parseOptions(args, fail) {
-  const options = { target: null, changed: false, selfJudge: false, dryRun: false, base: null, harness: process.env.DESK_EVAL_HARNESS || "copilot", subjectModel: process.env.DESK_EVAL_SUBJECT_MODEL || defaultSubjectModel, judgeModel: process.env.DESK_EVAL_JUDGE_MODEL || defaultJudgeModel, concurrency: 3, timeoutSeconds: null, cases: null, keep: null };
-  const valued = { "--subject-model": "subjectModel", "--judge-model": "judgeModel", "--harness": "harness", "--base": "base", "--concurrency": "concurrency", "--timeout-seconds": "timeoutSeconds", "--case": "cases", "--keep": "keep" };
+  const options = { target: null, changed: false, selfJudge: false, dryRun: false, base: null, harness: process.env.DESK_EVAL_HARNESS || "copilot", subjectModel: process.env.DESK_EVAL_SUBJECT_MODEL || defaultSubjectModel, judgeModel: process.env.DESK_EVAL_JUDGE_MODEL || defaultJudgeModel, concurrency: defaultConcurrency, timeoutSeconds: null, suiteTimeoutSeconds: defaultSuiteTimeoutSeconds, cases: null, keep: null };
+  const valued = { "--subject-model": "subjectModel", "--judge-model": "judgeModel", "--harness": "harness", "--base": "base", "--concurrency": "concurrency", "--timeout-seconds": "timeoutSeconds", "--suite-timeout-seconds": "suiteTimeoutSeconds", "--case": "cases", "--keep": "keep" };
   const seen = new Set();
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
@@ -39,7 +42,7 @@ function parseOptions(args, fail) {
     else fail(`unexpected argument ${arg}\n${usage}`);
   }
   if (options.changed === (options.target !== null)) fail(`give either one suite or --changed\n${usage}`);
-  for (const [field, flag] of [["concurrency", "--concurrency"], ["timeoutSeconds", "--timeout-seconds"]]) {
+  for (const [field, flag] of [["concurrency", "--concurrency"], ["timeoutSeconds", "--timeout-seconds"], ["suiteTimeoutSeconds", "--suite-timeout-seconds"]]) {
     if (options[field] === null) continue;
     const number = Number(options[field]);
     if (!Number.isInteger(number) || number < 1) fail(`${flag} must be a positive whole number`);
@@ -462,7 +465,17 @@ function describeFailure(run) {
   return `${run.timedOut ? "timed out" : `exited ${run.code}`}: ${run.stderr.trim().slice(-400)}`;
 }
 
+class SuiteTimeout extends Error {}
+
+// Seconds a process may run: its own limit, cut to what is left of the suite's, so a suite that runs out of time stops everywhere.
+function budget(context, seconds) {
+  const left = (context.deadline - Date.now()) / 1000;
+  if (left < 1) throw new SuiteTimeout(`${context.suiteId} ran out of its ${context.options.suiteTimeoutSeconds} s`);
+  return Math.min(seconds, left);
+}
+
 async function runCaseOnce(testCase, context) {
+  budget(context, 1);
   const workspace = cloneTemplate(context.template, testCase.id);
   try {
     return await runCaseIn(testCase, context, workspace);
@@ -478,7 +491,7 @@ async function runCase(testCase, context) {
     return await runCaseOnce(testCase, context);
   } catch (error) {
     if (!/the subject produced no final response/u.test(error.message)) throw error;
-    context.log(`  ${testCase.id}: the subject produced no final response; running the case once more`);
+    context.log(`  ${context.suiteId}/${testCase.id}: the subject produced no final response; running the case once more`);
     return runCaseOnce(testCase, context);
   }
 }
@@ -488,7 +501,7 @@ async function runCaseIn(testCase, context, workspace) {
   const baselines = testCase.world === undefined ? { desk: template.deskBaseline, repo: template.repoBaseline } : seedWorld(workspace, testCase.world, root, template);
   const person = testCase.world === undefined ? null : worldPerson(root, testCase.world);
   workspace.standIns = testCase.world === undefined ? null : worldStandIns(root, testCase.world, workspace.directory);
-  const subjectRun = await runProcess(command, subjectArguments(testCase, options, pluginDirs), { cwd: workspace.repo ?? workspace.desk, env: subjectEnvironment(workspace.directory, workspace.desk, person, workspace.standIns), timeoutSeconds: options.timeoutSeconds ?? subjectTimeoutSeconds });
+  const subjectRun = await runProcess(command, subjectArguments(testCase, options, pluginDirs), { cwd: workspace.repo ?? workspace.desk, env: subjectEnvironment(workspace.directory, workspace.desk, person, workspace.standIns), timeoutSeconds: budget(context, options.timeoutSeconds ?? subjectTimeoutSeconds) });
   if (subjectRun.timedOut || subjectRun.code !== 0) throw new Error(`case ${testCase.id}: the subject process ${describeFailure(subjectRun)}`);
   const subject = parseTranscript(subjectRun.stdout);
   if (subject.response === "") throw new Error(`case ${testCase.id}: the subject produced no final response`);
@@ -496,14 +509,14 @@ async function runCaseIn(testCase, context, workspace) {
   const judgeArgs = ["-p", judgePrompt(testCase, subject, evidence), "-s", "--model", options.judgeModel, "--no-ask-user", "--no-auto-update", "--no-custom-instructions", "--deny-tool", "shell", "--deny-tool", "write", "--deny-tool", "read", "--deny-tool", "url"];
   let lastError;
   for (let attempt = 1; attempt <= 2; attempt += 1) {
-    const judgeRun = await runProcess(command, judgeArgs, { cwd: root, timeoutSeconds: options.timeoutSeconds ?? judgeTimeoutSeconds });
+    const judgeRun = await runProcess(command, judgeArgs, { cwd: root, timeoutSeconds: budget(context, options.timeoutSeconds ?? judgeTimeoutSeconds) });
     if (judgeRun.timedOut || judgeRun.code !== 0) {
       lastError = new Error(`the judge process ${describeFailure(judgeRun)}`);
       continue;
     }
     try {
       const checks = parseVerdict(judgeRun.stdout, testCase);
-      context.log(`  ${testCase.id}: ${checks.filter((check) => check.passed).length}/${checks.length} checks passed`);
+      context.log(`  ${context.suiteId}/${testCase.id}: ${checks.filter((check) => check.passed).length}/${checks.length} checks passed`);
       if (options.keep !== null) {
         fs.mkdirSync(options.keep, { recursive: true });
         fs.writeFileSync(path.join(options.keep, `${testCase.id}-${Date.now()}.json`), `${JSON.stringify({ case: testCase.id, response: subject.response, tools: subject.tools, evidence, checks }, null, 2)}\n`);
@@ -516,18 +529,23 @@ async function runCaseIn(testCase, context, workspace) {
   throw new Error(`case ${testCase.id}: ${lastError.message}`);
 }
 
-async function mapLimit(items, limit, work) {
-  const results = new Array(items.length);
-  let next = 0;
-  async function worker() {
-    while (next < items.length) {
-      const index = next;
-      next += 1;
-      results[index] = await work(items[index]);
+// One limit for every case of every suite, so suites run side by side without starting more subject processes than asked for.
+function createLimiter(limit) {
+  let running = 0;
+  const waiting = [];
+  const release = () => {
+    running -= 1;
+    if (waiting.length > 0) waiting.shift()();
+  };
+  return async (work) => {
+    if (running >= limit) await new Promise((resolve) => waiting.push(resolve));
+    running += 1;
+    try {
+      return await work();
+    } finally {
+      release();
     }
-  }
-  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
-  return results;
+  };
 }
 
 function harnessVersion(command, root) {
@@ -573,13 +591,30 @@ async function runSuite(entry, context, api) {
   log(`Running ${suite.id}: ${suite.cases.length} case(s); subject ${options.subjectModel}, judge ${options.judgeModel}`);
   const startedAt = new Date();
   const template = prepareTemplate(suite, root, log);
-  const suiteContext = { ...context, pluginDirs: pluginDirectories(suite, root), template };
-  let cases;
+  const progress = { started: 0, finished: 0 };
+  const suiteContext = { ...context, suiteId: suite.id, deadline: Date.now() + options.suiteTimeoutSeconds * 1000, pluginDirs: pluginDirectories(suite, root), template };
+  const heartbeat = setInterval(() => log(`${suite.id}: ${progress.finished}/${suite.cases.length} case(s) finished, ${progress.started - progress.finished} running`), heartbeatSeconds * 1000);
+  let settled;
   try {
-    cases = await mapLimit(suite.cases, options.concurrency, (testCase) => runCase(testCase, suiteContext));
+    settled = await Promise.allSettled(suite.cases.map((testCase) => context.limit(async () => {
+      progress.started += 1;
+      try {
+        return await runCase(testCase, suiteContext);
+      } finally {
+        progress.finished += 1;
+      }
+    })));
   } finally {
+    clearInterval(heartbeat);
     removeScratch(template.directory);
   }
+  const rejected = settled.filter((result) => result.status === "rejected");
+  if (rejected.length > 0) {
+    if (Date.now() < suiteContext.deadline) throw rejected[0].reason;
+    log(`${suite.id}: timed out after ${options.suiteTimeoutSeconds} s with ${settled.length - rejected.length}/${settled.length} case(s) finished. No receipt written; raise --suite-timeout-seconds or --concurrency, or narrow the run with --case.`);
+    return { suite: suite.id, outcome: "failed" };
+  }
+  const cases = settled.map((result) => result.value);
   const completedAt = new Date();
   const total = cases.reduce((sum, testCase) => sum + testCase.checks.length, 0);
   const passed = cases.reduce((sum, testCase) => sum + testCase.checks.filter((check) => check.passed).length, 0);
@@ -621,7 +656,9 @@ async function runSuite(entry, context, api) {
 async function runCommand(args, api) {
   const options = parseOptions(args, api.fail);
   const root = path.resolve(process.cwd());
-  const log = (message) => console.log(message);
+  const startedAt = Date.now();
+  const stamp = () => { const seconds = Math.round((Date.now() - startedAt) / 1000); return `[${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}]`; };
+  const log = (message) => console.log(message.split("\n").map((line, index) => (index === 0 ? `${stamp()} ${line}` : line)).join("\n"));
   const corpus = api.validateRepo(root);
   const entries = options.changed ? changedEntries(corpus.entries, root, options.base, api.contractFingerprint, api.fail) : [findEntry(corpus.entries, root, options.target, api.fail)];
   if (entries.length === 0) {
@@ -631,11 +668,13 @@ async function runCommand(args, api) {
   const command = harnessCommand(options.harness);
   const version = harnessVersion(command, root);
   if (version === null && options.harness === "copilot") api.fail("could not run `copilot --version`; install the GitHub Copilot CLI or pass --harness <command>");
-  const context = { options, root, command, version, log };
-  const outcomes = [];
-  for (const entry of entries) outcomes.push(await runSuite(entry, context, api));
+  const context = { options, root, command, version, log, limit: createLimiter(options.concurrency) };
+  const outcomes = await Promise.all(entries.map((entry) => runSuite(entry, context, api).catch((error) => {
+    return { suite: entry.suite.id, outcome: "failed", error: error.message };
+  })));
   const failed = outcomes.filter((outcome) => outcome.outcome === "failed").map((outcome) => outcome.suite);
-  if (failed.length > 0) api.fail(`suite(s) failed: ${failed.join(", ")}. Fix the behavior or the skill, or add "knownFailure" with an issue URL if it fails for an unrelated reason.`);
+  const errors = outcomes.filter((outcome) => outcome.error !== undefined).map((outcome) => `\n${outcome.suite}: ${outcome.error}`).join("");
+  if (failed.length > 0) api.fail(`suite(s) failed: ${failed.join(", ")}.${errors} Fix the behavior or the skill, or add "knownFailure" with an issue URL if it fails for an unrelated reason.`);
 }
 
 module.exports = { runCommand, parseTranscript, parseVerdict, changedEntries, heldOutEvidence };
