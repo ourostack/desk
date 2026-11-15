@@ -1,5 +1,15 @@
 # desk plugin — changelog
 
+## 3.2.163 — 2026-11-15
+
+A `merge-when-green` relay no longer holds a pull request for a matrix job that GitHub skipped before it expanded when the same matrix also ran under expanded names. The skipped template, such as `npm test (${{ matrix.os }}, ${{ matrix.shard }}/${{ strategy.job-total }})`, counted as a not-green match for every pattern that starts like it, so a relay without `skippedPasses` waited forever on a pull request whose real jobs were all green. Now it counts only when it is the only match, as the stand-in for a matrix that never ran.
+
+A `dispatch` relay now remembers every head it fired for or passed over for a newer head, not only the last one. A second event's run that succeeded on an older head after a newer head had fired used to fire the older head again, after the newer one, so the target could end up deploying a stale commit. See [relays](docs/relays.md).
+
+Both came out of a new replay of the relays against recorded, sanitized GitHub data in the Desk tests (`tests/desk/mcp/__tests__/fixtures/relays`): the final checks of 60 merged pull requests and a day of watched-workflow runs for two repositories.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.162 — 2026-11-15
 
 A `dispatch` relay now fires at most once per watched head. It used to fire on every successful run of the watched workflow, so a workflow that succeeded several times on one commit started the downstream workflow or event each time, and each fire cancelled the target's live check already in progress. The relay records the last head it fired for, so repeated successes on that head never fire again, and a restart does not either.
