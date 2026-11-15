@@ -1022,6 +1022,20 @@ test("the Claude inline launcher answers the handshake when bootstrap.cjs run() 
   assert.match(result.stderr, /\[desk-mcp\] launcher: run rejected late/u)
 })
 
+test("on Windows with no Node anywhere, the degraded answer puts the fix first and says the registry PATH was searched", async () => {
+  const root = await mkTempRoot("desk-bootstrap-windows-missing-")
+  const input = new PassThrough()
+  const output = new PassThrough()
+  const read = collect(output)
+  const running = bootstrap.run({ ...machine(root, { platform: "win32", arch: "x64" }), registryPath: () => [], args: [], stdin: input, stdout: output, stderr: { write() {} } })
+  input.end(`${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "desk_status", arguments: {} } })}\n`)
+  await running
+  const payload = toolPayload(read()[0])
+  assert.deepEqual(Object.keys(payload).slice(0, 5), ["status", "state", "code", "fix", "summary"])
+  assert.match(payload.fix, /^Run `winget install /u)
+  assert.match(payload.summary, /under the usual version managers or on the Windows registry's PATH, so/u)
+})
+
 test("with no pack for this platform the node_missing fix still names a command", async () => {
   const root = await mkTempRoot("desk-bootstrap-nopack-")
   const input = new PassThrough()
