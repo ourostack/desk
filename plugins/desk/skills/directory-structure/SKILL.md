@@ -30,6 +30,8 @@ $DESK/
         <older-doc>.md
     <task-name>/                        # one directory per task within the track
       task.md                           # task card (see task-card-format)
+      log.md                            # optional: the task's append-only log of rulings and evidence pointers (task_update `log`)
+      handoffs/                         # optional: artifacts another session needs (desk_save), named by repository URL, never a local path
       _iterations/                      # iterations of a task with no repositories (repos: []), same <YYYY-MM-DD>-<slug>/ shape as below
       <repo-name>/                      # only when the task needs a plan or log beyond its card (matches task.md repos[].name)
         <YYYY-MM-DD>-<slug>/            # one iteration directory (e.g. 2026-04-13-initial-impl)

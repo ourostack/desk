@@ -149,11 +149,13 @@ async function enablePullRequests(shared, policy = { schema_version: 1, mode: "p
   git(shared.desk, ["pull", "-q", "--ff-only"])
 }
 
-function publicationServer(shared, { failed = false, missing = false } = {}) {
+function publicationServer(shared, { failed = false, missing = false, moveBaseDuringChecks = false } = {}) {
   let head
   let number = null
+  let moved = false
   const pushes = []
   const merges = []
+  const closed = []
   let elapsed = 0
   const clock = { now: () => elapsed, sleep: (ms) => { elapsed += ms } }
   const pr = () => ({
@@ -176,8 +178,20 @@ function publicationServer(shared, { failed = false, missing = false } = {}) {
     else if (args.includes("create")) {
       number = 42
       return { status: 0, stdout: pr().url + "\n", stderr: "" }
-    } else if (args.includes("view")) response = pr()
-    else if (args.includes(`repos/example/workspace/commits/${head}/status?per_page=100`)) {
+    } else if (args.includes("view")) {
+      // Another writer's pull request merges while this one's checks run.
+      if (moveBaseDuringChecks && !moved) {
+        moved = true
+        writeFileSync(path.join(shared.elsewhere, "notes/during-checks.md"), "merged meanwhile\n")
+        git(shared.elsewhere, ["add", "--", "notes/during-checks.md"])
+        git(shared.elsewhere, ["commit", "-q", "-m", "merged meanwhile", "--", "notes/during-checks.md"])
+        git(shared.elsewhere, ["push", "-q", "origin", "main"])
+      }
+      response = pr()
+    } else if (args[0] === "pr" && args[1] === "close") {
+      closed.push(args[2])
+      return { status: 0, stdout: "", stderr: "" }
+    } else if (args.includes(`repos/example/workspace/commits/${head}/status?per_page=100`)) {
       assert.ok(args.includes("--paginate") && args.includes("--slurp"))
       response = [{ statuses: [] }]
     } else if (args.includes(`repos/example/workspace/commits/${head}/check-runs?filter=latest&per_page=100`)) {
@@ -194,7 +208,7 @@ function publicationServer(shared, { failed = false, missing = false } = {}) {
     } else assert.fail(`unexpected publication call: ${args.join(" ")}`)
     return { status: 0, stdout: JSON.stringify(response), stderr: "" }
   }
-  return { spawnGit, clock, pushes, merges }
+  return { spawnGit, clock, pushes, merges, closed }
 }
 
 for (const replayed of [false, true]) {
@@ -222,6 +236,59 @@ for (const replayed of [false, true]) {
     assert.deepEqual(await snapshot(shared.desk), before)
   })
 }
+
+test("a base that moves while the checks run is qualified again on the new base by the same delivery, and the abandoned pull request is closed", async () => {
+  const shared = await mkShared()
+  await enablePullRequests(shared)
+  await commit(shared.desk, "tasks/mine.md", "saved\n", "desk: save")
+  const server = publicationServer(shared, { moveBaseDuringChecks: true })
+  const result = deliver({ root: shared.desk, spawnGit: server.spawnGit, publicationClock: server.clock })
+  assert.equal(result.state, "delivered", JSON.stringify(result))
+  assert.equal(server.pushes.length, 2, "a fresh candidate was built on the new base")
+  assert.equal(server.closed.length, 1)
+  assert.equal(server.merges.length, 1)
+  assert.equal(bare(shared.origin, ["show", "main:tasks/mine.md"]), "saved\n")
+  assert.equal(bare(shared.origin, ["show", "main:notes/during-checks.md"]), "merged meanwhile\n")
+  assert.equal(bare(shared.origin, ["rev-parse", `${server.merges[0]}^`]).trim(), git(shared.elsewhere, ["rev-parse", "HEAD"]).trim())
+})
+
+// A Git read inside the replay worktree (not the desk) that the clock cuts off: `times` times, then it answers.
+function cutReadsInReplay(shared, server, times) {
+  let cut = 0
+  return (cmd, args, opts) => {
+    if (cmd === "git" && args[1] !== shared.desk && args.at(-2) === "rev-parse" && args.at(-1) === "HEAD" && cut < times) {
+      cut += 1
+      return { status: null, stdout: "", stderr: "", error: Object.assign(new Error("spawnSync git ETIMEDOUT"), { code: "ETIMEDOUT" }) }
+    }
+    return server.spawnGit(cmd, args, opts)
+  }
+}
+
+test("a replayed commit whose id Git could not read in time is never published: nothing is pushed and no branch name is built from nothing", async () => {
+  const shared = await mkShared()
+  await enablePullRequests(shared)
+  await commit(shared.elsewhere, "notes/remote.md", "advance\n", "advance base")
+  git(shared.elsewhere, ["push", "-q", "origin", "main"])
+  await commit(shared.desk, "tasks/mine.md", "saved\n", "desk: save")
+  const server = publicationServer(shared)
+  const result = deliver({ root: shared.desk, spawnGit: cutReadsInReplay(shared, server, 99), publicationClock: server.clock })
+  assert.equal(result.state, "failed")
+  assert.equal(result.reason, "deadline")
+  assert.deepEqual(server.pushes, [])
+  assert.equal(git(shared.desk, ["worktree", "list", "--porcelain"]).match(/^worktree /gmu).length, 1)
+})
+
+test("a Git read the clock cut off once is asked again, and the delivery goes through", async () => {
+  const shared = await mkShared()
+  await enablePullRequests(shared)
+  await commit(shared.elsewhere, "notes/remote.md", "advance\n", "advance base")
+  git(shared.elsewhere, ["push", "-q", "origin", "main"])
+  await commit(shared.desk, "tasks/mine.md", "saved\n", "desk: save")
+  const server = publicationServer(shared)
+  const result = deliver({ root: shared.desk, spawnGit: cutReadsInReplay(shared, server, 1), publicationClock: server.clock })
+  assert.equal(result.state, "delivered", JSON.stringify(result))
+  assert.match(server.pushes[0], /^[0-9a-f]{40}:refs\/heads\/desk\/publish\/[0-9a-f]{40}$/u)
+})
 
 for (const replayed of [false, true]) {
   test(`failed PR checks preserve the ${replayed ? "replayed" : "captured"} save and never advance main`, async () => {

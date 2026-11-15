@@ -26,7 +26,6 @@
   {"match":"${entry.id} could not be checked at startup because bash could not run (${bashHint(platform, true)}). Tell the human in one line that Desk's migrations are not being checked.","reason":"runtime/pending-migrations.js: not yet in the Ouro AX problem shape"},
   {"match":"its Migrate failed","reason":"runtime/pending-migrations.js: not yet in the Ouro AX problem shape"},
   {"match":"Could not read the checks ${repo.full} requires on ${base} (${detail}); the publication PR will not be merged without them","reason":"runtime/pr-publication.js: not yet in the Ouro AX problem shape"},
-  {"match":"Could not read the publication remote","reason":"runtime/pr-publication.js: not yet in the Ouro AX problem shape"},
   {"match":"Could not read the published ${POLICY}","reason":"runtime/pr-publication.js: not yet in the Ouro AX problem shape"},
   {"match":"The created publication PR could not be read back","reason":"runtime/pr-publication.js: not yet in the Ouro AX problem shape"},
   {"match":"The PR merge could not be fetched for verification","reason":"runtime/pr-publication.js: not yet in the Ouro AX problem shape"},

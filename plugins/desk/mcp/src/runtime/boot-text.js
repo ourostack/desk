@@ -245,7 +245,8 @@ function taskLines(track, task, pushNotes) {
   const elsewhere = saysElsewhere(task) ? [`  ${ELSEWHERE_NOTE}`] : []
   const cleanup = task.cleanup_due_count > 0 ? [`  cleanup due: ${task.cleanup_due_count}`] : []
   const large = task.card_kb > 0 ? [`  card is ${task.card_kb} KB; move history into its iteration folder (task_update replace_section) so boot can read all of it`] : []
-  return [`- ${named}${title}${updated}${hidden}`, ...stepLines(task), ...large, ...cleanup, ...elsewhere, ...push]
+  const scratch = typeof task.scratch_fix === "string" ? [`  ${task.scratch_fix}`] : []
+  return [`- ${named}${title}${updated}${hidden}`, ...stepLines(task), ...large, ...cleanup, ...scratch, ...elsewhere, ...push]
 }
 
 // A repo's path as boot prints it: already expanded against this machine's HOME, with the card's own spelling after it ("/home/me/code/x (~/code/x)"), so an agent never expands `~` itself
