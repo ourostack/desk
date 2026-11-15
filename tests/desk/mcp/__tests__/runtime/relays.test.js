@@ -383,6 +383,16 @@ test("waitingOnChecks with skippedPasses: skipped and neutral pass, while every 
   assert.deepEqual(verdict([check("typecheck", "skipped"), check("shard-1", "skipped"), check("shard-2", "failure")]), ["shard-*: 1 of 2 not green (shard-2 failure)"])
 })
 
+test("waitingOnChecks: a matrix job skipped under its unexpanded template name satisfies the pattern that starts like it, as a skipped check", () => {
+  const TEMPLATE = "npm test (${{ matrix.os }}, ${{ matrix.shard }}/${{ strategy.job-total }})"
+  const required = ["npm test (ubuntu-latest, *)"]
+  assert.deepEqual(waitingOnChecks(required, [check(TEMPLATE, "skipped")], true), [])
+  assert.deepEqual(waitingOnChecks(required, [check(TEMPLATE, "skipped")]), [`npm test (ubuntu-latest, *): ${TEMPLATE} skipped`], "without skippedPasses a skipped check still holds")
+  assert.deepEqual(waitingOnChecks(required, [check(TEMPLATE, "failure")], true), ["npm test (ubuntu-latest, *): not started"], "only a skipped template matches, so a failed one still holds")
+  assert.deepEqual(waitingOnChecks(required, [check(TEMPLATE, "success")], true), ["npm test (ubuntu-latest, *): not started"], "only a skipped template matches")
+  assert.deepEqual(waitingOnChecks(["lint (*)"], [check(TEMPLATE, "skipped")], true), ["lint (*): not started"], "a different prefix does not match")
+})
+
 test("skippedPasses is true or false on a merge relay, and anything else is named", () => {
   const merge = (extra) => parseRelayConfig(JSON.stringify({ relays: [{ ...MERGE, ...extra }] }), "relays.json")[0]
   assert.equal(merge({ skippedPasses: true }).skippedPasses, true)
@@ -415,6 +425,19 @@ test("merge-when-green: with every check green and main green it squash-merges a
   assert.equal(w.state("pages merge").lastMerge.number, 7)
   assert.match(relayStatusLines([MERGE], { "pages merge": w.state("pages merge") }, NOW)[0], /last merged #7/u)
   assert.equal(JSON.stringify(w.world.writes).match(/admin|bypass|auto_merge/iu), null, "no bypass of any kind is ever sent")
+})
+
+test("merge-when-green: a matrix job skipped under its template name lets skippedPasses merge, and holds the merge without it", async () => {
+  const TEMPLATE = "npm test (${{ matrix.os }}, ${{ matrix.shard }}/${{ strategy.job-total }})"
+  const passing = await setup([{ ...MERGE, skippedPasses: true }])
+  mergeWorld(passing.world, { checks: [check("typecheck"), check(TEMPLATE, "skipped")] })
+  assert.deepEqual((await passing.poll()).errors, [])
+  assert.deepEqual(prWrites(passing.world).map((write) => write.method), ["PUT"])
+
+  const held = await setup([MERGE])
+  mergeWorld(held.world, { checks: [check("typecheck"), check(TEMPLATE, "skipped")] })
+  await held.poll()
+  assert.deepEqual(prWrites(held.world), [])
 })
 
 test("merge-when-green: it never merges while a required check is missing, pending or failed, and keeps one status comment it edits", async () => {

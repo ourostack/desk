@@ -315,12 +315,21 @@ const shown = (runs) => `${runs.slice(0, 3).map((run) => `${run.name} ${run.stat
 /** The conclusions a `skippedPasses` relay also accepts. Every other conclusion, and a check still running, keeps the pull request waiting. */
 const SKIPPED_PASSES = new Set(["skipped", "neutral"])
 
+/**
+ * GitHub posts a matrix job that is skipped before it expands under its literal template name, such as `npm test (${{ matrix.os }}, ...)`.
+ * A skipped check like that matches every required pattern that starts with the text before its first `${{`.
+ */
+const skippedTemplateMatches = (run, required) => {
+  const at = run.name.indexOf("${{")
+  return run.conclusion === "skipped" && at > 0 && required.startsWith(run.name.slice(0, at))
+}
+
 /** What each required check is still missing, as one line per entry that is not fully green. Only the newest attempt of each check counts, and it counts only when it completed with `success`, or with `skipped` or `neutral` when `skippedPasses` is set. */
 export function waitingOnChecks(requiredChecks, runs, skippedPasses = false) {
   const green = (run) => run.status === "completed" && (run.conclusion === "success" || (skippedPasses && SKIPPED_PASSES.has(run.conclusion)))
   const newest = latestCheckRuns(runs)
   return requiredChecks.flatMap((required) => {
-    const matching = newest.filter((run) => globPattern(required).test(run.name))
+    const matching = newest.filter((run) => globPattern(required).test(run.name) || skippedTemplateMatches(run, required))
     if (matching.length === 0) return [`${required}: not started`]
     const notGreen = matching.filter((run) => !green(run))
     return notGreen.length === 0 ? [] : [`${required}: ${notGreen.length === matching.length && matching.length === 1 ? shown(notGreen) : `${notGreen.length} of ${matching.length} not green (${shown(notGreen)})`}`]
