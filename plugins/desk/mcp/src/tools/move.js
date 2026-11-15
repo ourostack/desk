@@ -1,4 +1,4 @@
-// Cheap moves — task_move, track_rename.
+// Cheap moves — task_update, track_update.
 //
 // Both move a folder (via `git mv` semantics when the desk is a Git
 // repository, a plain rename otherwise), touch the small set of frontmatter
@@ -41,12 +41,49 @@ import {
 
 const SKIP_DIRS = new Set(["node_modules", ".git", ".state"])
 
-// Every field task_move/track_rename read off `input`, kept next to this
+// Every field task_update/track_update read off `input`, kept next to this
 // module so a field added to either handler's reads is a field added here
 // in the same diff. __tests__/tool_schema_parity.test.js checks these
 // against each tool's declared schema in tool-schemas.js.
-export const TASK_MOVE_FIELDS = ["track", "slug", "handle", "to_track", "to_slug", "unarchive", "into_task", "allow_dirty"]
-export const TRACK_RENAME_FIELDS = ["track", "handle", "to", "allow_dirty"]
+const TASK_MOVE_FIELDS = ["track", "slug", "handle", "to_track", "to_slug", "unarchive", "into_task", "allow_dirty"]
+// What task_update and track_update add to their own fields for a move or a rename.
+export const TASK_UPDATE_MOVE_FIELDS = TASK_MOVE_FIELDS.filter((field) => field !== "track" && field !== "slug")
+export const TRACK_UPDATE_RENAME_FIELDS = ["handle", "rename_to", "allow_dirty"]
+
+const given = (values, fields) => fields.some((field) => values?.[field] !== undefined)
+
+// The fields given that a move or rename does not take, as a list for the refusal, or "" when there are none.
+function mixedFields(values, allowed) {
+  return Object.keys(values).filter((key) => values[key] !== undefined && !allowed.includes(key)).map((key) => `\`${key}\``).join(", ")
+}
+
+/** task_update reads any of these fields as a move or rename of the task, which takes no other update. */
+export function taskMoveRequested(input) {
+  return given(input, TASK_UPDATE_MOVE_FIELDS)
+}
+
+export function moveTaskAlone(args) {
+  const extra = mixedFields(args.input, TASK_MOVE_FIELDS)
+  if (extra !== "") {
+    throw Object.assign(new Error(`task_update: Send the move alone, then update: ${extra} cannot go with a move; nothing was changed`), { code: "task_update_move_cannot_be_combined_with_update" })
+  }
+  return moveTask(args)
+}
+
+/** track_update reads any of these fields as a rename of the track, which takes no other update. */
+export function trackRenameRequested(input) {
+  return given(input, TRACK_UPDATE_RENAME_FIELDS)
+}
+
+export function renameTrackAlone(args) {
+  const extra = mixedFields(args.input, ["slug", ...TRACK_UPDATE_RENAME_FIELDS])
+  if (extra !== "") {
+    throw Object.assign(new Error(`track_update: Send the rename alone, then update: ${extra} cannot go with a rename; nothing was changed`), { code: "track_update_rename_cannot_be_combined_with_update" })
+  }
+  const { slug, handle, rename_to: to, allow_dirty } = args.input
+  const input = Object.fromEntries(Object.entries({ track: slug, handle, to, allow_dirty }).filter(([, value]) => value !== undefined))
+  return renameTrack({ ...args, input })
+}
 
 const TERMINAL_STATUSES = new Set(TERMINAL_STATES)
 
@@ -101,30 +138,30 @@ function rejectTraversalShapedInput(tool, field, value) {
 function taskMoveSource(deskRoot, person, values) {
   if (values.handle === undefined) {
     if (!Object.hasOwn(values, "track") || !Object.hasOwn(values, "slug")) {
-      throw Object.assign(new Error("task_move: Pass `track` and `slug`, or `handle`: `track` and `slug` are required, or `handle` in their place"), { code: "task_move_track_and_slug_are_required" })
+      throw Object.assign(new Error("task_update: Pass `track` and `slug`, or `handle`: `track` and `slug` are required, or `handle` in their place"), { code: "task_update_move_track_and_slug_are_required" })
     }
     return { track: values.track, slug: values.slug }
   }
   if (Object.hasOwn(values, "track") || Object.hasOwn(values, "slug")) {
-    throw Object.assign(new Error("task_move: pass `handle` or `track` and `slug`, not both"), { code: "task_move_pass_handle_or_track_and" })
+    throw Object.assign(new Error("task_update: pass `handle` or `track` and `slug`, not both"), { code: "task_update_move_pass_handle_or_track_and" })
   }
   const source = resolveTaskHandle(deskRoot, personPrefix(deskRoot, person), values.handle)
-  if (source === null) throw new Error(handleMiss("task_move", "task"))
+  if (source === null) throw new Error(handleMiss("task_update", "task"))
   return source
 }
 
 function trackRenameSource(deskRoot, person, values) {
   if (values.handle === undefined) {
     if (!Object.hasOwn(values, "track")) {
-      throw Object.assign(new Error("track_rename: Pass `track`, or `handle`: `track` is required, or `handle` in its place"), { code: "track_rename_track_is_required_or_handle" })
+      throw Object.assign(new Error("track_update: Pass `slug`, or `handle`: `slug` is required, or `handle` in its place"), { code: "track_update_rename_track_is_required_or_handle" })
     }
     return values.track
   }
   if (Object.hasOwn(values, "track")) {
-    throw Object.assign(new Error("track_rename: pass `handle` or `track`, not both"), { code: "track_rename_pass_handle_or_track_not" })
+    throw Object.assign(new Error("track_update: pass `handle` or `slug`, not both"), { code: "track_update_rename_pass_handle_or_track_not" })
   }
   const track = resolveTrackHandle(deskRoot, personPrefix(deskRoot, person), values.handle)
-  if (track === null) throw new Error(handleMiss("track_rename", "track"))
+  if (track === null) throw new Error(handleMiss("track_update", "track"))
   return track
 }
 
@@ -294,7 +331,7 @@ async function editTasksTable(trackMdPath, mutate) {
   return result
 }
 
-// ── Task-card discovery (for track_rename) ──────────────────────────────────
+// ── Task-card discovery (for track_update) ──────────────────────────────────
 
 async function findTaskCards(dir) {
   const found = []
@@ -346,7 +383,7 @@ async function findMentions({ root, oldRelPath, exclude }) {
   return mentions.map((abs) => relPath(root, abs))
 }
 
-// ── task_move ────────────────────────────────────────────────────────────
+// ── task_update ────────────────────────────────────────────────────────────
 
 /**
  * A new "## Tasks" row for `slug`, shaped by the table's header row: the
@@ -373,7 +410,7 @@ function trueOrAbsent(tool, field, value) {
 }
 
 /**
- * task_move
+ * task_update
  *
  * Input: { track, slug, to_track?, to_slug?, unarchive?, into_task?, allow_dirty? }
  *
@@ -418,18 +455,18 @@ function trueOrAbsent(tool, field, value) {
  *
  * Returns: { from, to, updated_files, mentions, commit? }
  */
-export async function task_move({ deskRoot, input, person = null, search, statusContext = {}, spawnGit = spawnSync, schedulePush = schedulePushDefault }) {
+export async function moveTask({ deskRoot, input, person = null, search, statusContext = {}, spawnGit = spawnSync, schedulePush = schedulePushDefault }) {
   const values = input ?? {}
   const { track, slug } = taskMoveSource(deskRoot, person, values)
-  rejectTraversalShapedInput("task_move", "track", track)
-  rejectTraversalShapedInput("task_move", "slug", slug)
-  const unarchive = trueOrAbsent("task_move", "unarchive", values.unarchive)
-  const allowDirty = trueOrAbsent("task_move", "allow_dirty", values.allow_dirty)
+  rejectTraversalShapedInput("task_update", "track", track)
+  rejectTraversalShapedInput("task_update", "slug", slug)
+  const unarchive = trueOrAbsent("task_update", "unarchive", values.unarchive)
+  const allowDirty = trueOrAbsent("task_update", "allow_dirty", values.allow_dirty)
   const intoTask = values.into_task
   if (intoTask !== undefined) {
-    rejectTraversalShapedInput("task_move", "into_task", intoTask)
+    rejectTraversalShapedInput("task_update", "into_task", intoTask)
     if (values.to_slug !== undefined || unarchive) {
-      throw Object.assign(new Error("task_move: Drop `to_slug` and `unarchive`, or drop `into_task`: `into_task` cannot be combined with `to_slug` or `unarchive`"), { code: "task_move_into_task_cannot_be_combined" })
+      throw Object.assign(new Error("task_update: Drop `to_slug` and `unarchive`, or drop `into_task`: `into_task` cannot be combined with `to_slug` or `unarchive`"), { code: "task_update_move_into_task_cannot_be_combined" })
     }
   }
 
@@ -437,13 +474,13 @@ export async function task_move({ deskRoot, input, person = null, search, status
   const toSlug = values.to_slug ?? slug
 
   if (intoTask === slug && toTrack === track) {
-    throw Object.assign(new Error("task_move: Name a different task in `into_task`: a task cannot be merged into itself"), { code: "task_move_a_task_cannot_be_merged" })
+    throw Object.assign(new Error("task_update: Name a different task in `into_task`: a task cannot be merged into itself"), { code: "task_update_move_a_task_cannot_be_merged" })
   }
 
   if (values.to_slug !== undefined) {
     const nameResult = validateName(toSlug)
     if (!nameResult.ok) {
-      throw Object.assign(new Error(`task_move: Pass a valid value: invalid to_slug: ${describeNameRejection(nameResult)}`), { code: "task_move_invalid_to_slug" })
+      throw Object.assign(new Error(`task_update: Pass a valid value: invalid to_slug: ${describeNameRejection(nameResult)}`), { code: "task_update_move_invalid_to_slug" })
     }
   }
 
@@ -453,12 +490,12 @@ export async function task_move({ deskRoot, input, person = null, search, status
   if (values.to_track !== undefined) {
     const trackNameResult = validateTrackName(toTrack, { operatorNames: operatorNames(deskRoot) })
     if (!trackNameResult.ok) {
-      throw Object.assign(new Error(`task_move: Pass a valid value: invalid to_track: ${describeNameRejection(trackNameResult)}`), { code: "task_move_invalid_to_track" })
+      throw Object.assign(new Error(`task_update: Pass a valid value: invalid to_track: ${describeNameRejection(trackNameResult)}`), { code: "task_update_move_invalid_to_track" })
     }
     destTrackMd = await target([toTrack, "track.md"])
     if (!(await pathExists(destTrackMd))) {
       throw Object.assign(new Error(
-        "task_move: Create the track with track_create first: the destination track doesn't exist; create it first with track_create (a scope line is required)"), { code: "task_move_the_destination_track_doesn_t" })
+        "task_update: Create the track with track_create first: the destination track doesn't exist; create it first with track_create (a scope line is required)"), { code: "task_update_move_the_destination_track_doesn_t" })
     }
   }
 
@@ -469,7 +506,7 @@ export async function task_move({ deskRoot, input, person = null, search, status
   if (unarchive) {
     if (!(await pathExists(archivedSrcFile))) {
       throw Object.assign(new Error(
-        `task_move: Check the track and slug, then try again: no archived task to unarchive at ${shownRelPath(deskRoot, path.dirname(archivedSrcFile))}`), { code: "task_move_no_archived_task_to_unarchive" })
+        `task_update: Check the track and slug, then try again: no archived task to unarchive at ${shownRelPath(deskRoot, path.dirname(archivedSrcFile))}`), { code: "task_update_move_no_archived_task_to_unarchive" })
     }
     archived = true
   } else if (await pathExists(liveSrcFile)) {
@@ -478,7 +515,7 @@ export async function task_move({ deskRoot, input, person = null, search, status
     archived = true
   } else {
     throw Object.assign(new Error(
-      `task_move: Check the track and slug, then try again: task does not exist at ${shownRelPath(deskRoot, path.dirname(liveSrcFile))}`), { code: "task_move_task_does_not_exist_at" })
+      `task_update: Check the track and slug, then try again: task does not exist at ${shownRelPath(deskRoot, path.dirname(liveSrcFile))}`), { code: "task_update_move_task_does_not_exist_at" })
   }
 
   const srcSegments = archived ? [track, "_archive", slug] : [track, slug]
@@ -489,14 +526,14 @@ export async function task_move({ deskRoot, input, person = null, search, status
   if (intoTask !== undefined) {
     if (!(await pathExists(await target([toTrack, intoTask, "task.md"])))) {
       throw Object.assign(new Error(
-        `task_move: Check the track and slug, then try again: the task to merge into doesn't exist at ${shownRelPath(deskRoot, await target([toTrack, intoTask]))}`), { code: "task_move_the_task_to_merge_into" })
+        `task_update: Check the track and slug, then try again: the task to merge into doesn't exist at ${shownRelPath(deskRoot, await target([toTrack, intoTask]))}`), { code: "task_update_move_the_task_to_merge_into" })
     }
     // Never hide a live task behind a finished one (M4-5 fix round 3).
     const keeper = await readMarkdown(await target([toTrack, intoTask, "task.md"]))
     if (!TERMINAL_STATUSES.has(srcCard.data.status) && TERMINAL_STATUSES.has(keeper.data.status)) {
       throw Object.assign(new Error(
-        "task_move: Merge the finished task into the live one instead, or skip the merge: this task is still live but the task to merge into is done or cancelled; " +
-          "keep the live task (merge the finished one into it instead) or skip the merge"), { code: "task_move_this_task_is_still_live" })
+        "task_update: Merge the finished task into the live one instead, or skip the merge: this task is still live but the task to merge into is done or cancelled; " +
+          "keep the live task (merge the finished one into it instead) or skip the merge"), { code: "task_update_move_this_task_is_still_live" })
     }
     destSegments = [toTrack, intoTask, "_iterations", `${iterationDate(srcCard.data.created)}-${slug}`]
   } else {
@@ -507,15 +544,15 @@ export async function task_move({ deskRoot, input, person = null, search, status
   const destFile = await target([...destSegments, cardName])
 
   if (await pathExists(destDir)) {
-    throw Object.assign(new Error(`task_move: Choose another name: target already exists at ${shownRelPath(deskRoot, destDir)}`), { code: "task_move_target_already_exists_at" })
+    throw Object.assign(new Error(`task_update: Choose another name: target already exists at ${shownRelPath(deskRoot, destDir)}`), { code: "task_update_move_target_already_exists_at" })
   }
 
   const srcTrackMd = await target([track, "track.md"])
   destTrackMd ??= await target([toTrack, "track.md"])
   const effectiveRoot = path.resolve(personPrefix(deskRoot, person))
-  assertClean({ tool: "task_move", root: effectiveRoot, paths: [srcDir], what: "the source", allowDirty, spawnGit })
+  assertClean({ tool: "task_update", root: effectiveRoot, paths: [srcDir], what: "the source", allowDirty, spawnGit })
   assertClean({
-    tool: "task_move",
+    tool: "task_update",
     root: effectiveRoot,
     paths: [srcTrackMd, destTrackMd],
     what: "a track.md this move would edit",
@@ -529,7 +566,7 @@ export async function task_move({ deskRoot, input, person = null, search, status
     try {
       await readMarkdown(trackMd)
     } catch (error) {
-      throw Object.assign(new Error(`task_move: Fix the card, then try again: nothing was moved, because a track card cannot be updated: ${error.message}`, { cause: error }), { code: "task_move_nothing_was_moved_because_a" })
+      throw Object.assign(new Error(`task_update: Fix the card, then try again: nothing was moved, because a track card cannot be updated: ${error.message}`, { cause: error }), { code: "task_update_move_nothing_was_moved_because_a" })
     }
   }
   await movePath({ root: effectiveRoot, from: srcDir, to: destDir, spawnGit })
@@ -608,7 +645,7 @@ export async function task_move({ deskRoot, input, person = null, search, status
     root: effectiveRoot,
     movedDirs: [srcDir, destDir],
     writtenFiles,
-    message: `task_move: ${slug} → ${toTrack}`,
+    message: `task_update: ${slug} → ${toTrack}`,
     spawnGit,
     deskRoot,
   })
@@ -642,10 +679,10 @@ export async function task_move({ deskRoot, input, person = null, search, status
   return withNext(result)
 }
 
-// ── track_rename ─────────────────────────────────────────────────────────
+// ── track_update ─────────────────────────────────────────────────────────
 
 /**
- * track_rename
+ * track_update
  *
  * Input: { track, to, allow_dirty? }
  *
@@ -662,19 +699,19 @@ export async function task_move({ deskRoot, input, person = null, search, status
  *
  * Returns: { from, to, updated_files, mentions, commit? }
  */
-export async function track_rename({ deskRoot, input, person = null, search, spawnGit = spawnSync, schedulePush = schedulePushDefault }) {
+export async function renameTrack({ deskRoot, input, person = null, search, spawnGit = spawnSync, schedulePush = schedulePushDefault }) {
   const values = input ?? {}
   if (!Object.hasOwn(values, "to")) {
-    throw Object.assign(new Error("track_rename: Pass `to`, with `track` or `handle`: `to` is required, with `track` or `handle`"), { code: "track_rename_to_is_required_with_track" })
+    throw Object.assign(new Error("track_update: Pass `rename_to`, with `slug` or `handle`: `rename_to` is required, with `slug` or `handle`"), { code: "track_update_rename_to_is_required_with_track" })
   }
   const { to } = values
   const track = trackRenameSource(deskRoot, person, values)
-  rejectTraversalShapedInput("track_rename", "track", track)
-  const allowDirty = trueOrAbsent("track_rename", "allow_dirty", values.allow_dirty)
+  rejectTraversalShapedInput("track_update", "slug", track)
+  const allowDirty = trueOrAbsent("track_update", "allow_dirty", values.allow_dirty)
 
   const nameResult = validateTrackName(to, { operatorNames: operatorNames(deskRoot) })
   if (!nameResult.ok) {
-    throw Object.assign(new Error(`track_rename: Pass a valid value: invalid to: ${describeNameRejection(nameResult)}`), { code: "track_rename_invalid_to" })
+    throw Object.assign(new Error(`track_update: Pass a valid value: invalid rename_to: ${describeNameRejection(nameResult)}`), { code: "track_update_rename_invalid_to" })
   }
 
   const target = (segments) => resolveWriteTarget({ deskRoot, person, segments })
@@ -683,10 +720,10 @@ export async function track_rename({ deskRoot, input, person = null, search, spa
   const destDir = await target([to])
 
   if (!(await pathExists(srcTrackMd))) {
-    throw Object.assign(new Error(`track_rename: Check the track and slug, then try again: track does not exist at ${shownRelPath(deskRoot, srcDir)}`), { code: "track_rename_track_does_not_exist_at" })
+    throw Object.assign(new Error(`track_update: Check the track and slug, then try again: track does not exist at ${shownRelPath(deskRoot, srcDir)}`), { code: "track_update_rename_track_does_not_exist_at" })
   }
   if (await pathExists(destDir)) {
-    throw Object.assign(new Error(`track_rename: Choose another name: target already exists at ${shownRelPath(deskRoot, destDir)}`), { code: "track_rename_target_already_exists_at" })
+    throw Object.assign(new Error(`track_update: Choose another name: target already exists at ${shownRelPath(deskRoot, destDir)}`), { code: "track_update_rename_target_already_exists_at" })
   }
 
   // Every card is patched after the folder moves, so a card the patch would
@@ -695,12 +732,12 @@ export async function track_rename({ deskRoot, input, person = null, search, spa
     try {
       await assertFrontmatterPatchable(file, { track: to, updated: nowIso() })
     } catch (error) {
-      throw Object.assign(new Error(`track_rename: Fix the card, then try again: nothing was renamed, because a task card cannot be updated: ${error.message}`, { cause: error }), { code: "track_rename_nothing_was_renamed_because_a" })
+      throw Object.assign(new Error(`track_update: Fix the card, then try again: nothing was renamed, because a task card cannot be updated: ${error.message}`, { cause: error }), { code: "track_update_rename_nothing_was_renamed_because_a" })
     }
   }
 
   const effectiveRoot = path.resolve(personPrefix(deskRoot, person))
-  assertClean({ tool: "track_rename", root: effectiveRoot, paths: [srcDir], what: "the source", allowDirty, spawnGit })
+  assertClean({ tool: "track_update", root: effectiveRoot, paths: [srcDir], what: "the source", allowDirty, spawnGit })
   await movePath({ root: effectiveRoot, from: srcDir, to: destDir, spawnGit })
 
   const taskFiles = await findTaskCards(destDir)
@@ -716,7 +753,7 @@ export async function track_rename({ deskRoot, input, person = null, search, spa
     root: effectiveRoot,
     movedDirs: [srcDir, destDir],
     writtenFiles: taskFiles,
-    message: `track_rename: ${track} → ${to}`,
+    message: `track_update: ${track} → ${to}`,
     spawnGit,
     deskRoot,
   })

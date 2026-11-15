@@ -68,6 +68,15 @@ const CARD_UPDATE = {
   body_append: text("Markdown to append to the card body, separated by a blank line."),
 }
 
+const TASK_MOVE = {
+  handle: text("Only with a move: the task's handle from active_tasks, desk_status `detail: true` or a desk_doctor finding, in place of track and slug; use it for a name shown as <redacted segment>."),
+  to_track: text("Move the task to this track (live or archived; archived stays archived); its track.md must already exist. A move takes no other update field, and the target must not exist."),
+  to_slug: text("Rename the task to this name, an outcome name."),
+  unarchive: flag("Reopen an archived task into a live folder."),
+  into_task: text("Merge this duplicate task into the named keeper task, under the keeper's _iterations/ folder; nothing is deleted. A live task cannot merge into a done or cancelled one."),
+  allow_dirty: flag("With a move: move even though the folder has unstaged or untracked changes, which a Git desk otherwise refuses."),
+}
+
 const REPOS_REMOVED_REASON = text("One line on why. Required to remove every repo from a card; not with `status: done`, and not needed with `status: cancelled`.")
 
 const RETURN_REASON = {
@@ -205,7 +214,7 @@ export const TOOL_INPUT_SCHEMAS = Object.freeze({
     origin_note: text("When the agent started the task: one line on what it noticed."),
     steps: { type: "array", items: STEP, description: "The outcome's steps, in order, written as the card's `## Steps` table. A new step needs `id`, `repo` and `depends_on`." },
   }, ["track", "slug", "title"]),
-  task_update: schema({ ...TASK_TARGET, status: text("Shorthand for `frontmatter.status`: one of drafting, processing, validating, collaborating, paused, blocked, done, cancelled. Moving to `done` needs `evidence`."), ...CARD_UPDATE, ...TASK_PROGRESS, evidence: TASK_DONE_EVIDENCE, repos_removed_reason: REPOS_REMOVED_REASON, return_reason: RETURN_REASON, step: STEP, resource: RESOURCE, display_label: DISPLAY_LABEL, replace_section: REPLACE_SECTION, log: TASK_LOG, content_home: CONTENT_HOME }, ["track", "slug"]),
+  task_update: schema({ ...TASK_TARGET, status: text("Shorthand for `frontmatter.status`: one of drafting, processing, validating, collaborating, paused, blocked, done, cancelled. Moving to `done` needs `evidence`."), ...CARD_UPDATE, ...TASK_PROGRESS, evidence: TASK_DONE_EVIDENCE, repos_removed_reason: REPOS_REMOVED_REASON, return_reason: RETURN_REASON, step: STEP, resource: RESOURCE, display_label: DISPLAY_LABEL, replace_section: REPLACE_SECTION, log: TASK_LOG, content_home: CONTENT_HOME, ...TASK_MOVE }, []),
   task_archive: schema({ ...TASK_TARGET, evidence: TASK_DONE_EVIDENCE, outcome: TASK_ARCHIVE_OUTCOME }, ["track", "slug"]),
   task_signoff: schema({
     track: text("The track folder of the delivered task."),
@@ -221,15 +230,6 @@ export const TOOL_INPUT_SCHEMAS = Object.freeze({
     clear: flag("Pass true, alone, to declare no task: for a side conversation that belongs to none."),
     display_label: DISPLAY_LABEL,
   }),
-  task_move: schema({
-    ...TASK_TARGET,
-    handle: text("The task's handle from active_tasks, desk_status `detail: true` or a desk_doctor finding, in place of track and slug; use it for a name shown as <redacted segment>."),
-    to_track: text("The destination track; its track.md must already exist."),
-    to_slug: text("The new task folder name: an outcome name."),
-    unarchive: flag("Reopen an archived task into a live folder."),
-    into_task: text("Merge this duplicate task into the named keeper task, under the keeper's _iterations/ folder. A live task cannot merge into a done or cancelled one."),
-    allow_dirty: flag("Move even though the folder has unstaged or untracked changes."),
-  }),
   track_create: schema({
     slug: text("The track folder name: an outcome name, 2-6 lowercase kebab-case words."),
     title: text("The track title."),
@@ -240,13 +240,13 @@ export const TOOL_INPUT_SCHEMAS = Object.freeze({
     adopted_from: { type: "object", additionalProperties: true, description: "Where the track was adopted from: { source_path, source_sha, adopted_at, adopted_by }." },
     planning: text("Path to the track's planning document."),
   }, ["slug", "title", "scope"]),
-  track_update: schema({ slug: text("The track folder name."), ...CARD_UPDATE }, ["slug"]),
-  track_rename: schema({
-    track: text("The track folder to rename."),
-    handle: text("The track's handle from the boot result's active_tasks, desk_status with detail: true, or a desk_doctor finding, in place of track; use it for a name shown as <redacted segment>."),
-    to: text("The new track folder name: an outcome name."),
-    allow_dirty: flag("Rename even though the track has unstaged or untracked changes."),
-  }, ["to"]),
+  track_update: schema({
+    slug: text("The track folder name."),
+    handle: text("The track's handle from the boot result's active_tasks, desk_status with detail: true, or a desk_doctor finding, in place of slug; use it for a name shown as <redacted segment>. Only with rename_to."),
+    ...CARD_UPDATE,
+    rename_to: text("Rename the track to this name, a valid track name that doesn't exist yet, instead of updating it; give nothing else but slug or handle. Rewrites `track:` in every task.md under the moved tree, live and archived, stages those cards and commits the moved directory."),
+    allow_dirty: flag("With rename_to: rename even though the track has unstaged changes or untracked, non-ignored files, which a Git desk otherwise refuses because another session may be working there."),
+  }),
   friction_add: schema({
     track: text("Track for a track-local entry; omit for the cross-cutting log."),
     theme: text("Short slug for a track-local entry's filename; defaults to untitled."),
@@ -305,7 +305,7 @@ export const TOOL_INPUT_SCHEMAS = Object.freeze({
       description: "For a client with no filesystem: files to write, then commit with `paths`. A refused entry (outside the desk or write prefix, in .git, .state/ or .github/workflows/, a task card or link) refuses the call before anything is written. Not with `tidy: true`. Required unless `paths` is given.",
     },
     message: text("The commit message."),
-    tidy: flag("Pass true to commit a desk tidy or its undo: moved or renamed task cards already staged by task_move, track_rename or git mv, plus _meta/organization.json."),
+    tidy: flag("Pass true to commit a desk tidy or its undo: moved or renamed task cards already staged by task_update, track_update or git mv, plus _meta/organization.json."),
   }, ["message"]),
   desk_search: schema({
     query: text("The search query. Omit it to list documents by update time."),

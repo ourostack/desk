@@ -149,7 +149,7 @@ If a live card has a legacy Resources table, repeat the resource write with `mig
 
 Desk puts the six mapped columns in standard order and adds empty cells for absent fields, preserving other columns after them, all row cells and surrounding prose. The migration and row update use the same checked write; repeating the call on a canonical table does not migrate again. Duplicate headers or typed identities, multiple Resources sections or tables, missing mapped columns, and rows with the wrong cell count refuse without writing.
 
-Do not use `replace_section` or a direct card edit. Archived cards remain disposition-only; use the normal `task_move` unarchive flow before recovering a legacy archived table.
+Do not use `replace_section` or a direct card edit. Archived cards remain disposition-only; use the normal `task_update` unarchive flow before recovering a legacy archived table.
 
 ## Evidence on `done`
 

@@ -23,7 +23,7 @@ Some Desk tools, doctor repairs and skills need a shell, the host machine or a c
 
 ## Branding
 
-The consent, invitation and sign-in refusal pages share the approved transparent Desk render at `/assets/desk-logo.png` and the silhouette favicon at `/favicon.svg`. Both are public, fixed files under `hosted/public`; authentication pages stay uncached and refuse framing. The PNG is a lossless conversion of the approved 256px WebP, and the SVG is the approved single-colour silhouette. Replace assets only from an approved logo handoff, not a redraw.
+The consent, invitation and sign-in refusal pages share the approved transparent Desk render at `/assets/desk-logo.png` and the silhouette favicon at `/favicon.svg`. Both are public, fixed files under `hosted/public`; authentication pages stay uncached and refuse framing. The PNG is a 512px Lanczos export of the approved 1024px master, `brand/desk.png` in ourostack/.github, shown at 80px so it stays sharp on 2x and 3x screens and as the MCP connector icon. The SVG is the approved single-colour silhouette. Replace assets only from an approved logo handoff, not a redraw.
 
 The gateway derives `DESK_MCP_ICON_URL` for each Desk child from `DESK_PUBLIC_URL`. The native Desk front door advertises it in `serverInfo.icons` for protocols from `2025-11-25` onward. Local sessions, hosted sessions without that setting and older protocols retain their existing metadata; the gateway does not rewrite MCP messages.
 

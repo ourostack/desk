@@ -106,7 +106,7 @@ desk_card_guard() {
     if [ "\${#unstage}" -le 87 ]; then echo "Run $unstage and call task_update for it."; else echo "Run the command below, then call task_update for the card."; echo "$unstage"; fi
     echo "Desk refused this commit because it changes a task card, and a card is written only through Desk's tools, which commit it for you:"
     echo "$refused" | sed 's/^/  /'
-    echo "Use task_update (status, repos, a progress note, the next step, more body text), task_create, task_move or task_archive: each writes the card and commits it for you."
+    echo "Use task_update (status, repos, a progress note, the next step, more body text), task_create, task_update or task_archive: each writes the card and commits it for you."
     echo "If this card is in a desk this session's Desk tools cannot reach, do not commit it by hand: make the edit from a session bound to that desk, or ask the person who owns it."
     echo '${hint}'
     echo "To commit your other work, take each card out of this commit first (git restore --staged <card path>), then use task_update for the card itself."

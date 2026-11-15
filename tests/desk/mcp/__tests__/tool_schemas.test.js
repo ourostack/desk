@@ -80,9 +80,9 @@ test("task_create declares the fields start-task sends", () => {
   assert.equal(properties.origin_note.type, "string")
 })
 
-test("task_move and track_rename take a handle in place of the folder name", () => {
-  assert.equal(TOOL_INPUT_SCHEMAS.task_move.properties.handle.type, "string")
-  assert.deepEqual(TOOL_INPUT_SCHEMAS.task_move.required, [])
-  assert.equal(TOOL_INPUT_SCHEMAS.track_rename.properties.handle.type, "string")
-  assert.deepEqual(TOOL_INPUT_SCHEMAS.track_rename.required, ["to"])
+test("task_update and track_update take a handle in place of the folder name, for a move or a rename", () => {
+  assert.equal(TOOL_INPUT_SCHEMAS.task_update.properties.handle.type, "string")
+  assert.deepEqual(TOOL_INPUT_SCHEMAS.task_update.required, [])
+  assert.equal(TOOL_INPUT_SCHEMAS.track_update.properties.handle.type, "string")
+  assert.deepEqual(TOOL_INPUT_SCHEMAS.track_update.required, [])
 })

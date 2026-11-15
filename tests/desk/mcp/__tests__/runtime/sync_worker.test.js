@@ -680,6 +680,55 @@ test("the loop re-checks for new commits before releasing the lock, so a commit 
   assert.equal(originCommitCount(origin), 3, "seed + first + second all reached origin in one worker run")
 })
 
+// A clock that records each wait and runs `onWait` with its index first, so a test can change the checkout between steps.
+function recordingClock(onWait) {
+  const waits = []
+  return { waits, sleep: (ms) => { onWait(waits.length); waits.push(ms); return Promise.resolve() } }
+}
+
+// Fakes the branch's upstream going missing from its config and tracking ref while `gone()` is true, as a detached
+// HEAD does mid-rebase. Everything else runs real Git.
+function upstreamGoneSpawn(isGone) {
+  return (cmd, args, opts) => {
+    if (isGone() && args.includes("config")) return { status: 1, stdout: "", stderr: "" }
+    if (isGone() && args.includes("--left-right")) return { status: 128, stdout: "", stderr: "fatal: no upstream configured" }
+    return spawnSync(cmd, args, opts)
+  }
+}
+
+test("a push round whose upstream vanishes mid-run is skipped, not blocked or filed, when no upstream comes back", async () => {
+  const { origin, cloneA } = await mkOriginWithClone()
+  await writeAndCommit(cloneA, "more.md", "more\n", "more")
+  let gone = false
+  // The upstream is there at the pre-debounce check and goes missing during the debounce wait.
+  const clock = recordingClock((index) => { if (index === 0) gone = true })
+  let filed = false
+  const result = await runPushWorker({ root: cloneA, env: process.env, debounceMs: 0, clock, spawnGit: upstreamGoneSpawn(() => gone), fileProblem: () => { filed = true } })
+  assert.deepEqual(result, { result: "skipped", reason: "upstream_gone" })
+  assert.deepEqual(clock.waits, [0, 2000, 2000, 2000], "the debounce, then three re-checks two seconds apart")
+  assert.equal(filed, false)
+  assert.notEqual(readSyncStatus({ root: cloneA, env: process.env })?.blocked, true, "a vanished upstream does not block sync")
+  assert.equal(originCommitCount(origin), 1, "nothing was pushed")
+})
+
+test("a push round whose upstream vanishes once delivers after a re-check finds it back", async () => {
+  const { origin, cloneA } = await mkOriginWithClone()
+  await writeAndCommit(cloneA, "more.md", "more\n", "more")
+  let gone = false
+  // Gone during the debounce wait, back by the first re-check.
+  const clock = recordingClock((index) => {
+    if (index === 0) gone = true
+    if (index === 1) gone = false
+  })
+  let filed = false
+  const result = await runPushWorker({ root: cloneA, env: process.env, debounceMs: 0, clock, spawnGit: upstreamGoneSpawn(() => gone), fileProblem: () => { filed = true } })
+  assert.deepEqual(result, { result: "ok" })
+  assert.deepEqual(clock.waits, [0, 2000], "one re-check was enough")
+  assert.equal(filed, false)
+  assert.equal(originCommitCount(origin), 2, "the commit reached origin once the upstream was back")
+  assert.equal(readSyncStatus({ root: cloneA, env: process.env }).blocked, false)
+})
+
 // ---------------------------------------------------------------------------
 // runSyncPushCli.
 // ---------------------------------------------------------------------------

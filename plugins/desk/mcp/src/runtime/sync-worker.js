@@ -584,7 +584,19 @@ function deliveredWith(current, added) {
   return [...new Set([...recorded, ...added])].slice(-DELIVERED_CAP)
 }
 
-function deliverUntilDone({ root, env, spawnGit, fileProblem }) {
+// A missing upstream seen mid-delivery is re-checked a few times before the round is skipped: the checkout can change between the pre-debounce check and delivery (a session-start `git pull --rebase` detaches HEAD while it runs, or a branch switch), which is not a desk defect.
+const UPSTREAM_RECHECKS = 3
+const UPSTREAM_RECHECK_MS = 2000
+
+async function upstreamBack({ root, spawnGit, clock }) {
+  for (let check = 0; check < UPSTREAM_RECHECKS; check += 1) {
+    await clock.sleep(UPSTREAM_RECHECK_MS)
+    if (canPush(root, spawnGit)) return true
+  }
+  return false
+}
+
+async function deliverUntilDone({ root, env, spawnGit, fileProblem, clock }) {
   let pushedAt = null
   for (let round = 0; round < MAX_ROUNDS; round += 1) {
     const delivered = deliveredSoFar(root, env)
@@ -595,6 +607,10 @@ function deliverUntilDone({ root, env, spawnGit, fileProblem }) {
       return { result: "ok" }
     }
     const outcome = deliver({ root, env, spawnGit, delivered })
+    if (outcome.reason === "no_upstream") {
+      if (await upstreamBack({ root, spawnGit, clock })) continue
+      return { result: "skipped", reason: "upstream_gone" }
+    }
     const followed = ["current", "caught_up"].includes(outcome.checkout?.state)
     updateSyncStatus(root, env, (current) => ({ delivered: followed ? [] : deliveredWith(current, outcome.delivered), checkout: outcome.checkout ?? null, publication: outcome.publication ?? null }))
     if (outcome.delivered.length > 0) pushedAt = new Date().toISOString()
@@ -653,7 +669,7 @@ async function pushRound({
   try {
     if (!canPush(root, spawnGit)) return { result: "skipped" }
     await clock.sleep(debounceMs)
-    return deliverUntilDone({ root, env, spawnGit, fileProblem })
+    return await deliverUntilDone({ root, env, spawnGit, fileProblem, clock })
   } finally {
     lock.release()
   }

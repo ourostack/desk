@@ -33,16 +33,16 @@ A running tally of decisions made so far is fine, and an index of what's coming 
 
 ## 2. Organization: tidy and announce
 
-You own the desk's organization: file work where its scope fits, name things from the outcome, and when something could be better organized, tidy it and say so in one line rather than asking. So never ask the human to choose a name, a track or a filing location. `start-task` names and routes new work, `track-card-format` defines the scope line, `directory-structure` says what may sit where, and `desk_doctor` reports drift. Names are cheap to change: `task_move` moves or renames a task and `track_rename` renames a track, so a weak name gets fixed later instead of being negotiated up front.
+You own the desk's organization: file work where its scope fits, name things from the outcome, and when something could be better organized, tidy it and say so in one line rather than asking. So never ask the human to choose a name, a track or a filing location. `start-task` names and routes new work, `track-card-format` defines the scope line, `directory-structure` says what may sit where, and `desk_doctor` reports drift. Names are cheap to change: `task_update` moves or renames a task and `track_update` renames a track, so a weak name gets fixed later instead of being negotiated up front.
 
 When you find something that could be organized better, tidy it and say so in one line, then proceed without waiting. Write the line in the spirit of Ari's example: "I'm going to tidy up my desk a bit: moving these three tasks into a new `billing` track. Say if you mind." Never turn the finding into a question about how the human would like it fixed, such as "I noticed this is disorganized; how would you like me to fix it?". Several tidies in one pass get one line that names them all.
 
 Tidying is safe by construction:
 
-- It moves and renames through Git (`task_move` and `track_rename` stage a `git mv` on a Git desk), so every change is reversible.
+- It moves and renames through Git (`task_update` and `track_update` stage a `git mv` on a Git desk), so every change is reversible.
 - It never deletes content. An empty track is archived, not removed.
 - It stays inside your own desk subtree. A peer's crew desk is theirs: report what you see there, but do not change it.
-- It leaves work in progress alone: `task_move` and `track_rename` refuse a folder with uncommitted changes that are not staged, or with untracked files, because another session may be working there, and a tidy never overrides that with `allow_dirty`. The Desk tools stage everything they write, so a staged change is the tidy's own work in progress.
+- It leaves work in progress alone: `task_update` and `track_update` refuse a folder with uncommitted changes that are not staged, or with untracked files, because another session may be working there, and a tidy never overrides that with `allow_dirty`. The Desk tools stage everything they write, so a staged change is the tidy's own work in progress.
 - It respects an explicit instruction not to write, which overrides tidying like every other capture habit (`using-desk` "Authority").
 - If the human objects, revert the tidy through Git and leave it that way.
 

@@ -1,11 +1,11 @@
-// task_move unarchive and into_task, its dirty-tree refusals, and track_rename. The other task_move cases are in move.test.js.
+// task_update unarchive and into_task, its dirty-tree refusals, and track_update. The other task_update cases are in move.test.js.
 
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import * as path from "node:path"
 import { promises as fs } from "node:fs"
 import { spawnSync } from "node:child_process"
-import { task_move, track_rename } from "../../../../../plugins/desk/mcp/src/tools/move.js"
+import { moveTask, renameTrack } from "../../../../../plugins/desk/mcp/src/tools/move.js"
 import { writeMarkdown } from "../../../../../plugins/desk/mcp/src/util/fm.js"
 import { task_create, task_archive, task_update } from "../../../../../plugins/desk/mcp/src/tools/task.js"
 import { track_create } from "../../../../../plugins/desk/mcp/src/tools/track.js"
@@ -14,7 +14,7 @@ import { folderHandle } from "../../../../../plugins/desk/mcp/src/desk/handles.j
 import { DONE_EVIDENCE, SCOPE, assertNoCandidateLeak, commitAll, gitLog, gitStatus, initGit, lastCommitMessage, mkTrack, tasksTableBody, trackBody } from "./_move_fixture.js"
 import { assertNextFirst, notCommitted } from "./_route_around.js"
 
-// ── task_move: unarchive (M4-5) ──────────────────────────────────────────────
+// ── task_update: unarchive (M4-5) ──────────────────────────────────────────────
 
 async function archivedTask(root, { track = "main-track", slug = "old-task", rows = [] } = {}) {
   await mkTrack(root, track, { rows })
@@ -22,13 +22,13 @@ async function archivedTask(root, { track = "main-track", slug = "old-task", row
   await task_archive({ deskRoot: root, input: { track, slug, evidence: DONE_EVIDENCE } })
 }
 
-test("task_move unarchive moves an archived task back to a live folder and restores its missing row", async () => {
+test("task_update unarchive moves an archived task back to a live folder and restores its missing row", async () => {
   const root = await mkTempDeskRoot()
   initGit(root)
   await archivedTask(root, { rows: ["other-task"] })
 
   commitAll(root)
-  const result = await task_move({
+  const result = await moveTask({
     deskRoot: root,
     input: { track: "main-track", slug: "old-task", unarchive: true },
     schedulePush: () => {},
@@ -45,15 +45,15 @@ test("task_move unarchive moves an archived task back to a live folder and resto
   assert.match(body, /`other-task`/)
   assert.ok(result.updated_files.includes(path.posix.join("main-track", "track.md")))
   assert.equal(gitStatus(root), "")
-  assert.equal(lastCommitMessage(root), "task_move: old-task → main-track")
+  assert.equal(lastCommitMessage(root), "task_update: old-task → main-track")
 })
 
-test("task_move unarchive leaves a row that is still in the table alone", async () => {
+test("task_update unarchive leaves a row that is still in the table alone", async () => {
   const root = await mkTempDeskRoot()
   await archivedTask(root, { rows: ["old-task"] })
   const before = await trackBody(root, "main-track")
 
-  const result = await task_move({
+  const result = await moveTask({
     deskRoot: root,
     input: { track: "main-track", slug: "old-task", unarchive: true },
   })
@@ -62,11 +62,11 @@ test("task_move unarchive leaves a row that is still in the table alone", async 
   assert.deepEqual(result.updated_files, [path.posix.join("main-track", "old-task", "task.md")])
 })
 
-test("task_move unarchive with a new name renames the row that is still in the table", async () => {
+test("task_update unarchive with a new name renames the row that is still in the table", async () => {
   const root = await mkTempDeskRoot()
   await archivedTask(root, { rows: ["old-task"] })
 
-  await task_move({
+  await moveTask({
     deskRoot: root,
     input: { track: "main-track", slug: "old-task", unarchive: true, to_slug: "reopened-task" },
   })
@@ -77,7 +77,7 @@ test("task_move unarchive with a new name renames the row that is still in the t
   assert.doesNotMatch(body, /`old-task`/)
 })
 
-test("task_move unarchive into another track moves the source row there", async () => {
+test("task_update unarchive into another track moves the source row there", async () => {
   const root = await mkTempDeskRoot()
   await archivedTask(root, { rows: ["old-task"] })
   const archived = await readFront(path.join(root, "main-track", "_archive", "old-task", "task.md"))
@@ -85,7 +85,7 @@ test("task_move unarchive into another track moves the source row there", async 
   assert.match(await trackBody(root, "main-track"), /^\| `old-task` \| done \|/m)
   await mkTrack(root, "track-b", { rows: [] })
 
-  await task_move({
+  await moveTask({
     deskRoot: root,
     input: { track: "main-track", slug: "old-task", unarchive: true, to_track: "track-b" },
   })
@@ -98,7 +98,7 @@ test("task_move unarchive into another track moves the source row there", async 
   assert.deepEqual(live.data.evidence, archived.data.evidence)
 })
 
-test("task_move unarchive into another track builds a row when the source table has none", async () => {
+test("task_update unarchive into another track builds a row when the source table has none", async () => {
   const root = await mkTempDeskRoot()
   await archivedTask(root)
   await track_create({
@@ -111,7 +111,7 @@ test("task_move unarchive into another track builds a row when the source table 
     },
   })
 
-  const result = await task_move({
+  const result = await moveTask({
     deskRoot: root,
     input: { track: "main-track", slug: "old-task", unarchive: true, to_track: "track-b" },
   })
@@ -120,74 +120,74 @@ test("task_move unarchive into another track builds a row when the source table 
   assert.ok(result.updated_files.includes(path.posix.join("track-b", "track.md")))
 })
 
-test("task_move unarchive leaves a track.md with no Tasks table alone", async () => {
+test("task_update unarchive leaves a track.md with no Tasks table alone", async () => {
   const root = await mkTempDeskRoot()
   await track_create({ deskRoot: root, input: { slug: "main-track", title: "main-track", scope: SCOPE } })
   await task_create({ deskRoot: root, input: { track: "main-track", slug: "old-task", title: "T" } })
   await task_archive({ deskRoot: root, input: { track: "main-track", slug: "old-task", evidence: DONE_EVIDENCE } })
 
-  const result = await task_move({
+  const result = await moveTask({
     deskRoot: root,
     input: { track: "main-track", slug: "old-task", unarchive: true },
   })
   assert.deepEqual(result.updated_files, [path.posix.join("main-track", "old-task", "task.md")])
 })
 
-test("task_move unarchive refuses a task that isn't archived", async () => {
+test("task_update unarchive refuses a task that isn't archived", async () => {
   const root = await mkTempDeskRoot()
   await mkTrack(root, "main-track")
   await task_create({ deskRoot: root, input: { track: "main-track", slug: "live-task", title: "T" } })
 
   await assert.rejects(
-    task_move({ deskRoot: root, input: { track: "main-track", slug: "live-task", unarchive: true } }),
+    moveTask({ deskRoot: root, input: { track: "main-track", slug: "live-task", unarchive: true } }),
     /no archived task to unarchive/,
   )
   assert.ok(await exists(path.join(root, "main-track", "live-task", "task.md")))
 })
 
-test("task_move unarchive refuses when the live folder already exists", async () => {
+test("task_update unarchive refuses when the live folder already exists", async () => {
   const root = await mkTempDeskRoot()
   await archivedTask(root)
   // task_create refuses a slug that exists in the archive, so the colliding live folder is written directly.
   await writeMarkdown(path.join(root, "main-track", "old-task", "task.md"), { title: "T", status: "drafting" }, "")
 
   await assert.rejects(
-    task_move({ deskRoot: root, input: { track: "main-track", slug: "old-task", unarchive: true } }),
+    moveTask({ deskRoot: root, input: { track: "main-track", slug: "old-task", unarchive: true } }),
     /target already exists/,
   )
 })
 
-test("task_move unarchive validates a new name as usual", async () => {
+test("task_update unarchive validates a new name as usual", async () => {
   const root = await mkTempDeskRoot()
   await archivedTask(root)
   await assert.rejects(
-    task_move({ deskRoot: root, input: { track: "main-track", slug: "old-task", unarchive: true, to_slug: "please-reopen-it" } }),
+    moveTask({ deskRoot: root, input: { track: "main-track", slug: "old-task", unarchive: true, to_slug: "please-reopen-it" } }),
     /invalid to_slug/,
   )
 })
 
-test("task_move refuses an unarchive flag that isn't a boolean", async () => {
+test("task_update refuses an unarchive flag that isn't a boolean", async () => {
   const root = await mkTempDeskRoot()
   await archivedTask(root)
   await assert.rejects(
-    task_move({ deskRoot: root, input: { track: "main-track", slug: "old-task", unarchive: "yes" } }),
+    moveTask({ deskRoot: root, input: { track: "main-track", slug: "old-task", unarchive: "yes" } }),
     /`unarchive` must be true or false/,
   )
 })
 
-test("task_move with unarchive false behaves like a plain move", async () => {
+test("task_update with unarchive false behaves like a plain move", async () => {
   const root = await mkTempDeskRoot()
   await archivedTask(root)
-  const result = await task_move({
+  const result = await moveTask({
     deskRoot: root,
     input: { track: "main-track", slug: "old-task", unarchive: false, to_slug: "renamed-task" },
   })
   assert.equal(result.to, path.posix.join("main-track", "_archive", "renamed-task"))
 })
 
-// ── task_move: into_task (M4-5 duplicate merge) ──────────────────────────────
+// ── task_update: into_task (M4-5 duplicate merge) ──────────────────────────────
 
-test("task_move into_task moves a duplicate into the kept task as a dated iteration folder", async () => {
+test("task_update into_task moves a duplicate into the kept task as a dated iteration folder", async () => {
   const root = await mkTempDeskRoot()
   initGit(root)
   await mkTrack(root, "main-track", { rows: ["keep-task", "dup-task"] })
@@ -199,7 +199,7 @@ test("task_move into_task moves a duplicate into the kept task as a dated iterat
   const day = new Date(before.created).toISOString().slice(0, 10)
 
   commitAll(root)
-  const result = await task_move({
+  const result = await moveTask({
     deskRoot: root,
     input: { track: "main-track", slug: "dup-task", into_task: "keep-task" },
     schedulePush: () => {},
@@ -224,10 +224,10 @@ test("task_move into_task moves a duplicate into the kept task as a dated iterat
   assert.match(body, /`keep-task`/)
   assert.deepEqual(result.updated_files, [path.posix.join(iteration, "merged-task.md"), path.posix.join("main-track", "track.md")])
   assert.equal(gitStatus(root), "")
-  assert.equal(lastCommitMessage(root), "task_move: dup-task → main-track")
+  assert.equal(lastCommitMessage(root), "task_update: dup-task → main-track")
 })
 
-test("task_move into_task across tracks leaves the destination table alone", async () => {
+test("task_update into_task across tracks leaves the destination table alone", async () => {
   const root = await mkTempDeskRoot()
   await mkTrack(root, "track-a", { rows: [] })
   await mkTrack(root, "track-b", { rows: ["keep-task"] })
@@ -237,7 +237,7 @@ test("task_move into_task across tracks leaves the destination table alone", asy
   await fs.writeFile(card, (await fs.readFile(card, "utf8")).replace(/^created: .*$/m, "created: 2026-03-04"))
   const before = await trackBody(root, "track-b")
 
-  const result = await task_move({
+  const result = await moveTask({
     deskRoot: root,
     input: { track: "track-a", slug: "dup-task", to_track: "track-b", into_task: "keep-task" },
   })
@@ -249,7 +249,7 @@ test("task_move into_task across tracks leaves the destination table alone", asy
   assert.deepEqual(result.updated_files, [path.posix.join(result.to, "merged-task.md")])
 })
 
-test("task_move into_task names the iteration after today when the card has no usable created date", async () => {
+test("task_update into_task names the iteration after today when the card has no usable created date", async () => {
   const root = await mkTempDeskRoot()
   await mkTrack(root, "main-track")
   await task_create({ deskRoot: root, input: { track: "main-track", slug: "keep-task", title: "T" } })
@@ -257,49 +257,49 @@ test("task_move into_task names the iteration after today when the card has no u
   const card = path.join(root, "main-track", "dup-task", "task.md")
   await fs.writeFile(card, (await fs.readFile(card, "utf8")).replace(/^created: .*$/m, "created: not-a-date"))
 
-  const result = await task_move({
+  const result = await moveTask({
     deskRoot: root,
     input: { track: "main-track", slug: "dup-task", into_task: "keep-task" },
   })
   assert.match(path.basename(result.to), /^\d{4}-\d{2}-\d{2}-dup-task$/)
 })
 
-test("task_move into_task refuses a task to merge into that doesn't exist", async () => {
+test("task_update into_task refuses a task to merge into that doesn't exist", async () => {
   const root = await mkTempDeskRoot()
   await mkTrack(root, "main-track")
   await task_create({ deskRoot: root, input: { track: "main-track", slug: "dup-task", title: "T" } })
   await assert.rejects(
-    task_move({ deskRoot: root, input: { track: "main-track", slug: "dup-task", into_task: "missing-task" } }),
+    moveTask({ deskRoot: root, input: { track: "main-track", slug: "dup-task", into_task: "missing-task" } }),
     /the task to merge into doesn't exist/,
   )
   assert.ok(await exists(path.join(root, "main-track", "dup-task", "task.md")))
 })
 
-test("task_move into_task refuses to merge a task into itself, before touching anything", async () => {
+test("task_update into_task refuses to merge a task into itself, before touching anything", async () => {
   const root = await mkTempDeskRoot()
   initGit(root)
   await mkTrack(root, "main-track")
   await task_create({ deskRoot: root, input: { track: "main-track", slug: "dup-task", title: "T" } })
   await assert.rejects(
-    task_move({ deskRoot: root, input: { track: "main-track", slug: "dup-task", into_task: "dup-task" } }),
+    moveTask({ deskRoot: root, input: { track: "main-track", slug: "dup-task", into_task: "dup-task" } }),
     /cannot be merged into itself/,
   )
   assert.equal(await exists(path.join(root, "main-track", "dup-task", "_iterations")), false)
   assert.ok(await exists(path.join(root, "main-track", "dup-task", "task.md")))
 })
 
-test("task_move into_task refuses to_slug, unarchive and a traversal-shaped keeper", async () => {
+test("task_update into_task refuses to_slug, unarchive and a traversal-shaped keeper", async () => {
   const root = await mkTempDeskRoot()
   await mkTrack(root, "main-track")
   await task_create({ deskRoot: root, input: { track: "main-track", slug: "dup-task", title: "T" } })
   for (const extra of [{ to_slug: "other-name" }, { unarchive: true }]) {
     await assert.rejects(
-      task_move({ deskRoot: root, input: { track: "main-track", slug: "dup-task", into_task: "keep-task", ...extra } }),
+      moveTask({ deskRoot: root, input: { track: "main-track", slug: "dup-task", into_task: "keep-task", ...extra } }),
       /`into_task` cannot be combined/,
     )
   }
   await assert.rejects(
-    task_move({ deskRoot: root, input: { track: "main-track", slug: "dup-task", into_task: "../elsewhere" } }),
+    moveTask({ deskRoot: root, input: { track: "main-track", slug: "dup-task", into_task: "../elsewhere" } }),
     /`into_task` must be a non-empty path segment/,
   )
 })
@@ -308,7 +308,7 @@ test("task_move into_task refuses to_slug, unarchive and a traversal-shaped keep
 
 const DIRTY = /the source has unstaged changes or untracked files, so another session may be working there; commit or finish that work first, or pass allow_dirty: true to move it anyway/
 
-test("task_move refuses a task with uncommitted or untracked files, without quoting its name", async () => {
+test("task_update refuses a task with uncommitted or untracked files, without quoting its name", async () => {
   const root = await mkTempDeskRoot()
   initGit(root)
   await mkTrack(root, "main-track", { rows: ["pw-hunter2-task"] })
@@ -316,7 +316,7 @@ test("task_move refuses a task with uncommitted or untracked files, without quot
   commitAll(root)
   await fs.writeFile(path.join(root, "main-track", "clean-task", "doing.md"), "another session is writing this\n")
 
-  const error = await task_move({ deskRoot: root, input: { track: "main-track", slug: "clean-task", to_slug: "renamed-task" } }).catch((e) => e)
+  const error = await moveTask({ deskRoot: root, input: { track: "main-track", slug: "clean-task", to_slug: "renamed-task" } }).catch((e) => e)
   assert.match(error.message, DIRTY)
   assert.doesNotMatch(error.message, /clean-task|main-track/)
   assert.ok(await exists(path.join(root, "main-track", "clean-task", "doing.md")), "nothing moved")
@@ -324,10 +324,10 @@ test("task_move refuses a task with uncommitted or untracked files, without quot
   // A tracked file with unstaged edits counts too.
   commitAll(root)
   await fs.appendFile(path.join(root, "main-track", "clean-task", "doing.md"), "more\n")
-  await assert.rejects(task_move({ deskRoot: root, input: { track: "main-track", slug: "clean-task", to_slug: "renamed-task" } }), DIRTY)
+  await assert.rejects(moveTask({ deskRoot: root, input: { track: "main-track", slug: "clean-task", to_slug: "renamed-task" } }), DIRTY)
 })
 
-test("task_move ignores ignored files, and moves a dirty task when allow_dirty is true", async () => {
+test("task_update ignores ignored files, and moves a dirty task when allow_dirty is true", async () => {
   const root = await mkTempDeskRoot()
   initGit(root)
   await mkTrack(root, "main-track", { rows: [] })
@@ -335,26 +335,26 @@ test("task_move ignores ignored files, and moves a dirty task when allow_dirty i
   await fs.writeFile(path.join(root, ".gitignore"), "*.log\n")
   commitAll(root)
   await fs.writeFile(path.join(root, "main-track", "clean-task", "run.log"), "ignored\n")
-  await task_move({ deskRoot: root, input: { track: "main-track", slug: "clean-task", to_slug: "moved-task" }, schedulePush: () => {} })
+  await moveTask({ deskRoot: root, input: { track: "main-track", slug: "clean-task", to_slug: "moved-task" }, schedulePush: () => {} })
   assert.ok(await exists(path.join(root, "main-track", "moved-task", "run.log")))
 
   commitAll(root)
   await fs.writeFile(path.join(root, "main-track", "moved-task", "doing.md"), "in progress\n")
-  const result = await task_move({ deskRoot: root, input: { track: "main-track", slug: "moved-task", to_slug: "final-task", allow_dirty: true }, schedulePush: () => {} })
+  const result = await moveTask({ deskRoot: root, input: { track: "main-track", slug: "moved-task", to_slug: "final-task", allow_dirty: true }, schedulePush: () => {} })
   assert.equal(result.to, path.posix.join("main-track", "final-task"))
   // allow_dirty sweeps the dirty file along with the move (existing `git add
   // -A` + `git mv` behavior); the move's own commit picks it up too, since it
   // is part of the moved directory, not an unrelated path (M4-6 Part 2).
   assert.equal(gitStatus(root), "")
-  assert.equal(lastCommitMessage(root), "task_move: moved-task → main-track")
+  assert.equal(lastCommitMessage(root), "task_update: moved-task → main-track")
 
   await assert.rejects(
-    task_move({ deskRoot: root, input: { track: "main-track", slug: "final-task", to_slug: "other-task", allow_dirty: "yes" } }),
+    moveTask({ deskRoot: root, input: { track: "main-track", slug: "final-task", to_slug: "other-task", allow_dirty: "yes" } }),
     /`allow_dirty` must be true or false/,
   )
 })
 
-test("task_move treats a failing git diff or git ls-files as unstaged work", async () => {
+test("task_update treats a failing git diff or git ls-files as unstaged work", async () => {
   const root = await mkTempDeskRoot()
   initGit(root)
   await mkTrack(root, "main-track", { rows: [] })
@@ -362,11 +362,11 @@ test("task_move treats a failing git diff or git ls-files as unstaged work", asy
   commitAll(root)
   for (const failing of ["diff", "ls-files"]) {
     const spawnGit = (cmd, args, opts) => (args.includes(failing) ? { status: 128, stdout: "", stderr: "boom" } : spawnSync(cmd, args, opts))
-    await assert.rejects(task_move({ deskRoot: root, input: { track: "main-track", slug: "clean-task", to_slug: "moved-task" }, spawnGit }), DIRTY)
+    await assert.rejects(moveTask({ deskRoot: root, input: { track: "main-track", slug: "clean-task", to_slug: "moved-task" }, spawnGit }), DIRTY)
   }
 })
 
-test("task_move refuses to edit a track.md that holds another session's uncommitted changes, unless allow_dirty", async () => {
+test("task_update refuses to edit a track.md that holds another session's uncommitted changes, unless allow_dirty", async () => {
   const root = await mkTempDeskRoot()
   initGit(root)
   await mkTrack(root, "track-a", { rows: ["clean-task"] })
@@ -375,22 +375,22 @@ test("task_move refuses to edit a track.md that holds another session's uncommit
   commitAll(root)
   await fs.appendFile(path.join(root, "track-b", "track.md"), "\nA line another session is writing.\n")
 
-  const error = await task_move({ deskRoot: root, input: { track: "track-a", slug: "clean-task", to_track: "track-b" } }).catch((e) => e)
+  const error = await moveTask({ deskRoot: root, input: { track: "track-a", slug: "clean-task", to_track: "track-b" } }).catch((e) => e)
   assert.equal(
     error.message,
-    "task_move: Commit or finish that work first, or pass allow_dirty: true: a track.md this move would edit has unstaged changes or untracked files, so another session may be working there; commit or finish that work first, or pass allow_dirty: true to move it anyway",
+    "task_update: Commit or finish that work first, or pass allow_dirty: true: a track.md this move would edit has unstaged changes or untracked files, so another session may be working there; commit or finish that work first, or pass allow_dirty: true to move it anyway",
   )
   assert.ok(await exists(path.join(root, "track-a", "clean-task", "task.md")), "nothing moved")
 
   // The source track's table counts too.
   await fs.appendFile(path.join(root, "track-a", "track.md"), "\nAnother edit.\n")
-  await assert.rejects(task_move({ deskRoot: root, input: { track: "track-a", slug: "clean-task", to_slug: "renamed-task" } }), /a track\.md this move would edit has unstaged changes or untracked files/)
+  await assert.rejects(moveTask({ deskRoot: root, input: { track: "track-a", slug: "clean-task", to_slug: "renamed-task" } }), /a track\.md this move would edit has unstaged changes or untracked files/)
 
-  const result = await task_move({ deskRoot: root, input: { track: "track-a", slug: "clean-task", to_track: "track-b", allow_dirty: true }, schedulePush: () => {} })
+  const result = await moveTask({ deskRoot: root, input: { track: "track-a", slug: "clean-task", to_track: "track-b", allow_dirty: true }, schedulePush: () => {} })
   assert.equal(result.to, path.posix.join("track-b", "clean-task"))
 })
 
-test("task_move into_task refuses to hide a live task inside a done one, and merges a done one into a live one", async () => {
+test("task_update into_task refuses to hide a live task inside a done one, and merges a done one into a live one", async () => {
   const root = await mkTempDeskRoot()
   initGit(root)
   await mkTrack(root, "main-track", { rows: [] })
@@ -402,19 +402,19 @@ test("task_move into_task refuses to hide a live task inside a done one, and mer
   commitAll(root)
 
   await assert.rejects(
-    task_move({ deskRoot: root, input: { track: "main-track", slug: "live-task", into_task: "done-task" } }),
-    /^Error: task_move: Merge the finished task into the live one instead, or skip the merge: this task is still live but the task to merge into is done or cancelled; keep the live task \(merge the finished one into it instead\) or skip the merge$/,
+    moveTask({ deskRoot: root, input: { track: "main-track", slug: "live-task", into_task: "done-task" } }),
+    /^Error: task_update: Merge the finished task into the live one instead, or skip the merge: this task is still live but the task to merge into is done or cancelled; keep the live task \(merge the finished one into it instead\) or skip the merge$/,
   )
   assert.ok(await exists(path.join(root, "main-track", "live-task", "task.md")), "the live task stays where it is")
 
-  const kept = await task_move({ deskRoot: root, input: { track: "main-track", slug: "done-task", into_task: "live-task" }, schedulePush: () => {} })
+  const kept = await moveTask({ deskRoot: root, input: { track: "main-track", slug: "done-task", into_task: "live-task" }, schedulePush: () => {} })
   assert.match(kept.to, /^main-track\/live-task\/_iterations\/\d{4}-\d{2}-\d{2}-done-task$/)
   commitAll(root)
-  const both = await task_move({ deskRoot: root, input: { track: "main-track", slug: "other-live-task", into_task: "live-task" }, schedulePush: () => {} })
+  const both = await moveTask({ deskRoot: root, input: { track: "main-track", slug: "other-live-task", into_task: "live-task" }, schedulePush: () => {} })
   assert.match(both.to, /other-live-task$/, "two live tasks for one job can still be merged")
 })
 
-test("track_rename refuses a track with uncommitted work unless allow_dirty is true", async () => {
+test("track_update refuses a track with uncommitted work unless allow_dirty is true", async () => {
   const root = await mkTempDeskRoot()
   initGit(root)
   await mkTrack(root, "old-track", { rows: [] })
@@ -422,19 +422,19 @@ test("track_rename refuses a track with uncommitted work unless allow_dirty is t
   commitAll(root)
   await fs.writeFile(path.join(root, "old-track", "task-one", "doing.md"), "in progress\n")
 
-  const error = await track_rename({ deskRoot: root, input: { track: "old-track", to: "new-track" } }).catch((e) => e)
-  assert.match(error.message, /^track_rename: Commit or finish that work first, or pass allow_dirty: true: the source has unstaged changes or untracked files, so another session may be working there/)
+  const error = await renameTrack({ deskRoot: root, input: { track: "old-track", to: "new-track" } }).catch((e) => e)
+  assert.match(error.message, /^track_update: Commit or finish that work first, or pass allow_dirty: true: the source has unstaged changes or untracked files, so another session may be working there/)
   assert.doesNotMatch(error.message, /old-track|task-one/)
   assert.ok(await exists(path.join(root, "old-track", "track.md")))
 
-  const result = await track_rename({ deskRoot: root, input: { track: "old-track", to: "new-track", allow_dirty: true }, schedulePush: () => {} })
+  const result = await renameTrack({ deskRoot: root, input: { track: "old-track", to: "new-track", allow_dirty: true }, schedulePush: () => {} })
   assert.equal(result.to, "new-track")
-  await assert.rejects(track_rename({ deskRoot: root, input: { track: "new-track", to: "newer-track", allow_dirty: 1 } }), /`allow_dirty` must be true or false/)
+  await assert.rejects(renameTrack({ deskRoot: root, input: { track: "new-track", to: "newer-track", allow_dirty: 1 } }), /`allow_dirty` must be true or false/)
 })
 
-// ── track_rename ─────────────────────────────────────────────────────────────
+// ── track_update ─────────────────────────────────────────────────────────────
 
-test("track_rename renames a track and rewrites track: on every live task card", async () => {
+test("track_update renames a track and rewrites track: on every live task card", async () => {
   const root = await mkTempDeskRoot()
   initGit(root)
   await mkTrack(root, "old-track", { rows: [] })
@@ -442,7 +442,7 @@ test("track_rename renames a track and rewrites track: on every live task card",
   await task_create({ deskRoot: root, input: { track: "old-track", slug: "task-two", title: "T" } })
 
   commitAll(root)
-  const result = await track_rename({ deskRoot: root, input: { track: "old-track", to: "new-track" }, schedulePush: () => {} })
+  const result = await renameTrack({ deskRoot: root, input: { track: "old-track", to: "new-track" }, schedulePush: () => {} })
 
   assert.equal(result.from, "old-track")
   assert.equal(result.to, "new-track")
@@ -461,10 +461,10 @@ test("track_rename renames a track and rewrites track: on every live task card",
   // Staged and committed (M4-6 Part 2): the tree is clean afterward, and the
   // new commit names the tool and the rename.
   assert.equal(gitStatus(root), "")
-  assert.equal(lastCommitMessage(root), "track_rename: old-track → new-track")
+  assert.equal(lastCommitMessage(root), "track_update: old-track → new-track")
 })
 
-test("track_rename preserves every other frontmatter byte untouched: a date-only value, a long single-line scalar, quoted and unquoted values, and a note: | block", async () => {
+test("track_update preserves every other frontmatter byte untouched: a date-only value, a long single-line scalar, quoted and unquoted values, and a note: | block", async () => {
   const root = await mkTempDeskRoot()
   initGit(root)
   await mkTrack(root, "old-track", { rows: [] })
@@ -494,7 +494,7 @@ test("track_rename preserves every other frontmatter byte untouched: a date-only
   await fs.writeFile(filePath, handWritten, "utf8")
 
   commitAll(root)
-  await track_rename({ deskRoot: root, input: { track: "old-track", to: "new-track" }, schedulePush: () => {} })
+  await renameTrack({ deskRoot: root, input: { track: "old-track", to: "new-track" }, schedulePush: () => {} })
 
   const raw = await fs.readFile(path.join(root, "new-track", "task-one", "task.md"), "utf8")
   assert.match(raw, /\ncreated: 2026-05-26\n/u, "the date-only created value is untouched")
@@ -509,7 +509,7 @@ test("track_rename preserves every other frontmatter byte untouched: a date-only
   assert.doesNotMatch(raw, /updated: "2026-09-20T10:00:00Z"/u, "updated is refreshed")
 })
 
-test("track_rename with archived tasks rewrites both live and archived task cards", async () => {
+test("track_update with archived tasks rewrites both live and archived task cards", async () => {
   const root = await mkTempDeskRoot()
   initGit(root)
   await mkTrack(root, "old-track", { rows: [] })
@@ -518,7 +518,7 @@ test("track_rename with archived tasks rewrites both live and archived task card
   await task_archive({ deskRoot: root, input: { track: "old-track", slug: "task-gone", evidence: DONE_EVIDENCE } })
 
   commitAll(root)
-  const result = await track_rename({ deskRoot: root, input: { track: "old-track", to: "new-track" }, schedulePush: () => {} })
+  const result = await renameTrack({ deskRoot: root, input: { track: "old-track", to: "new-track" }, schedulePush: () => {} })
 
   const { data: liveData } = await readFront(path.join(root, "new-track", "live-one", "task.md"))
   assert.equal(liveData.track, "new-track")
@@ -537,18 +537,18 @@ test("track_rename with archived tasks rewrites both live and archived task card
   )
 })
 
-test("track_rename works on a track with no tasks", async () => {
+test("track_update works on a track with no tasks", async () => {
   const root = await mkTempDeskRoot()
   initGit(root)
   await mkTrack(root, "old-track", { rows: [] })
 
   commitAll(root)
-  const result = await track_rename({ deskRoot: root, input: { track: "old-track", to: "new-track" }, schedulePush: () => {} })
+  const result = await renameTrack({ deskRoot: root, input: { track: "old-track", to: "new-track" }, schedulePush: () => {} })
   assert.deepEqual(result.updated_files, [])
   assert.ok(await exists(path.join(root, "new-track", "track.md")))
 })
 
-test("track_rename renames nothing when a task card's frontmatter cannot be patched, and names the card", async () => {
+test("track_update renames nothing when a task card's frontmatter cannot be patched, and names the card", async () => {
   const root = await mkTempDeskRoot()
   initGit(root)
   await mkTrack(root, "old-track", { rows: [] })
@@ -565,8 +565,8 @@ test("track_rename renames nothing when a task card's frontmatter cannot be patc
 
   for (let attempt = 0; attempt < 2; attempt++) {
     await assert.rejects(
-      track_rename({ deskRoot: root, input: { track: "old-track", to: "new-track" }, schedulePush: () => assert.fail("nothing to push") }),
-      (error) => error.message.startsWith("track_rename: Fix the card, then try again: nothing was renamed") && error.message.includes(brokenCard) && /duplicated mapping key/u.test(error.message),
+      renameTrack({ deskRoot: root, input: { track: "old-track", to: "new-track" }, schedulePush: () => assert.fail("nothing to push") }),
+      (error) => error.message.startsWith("track_update: Fix the card, then try again: nothing was renamed") && error.message.includes(brokenCard) && /duplicated mapping key/u.test(error.message),
     )
   }
   assert.equal(await exists(path.join(root, "new-track")), false)
@@ -576,7 +576,7 @@ test("track_rename renames nothing when a task card's frontmatter cannot be patc
   assert.equal(spawnSync("git", ["status", "--porcelain"], { cwd: root, encoding: "utf8" }).stdout, "")
 })
 
-test("track_rename still renames a track whose card has invalid YAML in a field it does not patch", async () => {
+test("track_update still renames a track whose card has invalid YAML in a field it does not patch", async () => {
   const root = await mkTempDeskRoot()
   initGit(root)
   await mkTrack(root, "old-track", { rows: [] })
@@ -585,33 +585,33 @@ test("track_rename still renames a track whose card has invalid YAML in a field 
   await fs.writeFile(card, "---\ntitle: a\ntitle: b\ntrack: old-track\nstatus: drafting\n---\nbody\n", "utf8")
   commitAll(root)
 
-  const result = await track_rename({ deskRoot: root, input: { track: "old-track", to: "new-track" }, schedulePush: () => {} })
+  const result = await renameTrack({ deskRoot: root, input: { track: "old-track", to: "new-track" }, schedulePush: () => {} })
   assert.deepEqual(result.updated_files, [path.posix.join("new-track", "odd-task", "task.md")])
   assert.match(await fs.readFile(path.join(root, "new-track", "odd-task", "task.md"), "utf8"), /^---\ntitle: a\ntitle: b\ntrack: new-track\n/u)
 })
 
-test("track_rename refuses when the target already exists", async () => {
+test("track_update refuses when the target already exists", async () => {
   const root = await mkTempDeskRoot()
   initGit(root)
   await mkTrack(root, "old-track", { rows: [] })
   await mkTrack(root, "new-track", { rows: [] })
 
   await assert.rejects(
-    () => track_rename({ deskRoot: root, input: { track: "old-track", to: "new-track" } }),
+    () => renameTrack({ deskRoot: root, input: { track: "old-track", to: "new-track" } }),
     /already exists/,
   )
   assert.ok(await exists(path.join(root, "old-track")), "source must be untouched on refusal")
 })
 
-test("track_rename refuses an invalid new name and never echoes the candidate", async () => {
+test("track_update refuses an invalid new name and never echoes the candidate", async () => {
   const root = await mkTempDeskRoot()
   initGit(root)
   await mkTrack(root, "old-track", { rows: [] })
 
   await assert.rejects(
-    () => track_rename({ deskRoot: root, input: { track: "old-track", to: "misc" } }),
+    () => renameTrack({ deskRoot: root, input: { track: "old-track", to: "misc" } }),
     (error) => {
-      assert.match(error.message, /invalid to/)
+      assert.match(error.message, /invalid rename_to/)
       assertNoCandidateLeak(error.message, "misc")
       return true
     },
@@ -619,7 +619,7 @@ test("track_rename refuses an invalid new name and never echoes the candidate", 
   assert.ok(await exists(path.join(root, "old-track")), "source must be untouched on refusal")
 })
 
-test("track_rename refuses a name after the desk's own git identity", async () => {
+test("track_update refuses a name after the desk's own git identity", async () => {
   const root = await mkTempDeskRoot()
   initGit(root)
   const result = spawnSync("git", ["-C", root, "config", "user.name", "Ari Mendelow"], {
@@ -629,52 +629,52 @@ test("track_rename refuses a name after the desk's own git identity", async () =
   await mkTrack(root, "old-track", { rows: [] })
 
   await assert.rejects(
-    () => track_rename({ deskRoot: root, input: { track: "old-track", to: "ari-mendelow" } }),
-    /invalid to/,
+    () => renameTrack({ deskRoot: root, input: { track: "old-track", to: "ari-mendelow" } }),
+    /invalid rename_to/,
   )
 })
 
-test("track_rename throws when the track does not exist", async () => {
+test("track_update throws when the track does not exist", async () => {
   const root = await mkTempDeskRoot()
   await assert.rejects(
-    () => track_rename({ deskRoot: root, input: { track: "ghost", to: "somewhere-new" } }),
+    () => renameTrack({ deskRoot: root, input: { track: "ghost", to: "somewhere-new" } }),
     /does not exist/,
   )
 })
 
-test("track_rename requires track and to", async () => {
+test("track_update requires track and to", async () => {
   const root = await mkTempDeskRoot()
   await assert.rejects(
-    () => track_rename({ deskRoot: root, input: { to: "somewhere-new" } }),
-    /`track` is required, or `handle` in its place/,
+    () => renameTrack({ deskRoot: root, input: { to: "somewhere-new" } }),
+    /`slug` is required, or `handle` in its place/,
   )
   await assert.rejects(
-    () => track_rename({ deskRoot: root, input: { track: "main-track" } }),
-    /`to` is required, with `track` or `handle`/,
+    () => renameTrack({ deskRoot: root, input: { track: "main-track" } }),
+    /`rename_to` is required, with `slug` or `handle`/,
   )
 })
 
-test("track_rename rejects a traversal-shaped source track without quoting it", async () => {
+test("track_update rejects a traversal-shaped source track without quoting it", async () => {
   const root = await mkTempDeskRoot()
   await assert.rejects(
-    () => track_rename({ deskRoot: root, input: { track: "../evil", to: "somewhere-new" } }),
+    () => renameTrack({ deskRoot: root, input: { track: "../evil", to: "somewhere-new" } }),
     (error) => {
-      assert.match(error.message, /`track` must be a non-empty path segment/)
+      assert.match(error.message, /`slug` must be a non-empty path segment/)
       assertNoCandidateLeak(error.message, "../evil")
       return true
     },
   )
 })
 
-test("track_rename defaults a missing input to an empty object", async () => {
+test("track_update defaults a missing input to an empty object", async () => {
   const root = await mkTempDeskRoot()
   await assert.rejects(
-    () => track_rename({ deskRoot: root }),
-    /`to` is required/,
+    () => renameTrack({ deskRoot: root }),
+    /`rename_to` is required/,
   )
 })
 
-test("track_rename reports mentions elsewhere but never rewrites them", async () => {
+test("track_update reports mentions elsewhere but never rewrites them", async () => {
   const root = await mkTempDeskRoot()
   initGit(root)
   await mkTrack(root, "old-track", { rows: [] })
@@ -684,12 +684,12 @@ test("track_rename reports mentions elsewhere but never rewrites them", async ()
   await fs.writeFile(notePath, noteText, "utf8")
 
   commitAll(root)
-  const result = await track_rename({ deskRoot: root, input: { track: "old-track", to: "new-track" }, schedulePush: () => {} })
+  const result = await renameTrack({ deskRoot: root, input: { track: "old-track", to: "new-track" }, schedulePush: () => {} })
   assert.deepEqual(result.mentions, [path.posix.join("_meta", "notes.md")])
   assert.equal(await fs.readFile(notePath, "utf8"), noteText)
 })
 
-test("track_rename findTaskCards skips node_modules/.git/.state under the moved track", async () => {
+test("track_update findTaskCards skips node_modules/.git/.state under the moved track", async () => {
   const root = await mkTempDeskRoot()
   initGit(root)
   await mkTrack(root, "old-track", { rows: [] })
@@ -701,11 +701,11 @@ test("track_rename findTaskCards skips node_modules/.git/.state under the moved 
   )
 
   commitAll(root)
-  const result = await track_rename({ deskRoot: root, input: { track: "old-track", to: "new-track" }, schedulePush: () => {} })
+  const result = await renameTrack({ deskRoot: root, input: { track: "old-track", to: "new-track" }, schedulePush: () => {} })
   assert.deepEqual(result.updated_files, [])
 })
 
-test("track_rename reports a commit failure without losing the rename", async () => {
+test("track_update reports a commit failure without losing the rename", async () => {
   const root = await mkTempDeskRoot()
   initGit(root)
   await mkTrack(root, "old-track", { rows: [] })
@@ -716,7 +716,7 @@ test("track_rename reports a commit failure without losing the rename", async ()
   }
 
   commitAll(root)
-  const result = await track_rename({ deskRoot: root, input: { track: "old-track", to: "new-track" }, spawnGit })
+  const result = await renameTrack({ deskRoot: root, input: { track: "old-track", to: "new-track" }, spawnGit })
 
   assert.equal(result.to, "new-track", "the rename itself is never lost to a commit failure")
   assert.ok(await exists(path.join(root, "new-track", "track.md")))
@@ -724,18 +724,18 @@ test("track_rename reports a commit failure without losing the rename", async ()
   assertNextFirst(result)
 })
 
-test("track_rename commits only its own paths, leaving another process's staged, unrelated file untouched (TOCTOU)", async () => {
+test("track_update commits only its own paths, leaving another process's staged, unrelated file untouched (TOCTOU)", async () => {
   const root = await mkTempDeskRoot()
   initGit(root)
   await mkTrack(root, "old-track", { rows: [] })
   commitAll(root)
 
   // Simulates another process staging an unrelated path in the window
-  // between track_rename's own dirty check and its stage/commit.
+  // between track_update's own dirty check and its stage/commit.
   await fs.writeFile(path.join(root, "unrelated.txt"), "another process's work\n")
   spawnSync("git", ["-C", root, "add", "--", "unrelated.txt"], { encoding: "utf8" })
 
-  const result = await track_rename({ deskRoot: root, input: { track: "old-track", to: "new-track" }, schedulePush: () => {} })
+  const result = await renameTrack({ deskRoot: root, input: { track: "old-track", to: "new-track" }, schedulePush: () => {} })
 
   assert.equal(result.to, "new-track")
   assert.equal(result.commit, undefined, "the rename's own commit succeeded")
@@ -743,21 +743,21 @@ test("track_rename commits only its own paths, leaving another process's staged,
   assert.match(status, /^A  unrelated\.txt$/m, "the unrelated path is still staged, not swept into this commit")
 })
 
-// ── track_rename: push scheduling ────────────────────────────────────────────
+// ── track_update: push scheduling ────────────────────────────────────────────
 //
-// Same contract as task_move's (see above): a real push is scheduled through
+// Same contract as task_update's (see above): a real push is scheduled through
 // the injectable `schedulePush` seam, never the real, spawning default,
 // exactly once, keyed on the plain top-level `deskRoot`, and only after a
 // successful commit on a Git desk.
 
-test("track_rename schedules a push exactly once, keyed on the plain deskRoot, after a successful commit", async () => {
+test("track_update schedules a push exactly once, keyed on the plain deskRoot, after a successful commit", async () => {
   const root = await mkTempDeskRoot()
   initGit(root)
   await mkTrack(root, "old-track", { rows: [] })
   commitAll(root)
 
   const calls = []
-  const result = await track_rename({
+  const result = await renameTrack({
     deskRoot: root,
     input: { track: "old-track", to: "new-track" },
     schedulePush: (opts) => calls.push(opts),
@@ -767,12 +767,12 @@ test("track_rename schedules a push exactly once, keyed on the plain deskRoot, a
   assert.deepEqual(calls, [{ root }])
 })
 
-test("track_rename never schedules a push on a non-Git desk", async () => {
+test("track_update never schedules a push on a non-Git desk", async () => {
   const root = await mkTempDeskRoot()
   await mkTrack(root, "old-track", { rows: [] })
 
   const calls = []
-  await track_rename({
+  await renameTrack({
     deskRoot: root,
     input: { track: "old-track", to: "new-track" },
     schedulePush: (opts) => calls.push(opts),
@@ -781,7 +781,7 @@ test("track_rename never schedules a push on a non-Git desk", async () => {
   assert.deepEqual(calls, [])
 })
 
-test("track_rename never schedules a push when the commit fails", async () => {
+test("track_update never schedules a push when the commit fails", async () => {
   const root = await mkTempDeskRoot()
   initGit(root)
   await mkTrack(root, "old-track", { rows: [] })
@@ -793,7 +793,7 @@ test("track_rename never schedules a push when the commit fails", async () => {
 
   commitAll(root)
   const calls = []
-  const result = await track_rename({
+  const result = await renameTrack({
     deskRoot: root,
     input: { track: "old-track", to: "new-track" },
     spawnGit,
@@ -804,20 +804,20 @@ test("track_rename never schedules a push when the commit fails", async () => {
   assert.deepEqual(calls, [])
 })
 
-// ── track_rename: non-Git desk + person scoping ──────────────────────────────
+// ── track_update: non-Git desk + person scoping ──────────────────────────────
 
-test("track_rename works on a non-Git desk via a plain rename", async () => {
+test("track_update works on a non-Git desk via a plain rename", async () => {
   const root = await mkTempDeskRoot()
   await mkTrack(root, "old-track", { rows: [] })
   await task_create({ deskRoot: root, input: { track: "old-track", slug: "task-one", title: "T" } })
 
-  const result = await track_rename({ deskRoot: root, input: { track: "old-track", to: "new-track" } })
+  const result = await renameTrack({ deskRoot: root, input: { track: "old-track", to: "new-track" } })
   assert.equal(result.to, "new-track")
   const { data } = await readFront(path.join(root, "new-track", "task-one", "task.md"))
   assert.equal(data.track, "new-track")
 })
 
-test("track_rename honors the --person write prefix", async () => {
+test("track_update honors the --person write prefix", async () => {
   const root = await mkTempDeskRoot()
   await track_create({
     deskRoot: root,
@@ -825,7 +825,7 @@ test("track_rename honors the --person write prefix", async () => {
     input: { slug: "old-track", title: "old-track", scope: SCOPE },
   })
 
-  const result = await track_rename({
+  const result = await renameTrack({
     deskRoot: root,
     person: "ari",
     input: { track: "old-track", to: "new-track" },
@@ -853,9 +853,9 @@ async function deskWithSecretTask() {
   return { root, handle: folderHandle("task", root, dir) }
 }
 
-test("task_move renames a task by its handle and never shows the old name", async () => {
+test("task_update renames a task by its handle and never shows the old name", async () => {
   const { root, handle } = await deskWithSecretTask()
-  const result = await task_move({ deskRoot: root, input: { handle, to_slug: "restore-root-access" }, schedulePush: () => {} })
+  const result = await moveTask({ deskRoot: root, input: { handle, to_slug: "restore-root-access" }, schedulePush: () => {} })
   assert.doesNotMatch(JSON.stringify(result), /hunter/)
   assert.equal(result.from, "main-track/<redacted segment>")
   assert.equal(result.to, "main-track/restore-root-access")
@@ -864,13 +864,13 @@ test("task_move renames a task by its handle and never shows the old name", asyn
   assert.equal(await exists(path.join(root, "main-track", SECRET_SLUG)), false)
 })
 
-test("task_move by handle refuses a stale handle, a mixed call and a clash without naming the folder", async () => {
+test("task_update by handle refuses a stale handle, a mixed call and a clash without naming the folder", async () => {
   const { root, handle } = await deskWithSecretTask()
-  await assert.rejects(() => task_move({ deskRoot: root, input: { handle: "task-0000000000", to_slug: "x-y" } }), /no task in this session's desk has that handle/)
-  await assert.rejects(() => task_move({ deskRoot: root, input: { handle, track: "main-track", to_slug: "x-y" } }), /pass `handle` or `track` and `slug`, not both/)
-  await assert.rejects(() => task_move({ deskRoot: root, input: { handle, slug: "a", to_slug: "x-y" } }), /not both/)
+  await assert.rejects(() => moveTask({ deskRoot: root, input: { handle: "task-0000000000", to_slug: "x-y" } }), /no task in this session's desk has that handle/)
+  await assert.rejects(() => moveTask({ deskRoot: root, input: { handle, track: "main-track", to_slug: "x-y" } }), /pass `handle` or `track` and `slug`, not both/)
+  await assert.rejects(() => moveTask({ deskRoot: root, input: { handle, slug: "a", to_slug: "x-y" } }), /not both/)
   await assert.rejects(
-    () => task_move({ deskRoot: root, input: { handle } }),
+    () => moveTask({ deskRoot: root, input: { handle } }),
     (error) => {
       assert.match(error.message, /target already exists at main-track\/<redacted segment>/)
       assert.doesNotMatch(error.message, /hunter/)
@@ -878,7 +878,7 @@ test("task_move by handle refuses a stale handle, a mixed call and a clash witho
     },
   )
   await assert.rejects(
-    () => task_move({ deskRoot: root, input: { track: "main-track", slug: "set pw hunter3", to_slug: "x-y" } }),
+    () => moveTask({ deskRoot: root, input: { track: "main-track", slug: "set pw hunter3", to_slug: "x-y" } }),
     (error) => {
       assert.match(error.message, /task does not exist at main-track\/<redacted segment>/)
       return true
@@ -886,7 +886,7 @@ test("task_move by handle refuses a stale handle, a mixed call and a clash witho
   )
 })
 
-test("track_rename renames a track by its handle and never shows the old name", async () => {
+test("track_update renames a track by its handle and never shows the old name", async () => {
   const root = await mkTempDeskRoot()
   initGit(root)
   await fs.mkdir(path.join(root, "pw-hunter2-track", "some-task"), { recursive: true })
@@ -895,31 +895,31 @@ test("track_rename renames a track by its handle and never shows the old name", 
   commitAll(root)
   const handle = folderHandle("track", root, path.join(root, "pw-hunter2-track"))
 
-  await assert.rejects(() => track_rename({ deskRoot: root, input: { handle: "track-0000000000", to: "access-work" } }), /no track in this session's desk has that handle/)
-  await assert.rejects(() => track_rename({ deskRoot: root, input: { handle, track: "pw-hunter2-track", to: "access-work" } }), /pass `handle` or `track`, not both/)
+  await assert.rejects(() => renameTrack({ deskRoot: root, input: { handle: "track-0000000000", to: "access-work" } }), /no track in this session's desk has that handle/)
+  await assert.rejects(() => renameTrack({ deskRoot: root, input: { handle, track: "pw-hunter2-track", to: "access-work" } }), /pass `handle` or `slug`, not both/)
 
-  const result = await track_rename({ deskRoot: root, input: { handle, to: "access-work" }, schedulePush: () => {} })
+  const result = await renameTrack({ deskRoot: root, input: { handle, to: "access-work" }, schedulePush: () => {} })
   assert.doesNotMatch(JSON.stringify(result), /hunter/)
   assert.equal(result.from, "<redacted segment>")
   assert.deepEqual(result.updated_files, ["access-work/some-task/task.md"])
   assert.equal((await readFront(path.join(root, "access-work", "some-task", "task.md"))).data.track, "access-work")
 })
 
-test("track_rename errors show a credential-like track name redacted", async () => {
+test("track_update errors show a credential-like track name redacted", async () => {
   const root = await mkTempDeskRoot()
   await assert.rejects(
-    () => track_rename({ deskRoot: root, input: { track: "pw-hunter2-track", to: "access-work" } }),
+    () => renameTrack({ deskRoot: root, input: { track: "pw-hunter2-track", to: "access-work" } }),
     (error) => {
-      assert.equal(error.message, "track_rename: Check the track and slug, then try again: track does not exist at <redacted segment>")
+      assert.equal(error.message, "track_update: Check the track and slug, then try again: track does not exist at <redacted segment>")
       return true
     },
   )
   await mkTrack(root, "access-work", { rows: [] })
   await mkTrack(root, "other-track", { rows: [] })
-  await assert.rejects(() => track_rename({ deskRoot: root, input: { track: "other-track", to: "access-work" } }), /target already exists at access-work/)
+  await assert.rejects(() => renameTrack({ deskRoot: root, input: { track: "other-track", to: "access-work" } }), /target already exists at access-work/)
 })
 
-test("task_move into_task whose git mv fails leaves no empty _iterations folder behind", async () => {
+test("task_update into_task whose git mv fails leaves no empty _iterations folder behind", async () => {
   const root = await mkTempDeskRoot()
   initGit(root)
   await mkTrack(root, "main-track", { rows: ["keep-task", "dup-task"] })
@@ -927,13 +927,13 @@ test("task_move into_task whose git mv fails leaves no empty _iterations folder 
   await task_create({ deskRoot: root, input: { track: "main-track", slug: "dup-task", title: "T" } })
   commitAll(root)
   const failMv = (command, args, options) => (args.includes("mv") ? { status: 1, stdout: "", stderr: "mv refused" } : spawnSync(command, args, options))
-  await assert.rejects(task_move({ deskRoot: root, input: { track: "main-track", slug: "dup-task", into_task: "keep-task" }, spawnGit: failMv, schedulePush: () => {} }), /git mv failed/u)
+  await assert.rejects(moveTask({ deskRoot: root, input: { track: "main-track", slug: "dup-task", into_task: "keep-task" }, spawnGit: failMv, schedulePush: () => {} }), /git mv failed/u)
   await assert.rejects(fs.stat(path.join(root, "main-track", "keep-task", "_iterations")), { code: "ENOENT" })
 })
 
 // ── the outcome record survives every card rewrite ──────────────────────────
 
-test("task_move and track_rename keep signoff, flow and returns exactly as written", async () => {
+test("task_update and track_update keep signoff, flow and returns exactly as written", async () => {
   const root = await mkTempDeskRoot()
   await mkTrack(root, "main-track", { rows: ["old-name"] })
   await task_create({ deskRoot: root, input: { track: "main-track", slug: "old-name", title: "Unique title for the record test" } })
@@ -946,16 +946,16 @@ test("task_move and track_rename keep signoff, flow and returns exactly as writt
   const before = keep((await readFront(file)).data)
   assert.equal(before.signoff.state, "delivered_unsigned")
 
-  await task_move({ deskRoot: root, input: { track: "main-track", slug: "old-name", to_slug: "new-name" }, schedulePush: () => {} })
+  await moveTask({ deskRoot: root, input: { track: "main-track", slug: "old-name", to_slug: "new-name" }, schedulePush: () => {} })
   assert.deepEqual(keep((await readFront(path.join(root, "main-track", "new-name", "task.md"))).data), before)
 
-  await track_rename({ deskRoot: root, input: { track: "main-track", to: "renamed-track" }, schedulePush: () => {} })
+  await renameTrack({ deskRoot: root, input: { track: "main-track", to: "renamed-track" }, schedulePush: () => {} })
   assert.deepEqual(keep((await readFront(path.join(root, "renamed-track", "new-name", "task.md"))).data), before)
 
   await task_archive({ deskRoot: root, input: { track: "renamed-track", slug: "new-name" } })
   const archived = path.join(root, "renamed-track", "_archive", "new-name", "task.md")
   assert.deepEqual(keep((await readFront(archived)).data), before)
 
-  await task_move({ deskRoot: root, input: { track: "renamed-track", slug: "new-name", to_slug: "again" }, schedulePush: () => {} })
+  await moveTask({ deskRoot: root, input: { track: "renamed-track", slug: "new-name", to_slug: "again" }, schedulePush: () => {} })
   assert.deepEqual(keep((await readFront(path.join(root, "renamed-track", "_archive", "again", "task.md"))).data), before)
 })

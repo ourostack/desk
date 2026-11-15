@@ -5,7 +5,7 @@
 //   - Unit 3: task_create, task_update, task_archive, track_create,
 //             track_update, friction_add, lesson_add
 //   - Crew teammate notes: note
-//   - M4-2 (cheap moves): task_move, track_rename
+//   - M4-2 (cheap moves): task_update with a move, track_update with a rename
 //   - M4-6 Part 2: desk_save (commits hand-written files the same way every
 //     other write tool commits its own)
 //   - Unit 5: desk_search (also the newest-first listing), desk_recall
@@ -37,7 +37,7 @@ import {
 import { taskFocus } from "./tools/task-focus.js"
 import { taskSignoff } from "./tools/task-signoff.js"
 import { track_create, track_update } from "./tools/track.js"
-import { task_move, track_rename } from "./tools/move.js"
+import { taskMoveRequested, moveTaskAlone, trackRenameRequested, renameTrackAlone } from "./tools/move.js"
 import { friction_add } from "./tools/friction.js"
 import { improvement_open, improvement_next, improvement_update } from "./tools/improvement.js"
 import { lesson_add } from "./tools/lesson.js"
@@ -61,14 +61,12 @@ import { NATIVE_STAGES, NATIVE_STAGE_MAX_US, nativeStageTraceEnabled, runWithNat
 // Exported so tests can register a probe impl to assert dispatch threading.
 export const TOOL_IMPLS = {
   task_create,
-  task_update,
+  task_update: (args) => (taskMoveRequested(args.input) ? moveTaskAlone(args) : task_update(args)),
   task_archive,
-  task_move,
   task_focus: taskFocus,
   task_signoff: taskSignoff,
   track_create,
-  track_update,
-  track_rename,
+  track_update: (args) => (trackRenameRequested(args.input) ? renameTrackAlone(args) : track_update(args)),
   friction_add,
   lesson_add,
   desk_save,

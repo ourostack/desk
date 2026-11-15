@@ -103,7 +103,7 @@
 // within an archived track — the same four shapes `finishedTasks` scans),
 // the desk is not a Git repository of its own, the card has no Git history
 // yet (new and uncommitted), or any ordinary Git call fails. A card just
-// moved but not yet committed (right after `task_move`, before the agent's
+// moved but not yet committed (right after `task_update`, before the agent's
 // own commit) resolves to the *current* path until that commit lands: this
 // is expected, not a bug, and is expected to become rare once Desk tools
 // commit their own writes. With `deadline` (a value of `clock`, same
@@ -388,7 +388,7 @@ function taskRenameLookup(options, alias, runFn) {
 }
 
 // `(track, slug) -> [track, slug] | null`: the task this one was merged into
-// with `task_move into_task`, by the same Git history (the merge renames its
+// with `task_update into_task`, by the same Git history (the merge renames its
 // `task.md` to `<keeper>/_iterations/<date>-<slug>/merged-task.md`), after
 // any renames before the merge; null when it was never merged, and for any
 // Git failure. The keeper is named as it was at the merge; `readTask`

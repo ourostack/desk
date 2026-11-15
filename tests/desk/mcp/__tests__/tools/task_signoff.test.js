@@ -249,7 +249,7 @@ test("a refusal of an archived task brings it back to the live tree", async () =
   assert.equal(data.returns.length, 1)
   assert.equal(git(root, "status", "--short").trim(), "", "everything is committed")
   assert.equal(git(root, "log", "-1", "--format=%s").trim(), "task_signoff: t/from-the-shelf")
-  assert.match(git(root, "log", "-2", "--format=%s").split("\n")[1], /^task_move: from-the-shelf/)
+  assert.match(git(root, "log", "-2", "--format=%s").split("\n")[1], /^task_update: from-the-shelf/)
 })
 
 test("a refusal whose unarchive fails records nothing", async () => {
@@ -260,7 +260,7 @@ test("a refusal whose unarchive fails records nothing", async () => {
   const before = await body(file)
   const head = headOf(root)
   const finalize = spy()
-  await assert.rejects(sign(root, "stuck-on-shelf", { outcome: "refused", reason: "defect", return_reason: "agent_error" }, { finalize: finalize.fn }), /task_signoff: Use task_move \(unarchive: true\) to bring it back, then try again: the archived task could not be brought back \(task_move: .*\); nothing was recorded\. Bring it back with task_move \(unarchive: true\), then call task_signoff again\./)
+  await assert.rejects(sign(root, "stuck-on-shelf", { outcome: "refused", reason: "defect", return_reason: "agent_error" }, { finalize: finalize.fn }), /task_signoff: Use task_update \(unarchive: true\) to bring it back, then try again: the archived task could not be brought back \(task_update: .*\); nothing was recorded\. Bring it back with task_update \(unarchive: true\), then call task_signoff again\./)
   assert.equal(await body(file), before)
   assert.equal(headOf(root), head)
   assert.equal(finalize.calls.length, 0)

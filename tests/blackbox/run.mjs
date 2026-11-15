@@ -580,10 +580,10 @@ async function deskTools(ctx, world, session, shared, options) {
     assert(!updated.isError, updated.text.slice(0, 300))
     assert(read("search-quality/track.md").includes("ranking favours recent cards"), "track_update did not write the body")
   })
-  await check(ctx, "track_rename.moves", "tools", async () => {
-    const renamed = await call("track_rename", { track: "garden-planning", to: "garden-schedule" })
+  await check(ctx, "track_update.moves", "tools", async () => {
+    const renamed = await call("track_update", { slug: "garden-planning", rename_to: "garden-schedule" })
     assert(!renamed.isError, renamed.text.slice(0, 300))
-    assert(exists("garden-schedule/track.md") && !exists("garden-planning"), "track_rename did not move the track")
+    assert(exists("garden-schedule/track.md") && !exists("garden-planning"), "track_update did not move the track")
   })
 
   // Tasks.
@@ -613,10 +613,10 @@ async function deskTools(ctx, world, session, shared, options) {
     const cleared = await call("task_focus", { clear: true })
     assert(!cleared.isError, cleared.text.slice(0, 300))
   })
-  await check(ctx, "task_move.renames", "tools", async () => {
-    const moved = await call("task_move", { track: "search-quality", slug: "drop-stale-index-files", to_slug: "remove-stale-index-files" })
+  await check(ctx, "task_update.renames", "tools", async () => {
+    const moved = await call("task_update", { track: "search-quality", slug: "drop-stale-index-files", to_slug: "remove-stale-index-files" })
     assert(!moved.isError, moved.text.slice(0, 300))
-    assert(exists("search-quality/remove-stale-index-files/task.md") && !exists("search-quality/drop-stale-index-files"), "task_move did not move the card")
+    assert(exists("search-quality/remove-stale-index-files/task.md") && !exists("search-quality/drop-stale-index-files"), "task_update did not move the card")
   })
   await check(ctx, "task_archive.cancelled", "tools", async () => {
     const archived = await call("task_archive", { track: "search-quality", slug: "remove-stale-index-files", outcome: "cancelled" })

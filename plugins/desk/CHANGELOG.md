@@ -1,5 +1,27 @@
 # desk plugin — changelog
 
+## 3.2.172 — 2026-11-15
+
+Desk now exposes 19 tools instead of 21: moving a task and renaming a track were never used in two weeks of real sessions, so they became options on the update tools. Old skill text that names a removed tool needs the new call:
+
+- `task_move` is now `task_update` with `to_track`, `to_slug`, `unarchive` or `into_task`, plus `handle` and `allow_dirty` as before. A move is sent alone: with `status`, `note` or any other update field the call refuses and changes nothing, so update the card in a second call.
+- `track_rename` is now `track_update` with `rename_to` (its old `to`), naming the track by `slug` (its old `track`) or `handle`. A rename is sent alone too.
+- The errors, error codes and commit messages of both now name `task_update` and `track_update`.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.171 — 2026-11-15
+
+Desk no longer reports "no upstream" as a sync problem when the branch's upstream disappears in the middle of a background push. A session start's `git pull --rebase` or a branch switch can briefly leave the checkout with no upstream. Desk now checks again a few times over about six seconds, delivers the commits if the upstream is back, and otherwise leaves them for the next commit or session start without marking sync blocked or filing a Desk problem. Real fetch, push and conflict failures are reported as before.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.170 — 2026-11-15
+
+The plugin-update notice at boot and in `desk_status` now speaks only when the newer release changes something a session fixes at its start. Desk's own runtime updates in place, so a release that touches only `mcp/src` (and docs) is no reason to restart and is not announced. What counts: a skill's text or description, a hook, an agent, a manifest (compared without its version) or MCP config, and for Desk its MCP session layer (the tool names, descriptions and schemas in `mcp/src/tool-names.js`, `tool-schemas.js`, `tool-schema-parts.js` and `mcp/web-catalog.json`). Any other plugin counts on a skill, hook or agent change. Desk compares the session's loaded copy with the newest fetched release, with local reads only. Housesitter's auto-restart job applies the same rule.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.169 — 2026-11-15
 
 Session start now points to the [Epoch 3 RFC](docs/agentic-engineering-v3-rfc.md) on its `Desk RFC:` line, in place of the Epoch 2 RFC. The new document states the principles and working rules agreed for Epoch 3 in one short place, with the epoch-to-version map: Desk 3.2.86 and every release after belong to Epoch 3, which landed in place on `main`. The [Epoch 2 RFC](docs/agentic-engineering-v2-rfc.md) stays as history and now says so at the top. The `human-owned-work` eval was rerun against the changed source and now passes every case, so its known failure is removed.

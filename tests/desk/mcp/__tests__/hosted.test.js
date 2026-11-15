@@ -54,12 +54,12 @@ test("the lists name real tools, repairs and skills", () => {
   for (const reason of Object.values(HOSTED_SHELL_SKILLS)) assert.ok(reason.length > 0)
 })
 
-test("TOOL_ANNOTATIONS covers every tool: read-only is the read-only list minus desk_doctor; destructive is the four overwriting tools", () => {
+test("TOOL_ANNOTATIONS covers every tool: read-only is the read-only list minus desk_doctor; destructive is the two overwriting tools", () => {
   assert.deepEqual(Object.keys(TOOL_ANNOTATIONS), TOOL_NAMES)
   const readOnly = TOOL_NAMES.filter((name) => TOOL_ANNOTATIONS[name].readOnlyHint)
   assert.deepEqual(readOnly.sort(), READ_ONLY_TOOLS.filter((name) => name !== "desk_doctor").sort())
   const destructive = TOOL_NAMES.filter((name) => TOOL_ANNOTATIONS[name].destructiveHint)
-  assert.deepEqual(destructive.sort(), ["desk_save", "task_archive", "task_move", "track_rename"])
+  assert.deepEqual(destructive.sort(), ["desk_save", "task_archive"])
   assert.equal(TOOL_ANNOTATIONS.desk_doctor.readOnlyHint, false)
 })
 

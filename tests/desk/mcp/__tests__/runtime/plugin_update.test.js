@@ -8,6 +8,7 @@ import { mkTempRoot } from "../_temp_roots.js"
 import { bootOnce } from "../../../../../plugins/desk/mcp/src/runtime/boot.js"
 import { formatBootText } from "../../../../../plugins/desk/mcp/src/runtime/boot-text.js"
 import {
+  changesPerProcess,
   checkPluginUpdate,
   HOUSESITTER_AGENT_LABEL,
   housesitterRestartsApp,
@@ -19,10 +20,14 @@ import {
 
 const SHA = "a".repeat(40)
 
-function plugin(dir, name, version, claude = false) {
+function plugin(dir, name, version, claude = false, files = {}) {
   const where = claude ? path.join(dir, ".claude-plugin") : dir
   mkdirSync(where, { recursive: true })
   writeFileSync(path.join(where, "plugin.json"), JSON.stringify({ name, version }))
+  for (const [rel, text] of Object.entries(files)) {
+    mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true })
+    writeFileSync(path.join(dir, rel), text)
+  }
 }
 
 // An Agency data folder: one session folder with a root per plugin, and a cache of fetched releases.
@@ -30,10 +35,10 @@ async function agency({ loaded, fetched }) {
   const home = await mkTempRoot("desk-plugin-update-")
   const plugins = path.join(home, ".local", "agency", "plugins")
   const session = path.join(plugins, "sessions", "agency-plugin-abc.p123")
-  Object.entries(loaded).forEach(([name, version], index) => plugin(path.join(session, `root-${index}`, name), name, version, name === "crew"))
+  Object.entries(loaded).forEach(([name, version], index) => plugin(path.join(session, `root-${index}`, name), name, version, name === "crew", { "skills/s/SKILL.md": "old text", "mcp/src/server.js": "v1", "mcp/src/tool-schemas.js": "v1" }))
   const entries = {}
-  fetched.forEach(({ spec, name, version, at = 1000 }, index) => {
-    plugin(path.join(plugins, "cache", "entries", `e${index}`), name, version)
+  fetched.forEach(({ spec, name, version, at = 1000, files = { "skills/s/SKILL.md": "new text" } }, index) => {
+    plugin(path.join(plugins, "cache", "entries", `e${index}`), name, version, false, { "mcp/src/server.js": "v1", "mcp/src/tool-schemas.js": "v1", ...files })
     entries[spec] = { spec, dir_name: `e${index}`, fetched_at: at, resolved_sha: SHA }
   })
   mkdirSync(path.join(plugins, "cache"), { recursive: true })
@@ -94,6 +99,30 @@ test("with Housesitter's auto-restart job installed the line says the app will r
   assert.equal(finding.auto_restart, true)
   assert.equal(finding.line, pluginUpdateLine(finding.plugins, true))
   assert.match(finding.line, /^There's an update to cit \(0\.1\.81 → 0\.1\.82\); Housesitter on this Mac will restart the app to pick it up when nobody is using it/u)
+})
+
+test("a newer release that changes only what updates in place is not announced; a skill, hook, agent or Desk tool-schema change is", async () => {
+  const fetched = (files) => [{ spec: spec("desk", "release"), name: "desk", version: "3.2.168", files }]
+  const runtime = await agency({ loaded: { desk: "3.2.154" }, fetched: fetched({ "skills/s/SKILL.md": "old text", "mcp/src/server.js": "v2", "docs/x.md": "new", "README.md": "new" }) })
+  assert.equal(find(runtime), null, "a Desk release that touches only its runtime and docs needs no restart")
+  const skill = await agency({ loaded: { desk: "3.2.154" }, fetched: fetched({ "skills/s/SKILL.md": "edited" }) })
+  assert.deepEqual(find(skill).plugins, [{ name: "desk", from: "3.2.154", to: "3.2.168" }])
+  const schema = await agency({ loaded: { desk: "3.2.154" }, fetched: fetched({ "skills/s/SKILL.md": "old text", "mcp/src/tool-schemas.js": "v2" }) })
+  assert.equal(find(schema).plugins[0].name, "desk", "the MCP session layer is fixed per process")
+  const other = await agency({ loaded: { cit: "0.1.81" }, fetched: [{ spec: spec("cit"), name: "cit", version: "0.1.82", files: { "skills/s/SKILL.md": "old text", "mcp/src/tool-schemas.js": "v2", "hooks/h.cjs": "new hook" } }] })
+  assert.equal(find(other).plugins[0].name, "cit", "a new hook counts for any plugin")
+  const a = await agency({ loaded: { cit: "0.1.81" }, fetched: [] })
+  const old = path.join(a.session, "root-0", "cit")
+  const next = path.join(a.home, "next")
+  plugin(next, "cit", "0.1.82", false, { "skills/s/SKILL.md": "old text", "mcp/src/server.js": "v1", "mcp/src/tool-schemas.js": "changed, but only Desk's is fixed" })
+  assert.equal(changesPerProcess(old, next, "cit"), false, "a version bump, and a file only Desk treats as fixed, are nothing for another plugin")
+  assert.equal(changesPerProcess(old, next, "desk"), true)
+  const bare = path.join(a.home, "bare")
+  plugin(bare, "cit", "0.1.82")
+  assert.equal(changesPerProcess(old, bare, "cit"), true, "a skill the newer release no longer has is a change")
+  const broken = path.join(a.home, "broken")
+  plugin(broken, "cit", "0.1.82", false, { "skills/s/SKILL.md": "old text", "mcp/src/server.js": "v1", "mcp/src/tool-schemas.js": "v1", ".claude-plugin/plugin.json": "{not json" })
+  assert.equal(changesPerProcess(old, broken, "cit"), true, "a manifest that cannot be read is a change, not a reason to stay silent")
 })
 
 test("nothing is said when every loaded plugin is current or newer, a plugin has no fetched release, or Desk is skipped", async () => {
