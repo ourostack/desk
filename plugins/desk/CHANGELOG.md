@@ -1,5 +1,13 @@
 # desk plugin — changelog
 
+## 3.2.167 — 2026-11-15
+
+On Windows, a session started by a process that predates a Node install (a background service or Hub-spawned tree whose PATH is stale) no longer gets told Node is missing when it is installed. When Desk's Node search finds nothing on PATH or in the usual install folders, it now also reads the registry's current PATH (the machine and user values) and searches those folders, in the MCP launcher, in the check for a Node that is too old, and in the background boot repair that reuses them. The session-start hook for a machine with no `node` on PATH looks there too: the shell hook (Git Bash) runs one `reg query` per key when nothing else turned up, and the PowerShell hook already read the same values.
+
+When Node really is missing, every message now leads with the fix, the install command and the new session it needs, and then says what Desk needs and what it searched. The launcher's `degraded:node_missing` answer lists `fix` before `summary`, and says the registry PATH was searched on Windows.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.166 — 2026-11-15
 
 The Copilot session-start hook's deadline for its optional lines (3.5 s) is now read from one `timing` object in `hooks/lib/boot-checks.cjs` when the hook runs, instead of from a constant in the hook. The value is unchanged, so what you see at session start is the same; the change lets Desk's own tests give a slow host a longer deadline.
