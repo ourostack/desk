@@ -1421,7 +1421,7 @@ export async function bootOnce({
   }
   const agentsMdInHostInstructions = hostLoadsAgentsMd({ agent: host.agent, cwd, agentsMd })
   // The person the Desk tools resolve (crew-member.js, the same resolver as the tool server's admission), worked out once:
-  // it is printed on the status line and picks both the person's own AGENTS.md and their improvement cards. GitHub is
+  // it is printed on the status line and picks the person's own AGENTS.md. GitHub is
   // asked only when several signed-in accounts are on the roster, within a short budget. A bad DESK_PERSON never stops the boot.
   let member = null
   try {
@@ -1430,11 +1430,10 @@ export async function bootOnce({
     member = null
   }
   let who = null
-  let whoError = null
   try {
     who = await personFn({ deskRoot: root.path, env, now: now(), member })
-  } catch (error) {
-    whoError = error
+  } catch {
+    who = null
   }
   // In a shared workspace the root AGENTS.md is the team's; the person's own lessons and preferences are in theirs. The
   // two share one size budget, the desk's file first, so session start stays short enough for every host to show whole;

@@ -249,7 +249,7 @@ async function runWorkspaceTidy(ctx) {
         timer = setTimeout(() => {
           stopAll();
           // Deferred, not stuck: the next session start runs this check fresh and launches the repair itself, so no
-          // agent action is required and the line would only be noise. The registry records the skip in the factory status.
+          // agent action is required and the line would only be noise.
           reject(Object.assign(new Error("Run the check again: workspace-tidy ran past its budget"), { code: "boot_check_budget" }));
         }, Math.max(1, Math.min(ctx.tidyBudgetMs ?? Infinity, ctx.budgetMs - TIDY_SOFT_MARGIN_MS)));
       }),
