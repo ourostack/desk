@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.175 — 2026-11-15
+
+A schedule can now carry a `when` gate, so a watchdog costs a model turn only when something changed. `when` is an argv array (never a shell string) that `schedule poll` runs when the schedule is due: exit 0 delivers the prompt with the command's trimmed stdout (capped at about 2 KB) appended as `Why now:`, exit 1 skips quietly and records `skipped (when: nothing to do)` in `schedule status`, and any other exit, a timeout (`whenTimeoutSeconds`, default 30) or a command that cannot start delivers the prompt with a note that the gate failed and why, so a broken gate never silences a watchdog. `whenEveryMinutes` runs the gate more often than the prompt may go out, such as every 5 minutes with a prompt at most every 30. Coalescing and immediate delivery are unchanged. See [schedules](docs/schedules.md#gating-a-schedule-with-when).
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.174 — 2026-11-15
 
 Desk's session start no longer runs anything for the factory. The Copilot and Claude start hooks no longer start a delivery worker or the loop worker, the end-of-turn and end-of-session hooks no longer record or deliver factory facts, and the boot checks for the factory, the evaluator labels, andon issues and improvement cards are gone, together with their `Improvement cards: N open` line and the factory-consent instruction that the boot appended to its numbered list.
