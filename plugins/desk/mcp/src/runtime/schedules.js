@@ -16,7 +16,7 @@ const MINUTE_MS = 60_000
 const GATE_OUTPUT_CAP = 2048
 const GATE_STDERR_CAP = 200
 const GATE_DEFAULT_TIMEOUT_S = 30
-export const GATE_SKIPPED = "skipped (when: nothing to do)"
+const GATE_SKIPPED = "skipped (when: nothing to do)"
 
 export function schedulePaths(options) {
   const home = drainsHome(options)
@@ -95,7 +95,7 @@ const clip = (text, cap) => {
 }
 
 /** Runs a schedule's `when` argv with no shell. Resolves `{ exit, stdout, stderr, timedOut, startError, signal }` and never rejects. */
-export function runWhenGate(argv, timeoutSeconds = GATE_DEFAULT_TIMEOUT_S) {
+function runWhenGate(argv, timeoutSeconds = GATE_DEFAULT_TIMEOUT_S) {
   return new Promise((resolve) => {
     let stdout = ""
     let stderr = ""
