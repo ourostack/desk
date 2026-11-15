@@ -1,17 +1,21 @@
 # Desk's session-start command (hooks.json, copilot-hooks.json) sources this in the host's own shell when no `node` is on PATH, so
-# neither Desk's hooks nor its tool servers can start. It runs shell builtins only (no process, well under a millisecond), installs
-# nothing, and prints the session's context: the Node.js Desk needs (the engines floor in mcp/package.json), the install command for
-# this platform, and that a new session is needed because tool servers load only when a session starts. `desk_host` (claude or
+# neither Desk's hooks nor its tool servers can start. It runs shell builtins only (the one exception: on Windows, a single `reg query` for each
+# registry PATH, when nothing was found by the folders below), installs nothing, and prints the session's context, leading with what to do:
+# the install command for this platform and that a new session is needed because tool servers load only when a session starts, then the
+# Node.js Desk needs (the engines floor in mcp/package.json). `desk_host` (claude or
 # copilot) picks the host's output shape. The text goes into JSON through printf, so it holds no double quote, backslash or percent sign.
 # A version manager the bootstrap would use comes first. nvm-windows also needs `nvm use`, because the host needs a `node` on PATH.
 # On Windows, a node.exe that exists but is not on PATH (the app that started the session predates its install) gets the "installed at" message instead of install advice.
+desk_where=
 if [ "$OS" = Windows_NT ] || [ -n "$MSYSTEM" ]; then
   # Git Bash keeps Windows paths with backslashes, which the glob and the JSON text cannot use, so they become forward slashes first.
   desk_node=
+  desk_where=', in the Windows registry PATH or in the usual install folders'
   desk_pf=${ProgramFiles:-$PROGRAMFILES}
   desk_pf=${desk_pf//\\//}
   desk_nvm=${NVM_SYMLINK//\\//}
   desk_local=${LOCALAPPDATA//\\//}
+  desk_cr=$(printf '\r')
   for desk_candidate in "$desk_pf/nodejs/node.exe" "/c/Program Files/nodejs/node.exe" "$desk_nvm/node.exe"; do
     if [ -z "$desk_node" ] && [ -f "$desk_candidate" ]; then desk_node=$desk_candidate; fi
   done
@@ -21,6 +25,34 @@ if [ "$OS" = Windows_NT ] || [ -n "$MSYSTEM" ]; then
     if [ -f "$desk_candidate" ]; then desk_fnm=$desk_candidate; fi
   done
   if [ -z "$desk_node" ]; then desk_node=$desk_fnm; fi
+  # The registry's current PATH (machine, then user), which a session started before the Node install does not have in its environment.
+  # MSYS_NO_PATHCONV keeps Git Bash from rewriting reg's /v switch as a path. Only the variables Windows itself defines are expanded.
+  if [ -z "$desk_node" ] && command -v reg >/dev/null 2>&1; then
+    for desk_key in 'HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Environment' 'HKCU\Environment'; do
+      desk_line=
+      desk_out=$(MSYS_NO_PATHCONV=1 reg query "$desk_key" /v Path 2>/dev/null)
+      while IFS= read -r desk_row; do
+        case $desk_row in *REG_SZ*|*REG_EXPAND_SZ*) desk_line=$desk_row ;; esac
+      done <<EOF
+$desk_out
+EOF
+      desk_line=${desk_line//$desk_cr/}
+      desk_line=${desk_line#*REG_EXPAND_SZ}
+      desk_line=${desk_line#*REG_SZ}
+      desk_line=${desk_line#"${desk_line%%[! ]*}"}
+      desk_line=${desk_line//%SystemRoot%/${SystemRoot//\\//}}
+      desk_line=${desk_line//%USERPROFILE%/${USERPROFILE//\\//}}
+      desk_line=${desk_line//%LOCALAPPDATA%/$desk_local}
+      desk_line=${desk_line//\\//}
+      desk_rest=$desk_line\;
+      while [ -z "$desk_node" ] && [ -n "$desk_rest" ]; do
+        desk_dir=${desk_rest%%;*}
+        desk_rest=${desk_rest#*;}
+        desk_dir=${desk_dir# }
+        if [ -n "$desk_dir" ] && [ -f "$desk_dir/node.exe" ]; then desk_node=$desk_dir/node.exe; fi
+      done
+    done
+  fi
   if [ -n "$desk_node" ]; then
     desk_install=
   elif [ -n "$NVM_HOME" ]; then
@@ -35,9 +67,9 @@ elif [ -d /System/Library/CoreServices ]; then
 else
   desk_install='install the nodejs package with the distribution package manager (for example `sudo apt install nodejs` or `sudo dnf install nodejs`) and check that `node --version` prints v22.18 or newer; if it is older, install the current LTS from https://nodejs.org/en/download'
 fi
-desk_text='Desk needs Node.js 22.18 or newer, and this machine has no Node.js (no `node` on PATH), so the Desk tool servers (desk, desk-web) cannot run and Desk tools do not work in this session. Install it: '"$desk_install"'. Then the person must open a new terminal and start a new session, because tool servers load only when a session starts.'
+desk_text='To fix this, '"$desk_install"'. Then the person must open a new terminal and start a new session, because tool servers load only when a session starts. Desk needs Node.js 22.18 or newer, and this machine has no Node.js (no `node` on PATH'"$desk_where"'), so the Desk tool servers (desk, desk-web) cannot run and Desk tools do not work in this session.'
 if [ -n "$desk_node" ]; then
-  desk_text="Desk needs Node.js 22.18 or newer. It is installed at $desk_node, but it is not on this session's PATH, because the app or service that started this session was started before Node was installed (or with an older PATH), so the Desk tool servers (desk, desk-web) cannot run and Desk tools do not work in this session. Restart the app or background service that started this session, or open a new terminal and start the session from there; there is nothing to install."
+  desk_text="To fix this, restart the app or background service that started this session, or open a new terminal and start the session from there; there is nothing to install. Desk needs Node.js 22.18 or newer. It is installed at $desk_node, but it is not on this session's PATH, because the app or service that started this session was started before Node was installed (or with an older PATH), so the Desk tool servers (desk, desk-web) cannot run and Desk tools do not work in this session."
 fi
 if [ "$desk_host" = claude ]; then
   printf '{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"%s"}}\n' "$desk_text"

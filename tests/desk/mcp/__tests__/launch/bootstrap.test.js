@@ -318,6 +318,41 @@ test("on a fake Windows layout the bootstrap picks the packed Node, not the newe
   assert.equal(selection.node.version, "24.9.0")
 })
 
+test("on Windows a Node only on the registry's current PATH is found, and the registry is read only when nothing else is", async () => {
+  const root = await mkTempRoot("desk-bootstrap-windows-registry-")
+  const profile = path.join(root, "profile")
+  const registryNode = fakeNode(path.join(root, "tools", "node", "node.exe"), "24.9.0", "137")
+  const registry = (env) => {
+    // As reg prints them: the machine PATH has no Node, the user PATH names a folder through %USERPROFILE%.
+    assert.equal(env.USERPROFILE, profile)
+    return bootstrap.parseRegistryPath(`\r\nHKEY_CURRENT_USER\\Environment\r\n    Path    REG_EXPAND_SZ    C:\\Windows;%USERPROFILE%\\bin;${path.join(root, "tools", "node")}\r\n\r\n`, env)
+  }
+  const stale = { env: { PATH: "", USERPROFILE: profile }, platform: "win32", arch: "x64", registryPath: registry }
+  assert.equal(bootstrap.selectNode(machine(root, stale)).node.path, registryNode)
+
+  let reads = 0
+  const known = fakeNode(path.join(root, "AppData", "Roaming", "nvm", "v22.18.0", "node.exe"), "22.18.0", "127")
+  const found = bootstrap.selectNode(machine(root, { ...stale, env: { ...stale.env, APPDATA: path.join(root, "AppData", "Roaming") }, registryPath: (env) => { reads += 1; return registry(env) } }))
+  assert.equal(found.node.path, known)
+  assert.equal(reads, 0, "a Node the usual places already hold needs no registry read")
+
+  assert.equal(bootstrap.selectNode(machine(root, { ...stale, platform: "linux" })).node, null, "only Windows reads the registry")
+  assert.equal(bootstrap.selectNode(machine(root, { ...stale, registryPath: () => [] })).node, null)
+})
+
+test("the registry PATH reader expands variables and skips a value reg did not print", () => {
+  const env = { USERPROFILE: "C:\\Users\\a", SystemRoot: "C:\\Windows" }
+  assert.deepEqual(bootstrap.parseRegistryPath("HKEY\\x\r\n    PATH    REG_SZ    %SystemRoot%\\system32;;%USERPROFILE%\\bin;%UNKNOWN%\\x\r\n", env), ["C:\\Windows\\system32", "C:\\Users\\a\\bin"])
+  assert.deepEqual(bootstrap.parseRegistryPath("ERROR: The system was unable to find the specified registry key or value.", env), [])
+})
+
+test("native: the real registry read returns the machine and user PATH folders", { skip: process.platform === "win32" ? false : "reg.exe exists only on Windows" }, () => {
+  const dirs = bootstrap.registryPathDirs(process.env, 5000)
+  assert.ok(dirs.length > 0)
+  assert.ok(dirs.some((dir) => /[\\/]system32$/iu.test(dir)), `a Windows PATH names System32: ${dirs.join(";")}`)
+  assert.ok(dirs.every((dir) => !dir.includes("%")), "every %NAME% reference is expanded")
+})
+
 // ---- selection ----
 
 test("selection prefers the newest Node whose ABI has a runtime pack, then the newest compatible one", { skip: posixBranchOnly }, async () => {

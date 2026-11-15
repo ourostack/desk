@@ -81,8 +81,9 @@ function assertNodeMessage(t, label, result, { shape, install }) {
   } else {
     assert.deepEqual(Object.keys(payload), ["additionalContext"])
   }
-  assert.match(context, new RegExp(`^Desk needs Node\\.js ${floor} or newer, and this machine has no Node\\.js \\(no \`node\` on PATH\\)`, "u"))
-  assert.ok(context.includes(install), `${label} names ${install}: ${context}`)
+  assert.ok(context.startsWith("To fix this, "), `${label} leads with the fix: ${context}`)
+  assert.match(context, new RegExp(` Desk needs Node\\.js ${floor} or newer, and this machine has no Node\\.js \\(no \`node\` on PATH`, "u"))
+  assert.ok(context.includes(install) && context.indexOf(install) < context.indexOf("Desk needs"), `${label} names ${install} before what Desk needs: ${context}`)
   assert.ok(context.includes(RESTART), `${label} says a new session is needed`)
   t.diagnostic(`${label}: ${result.ms.toFixed(0)} ms (whole shell process)`)
   t.diagnostic(`${label} context: ${context}`)
@@ -148,7 +149,7 @@ const noneCompatible = () => ({ node: null, range: engines })
 test("a node older than Desk needs, with no newer one installed, gets the same message with the version it found", () => {
   const home = mkdtempSync(path.join(ROOT, "old-home-"))
   const windows = nodeRequiredLine({ env: { HOME: home }, platform: "win32", current: old, select: noneCompatible })
-  assert.match(windows, new RegExp(`^Desk needs Node\\.js ${floor} or newer, and the \`node\` on PATH is v16\\.20\\.2 with no newer Node\\.js installed`, "u"))
+  assert.match(windows, new RegExp(`^To fix this, run \`${WINGET}\` in a terminal\\. .* Desk needs Node\\.js ${floor} or newer, and the \`node\` on PATH is v16\\.20\\.2 with no newer Node\\.js installed`, "u"))
   assert.ok(windows.includes(`run \`${WINGET}\` in a terminal`))
   assert.ok(windows.includes(RESTART))
 
@@ -159,7 +160,7 @@ test("a node older than Desk needs, with no newer one installed, gets the same m
   if (!WINDOWS) assert.ok(mac.includes("run `brew install node` in a terminal"), mac)
 
   const range = nodeRequiredLine({ env: { HOME: home }, platform: "win32", current: old, select: () => ({ node: null, range: `>=${floor}.11` }) })
-  assert.match(range, new RegExp(`^Desk needs Node\\.js >=${floor.replace(".", "\\.")}\\.11, and`, "u"), "a range that is not a plain major floor is named as written")
+  assert.match(range, new RegExp(` Desk needs Node\\.js >=${floor.replace(".", "\\.")}\\.11, and`, "u"), "a range that is not a plain major floor is named as written")
 })
 
 test("a node Desk can use, here or installed elsewhere, gets no message, and a failed check never blocks the session", () => {
@@ -215,7 +216,7 @@ test("with no node and nvm-windows installed, the PowerShell message says to ins
 // Git Bash takes Windows paths with forward slashes, so the reported path is written that way.
 const SCRIPT = path.join(plugin, "hooks", "node-missing.sh")
 const forwardSlashes = (file) => file.split(path.sep).join("/")
-const FOUND = (file) => `Desk needs Node.js ${floor} or newer. It is installed at ${file}, but it is not on this session's PATH, because the app or service that started this session was started before Node was installed (or with an older PATH), so the Desk tool servers (desk, desk-web) cannot run and Desk tools do not work in this session. Restart the app or background service that started this session, or open a new terminal and start the session from there; there is nothing to install.`
+const FOUND = (file) => `To fix this, restart the app or background service that started this session, or open a new terminal and start the session from there; there is nothing to install. Desk needs Node.js ${floor} or newer. It is installed at ${file}, but it is not on this session's PATH, because the app or service that started this session was started before Node was installed (or with an older PATH), so the Desk tool servers (desk, desk-web) cannot run and Desk tools do not work in this session.`
 
 // The Windows branch uses `${var//\\//}`, which only bash has, so these run the script under bash whatever sh is.
 function windowsShellHook(environment) {
@@ -247,6 +248,19 @@ test("Windows with an fnm node under LOCALAPPDATA but not on PATH: the shell mes
   const node = fileAt(localAppData, "fnm", "node-versions", "v22.18.0", "installation", "node.exe")
   const emptyProgramFiles = mkdtempSync(path.join(ROOT, "empty-program-files-"))
   const result = windowsShellHook(env(SHELLS.pathWithoutNode, { OS: "Windows_NT", ProgramFiles: emptyProgramFiles, LOCALAPPDATA: localAppData }))
+  assert.equal(result.status, 0, result.stderr)
+  assert.equal(JSON.parse(result.stdout).additionalContext, FOUND(forwardSlashes(node)))
+})
+
+test("Windows with node.exe only on the registry's current PATH: the shell message reads it from there and says nothing needs installing", { skip: SHELLS.bash ? NOTHING_FOUND_ON_WINDOWS : "no bash here" }, () => {
+  const emptyProgramFiles = mkdtempSync(path.join(ROOT, "empty-program-files-"))
+  const home = mkdtempSync(path.join(ROOT, "registry-home-"))
+  const node = fileAt(home, "registry-node", "node.exe")
+  // A stand-in for reg.exe: the machine key has no PATH value, and the user key's PATH names a folder through %USERPROFILE%, as the registry stores it.
+  const bin = mkdtempSync(path.join(ROOT, "registry-bin-"))
+  writeFileSync(path.join(bin, "reg"), `#!/bin/sh\ncase "$2" in\n  HKCU*) printf '\\r\\nHKEY_CURRENT_USER\\\\Environment\\r\\n    Path    REG_EXPAND_SZ    C:\\\\Windows;%%USERPROFILE%%/registry-node\\r\\n\\r\\n' ;;\n  *) exit 1 ;;\nesac\n`)
+  chmodSync(path.join(bin, "reg"), 0o755)
+  const result = windowsShellHook(env(`${forwardSlashes(bin)}${path.delimiter}${SHELLS.pathWithoutNode}`, { OS: "Windows_NT", ProgramFiles: emptyProgramFiles, LOCALAPPDATA: emptyProgramFiles, USERPROFILE: home }))
   assert.equal(result.status, 0, result.stderr)
   assert.equal(JSON.parse(result.stdout).additionalContext, FOUND(forwardSlashes(node)))
 })
