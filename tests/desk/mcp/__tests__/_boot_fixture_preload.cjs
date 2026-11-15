@@ -3,7 +3,8 @@
 // `migrationLine` and `startFactory` from them when they run.
 //
 // `DESK_TEST_BOOT_FIXTURE` names a module that may export `checks` (replaces the registry's checks), `options` (merged over what
-// `runBootChecks` is given), `startFactory` and `migrationLine`. NODE_OPTIONS reaches every Node process the hook starts, including
+// `runBootChecks` is given), `timing` (merged over the registry's `timing` object, which the hooks read when they run),
+// `startFactory` and `migrationLine`. NODE_OPTIONS reaches every Node process the hook starts, including
 // each migration's Detect, which has a two-second budget, so only the hook process itself is touched.
 "use strict";
 
@@ -17,6 +18,7 @@ if (/(claude-session-start\.cjs|copilot-session-start\.cjs|resolve-desk-root\.js
     const real = boot.runBootChecks;
     boot.runBootChecks = (options) => real({ ...options, ...fixture.options });
   }
+  if (fixture.timing) Object.assign(boot.timing, fixture.timing);
   if (fixture.startFactory) boot.startFactory = fixture.startFactory;
   if (fixture.migrationLine) boot.migrationLine = fixture.migrationLine;
 }

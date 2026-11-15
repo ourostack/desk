@@ -18,11 +18,8 @@ const BOOT_STAND_DOWN = "The boot's instructions are for the operator's session:
 // The foundation points at the RFC through this line: the installed copy, which
 // the agent can open from any repository. Computed, never read at startup.
 const rfcPath = path.join(pluginRoot, "docs", "agentic-engineering-v2-rfc.md");
-// Copilot drops a sessionStart hook's whole output when the hook passes its 5 s limit, foundation included. So the
-// optional lines (boot pre-checks, migrations, the Copilot setting notes) get until this many milliseconds after the
-// process started; past it the hook prints the startup line and the foundation without them and does not start factory
-// delivery. The boot script runs the migration checks again; the pre-checks and the delivery wait for the next session start.
-const OPTIONAL_LINES_DEADLINE_MS = 3500;
+// The optional lines' deadline (lib/boot-checks.cjs `timing`), read where it is used: the module is loaded inside the hook's try blocks.
+const optionalLinesDeadlineMs = () => require("./lib/boot-checks.cjs").timing.optionalLinesDeadlineMs;
 const { performance } = require("node:perf_hooks");
 let optionalLinesTimedOut = false;
 
@@ -161,7 +158,7 @@ async function bootSection({ folder, sessionId, source }) {
     if (key === null) return "";
     const { paths } = boot.startBoot({ key, folder, sessionId, env: process.env, fresh: source === "resume" });
     if (paths === null || boot.wasDelivered(paths)) return "";
-    const result = await boot.awaitBoot({ paths, waitMs: Math.max(0, OPTIONAL_LINES_DEADLINE_MS - performance.now()) });
+    const result = await boot.awaitBoot({ paths, waitMs: Math.max(0, optionalLinesDeadlineMs() - performance.now()) });
     if (result.boot !== null) return boot.claimDelivery(paths) ? boot.bootContext({ boot: result.boot }).text : "";
     return result.reason === "running" ? boot.pendingBootLine({ seconds: boot.bootAgeSeconds(paths) }) : "";
   } catch {
@@ -200,7 +197,7 @@ async function startupDirection() {
     const standing = await standingAuthorityLines(sessionFolder);
     const personLine = standing.withPerson();
     let timer;
-    const late = new Promise((resolve) => { timer = setTimeout(resolve, Math.max(0, OPTIONAL_LINES_DEADLINE_MS - performance.now()), null); });
+    const late = new Promise((resolve) => { timer = setTimeout(resolve, Math.max(0, optionalLinesDeadlineMs() - performance.now()), null); });
     const [lines, standingLine] = await Promise.all([Promise.race([optional, late]), Promise.race([personLine, late])]);
     clearTimeout(timer);
     if (lines === null) optionalLinesTimedOut = true;
