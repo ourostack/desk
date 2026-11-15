@@ -308,6 +308,19 @@ async function readChecks(ctx, state, repo, sha) {
   })
 }
 
+/** The head's commit statuses, newest per context, as the combined status lists them. A `pending` or `error` state is not green, and an empty list is not a verdict. */
+async function readStatuses(ctx, state, repo, sha) {
+  const route = `/repos/${repo}/commits/${sha}/status?per_page=${CHECKS_PAGE}`
+  return cached(ctx, state, route, async (body) => {
+    const statuses = [...(body.statuses ?? [])]
+    for (let page = 2; page <= Math.ceil((body.total_count ?? 0) / CHECKS_PAGE); page++) statuses.push(...((await ctx.api.get(`${route}&page=${page}`)).body.statuses ?? []))
+    return { statuses: statuses.map((status) => ({ context: status.context, state: status.state })), volatile: (body.total_count ?? 0) > CHECKS_PAGE }
+  })
+}
+
+/** A commit status judged like a check run: `success` is green, `pending` is still running, and `failure` and `error` are red. */
+const statusAsRun = (status) => ({ name: status.context, status: status.state === "pending" ? "in_progress" : "completed", conclusion: status.state === "pending" ? null : status.state === "success" ? "success" : "failure" })
+
 // Only completed runs are asked for, so a queued or in-progress run of the workflow is never the one judged.
 const readMain = (ctx, state, repo, workflow, branch) =>
   cached(ctx, state, `/repos/${repo}/actions/workflows/${encodeURIComponent(workflow)}/runs?branch=${encodeURIComponent(branch)}&status=completed&per_page=1&exclude_pull_requests=true`, (body) => {
@@ -332,18 +345,28 @@ const skippedTemplateMatches = (run, required) => {
 /** An unexpanded matrix template that GitHub skipped stands in for a matrix that never ran; it says nothing once the matrix ran under expanded names. */
 const isTemplateSkip = (run) => run.conclusion === "skipped" && run.name.includes("${{")
 
-/** What each required check is still missing, as one line per entry that is not fully green. Only the newest attempt of each check counts, and it counts only when it completed with `success`, or with `skipped` or `neutral` when `skippedPasses` is set. */
-export function waitingOnChecks(requiredChecks, runs, skippedPasses = false) {
+/**
+ * What still keeps the head from merging, as one line per entry that is not fully green. Only the newest attempt of each check counts, and it counts only
+ * when it completed with `success`, or with `skipped` or `neutral` when `skippedPasses` is set. Each required pattern must also match something.
+ * Every other check run and commit status on the head must be green too: a check that is not required (a path-filtered one, say) still blocks while it fails or runs, whatever `skippedPasses` says.
+ * Only a required check needs `skippedPasses` for a skip: a skipped or neutral check that nothing requires never holds the head.
+ */
+export function waitingOnChecks(requiredChecks, runs, skippedPasses = false, statuses = []) {
   const green = (run) => run.status === "completed" && (run.conclusion === "success" || (skippedPasses && SKIPPED_PASSES.has(run.conclusion)))
-  const newest = latestCheckRuns(runs)
-  return requiredChecks.flatMap((required) => {
+  const newest = [...latestCheckRuns(runs), ...statuses.map(statusAsRun)]
+  const counted = new Set()
+  const required = requiredChecks.flatMap((required) => {
     const found = newest.filter((run) => globPattern(required).test(run.name) || skippedTemplateMatches(run, required))
     const expanded = found.filter((run) => !isTemplateSkip(run))
     const matching = expanded.length > 0 ? expanded : found
+    for (const run of found) counted.add(run)
     if (matching.length === 0) return [`${required}: not started`]
     const notGreen = matching.filter((run) => !green(run))
     return notGreen.length === 0 ? [] : [`${required}: ${notGreen.length === matching.length && matching.length === 1 ? shown(notGreen) : `${notGreen.length} of ${matching.length} not green (${shown(notGreen)})`}`]
   })
+  // A check nobody required that a path filter skipped says nothing against the head, so only a failure, a cancellation or a run still going holds it.
+  const others = newest.filter((run) => !counted.has(run) && !green(run) && !(run.status === "completed" && SKIPPED_PASSES.has(run.conclusion)))
+  return others.length === 0 ? required : [...required, `${others.length} other check${others.length === 1 ? "" : "s"} on the head not green (${shown(others)})`]
 }
 
 const MERGEABLE = new Set(["clean", "unstable", "has_hooks"])
@@ -389,7 +412,7 @@ async function writeStatus(ctx, relay, number, record, text, { final }) {
 
 const short = (sha) => String(sha).slice(0, 7)
 const waitingText = (relay, pr, waiting) => `**${relay.label}** has not merged this yet (head \`${short(pr.headSha)}\`). Waiting on:\n${waiting.map((line) => `- ${line}`).join("\n")}\n\nThis comment is edited as that changes.`
-const mergedText = (relay, pr, sha, deleted, judged) => `**${relay.label}** merged this (${relay.method}, head \`${short(pr.headSha)}\`, now \`${short(sha)}\`). Every required check on the head was green${judged ? ` and ${judged.branch}'s latest completed ${relay.requireMainWorkflowGreen} run ${judged.id} (${judged.url}) was green` : ""}${deleted ? "; the branch is deleted" : ""}.`
+const mergedText = (relay, pr, sha, deleted, judged) => `**${relay.label}** merged this (${relay.method}, head \`${short(pr.headSha)}\`, now \`${short(sha)}\`). Every check and status on the head was green${judged ? ` and ${judged.branch}'s latest completed ${relay.requireMainWorkflowGreen} run ${judged.id} (${judged.url}) was green` : ""}${deleted ? "; the branch is deleted" : ""}.`
 
 async function deleteBranch(ctx, relay, pr) {
   if (!relay.deleteBranch || !pr.headRepo || pr.headRepo.toLowerCase() !== pr.baseRepo.toLowerCase() || pr.headRef === pr.baseRef) return false
@@ -409,7 +432,9 @@ async function handlePull(relay, state, ctx, number) {
   let judged
   if (!pr.labels.includes(relay.label)) waiting = [`the ${relay.label} label is gone`]
   if (waiting.length === 0) {
-    waiting = waitingOnChecks(relay.requiredChecks, (await readChecks(ctx, state, relay.repo, pr.headSha)).runs, relay.skippedPasses)
+    const { runs } = await readChecks(ctx, state, relay.repo, pr.headSha)
+    const { statuses } = await readStatuses(ctx, state, relay.repo, pr.headSha)
+    waiting = waitingOnChecks(relay.requiredChecks, runs, relay.skippedPasses, statuses)
     if (relay.requireMainWorkflowGreen) {
       mainBranch = await cached(ctx, state, `/repos/${relay.repo}`, (body) => body.default_branch)
       const main = await readMain(ctx, state, relay.repo, relay.requireMainWorkflowGreen, mainBranch)
@@ -444,7 +469,7 @@ async function handlePull(relay, state, ctx, number) {
   await writeStatus(ctx, relay, number, prs[number], mergedText(relay, pr, response.body.sha, deleted, judged), { final: true })
 }
 
-/** Merges each labelled open pull request whose required checks (and the default branch's workflow, when named) are all green, and keeps its status comment current. */
+/** Merges each labelled open pull request whose checks and statuses are all green, the required ones included (and the default branch's workflow, when named),, and keeps its status comment current. */
 async function runMerge(relay, state, ctx) {
   const labelled = await cached(ctx, state, `/repos/${relay.repo}/issues?state=open&labels=${encodeURIComponent(relay.label)}&per_page=100`, (body) => body.filter((issue) => issue.pull_request).map((issue) => issue.number))
   for (const [number, record] of Object.entries(state.prs)) if (record.status !== "merged" && !labelled.includes(Number(number))) delete state.prs[number]
