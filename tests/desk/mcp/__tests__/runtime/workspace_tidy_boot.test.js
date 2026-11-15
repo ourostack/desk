@@ -65,13 +65,12 @@ test("boot check queues a detached repair, returns without waiting, and records 
   // Session start must not wait on the repair. Ordering above is the property; this ceiling only catches a hang. It is far above the slowest coverage-shard time seen (about 900 ms), so a slow runner cannot trip it.
   assert.ok(elapsed < 10_000, `the boot check took ${Math.round(elapsed)} ms`)
   if (held) await launchRepair(held.root, held.env)
-  assert.match(line, /^Desk boot pre-checks: workspace-tidy/)
-  assert.match(line, /deferred/)
-  assert.equal(line.split("\n").length, 1)
-  if (line.startsWith("Desk boot pre-checks: workspace-tidy budget exceeded")) {
+  // A repair that started and has nothing to report yet is not news for the agent, so the boot line stays empty.
+  assert.ok(line === "" || /inspection deferred/u.test(line), `a loaded machine may run the inventory out of its own deadline: ${line}`)
+  if (!held) {
     // A loaded machine can spend the whole budget before the launch, and then nothing is queued until the next session start. Queue the repair the way that next start does, without the budget, so the leftovers are still recorded.
     t.diagnostic("the whole-check budget ran out before the launch; the repair was queued by a second boot check")
-    assert.match(await readBootDetails({ host: "copilot", env: f.env, sessionFolder: f.desk }), /deferred \(/)
+    await readBootDetails({ host: "copilot", env: f.env, sessionFolder: f.desk })
   }
   const reportPath = reportPathFor(f.desk, git(f.desk, "rev-parse", "--absolute-git-dir"))
   const waited = performance.now()
@@ -125,6 +124,9 @@ test("boot failure degrades in one bounded line and never blocks session start",
 
 test("both actual startup hooks include exactly one boot line without changing their host envelope", async () => {
   const f = await fixture()
+  // A card the tidy cannot read gives the check something to say, since a clean desk adds no line.
+  await fs.mkdir(path.join(f.desk, "track", "unfinished"), { recursive: true })
+  await fs.writeFile(path.join(f.desk, "track", "unfinished", "task.md"), "---\ntitle: unfinished\n---\n")
   const plugin = path.resolve(fileURLToPath(hookPath), "../..")
   // Generous budgets: this test is about the envelope and the single line, not about a loaded host's timing.
   const overrides = path.join(f.root, "relax-budgets.cjs")
@@ -147,16 +149,14 @@ test("the complete boot check has a deadline even when launching repair stalls",
   const f = await fixture()
   // Real time: a stalled launch never resolves, so the check returns only through its own timer. The bound is generous for a loaded machine and still fails a check that waits on the launch.
   const started = performance.now()
-  const line = await tidy({ host: "copilot", env: f.env, sessionFolder: f.desk, budgetMs: 60, launch: () => new Promise(() => {}) })
+  const recorded = []
+  const line = await tidy({ host: "copilot", env: f.env, sessionFolder: f.desk, budgetMs: 60, launch: () => new Promise(() => {}), record: async (_env, skipped) => { recorded.push(...skipped) } })
   const elapsed = performance.now() - started
   t.diagnostic(`a 60 ms budget returned in ${Math.round(elapsed)} ms with the launch stalled`)
   assert.ok(elapsed < STALLED_LAUNCH_LIMIT_MS, `the boot check took ${Math.round(elapsed)} ms`)
-  assert.match(line, /budget.*deferred/)
-  // The line says plainly this needs no agent action (it retries automatically next boot) and spells out the exact,
-  // copy-pasteable repair command an agent can run sooner, rather than leaving "the repair" unnamed.
-  assert.match(line, /no agent action needed/)
-  assert.match(line, /deferred to the next session start automatically/)
-  assert.equal(line, `Desk boot pre-checks: workspace-tidy budget exceeded; deferred to the next session start automatically, no agent action needed; to run it sooner: node ${fileURLToPath(hookPath)} --repair <desk_status root>`)
+  // The next start retries the check by itself, so the agent hears nothing; the skip is recorded for the factory status.
+  assert.equal(line, "")
+  assert.deepEqual(recorded.map(({ id, reason }) => ({ id, reason })), [{ id: "workspace-tidy", reason: "budget" }])
 
   // Mocked time: the check ends exactly at the budget it was given, not at the 500 ms default, once the launch has begun and stalled.
   t.mock.timers.enable({ apis: ["setTimeout"] })
@@ -171,7 +171,7 @@ test("the complete boot check has a deadline even when launching repair stalls",
   assert.equal(result, undefined, "the check must wait out its whole budget")
   t.mock.timers.tick(1)
   await pending
-  assert.match(result, /budget.*deferred/)
+  assert.equal(result, "")
 })
 
 test("existing repair locks expose the exact pending resource without stealing it", async () => {
@@ -251,7 +251,7 @@ test("R3/R2 CLI acknowledges exact canonical accounting and refuses wrong revoca
 })
 
 test("boot reports absent bindings, malformed reports and repair launch failures explicitly", async () => {
-  assert.match(await tidy(), /no bound desk/)
+  assert.equal(await tidy(), "", "with no bound desk there is nothing to tidy and nothing to say")
   // A binding whose folder is gone is unavailable, not absent: the line agrees with the startup line above it.
   const gone = path.join(await mkTempRoot("desk-boot-gone-"), "gone-desk")
   assert.equal(await tidy({ host: "copilot", env: { DESK: gone } }), "Desk boot pre-checks: workspace-tidy skipped; the bound desk is unavailable; see desk_status.")
@@ -291,7 +291,7 @@ test("the boot path does no Node search: it starts the repair launcher in the ho
   t.after(() => { resolver.compatibleNode = original })
   const launched = []
   const line = await bootLine({ host: "claude", env: { ...f.env, DESK: alias }, launch: async (...args) => { launched.push(args) } })
-  assert.equal(line, "Desk boot pre-checks: workspace-tidy deferred (0 listed)")
+  assert.equal(line, "")
   assert.equal(searches, 0)
   assert.deepEqual(launched.map(([root]) => root), [alias], "the launcher gets the binding's own spelling")
 
@@ -401,7 +401,7 @@ test("a Copilot session folder that is a symlink alias of the bound desk is not 
   await fs.symlink(f.desk, alias)
   const launched = []
   const line = await bootLine({ host: "copilot", env: f.env, sessionFolder: alias, launch: async (...args) => { launched.push(args) } })
-  assert.equal(line, "Desk boot pre-checks: workspace-tidy deferred (0 listed)")
+  assert.equal(line, "")
   assert.equal(launched.length, 1)
 })
 
@@ -434,7 +434,7 @@ test("boot lock I/O failures and a slow report read do not authorize late launch
   const pending = tidy({ host: "claude", env: f.env, budgetMs: 500, inspectionBudgetMs: DETAIL_BUDGET_MS, launch: async () => { launched = true } })
   await entered
   t.mock.timers.tick(500)
-  assert.match(await pending, /budget/)
+  assert.equal(await pending, "")
   t.mock.timers.reset()
   finish()
   await new Promise((resolve) => setTimeout(resolve, 25))
@@ -469,7 +469,7 @@ test("whole-check cancellation suppresses launch when inventory resolves late", 
   const check = tidy({ host: "claude", env: f.env, budgetMs: 50, launch: async () => { launched = true } })
   await ready
   t.mock.timers.tick(50)
-  assert.match(await check, /budget/)
+  assert.equal(await check, "")
   t.mock.timers.reset()
   finish()
   await new Promise((resolve) => setTimeout(resolve, 25))
