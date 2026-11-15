@@ -705,13 +705,13 @@ async function deskTools(ctx, world, session, shared, options) {
     assert(!archived.isError, archived.text.slice(0, 200))
     assert(resultPaths(archived).every((p) => p.includes("_archive")), `archived scope returned live paths: ${resultPaths(archived).join(", ")}`)
   })
-  await check(ctx, "desk_timeline.lists", "search", async () => {
-    const timeline = await call("desk_timeline", { limit: 20 })
-    assert(!timeline.isError && resultPaths(timeline).length > 0, `desk_timeline: ${timeline.text.slice(0, 300)}`)
+  await check(ctx, "desk_search.lists_newest", "search", async () => {
+    const timeline = await call("desk_search", { limit: 20 })
+    assert(!timeline.isError && resultPaths(timeline).length > 0, `desk_search without a query: ${timeline.text.slice(0, 300)}`)
   })
-  await check(ctx, "desk_reindex.converges", "search", async () => {
-    const reindex = await call("desk_reindex", {}, 45000)
-    assert(!reindex.isError, `desk_reindex: ${reindex.text.slice(0, 300)}`)
+  await check(ctx, "desk_doctor.reindex_converges", "search", async () => {
+    const reindex = await call("desk_doctor", { reindex: true }, 45000)
+    assert(!reindex.isError, `desk_doctor reindex: ${reindex.text.slice(0, 300)}`)
   })
   await check(ctx, "desk_recall.by_meaning", "search", async () => {
     // No word in common with the garden note: only meaning can find it.

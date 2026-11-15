@@ -29,14 +29,10 @@ const EXPECTED_TOOLS = [
   "lesson_add",
   "desk_save",
   // Teammate notes (Crew)
-  "note_leave",
-  "note_ack",
+  "note",
   // Search (Units 4-6)
   "desk_search",
   "desk_recall",
-  "desk_timeline",
-  // Index management
-  "desk_reindex",
   // Health/status
   "desk_status",
   "desk_doctor",

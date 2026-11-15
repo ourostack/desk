@@ -341,3 +341,21 @@ test("preview desk_doctor never runs organization checks or leaks workspace data
     rmSync(root, { recursive: true, force: true })
   }
 })
+
+test("doctor with reindex re-reads the desk into the session's search engine", async (t) => {
+  const root = makeRoot()
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  assert.equal((await doctorRuntime({ deskRoot: root, input: { reindex: true } })).code, "search_starting")
+
+  const { createSearchEngine } = await import("../../../../../plugins/desk/mcp/src/search/engine.js")
+  mkdirSync(path.join(root, "track/work"), { recursive: true })
+  const file = path.join(root, "track/work/task.md")
+  writeFileSync(file, "before", "utf8")
+  const engine = createSearchEngine({ deskRoot: root, semantic: "unsupported", watch: () => ({ close() {} }) })
+  t.after(() => engine.close())
+  assert.equal((await engine.lexical({ query: "before" })).results.length, 1)
+  writeFileSync(file, "after", "utf8")
+  const result = await doctorRuntime({ deskRoot: root, statusContext: { search: engine }, input: { reindex: true } })
+  assert.equal(result.action, "reindexed")
+  assert.equal((await engine.lexical({ query: "after" })).results.length, 1)
+})

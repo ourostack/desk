@@ -47,7 +47,7 @@ The shared repo is one git repository. It holds everyone's desks side by side, p
     _template/                          # clean clonable skeleton a new teammate copies in (read desk:first-run-bootstrap shape)
     <alias>/                            # ONE PERSON'S FULL DESK -- identical shape to a single-operator $DESK
       AGENTS.md                         # this person's preferences and lessons; session start prints it for them
-      _inbox/                           # notes teammates left this person (note_leave); session start lists the open ones
+      _inbox/                           # notes teammates left this person (note); session start lists the open ones
       _meta/
         friction.md
         featured.md                     # this person's pins (per-person, not repo-wide)
@@ -173,7 +173,7 @@ A team lesson binds every teammate's agents, so one person cannot make one up: i
 
 ## Notes for a teammate
 
-To tell one teammate something they should see at their next session, leave them a note with `note_leave` (`crew:leave-note`). It is the one write into another person's desk that needs no further authority: it adds a single new, attributed file to their `desks/<alias>/_inbox/` through the shared-path protocol above, and never touches anything else there. The note relays your understanding in your own voice, never in anyone else's, and the whole workspace can read it. Their session start lists it until they call `note_ack`, which marks it acknowledged in their own desk.
+To tell one teammate something they should see at their next session, leave them a note with `note` (`crew:leave-note`). It is the one write into another person's desk that needs no further authority: it adds a single new, attributed file to their `desks/<alias>/_inbox/` through the shared-path protocol above, and never touches anything else there. The note relays your understanding in your own voice, never in anyone else's, and the whole workspace can read it. Their session start lists it until they call `note` with `ack`, which marks it acknowledged in their own desk.
 
 ## Shared tracks (when several people work one effort)
 

@@ -202,7 +202,7 @@ function recordCapture({ root, paths, message, capture }) {
 }
 
 /**
- * The route for a pull request Desk opened that has not merged (note_leave, lesson_add's team write, both through
+ * The route for a pull request Desk opened that has not merged (note, lesson_add's team write, both through
  * shared-write.js): merge it by hand, then read it back. A queued pull request is read again later; any other state is reported.
  */
 export function pullRequestRoute(pr) {
@@ -217,7 +217,7 @@ export function pullRequestRoute(pr) {
 }
 
 /**
- * The route for a shared-repository write that stopped before its pull request merged (note_leave, lesson_add's team write):
+ * The route for a shared-repository write that stopped before its pull request merged (note, lesson_add's team write):
  * read whether the change is already on the default branch, and if not, call the same tool again. The tool builds the change
  * from that branch again with every protection it has, so the route never writes to the repository by hand. `landed` is the
  * read-back (`argv` and what `expect` says it proves).

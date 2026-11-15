@@ -1,4 +1,4 @@
-// note_leave and note_ack: a teammate's agent leaves another member a dated, attributed note in their `_inbox/`, through
+// The note tool, leaving and acknowledging: a teammate's agent leaves another member a dated, attributed note in their `_inbox/`, through
 // a pull request it merges; the recipient acknowledges it on their own desk. Git runs for real against a local bare
 // repository that stands in for GitHub; `gh` and the account choice are fakes that act on that repository, as in
 // lesson_team.test.js.
@@ -8,7 +8,7 @@ import { strict as assert } from "node:assert"
 import * as path from "node:path"
 import { promises as fs } from "node:fs"
 import { spawnSync } from "node:child_process"
-import { note_ack, note_leave, localIso, noteFileName } from "../../../../../plugins/desk/mcp/src/tools/note.js"
+import { note, ackNote as note_ack, leaveNote as note_leave, localIso, noteFileName } from "../../../../../plugins/desk/mcp/src/tools/note.js"
 import { parseNote, renderNote } from "../../../../../plugins/desk/mcp/src/runtime/inbox.js"
 import { mkTempDeskRoot } from "./_helpers.js"
 import { assertNextFirst, notCommitted } from "./_route_around.js"
@@ -116,15 +116,15 @@ test("note_leave writes only the recipient's inbox, through a pull request it me
   assert.equal(result.pr, PR)
   assert.equal(result.commit, git(ws.bare, ["rev-parse", "main"]))
   assert.match(result.note, /^desks\/saranya\/_inbox\/2026-10-30-ari-your-tracker-is-being-extended-[0-9a-f]{6}\.md$/u)
-  assert.match(result.message, /^Left for saranya: merged in https:\/\/github\.com\/acme\/cit\/pull\/9\. saranya's session start lists it until they acknowledge it with note_ack\. Everyone in the workspace can read it\.$/u)
+  assert.match(result.message, /^Left for saranya: merged in https:\/\/github\.com\/acme\/cit\/pull\/9\. saranya's session start lists it until they acknowledge it with the note tool's ack\. Everyone in the workspace can read it\.$/u)
   assert.deepEqual(inbox(ws.bare), [result.note])
   const written = parseNote(onMain(ws.bare, result.note))
   assert.deepEqual([written.from, written.to, written.created, written.status, written.subject, written.related], ["ari", "saranya", "2026-10-30T13:05:06-07:00", "open", INPUT.subject, INPUT.related])
-  assert.match(written.content, /^\nHere's my understanding of what Ari was thinking: [^\n]+\n\nRelated:\n\n- _shared\/tracks\/plan\.md\n- https:\/\/example\.com\/plan\n\nari left this note with note_leave\. Ask ari if anything here is unclear\.\n$/u)
+  assert.match(written.content, /^\nHere's my understanding of what Ari was thinking: [^\n]+\n\nRelated:\n\n- _shared\/tracks\/plan\.md\n- https:\/\/example\.com\/plan\n\nari left this note with Desk's note tool\. Ask ari if anything here is unclear\.\n$/u)
   // The pull request's title and text, and only the note in the merged change.
   const create = fake.calls.find((args) => args[1] === "create")
   assert.equal(create[create.indexOf("--title") + 1], `Note for saranya: ${INPUT.subject}`)
-  assert.match(create[create.indexOf("--body") + 1], /^Leaves saranya a note from ari, written by Desk's note_leave: desks\/saranya\/_inbox\//u)
+  assert.match(create[create.indexOf("--body") + 1], /^Leaves saranya a note from ari, written by Desk's note tool: desks\/saranya\/_inbox\//u)
   assert.equal(git(ws.bare, ["diff", "--name-only", "main~1", "main"]), result.note)
   // The desk's own checkout and branches are as they were, and the pushed branch is gone.
   assert.equal(git(ws.clone, ["status", "--short"]), "")
@@ -211,7 +211,7 @@ test("note_leave's failure says how to finish it by hand, with a read-back: the 
   assert.equal(none.status, "failed")
   assert.equal(Object.keys(none)[0], "next", "the answer opens with the next step")
   assert.equal(none.next, "The change was not published: no pull request for it has opened. Run route_around.steps now, in order, then read back that it landed.")
-  assert.equal(none.route_around.steps[1].tool, "note_leave")
+  assert.equal(none.route_around.steps[1].tool, "note")
   assert.deepEqual(none.route_around.steps[1].arguments, { to: "saranya", subject: INPUT.subject, body: INPUT.body, related: INPUT.related })
   // A push refused after the pull request opened: the route merges that pull request by hand, then reads it back.
   let pushes = 0
@@ -278,13 +278,13 @@ test("note_ack marks the person's own note acknowledged, commits it and pushes, 
   const desk = await saranyaDesk()
   const pushes = []
   const changes = []
-  const ack = (note, extra = {}) => note_ack({ deskRoot: desk.root, person: "saranya", input: { note }, schedulePush: (args) => pushes.push(args), search: { noteChange: (rel) => changes.push(rel) }, now: () => at("2026-10-31T16:00:00Z", 420), ...extra })
+  const ack = (note, extra = {}) => note_ack({ deskRoot: desk.root, person: "saranya", input: { ack: note }, schedulePush: (args) => pushes.push(args), search: { noteChange: (rel) => changes.push(rel) }, now: () => at("2026-10-31T16:00:00Z", 420), ...extra })
   const result = await ack(desk.rel)
   assert.deepEqual(result, { status: "acknowledged", note: desk.rel, from: "ari", subject: INPUT.subject, committed: true, message: `Acknowledged ${desk.rel} from ari. It is committed, and ari sees it once your desk syncs.` })
   const text = await fs.readFile(path.join(desk.dir, desk.name), "utf8")
   assert.match(text, /\nstatus: acknowledged\nacknowledged: "2026-10-31T09:00:00-07:00"\n/u)
   assert.equal(git(desk.root, ["status", "--short"]), "")
-  assert.equal(git(desk.root, ["log", "-1", "--format=%s"]), `note_ack: ${desk.name}`)
+  assert.equal(git(desk.root, ["log", "-1", "--format=%s"]), `note ack: ${desk.name}`)
   assert.deepEqual([pushes, changes], [[{ root: desk.root }], [desk.rel]])
   // The bare file name works too, and a second acknowledgement changes nothing.
   const again = await ack(desk.name)
@@ -295,7 +295,7 @@ test("note_ack marks the person's own note acknowledged, commits it and pushes, 
 
 test("note_ack writes but does not commit when it cannot, and says why", async () => {
   const plain = await saranyaDesk({ gitDesk: false })
-  const run = (desk, extra = {}) => note_ack({ deskRoot: desk.root, person: "saranya", input: { note: desk.rel }, schedulePush: () => assert.fail("no push"), ...extra })
+  const run = (desk, extra = {}) => note_ack({ deskRoot: desk.root, person: "saranya", input: { ack: desk.rel }, schedulePush: () => assert.fail("no push"), ...extra })
   const notGit = await run(plain)
   assert.deepEqual([notGit.status, notGit.committed], ["acknowledged", false])
   assert.match(notGit.message, /^Acknowledged desks\/saranya\/_inbox\/[^ ]+ from ari on this machine, but not committed \(this desk is not a Git checkout\), so ari does not see it yet\.$/u)
@@ -325,7 +325,7 @@ test("note_ack: a commit Desk cannot read back is unknown, never reported as not
     if (dispatched && args.includes("rev-parse")) return { status: 128, stdout: "", stderr: "fatal: cannot lock ref" }
     return spawnSync(cmd, args, options)
   }
-  const result = await note_ack({ deskRoot: desk.root, person: "saranya", input: { note: desk.rel }, spawnGit, schedulePush: () => assert.fail("no push for an unknown commit") })
+  const result = await note_ack({ deskRoot: desk.root, person: "saranya", input: { ack: desk.rel }, spawnGit, schedulePush: () => assert.fail("no push for an unknown commit") })
   assert.equal(result.status, "acknowledged")
   assert.equal(result.committed, null)
   assert.equal(result.commit.status, "unknown")
@@ -335,16 +335,23 @@ test("note_ack: a commit Desk cannot read back is unknown, never reported as not
 
 test("note_ack refuses anything but a note in the person's own inbox", async () => {
   const desk = await saranyaDesk()
-  const run = (note, extra = {}) => note_ack({ deskRoot: desk.root, person: "saranya", input: { note }, ...extra })
+  const run = (note, extra = {}) => note_ack({ deskRoot: desk.root, person: "saranya", input: { ack: note }, ...extra })
   // With nothing injected, the real Git, push and clock are only set up: input is checked first.
-  await assert.rejects(() => note_ack({ deskRoot: desk.root, input: { note: desk.name } }), /this session has no person/u)
+  await assert.rejects(() => note_ack({ deskRoot: desk.root, input: { ack: desk.name } }), /this session has no person/u)
   const solo = await mkTempDeskRoot()
   await assert.rejects(() => run(desk.name, { deskRoot: solo }), /a Crew shared workspace/u)
-  await assert.rejects(() => run(undefined), /`note` is required/u)
+  await assert.rejects(() => run(undefined), /`ack` is required/u)
   await assert.rejects(() => run("desks/ari/_inbox/x.md"), /only a note in your own inbox, desks\/saranya\/_inbox\//u)
   await assert.rejects(() => run("../x.md"), /only a note in your own inbox/u)
   await assert.rejects(() => run("x.txt"), /only a note in your own inbox/u)
   await assert.rejects(() => run("missing.md"), /no note desks\/saranya\/_inbox\/missing\.md/u)
   await fs.writeFile(path.join(desk.dir, "plain.md"), "no frontmatter\n")
   await assert.rejects(() => run("plain.md"), /desks\/saranya\/_inbox\/plain\.md is not a note/u)
+})
+
+test("the note tool acknowledges with `ack` and leaves a note otherwise", async () => {
+  const desk = await saranyaDesk()
+  const acknowledged = await note({ deskRoot: desk.root, person: "saranya", input: { ack: desk.name }, schedulePush: () => {} })
+  assert.equal(acknowledged.status, "acknowledged")
+  await assert.rejects(() => note({ deskRoot: desk.root, person: "saranya", input: {} }), /`to` is required/u)
 })

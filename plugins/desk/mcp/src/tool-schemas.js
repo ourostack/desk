@@ -281,15 +281,13 @@ export const TOOL_INPUT_SCHEMAS = Object.freeze({
     repo: text("For \"team\": the path of your local clone of the team's repository. Defaults to the desk in a shared workspace."),
     source: text("Required for \"team\": where the lesson comes from, on one line: the decision record's path where the repository has _shared/decisions/, else who said it, where and when (YYYY-MM-DD)."),
   }, ["scope", "topic", "body"]),
-  note_leave: schema({
-    to: text("The alias of the member the note is for, as in the roster (_meta/desks.md)."),
-    subject: text("What the note is about, on one line of at most 120 characters."),
-    body: text("The note, in your own voice, at most 8000 characters. Relay someone else's thinking as your understanding of it, never in their words. Everyone in the workspace can read it."),
+  note: schema({
+    to: text("The alias of the member the note is for, as in the roster (_meta/desks.md). Required unless `ack` is given."),
+    subject: text("What the note is about, on one line of at most 120 characters. Required with `to`."),
+    body: text("The note, in your own voice, at most 8000 characters. Relay someone else's thinking as your understanding of it, never in their words. Everyone in the workspace can read it. Required with `to`."),
     related: list("Up to 10 links: https URLs, or paths relative to the workspace root."),
-  }, ["to", "subject", "body"]),
-  note_ack: schema({
-    note: text("The note's path as session start listed it, or its file name."),
-  }, ["note"]),
+    ack: text("To acknowledge a note instead of leaving one: its path as session start listed it, or its file name."),
+  }),
   desk_save: schema({
     content_home: CONTENT_HOME,
     paths: list("The paths to commit, relative to the desk root. Required unless `files` is given."),
@@ -310,7 +308,8 @@ export const TOOL_INPUT_SCHEMAS = Object.freeze({
     tidy: flag("Pass true to commit a desk tidy or its undo: moved or renamed task cards already staged by task_move, track_rename or git mv, plus _meta/organization.json."),
   }, ["message"]),
   desk_search: schema({
-    query: text("The search query."),
+    query: text("The search query. Omit it to list documents by update time."),
+    newest: flag("Pass true to order by update time, newest first, instead of by match."),
     limit: LIMIT,
     scope: SCOPE,
     filters: {
@@ -325,16 +324,8 @@ export const TOOL_INPUT_SCHEMAS = Object.freeze({
       },
       description: "Filters, as a JSON object (not a string).",
     },
-  }, ["query"]),
-  desk_recall: schema({ topic: text("What to recall."), limit: LIMIT, scope: SCOPE }, ["topic"]),
-  desk_timeline: schema({
-    from: text("Start of the updated_at window (ISO 8601)."),
-    to: text("End of the updated_at window (ISO 8601)."),
-    query: text("Optional query to rank documents inside the window."),
-    limit: LIMIT,
-    scope: SCOPE,
   }),
-  desk_reindex: schema({ force: flag("Accepted for compatibility; it changes nothing.") }),
+  desk_recall: schema({ topic: text("What to recall."), limit: LIMIT, scope: SCOPE }, ["topic"]),
   desk_status: schema({
     detail: flag("Pass true for the full payload (tens of KB). Omit it for the compact answer."),
     has_instructions: flag("Hosted Desk only: pass true when an earlier desk_status answer in this conversation already gave you Desk's instructions."),
@@ -345,6 +336,7 @@ export const TOOL_INPUT_SCHEMAS = Object.freeze({
   desk_doctor: schema({
     format: { type: "string", enum: ["full", "preview"], description: "preview returns only the local package/process snapshot." },
     repair: { type: "string", enum: [...DOCTOR_REPAIRS], description: "A named repair to run." },
+    reindex: flag("Pass true to re-read the desk into this session's search engine and wait until exact-word search is current."),
     factory_consent: { type: "string", enum: ["yes", "no"], description: "The operator's answer to the factory contribution question; Desk resolves the store and, for yes, the GitHub account." },
     factory_told: flag("Pass true once you have told the operator the factory sentence from the boot, so a later session does not say it again."),
   }),

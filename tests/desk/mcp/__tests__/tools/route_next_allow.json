@@ -2,7 +2,7 @@
   {
     "file": "_card-commit.js",
     "match": "staged.stderr, route_around: commitRoute({ root: dir, paths: names",
-    "reason": "stageAndCommitFiles' stage failure; note_ack carries it under commit and withNext leads its answer"
+    "reason": "stageAndCommitFiles' stage failure; note (ack) carries it under commit and withNext leads its answer"
   },
   {
     "file": "_card-commit.js",
@@ -62,7 +62,7 @@
   {
     "file": "shared-write.js",
     "match": "return { status: \"pr_open\", reason: state.mergeStateStatus",
-    "reason": "pull request route; note_leave and lesson_add's team write lead their answers with withNext"
+    "reason": "pull request route; note (leave) and lesson_add's team write lead their answers with withNext"
   },
   {
     "file": "task.js",

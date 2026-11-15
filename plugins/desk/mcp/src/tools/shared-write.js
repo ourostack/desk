@@ -1,5 +1,5 @@
 // Crew's shared-write protocol, done by a tool itself: a change to a repository the team shares lands through a pull
-// request the tool opens and merges at once. lesson_add's team write (lesson-team.js) and note_leave (note.js) use it.
+// request the tool opens and merges at once. lesson_add's team write (lesson-team.js) and the note tool (note.js) use it.
 //
 // The write never touches the clone's checkout or uses its remotes: it fetches the default branch from
 // https://github.com/<owner>/<repo>.git with the chosen account (pinned past the clone's redirect rules and extra headers,
