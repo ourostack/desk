@@ -6,11 +6,11 @@ const require = createRequire(import.meta.url)
 const verifier = require("../../../../../scripts/test-desk-host-manifests.cjs")
 const read = (name) => JSON.parse(readFileSync(new URL(`../../../../../plugins/desk/hooks/${name}`, import.meta.url), "utf8"))
 
-test("host manifests register all four bounded factory events and detect drift", () => {
+test("host manifests register only the session-end events, no per-turn factory hook, and detect drift", () => {
   assert.equal(typeof verifier.validateFactoryHooks, "function")
   assert.deepEqual(verifier.validateFactoryHooks(read("hooks.json"), read("copilot-hooks.json")), [])
-  assert.equal(verifier.validateFactoryHooks({}, {}).length, 4)
-  for (const event of ["SessionEnd", "Stop", "sessionEnd", "agentStop"]) {
+  assert.equal(verifier.validateFactoryHooks({}, {}).length, 2)
+  for (const event of ["SessionEnd", "sessionEnd"]) {
     const claude = read("hooks.json")
     const copilot = read("copilot-hooks.json")
     const manifest = /^[A-Z]/u.test(event) ? claude : copilot
@@ -19,7 +19,7 @@ test("host manifests register all four bounded factory events and detect drift",
   }
   const claude = read("hooks.json")
   const copilot = read("copilot-hooks.json")
-  claude.hooks.Stop[0].hooks[0].timeout = 30
-  copilot.hooks.agentStop[0].powershell = "other-command"
+  claude.hooks.Stop = [{ hooks: [{ type: "command", command: "other-command" }] }]
+  copilot.hooks.agentStop = [{ type: "command", bash: "other-command" }]
   assert.equal(verifier.validateFactoryHooks(claude, copilot).length, 2)
 })

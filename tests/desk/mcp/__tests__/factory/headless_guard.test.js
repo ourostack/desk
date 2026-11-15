@@ -14,7 +14,7 @@ import { HEADLESS_CODE, READ_ONLY_TOOLS, headlessRefusal, isHeadlessFactorySessi
 import { TOOL_NAMES } from "../../../../../plugins/desk/mcp/src/tool-names.js"
 import { callTool, TOOL_IMPLS } from "../../../../../plugins/desk/mcp/src/server.js"
 import { bootOnce, isNoninteractive } from "../../../../../plugins/desk/mcp/src/runtime/boot.js"
-import { runBootChecks, startFactory } from "../../../../../plugins/desk/hooks/lib/boot-checks.cjs"
+import { runBootChecks } from "../../../../../plugins/desk/hooks/lib/boot-checks.cjs"
 import { runHook as endRunHook } from "../../../../../plugins/desk/hooks/lib/factory-end.cjs"
 import { runHook as syncRunHook } from "../../../../../plugins/desk/hooks/lib/sync-end.cjs"
 import { bootFixtureEnv } from "../_boot_fixture.js"
@@ -53,32 +53,26 @@ test("the bounded end hook process spawns no worker and writes no marker under t
   assert.deepEqual(await listMarkers(ctx.env), [])
 }))
 
-test("boot checks say nothing and the detached factory start never happens under the flag", async () => {
+test("boot checks say nothing under the flag", async () => {
   let ran = 0
   let launched = 0
   const checks = [{ id: "x", budgetMs: 100, run: async () => { ran += 1; return { line: "speaks" } } }]
-  const quiet = { launchRepair: async () => { launched += 1 }, launch: async () => { launched += 1 }, record: async () => {} }
+  const quiet = { launchRepair: async () => { launched += 1 }, launch: async () => { launched += 1 } }
   assert.equal(await runBootChecks({ ...quiet, checks, env: { DESK_FACTORY_HEADLESS: "1" } }), "")
-  assert.equal(await startFactory({ env: { DESK_FACTORY_HEADLESS: "1" }, launch: async () => { launched += 1 } }), false)
   assert.deepEqual([ran, launched], [0, 0])
   assert.equal(await runBootChecks({ ...quiet, checks, env: { DESK_FACTORY_HEADLESS: "0" } }), "Desk boot pre-checks: speaks")
   assert.equal(ran, 1)
 })
 
 for (const host of ["claude", "copilot"]) {
-  test(`the ${host} start hook prints nothing and starts no process under the flag`, () => scratch(async ({ env, desk, base }) => {
-    const calls = path.join(base, "calls.txt")
-    const fixture = path.join(base, "fixture.cjs")
-    await fs.writeFile(fixture, `const fs = require("node:fs");
-module.exports = { startFactory: async () => { fs.appendFileSync(${JSON.stringify(calls)}, "started\\n"); return true } };`)
-    const hookEnv = bootFixtureEnv({ ...env, PLUGIN_ROOT: PLUGIN, CLAUDE_PLUGIN_ROOT: PLUGIN, CLAUDE_PROJECT_DIR: desk }, fixture)
+  test(`the ${host} start hook prints nothing under the flag`, () => scratch(async ({ env, desk }) => {
+    const hookEnv = { ...env, PLUGIN_ROOT: PLUGIN, CLAUDE_PLUGIN_ROOT: PLUGIN, CLAUDE_PROJECT_DIR: desk }
     const run = (flag) => host === "copilot"
       ? spawnSync(process.execPath, [path.join(HOOKS, "copilot-session-start.cjs")], { env: { ...hookEnv, DESK_FACTORY_HEADLESS: flag }, input: JSON.stringify({ cwd: desk }), encoding: "utf8" })
       : spawnSync(process.execPath, [path.join(HOOKS, "claude-session-start.cjs"), path.join(PLUGIN, "skills", "using-desk", "SKILL.md")], { env: { ...hookEnv, DESK_FACTORY_HEADLESS: flag }, encoding: "utf8" })
     const headless = run("1")
     assert.equal(headless.status, 0, headless.stderr)
     assert.equal(headless.stdout, "")
-    await assert.rejects(fs.access(calls))
     const normal = run("0")
     assert.equal(normal.status, 0, normal.stderr)
     assert.match(normal.stdout, /Desk/u)
@@ -122,7 +116,6 @@ test("a hook that cannot load the rule file still honours the flag from the envi
     assert.equal(prompt.status, 0)
     assert.equal((await require(path.join(hooks, "lib", "sync-end.cjs")).runHook({ host: "claude", payload, env: hookEnv })) === "headless", headless, `sync-end ${label}`)
     assert.equal((await require(path.join(hooks, "lib", "factory-end.cjs")).runHook({ host: "claude", payload: { ...payload, session_id: ID, transcript_path: path.join(base, "x.jsonl") }, env: hookEnv })) === "headless", headless, `factory-end ${label}`)
-    assert.equal(await require(path.join(hooks, "lib", "boot-checks.cjs")).startFactory({ env: hookEnv, launch: async () => {} }) , false)
   }
 }))
 

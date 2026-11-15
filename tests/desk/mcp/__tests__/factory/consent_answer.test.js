@@ -1,4 +1,4 @@
-// The operator's factory answer recorded through the tool (`desk_doctor`'s `factory_consent` and `factory_told`): the account is resolved by Desk,
+// The operator's factory answer recorded through the tool (`desk_doctor`'s `factory_consent`): the account is resolved by Desk,
 // the file written is the one `factory.js consent` writes, and a recorded decision is never overwritten. Accounts and tokens here are synthetic.
 
 import { test } from "node:test"
@@ -7,8 +7,6 @@ import * as path from "node:path"
 
 import { answerFactoryConsent } from "../../../../../plugins/desk/mcp/src/factory/consent-answer.js"
 import { runConsentCommand } from "../../../../../plugins/desk/mcp/scripts/factory.js"
-import { consentMentioned } from "../../../../../plugins/desk/mcp/src/runtime/consent-mentioned.js"
-import { resolveDeskStateDir } from "../../../../../plugins/desk/mcp/src/runtime/last-start.js"
 import { setConsent } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 import { factoryStatus } from "../../../../../plugins/desk/mcp/src/tools/factory-context.js"
 import { STORE, json, scratch } from "./_session_helpers.js"
@@ -68,13 +66,6 @@ test("a yes with gh missing records nothing", () => scratch(async ({ desk, env }
   assert.equal(real.result, "gh_missing", "with no runner, Desk asks the real gh")
 }))
 
-test("factory_told records that the operator was told, and nothing else", () => scratch(async ({ desk, env }) => {
-  await declared(desk)
-  assert.deepEqual(await answerFactoryConsent({ env, deskRoot: desk, told: true }), { status: "recorded", store: STORE, told: true })
-  assert.equal(consentMentioned(resolveDeskStateDir({ env }), STORE), true)
-  assert.equal(factoryStatus({ env, deskRoot: desk, signoff: false }).consent, "undecided")
-}))
-
 test("a recorded decision is never overwritten, and no store means nothing to answer", () => scratch(async ({ desk, env }) => {
   await declared(desk)
   await setConsent(env, { store: STORE, contribute: false })
@@ -82,6 +73,5 @@ test("a recorded decision is never overwritten, and no store means nothing to an
   assert.deepEqual([refused.status, refused.code, refused.consent], ["refused", "factory_already_decided", "no"])
   assert.equal((await answerFactoryConsent({ env, deskRoot: null, answer: "no" })).code, "factory_no_store")
   assert.equal((await answerFactoryConsent({ env, deskRoot: desk, answer: "maybe" })).code, "factory_consent_not_yes_or_no")
-  assert.equal((await answerFactoryConsent({ env, deskRoot: desk })).code, "factory_consent_not_yes_or_no", "no answer and no told is not a yes")
-  assert.equal((await answerFactoryConsent({ env, deskRoot: desk, answer: "no", told: true })).code, "factory_consent_one_answer_per_call")
+  assert.equal((await answerFactoryConsent({ env, deskRoot: desk })).code, "factory_consent_not_yes_or_no", "no answer is not a yes")
 }))

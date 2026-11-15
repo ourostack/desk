@@ -32,13 +32,16 @@ function parseJsonc(text) {
 const knip = parseJsonc(read("tools", "unused-code", "knip.jsonc"))
 const registered = (...files) => new Set(files.flatMap((file) => [...read(...file).matchAll(/hooks[\\/]+([\w-]+\.cjs)/gu)].map((match) => match[1])))
 
-test("the Desk hooks the unused-code check lists are the ones hooks.json and copilot-hooks.json register, plus the ones a registered hook starts", () => {
+test("the Desk hooks the unused-code check lists are the ones hooks.json and copilot-hooks.json register, plus boot-checks.cjs and the factory's on-demand hooks", () => {
   const entries = knip.workspaces["plugins/desk/hooks"].entry
   const hooks = registered(["plugins", "desk", "hooks", "hooks.json"], ["plugins", "desk", "hooks", "copilot-hooks.json"])
   assert.ok(hooks.size > 0)
   for (const hook of hooks) assert.ok(entries.includes(hook), `${hook} is registered but not listed in knip.jsonc`)
+  // Since Epoch 3 the factory's hooks are registered nowhere and started by no session start: a person starts them, or a host that registers one.
+  const onDemand = new Set(["factory-end.cjs", "factory-start.cjs", "loop-start.cjs"])
+  for (const name of onDemand) assert.ok(!hooks.has(name), `${name} must not be registered: the factory runs nothing at session start or per turn`)
   const bootChecks = read("plugins", "desk", "hooks", "lib", "boot-checks.cjs")
-  for (const entry of entries.filter((name) => !hooks.has(name))) {
+  for (const entry of entries.filter((name) => !hooks.has(name) && !onDemand.has(name))) {
     assert.ok(bootChecks.includes(`"${entry}"`), `${entry} is listed in knip.jsonc but neither registered nor started by lib/boot-checks.cjs`)
   }
   for (const entry of entries) {

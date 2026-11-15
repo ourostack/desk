@@ -1097,7 +1097,7 @@ export function createDeskSession(deps) {
       if (input.factory_told !== undefined && input.factory_told !== true) return { content: [{ type: "text", text: "Pass factory_told as true: factory_told records that the operator was told." }], isError: true }
       // The answer touches no desk file, so the next call need not wait for it; asking GitHub for the account can take a while.
       release?.()
-      const result = await answerFactoryConsent({ env, deskRoot: context.root?.root ?? null, answer: input.factory_consent, told: input.factory_told === true })
+      const result = await answerFactoryConsent({ env, deskRoot: context.root?.root ?? null, answer: input.factory_consent })
       return jsonResult(result, result.status === "refused")
     }
     if (format === "preview") {

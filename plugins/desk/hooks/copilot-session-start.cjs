@@ -21,7 +21,6 @@ const rfcPath = path.join(pluginRoot, "docs", "agentic-engineering-v3-rfc.md");
 // The optional lines' deadline (lib/boot-checks.cjs `timing`), read where it is used: the module is loaded inside the hook's try blocks.
 const optionalLinesDeadlineMs = () => require("./lib/boot-checks.cjs").timing.optionalLinesDeadlineMs;
 const { performance } = require("node:perf_hooks");
-let optionalLinesTimedOut = false;
 
 // Copilot passes the session's working folder as `cwd` and the session id as `sessionId` in the hook input. Read
 // them briefly and fall back to the process folder, so startup never waits on a host that leaves stdin open.
@@ -200,20 +199,10 @@ async function startupDirection() {
     const late = new Promise((resolve) => { timer = setTimeout(resolve, Math.max(0, optionalLinesDeadlineMs() - performance.now()), null); });
     const [lines, standingLine] = await Promise.all([Promise.race([optional, late]), Promise.race([personLine, late])]);
     clearTimeout(timer);
-    if (lines === null) optionalLinesTimedOut = true;
     const bootText = await bootResult;
     return [direction, bootText, standingLine || standing.deskOnly, ...(lines ?? [])].filter(Boolean).join("\n\n");
   } catch {
     return `Desk startup: Desk could not resolve its root in this hook, so the hook did not start the boot. Desk starts it with your first Desk tool reply; desk_status reports the root Desk actually bound. ${BOOT_STAND_DOWN}`;
-  }
-}
-
-async function startFactory() {
-  try {
-    const { startFactory: start } = require("./lib/boot-checks.cjs");
-    await start({ env: process.env });
-  } catch {
-    // Delivery retries at the next session start.
   }
 }
 
@@ -247,8 +236,6 @@ function emit(additionalContext) {
     const direction = await startupDirection();
     // The startup line leads, as in the Claude hook: a host that keeps only a preview of a long context still shows the boot imperative.
     const output = `${direction}${memory ? `\n\n${memory}` : ""}\n\n${plainLanguagePointer()}${workerPointer}\n\n${foundation}\n\nDesk RFC: ${rfcPath}`;
-    // Factory delivery starts detached only once the output is built; it never delays or changes it.
-    if (!optionalLinesTimedOut) await startFactory();
     emit(output);
   } catch {
     emit(`desk worker boot — the Desk foundation could not be read from ${foundationPath}. Desk runs its own boot; its result comes with your first Desk tool reply, and desk:session-start explains it. ${BOOT_STAND_DOWN}`);

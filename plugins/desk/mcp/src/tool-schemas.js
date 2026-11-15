@@ -336,7 +336,6 @@ export const TOOL_INPUT_SCHEMAS = Object.freeze({
     repair: { type: "string", enum: [...DOCTOR_REPAIRS], description: "A named repair to run." },
     reindex: flag("Pass true to re-read the desk into this session's search engine and wait until exact-word search is current."),
     factory_consent: { type: "string", enum: ["yes", "no"], description: "The operator's answer to the factory contribution question; Desk resolves the store and, for yes, the GitHub account." },
-    factory_told: flag("Pass true once you have told the operator the factory sentence from the boot, so a later session does not say it again."),
   }),
   improvement_open: schema({
     source: { type: "string", enum: ["andon", "friction_candidate", "reconcile_class", "desk_problem", "store_build", "evaluator", "loop_alarm", "flush_health"], description: "Where the card comes from; the card key is <source>:<id>." },

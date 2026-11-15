@@ -1,16 +1,11 @@
-// Consent is the boot's last instruction by construction (Package H, poka-yoke), and a resumed or compacted session is not asked twice for the same sign-offs.
+// A resumed or compacted session is not asked twice for the same sign-offs, and the boot says nothing about the factory (Epoch 3).
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { promises as fs, readFileSync } from "node:fs"
+import { promises as fs } from "node:fs"
 import * as path from "node:path"
-import { fileURLToPath } from "node:url"
 import { mkTempRoot } from "../_temp_roots.js"
-import { bootOnce, withConsentLast } from "../../../../../plugins/desk/mcp/src/runtime/boot.js"
+import { bootOnce } from "../../../../../plugins/desk/mcp/src/runtime/boot.js"
 import { formatBootText } from "../../../../../plugins/desk/mcp/src/runtime/boot-text.js"
-import { consentMentioned, noteConsentMentioned } from "../../../../../plugins/desk/mcp/src/runtime/consent-mentioned.js"
-import { resolveDeskStateDir } from "../../../../../plugins/desk/mcp/src/runtime/last-start.js"
-
-const bootSource = readFileSync(fileURLToPath(new URL("../../../../../plugins/desk/mcp/src/runtime/boot.js", import.meta.url)), "utf8")
 
 const jq = async () => ({ code: 0, stdout: "jq-1.7\n", stderr: "" })
 const gh = async (args) => {
@@ -18,8 +13,6 @@ const gh = async (args) => {
   if (args[0] === "auth" && args[1] === "status") return { code: 0, stdout: "github.com\n  ✓ Logged in to github.com account ari (keyring)\n  - Active account: ari\n", stderr: "" }
   return { code: 1, stdout: "", stderr: "unexpected call" }
 }
-const UNDECIDED = () => ({ store: "ourostack/factory-intake", source: "x", consent: "undecided", stores: [], warnings: [] })
-const OPEN_CARDS = async () => ({ status: "ok", open: 2, oldest_days: 3, open_keys: [], truncated: false, set_aside: 1, unreadable_files: 0 })
 const delivered = (title, days) => [
   "schema_version: 1", `title: ${title}`, "status: done", "created: '2026-01-01T00:00:00Z'", "updated: '2026-01-02T00:00:00Z'", "track: ops", "repos: []",
   "signoff:", "  state: delivered_unsigned", "  at: null", "  verified: null", "  reason: null",

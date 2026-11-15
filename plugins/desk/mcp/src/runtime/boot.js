@@ -34,7 +34,7 @@
 //
 // `bootOnce` returns `{ boot_complete: true, status, degraded, pending,
 // instructions, root, host, prereqs, sync, sync_summary, agents_md, agents_md_in_host_instructions, notes, active_tasks,
-// card_validation, push_accounts, factory }` (among others); `notes` is the open notes teammates left in this
+// card_validation, push_accounts }` (among others); `notes` is the open notes teammates left in this
 // person's `_inbox/` (`inbox.js`), or null. The CLI prints it as readable
 // text (`boot-text.js`) unless `--json` asks for this structure. `status` is one of "ready", "degraded" or
 // "setup_required" — never two words, and `degraded` always lists why.
@@ -60,7 +60,6 @@ import { activeTasks } from "../desk/active-tasks.js"
 import { folderHandle } from "../desk/handles.js"
 import { loadFrontmatterParser } from "../desk/organization.js"
 import { parseFrontmatterLite } from "../desk/frontmatter-lite.js"
-import { factoryFindingLines, factoryStatus } from "../tools/factory-context.js"
 import {
   claudeBindingPath,
   DESK_ROOT_NOT_FOUND,
@@ -72,8 +71,6 @@ import { readSmallText } from "../factory/marker.js"
 import { readRemotes } from "../util/git-config-file.js"
 import { isHeadlessFactorySession } from "../factory/headless-flag.js"
 import { isNoninteractive } from "../factory/session-kind.js"
-import { improvementBootCheck, improvementCountText, improvementLine, improvementNotes } from "../factory/boot-check.js"
-import { AUTHORITY } from "../desk/improvement-authority.js"
 import { improvementPerson } from "../desk/improvement-person.js"
 import { memberMessage, resolveMember } from "../desk/crew-member.js"
 import { personAgentsCap } from "./agents-md.js"
@@ -95,7 +92,6 @@ import { planStaleRefresh, startStaleRefresh, startedLine } from "./stale-desk-r
 import { deferredToolsHint } from "../util/deferred-tools.js"
 import { recordUnsigned, signoffInstructions } from "../desk/unsigned-deliveries.js"
 import { noteSignoffListed } from "./signoff-listed.js"
-import { consentMentioned } from "./consent-mentioned.js"
 import { otherSessions } from "./other-sessions.js"
 import { resolveDeskStateDir } from "./last-start.js"
 import { applyPublicationMode } from "./publication-mode.js"
@@ -557,7 +553,7 @@ function repoLabel(card, repo) {
 /**
  * The push account for every repo of every non-terminal task card, reusing
  * `factory/flush.js`'s `chooseAccount` — the same per-store, per-signed-in-
- * account resolution the factory consent instruction uses, asking each
+ * account resolution the factory's account choice uses, asking each
  * account's own token about push/fork permission rather than assuming
  * `gh`'s active account. A repo entry that resolves to a real `owner/repo`
  * slug (a `remote`-mode `name` matching `PATTERNS.prRepo`, or a
@@ -1019,7 +1015,6 @@ function emptyResult({ status, degraded, pending, instructions = [], root, host 
     repo_states: [],
     open_prs: [],
     task: null,
-    factory: null,
     stale_desk: null,
     plugin_update: null,
     other_sessions: null,
@@ -1028,54 +1023,7 @@ function emptyResult({ status, degraded, pending, instructions = [], root, host 
   }
 }
 
-const FACTORY_QUESTION = (store) => `Desk can contribute measurement data about your finished tasks to \`${store}\`, which builds a report for each finished job. What it publishes: durations, counts, tool kinds, plugin and model versions, and references to public repositories. What it never publishes: prompt, assistant or tool content, names, or dates and times of day. \`${store}\` is a public repository, and one of your signed-in GitHub accounts, which Desk picks and names when you answer, appears as the author of the intake pull requests that deliver the data. Contribute? (yes or no)`
-
 export { isNoninteractive }
-
-const IMPROVEMENT_BUDGET_MS = 500
-
-/**
- * What a session is told about the improvement cards, for an agent that reads it at session start: what a card is,
- * that the cards are standing work, when to take one, and (the one authority paragraph the improvement tools export)
- * what it may decide itself. Said only for a session with an operator in it, and the authority paragraph only when
- * a card is open. An unreadable folder and set-aside files are said whatever the count is.
- */
-export function improvementInstructions(summary) {
-  if (summary === null || summary === undefined) return []
-  if (summary.status !== "ok") return [improvementLine(summary)]
-  const out = []
-  if (summary.open > 0) {
-    out.push(`Improvement cards: ${improvementCountText(summary)}. An improvement card is one finding of the factory about our own tooling, with its evidence. This backlog is not an assignment inside the supplied task. Do not spawn unsolicited repair work; preserve evidence for the existing repair owner. ${AUTHORITY}`)
-  }
-  const notes = improvementNotes(summary)
-  if (notes.length > 0) out.push(`Improvement cards: ${notes.join("; ")}`)
-  return out
-}
-
-// Whether the boot has a consent line at all: only for an undecided store, and never with no operator to ask (say nothing, record
-// nothing; the next interactive session asks).
-const consentUndecided = (factory, noninteractive) => factory?.consent === "undecided" && !noninteractive
-
-// The call an agent makes when it tells the operator about the store, so that the boot of a later session does not hand the sentence
-// out again (`consent-mentioned.js`). A reply ends the turn, so the call comes before the reply that carries the sentence; a call
-// that fails costs nothing but a repeat in a later session, so it is never retried and never raised with the operator.
-const MENTIONED_STEP = `In the same turn, just before the reply that includes it, call desk_doctor with {"factory_told": true}, so that no later session says it again; if the call fails or is refused, say the sentence anyway, do not retry and do not mention it. If you already said the sentence in this session, do not say it again. A child agent never says it and never makes the call.`
-
-// The whole consent block once the operator was told: the question is asked once at setup, so nothing is raised again.
-function factoryMentionedLine(factory, pluginRoot) {
-  const details = path.join(pluginRoot, "skills", "session-start", "details.md")
-  return `Factory consent is undecided for ${factory.store}, and the operator was already told that Desk can contribute to it: do not raise it again. Only if they say 'factory details' (or ask what Desk sends), follow "Factory consent" in ${details}.`
-}
-
-function factoryInstructions(factory, pluginRoot, { noninteractive, mentioned }) {
-  if (!consentUndecided(factory, noninteractive)) return []
-  if (mentioned) return [factoryMentionedLine(factory, pluginRoot)]
-  const store = factory.store
-  return [
-    `Factory consent is undecided for ${store}. It never comes before the work the operator asked for, and never instead of it: do that work first. If this reply delivers a task, defer the notice to a later turn and preserve the required sign-off. Otherwise, only if the operator is in the conversation, raise it at most once as this statement: "Desk can contribute measurement data about finished tasks to ${store}; say 'factory details' to see what it sends." ${MENTIONED_STEP} Only if they ask for 'factory details' (or ask what is sent), ask this: "${FACTORY_QUESTION(store)}"`,
-    `Record the answer only by calling desk_doctor with {"factory_consent": "yes"} or {"factory_consent": "no"}; Desk finds the GitHub account itself. After a yes, tell the operator which account the answer names. If the answer is not_recorded, follow its fix. After a no, or a recorded yes, the question is never asked again; a no is a decision too.`,
-  ]
-}
 
 // Every untracked file the sync moved out of the pull's way, by its old and new path, so the session that owns one can find
 // it. Each moved path is `_cache/stray-<date>/<old path>`. Returns null when nothing was moved.
@@ -1188,18 +1136,8 @@ function remoteRepoInstruction(names, root) {
   return `The named task's remote-only repos (no local clone): ${names.join(", ")}. Do not clone any of them unless the next step needs its code. If it does, clone into the operator's code location (\`defaults.clone_root\` in ${root.path}/.machine-local.yml, default ~/code/), never /tmp, and record the clone on the card with task_update (the repo's \`local_path\`, with \`mode: local\`).`
 }
 
-// The factory consent line the plain-text boot prints in place of the two long instructions `--json` keeps: one short
-// line, after the work, with the pointer to the details that apply only if the operator says yes.
-function factoryTextLine(factory, pluginRoot) {
-  const store = factory.store
-  const details = path.join(pluginRoot, "skills", "session-start", "details.md")
-  return `Factory consent is undecided for ${store}. Only after the operator's work is done, and only if they are in the conversation, raise this statement once: "Desk can contribute measurement data about finished tasks to ${store}; say 'factory details' to see what it sends." If this reply delivers a task, defer the notice to a later turn and preserve the required sign-off. ${MENTIONED_STEP} Only if they then say 'factory details' (or ask what is sent), follow "Factory consent" in ${details}.`
-}
-
 // The instructions as `{ text, plain }` pairs: `text` is what `--json` carries, `plain` the shorter wording the text boot
-// prints, or null when the text boot says it elsewhere (a push route sits on its task) or not at all. Every producer
-// adds to `body`; the consent block is built only by `consentItems` and joined only by `withConsentLast`, so no
-// producer can put a line after consent (three packages broke "consent is last" by appending after it).
+// prints, or null when the text boot says it elsewhere (a push route sits on its task) or not at all.
 /** The named task's missing clones with no source to clone them from: the agent has to ask the operator before it hands off. */
 function blockingClones(task, repoStateList) {
   return task?.status === "resolved" ? repoStateList.filter((state) => state.present === false && state.track === task.task.track && state.slug === task.task.slug && !hasCloneSource(state)) : []
@@ -1234,7 +1172,7 @@ function namedTaskInstructions({ task, repoStateList, root, host, noninteractive
 }
 
 function buildInstructionItems(ctx) {
-  const { root, prereqResults, pushAccounts, cardValidationResult, sync, task, host, migrationEntries, taskQuery, agentHost, noninteractive, repoStateList, improvement } = ctx
+  const { root, prereqResults, pushAccounts, cardValidationResult, sync, task, host, migrationEntries, taskQuery, agentHost, noninteractive, repoStateList } = ctx
   const body = []
   const add = (text, plain = text) => body.push({ text, plain })
   // A question for the operator comes first, before the desk path and the tool names: the agent must not start anything until it is asked.
@@ -1271,43 +1209,22 @@ function buildInstructionItems(ctx) {
     add(noninteractive ? NEW_WORK_INSTRUCTION_UNATTENDED : NEW_WORK_INSTRUCTION)
   }
   signoffInstructions(ctx.unsigned, { noninteractive, seen: ctx.signoffSeen === true }).forEach((text) => add(text))
-  // An ask-and-stop blocker means the operator has one question to answer first: no card pickup on this boot.
-  if (!noninteractive && needsOperator(ctx) === null) for (const text of improvementInstructions(improvement)) add(text)
-  // Factory findings (orphan pass, retention, a capture check that keeps failing) are body lines, so consent stays last.
-  for (const text of factoryFindingLines(ctx.factory)) add(`Factory: ${text}`)
   add("If the next step needs something that is not on this machine (a branch, a file, a clone), say what is missing and stop; never recreate or simulate it. Never clone or fetch to look for something the card says is on another machine, and never clone inside the desk folder; clone a missing repo only where an instruction above says to, at the path it gives.", null)
   add("When you report on a task, say its real status; say 'done' only for a task whose status is done.", null)
   add(`This boot covers the ${AGENT_HOSTS.join(", ")} hosts${agentHost === "unknown" ? "" : `; this session looks like ${agentHost}`}.`, null)
-  return { body, consent: consentItems(ctx) }
-}
-
-// The factory consent block, and the only place it is built. An ask-and-stop blocker means the operator has one
-// question to answer first: no consent line on that boot.
-function consentItems(ctx) {
-  if (needsOperator(ctx) !== null) return []
-  const mentioned = ctx.consentMentioned === true
-  return factoryInstructions(ctx.factory, ctx.pluginRoot, { noninteractive: ctx.noninteractive, mentioned }).map((text, index) => ({ text, plain: index > 0 ? null : mentioned ? text : factoryTextLine(ctx.factory, ctx.pluginRoot) }))
-}
-
-/** The one join of a boot's instructions: `consent` after every other line. Both boots (`--json` and text) are built through it, so consent is the boot's last instruction whatever a producer adds. */
-export function withConsentLast(body, consent) {
-  return [...body, ...consent]
+  return body
 }
 
 function buildInstructions(ctx) {
-  const { body, consent } = buildInstructionItems(ctx)
-  return withConsentLast(body.map((item) => item.text), consent.map((item) => item.text))
+  return buildInstructionItems(ctx).map((item) => item.text)
 }
 
 // The three closing rules that `--json` carries as separate lines, as one instruction, plus the step-heading rule.
 const CLOSING_RULES = "In every reply: if the next step needs something that is not on this machine (a branch, a file, a clone), say what is missing and stop, and never recreate or simulate it; never clone or fetch to look for something the card says is on another machine, never clone inside the desk folder, and clone a missing repo only where an instruction above says to, at the path it gives; give each task's real status and say 'done' only for a task whose status is done; do not print Desk skill step headings."
 
-// The plain-text wording of the same instructions, in the order the text boot prints them: the closing rules, then the
-// factory line, so the factory question never comes before the work.
+// The plain-text wording of the same instructions, in the order the text boot prints them: the closing rules last.
 function buildTextInstructions(ctx) {
-  const { body, consent } = buildInstructionItems(ctx)
-  const plainOf = (items) => items.map((item) => item.plain).filter((line) => line !== null)
-  return withConsentLast([...plainOf(body), CLOSING_RULES], plainOf(consent))
+  return [...buildInstructionItems(ctx).map((item) => item.plain).filter((line) => line !== null), CLOSING_RULES]
 }
 
 function withinBudget(promise, ms, timeoutValue) {
@@ -1321,8 +1238,7 @@ function withinBudget(promise, ms, timeoutValue) {
 /**
  * One call replacing session-start's mechanical steps (migration check, host
  * probe, prereq probe, sync, active-task scan, card validation, push-account
- * resolution, repo fetch and open-PR lookup, named-task resolution,
- * factory-consent context): see the module header for the full result shape
+ * resolution, repo fetch and open-PR lookup, named-task resolution): see the module header for the full result shape
  * and the design choices behind it. `taskQuery`, when given, names the task
  * the operator wants to resume.
  */
@@ -1350,8 +1266,6 @@ export async function bootOnce({
   localOnlyFn = recordLocalOnlyOnCards,
   stateBranchFn = resolveStartupStateBranch,
   prFn = openPullRequests,
-  factoryStatusFn = factoryStatus,
-  improvementFn = improvementBootCheck,
   lastSyncFn = lastSyncedAt,
   cardGuardFn = installCardGuard,
   agentsFn = readAgentsMd,
@@ -1366,7 +1280,6 @@ export async function bootOnce({
   nestedCards = NESTED_CARD_FIELDS,
   unsignedFn = recordUnsigned,
   signoffListedFn = noteSignoffListed,
-  consentMentionedFn = consentMentioned,
 } = {}) {
   const gh = ghArg ?? ghRunner({ env })
   const ghAuth = ghAuthArg ?? (ghArg ?? commandRunner("gh", { env }))
@@ -1603,13 +1516,6 @@ export async function bootOnce({
     // Recording is a convenience and never a reason to degrade a boot.
   }
 
-  let factory = null
-  try {
-    factory = factoryStatusFn({ env, deskRoot: root.path, signoff: false })
-  } catch (error) {
-    degraded.push(`factory: ${error.message}`)
-  }
-
   // The delivered tasks that await the operator's sign-off; the counts go to status.json.
   let unsigned = null
   try {
@@ -1619,20 +1525,6 @@ export async function bootOnce({
   }
   // Whether an earlier boot of this session (a resume, a compaction) listed the same deliveries: then they are not raised again.
   const signoffSeen = isNoninteractive(env) ? undefined : signoffListedFn(env, unsigned, { stateDir: resolveDeskStateDir({ env, homeDir }), now })
-
-  // The improvement cards the session may take: nothing is read for a session with no operator in it.
-  let improvement = null
-  if (root !== null && !isNoninteractive(env)) {
-    try {
-      if (whoError !== null) throw whoError
-      improvement = who.status !== "ok"
-        ? { status: "unchecked", reason: who.reason }
-        : await withinBudget(improvementFn({ deskRoot: root.path, personPrefix: who.personPrefix, env, now: now() }), Math.min(IMPROVEMENT_BUDGET_MS, deadline - now()), null)
-      if (improvement === null) pending.push("improvement: boot_budget_exceeded")
-    } catch (error) {
-      degraded.push(`improvement: ${error.message}`)
-    }
-  }
 
   let pushAccounts = []
   try {
@@ -1667,9 +1559,7 @@ export async function bootOnce({
   const otherWork = await others
   const releaseFinding = await releaseAlert
   const status = healthWord(degraded)
-  // Whether an agent on this machine already told the operator about the undecided store: then no session raises it again.
-  const consentWasMentioned = consentUndecided(factory, isNoninteractive(env)) && consentMentionedFn(resolveDeskStateDir({ env, homeDir }), factory.store)
-  const instructionContext = { root, prereqResults: prereqs, pushAccounts, cardValidationResult, sync, factory, task, host, migrationEntries, pluginRoot, platform, taskQuery, agentHost: host.agent, noninteractive: isNoninteractive(env), repoStateList, syncSummaryText, unsigned, signoffSeen, improvement, consentMentioned: consentWasMentioned, notes }
+  const instructionContext = { root, prereqResults: prereqs, pushAccounts, cardValidationResult, sync, task, host, migrationEntries, pluginRoot, platform, taskQuery, agentHost: host.agent, noninteractive: isNoninteractive(env), repoStateList, syncSummaryText, unsigned, signoffSeen, notes }
   const instructions = buildInstructions(instructionContext)
   return {
     boot_complete: true,
@@ -1697,7 +1587,6 @@ export async function bootOnce({
     repo_states: repoStateList,
     open_prs: openPrs,
     task,
-    factory,
     stale_desk: staleFinding,
     plugin_update: pluginUpdate,
     other_sessions: otherWork,
