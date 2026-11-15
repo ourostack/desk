@@ -86,6 +86,15 @@ const HOOKS_DIR = path.join(__dirname, "..");
 const PLUGIN_ROOT_DIR = path.join(__dirname, "..", "..");
 const REPAIR_ENTRY_POINT = path.join(HOOKS_DIR, "boot-checks.cjs");
 const TOTAL_BUDGET_MS = 300;
+// Read by the session-start hooks when they run, never when this module loads, so the test-only boot fixture can relax them for one
+// hook process (tests/desk/mcp/__tests__/_boot_fixture_preload.cjs). Production values only; nothing here reads the environment.
+const timing = {
+  // Copilot drops a sessionStart hook's whole output when the hook passes its 5 s limit, foundation included. So the optional lines
+  // (boot pre-checks, migrations, the Copilot setting notes) get until this many milliseconds after the process started; past it the
+  // hook prints the startup line and the foundation without them and does not start factory delivery. The boot script runs the
+  // migration checks again; the pre-checks and the delivery wait for the next session start.
+  optionalLinesDeadlineMs: 3500,
+};
 const TIDY_SOFT_MARGIN_MS = 20;
 const FACTORY_SCRIPT = path.join(PLUGIN_ROOT_DIR, "mcp", "scripts", "factory.js");
 const DESK_PROBLEM_SCRIPT = path.join(PLUGIN_ROOT_DIR, "mcp", "scripts", "file-desk-problem.js");
@@ -834,5 +843,5 @@ module.exports = {
   checks, factoryCheck, labelsCheck, andonCheck, deskHealthCheck, workspaceTidyCheck, improvementCheck,
   runBootChecks, startFactory, boundRoot, migrationLine, launchCommand, recordSkipped,
   runRepair, startRepair, launchRepair, runCompatible, compatibleCommand, acknowledgeRepair, reportPath, readReport, TOTAL_BUDGET_MS, REPAIR_NODE_ENV,
-  main,
+  timing, main,
 };

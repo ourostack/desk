@@ -128,7 +128,7 @@ test("both actual startup hooks include exactly one boot line without changing t
   const plugin = path.resolve(fileURLToPath(hookPath), "../..")
   // Generous budgets: this test is about the envelope and the single line, not about a loaded host's timing.
   const overrides = path.join(f.root, "relax-budgets.cjs")
-  await fs.writeFile(overrides, `module.exports = { options: { totalBudgetMs: 5000, checkBudgets: { factory: 2000, "desk-health": 2000, "workspace-tidy": 2000 } } };\n`)
+  await fs.writeFile(overrides, `module.exports = { options: { totalBudgetMs: 5000, checkBudgets: { factory: 2000, "desk-health": 2000, "workspace-tidy": 2000 } }, timing: { optionalLinesDeadlineMs: 30000 } };\n`)
   const env = bootFixtureEnv({ ...f.env, PLUGIN_ROOT: plugin, CLAUDE_PLUGIN_ROOT: plugin, CLAUDE_PROJECT_DIR: f.desk }, overrides)
   for (const host of ["copilot", "claude"]) {
     const result = host === "copilot"
