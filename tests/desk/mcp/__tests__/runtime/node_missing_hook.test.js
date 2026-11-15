@@ -48,6 +48,10 @@ function shells() {
 }
 const SHELLS = shells()
 
+// The hooks find a node.exe under Program Files or on the registry PATH, which a Windows runner has. The nothing-found cases need a machine without one.
+const WINDOWS_NODE = WINDOWS && [...(process.env.PATH ?? process.env.Path ?? "").split(";"), "C:\\Program Files\\nodejs"].some((dir) => dir && existsSync(path.join(dir, "node.exe")))
+const NOTHING_FOUND_ON_WINDOWS = WINDOWS_NODE ? "Node is installed on this Windows machine, so the nothing-found message cannot be reached here" : false
+
 // Windows keeps these in every process's environment, and PowerShell needs PATHEXT to resolve `node` to node.exe.
 const WINDOWS_SYSTEM = Object.fromEntries(["SystemRoot", "OS", "PATHEXT"].filter((name) => process.env[name]).map((name) => [name, process.env[name]]))
 
@@ -86,7 +90,7 @@ function assertNodeMessage(t, label, result, { shape, install }) {
 
 const posixInstall = WINDOWS ? WINGET : POSIX_INSTALL[process.platform] ?? POSIX_INSTALL.linux
 
-test("Claude Code with no node: the registered SessionStart command says what to install and that a new session is needed", { skip: SHELLS.sh ? false : "no POSIX shell" }, (t) => {
+test("Claude Code with no node: the registered SessionStart command says what to install and that a new session is needed", { skip: SHELLS.sh ? NOTHING_FOUND_ON_WINDOWS : "no POSIX shell" }, (t) => {
   for (const shell of new Set([SHELLS.sh, SHELLS.bash].filter(Boolean))) {
     const environment = env(SHELLS.pathWithoutNode)
     if (run(shell, "command -v node", environment).status === 0) return t.skip(`${shell} finds a node on ${SHELLS.pathWithoutNode}`)
@@ -98,7 +102,7 @@ test("Copilot on macOS or Linux with no node: the registered bash sessionStart c
   assertNodeMessage(t, "copilot via bash", run(SHELLS.bash, copilotCommandFor("bash"), env(SHELLS.pathWithoutNode)), { shape: "copilot", install: posixInstall })
 })
 
-test("Copilot on Windows with no node: the registered PowerShell sessionStart command names the winget install and that a new session is needed", { skip: SHELLS.powershell ? false : "no PowerShell here" }, (t) => {
+test("Copilot on Windows with no node: the registered PowerShell sessionStart command names the winget install and that a new session is needed", { skip: SHELLS.powershell ? NOTHING_FOUND_ON_WINDOWS : "no PowerShell here" }, (t) => {
   const empty = mkdtempSync(path.join(ROOT, "empty-path-"))
   assertNodeMessage(t, `copilot via ${path.basename(SHELLS.powershell)}`, run(SHELLS.powershell, copilotCommandFor("powershell"), env(empty)), { shape: "copilot", install: WINGET })
 })
@@ -186,7 +190,7 @@ test("a search cut short by its time budget never claims Node is missing", () =>
 const NVM_WINDOWS = "run `nvm install lts` and then `nvm use lts` in a terminal"
 const NVM_POSIX = "run `nvm install --lts` in a terminal"
 
-test("with no node and nvm installed, the shell message says to install through nvm", { skip: SHELLS.sh ? false : "no POSIX shell" }, (t) => {
+test("with no node and nvm installed, the shell message says to install through nvm", { skip: SHELLS.sh ? NOTHING_FOUND_ON_WINDOWS : "no POSIX shell" }, (t) => {
   const home = mkdtempSync(path.join(ROOT, "nvm-home-"))
   mkdirSync(path.join(home, ".nvm"), { recursive: true })
   writeFileSync(path.join(home, ".nvm", "nvm.sh"), "# nvm\n")
@@ -195,12 +199,74 @@ test("with no node and nvm installed, the shell message says to install through 
     const posix = run(SHELLS.sh, claudeCommandFor(), { ...env(SHELLS.pathWithoutNode), HOME: home })
     assertNodeMessage(t, "claude with nvm", posix, { shape: "claude", install: NVM_POSIX })
   }
-  const windows = run(SHELLS.sh, claudeCommandFor(), env(SHELLS.pathWithoutNode, { OS: "Windows_NT", NVM_HOME: "C:\\nvm" }))
+  // The Windows branch uses bash's `${var//\\//}`, and Claude Code on Windows runs hooks in Git Bash, so this part runs under bash whatever sh is here.
+  const windows = run(SHELLS.bash, claudeCommandFor(), env(SHELLS.pathWithoutNode, { OS: "Windows_NT", NVM_HOME: "C:\\nvm" }))
   assertNodeMessage(t, "claude with nvm-windows", windows, { shape: "claude", install: NVM_WINDOWS })
 })
 
-test("with no node and nvm-windows installed, the PowerShell message says to install and use a version through nvm", { skip: SHELLS.powershell ? false : "no PowerShell here" }, (t) => {
+test("with no node and nvm-windows installed, the PowerShell message says to install and use a version through nvm", { skip: SHELLS.powershell ? NOTHING_FOUND_ON_WINDOWS : "no PowerShell here" }, (t) => {
   const empty = mkdtempSync(path.join(ROOT, "empty-path-"))
   const result = run(SHELLS.powershell, copilotCommandFor("powershell"), env(empty, { NVM_HOME: "C:\\nvm" }))
   assertNodeMessage(t, "copilot with nvm-windows", result, { shape: "copilot", install: NVM_WINDOWS })
+})
+
+// ---- a node.exe installed but not on this session's PATH ----
+
+// Git Bash takes Windows paths with forward slashes, so the reported path is written that way.
+const SCRIPT = path.join(plugin, "hooks", "node-missing.sh")
+const forwardSlashes = (file) => file.split(path.sep).join("/")
+const FOUND = (file) => `Desk needs Node.js ${floor} or newer. It is installed at ${file}, but it is not on this session's PATH, because the app or service that started this session was started before Node was installed (or with an older PATH), so the Desk tool servers (desk, desk-web) cannot run and Desk tools do not work in this session. Restart the app or background service that started this session, or open a new terminal and start the session from there; there is nothing to install.`
+
+// The Windows branch uses `${var//\\//}`, which only bash has, so these run the script under bash whatever sh is.
+function windowsShellHook(environment) {
+  return run(SHELLS.bash, `desk_host=copilot; . "${forwardSlashes(SCRIPT)}"`, environment)
+}
+
+function fileAt(...parts) {
+  const file = path.join(...parts)
+  mkdirSync(path.dirname(file), { recursive: true })
+  writeFileSync(file, "")
+  chmodSync(file, 0o755)
+  return file
+}
+
+test("Windows with node.exe under ProgramFiles but not on PATH: the shell message says where it is and that nothing needs installing", { skip: SHELLS.bash ? false : "no bash here" }, () => {
+  const programFiles = mkdtempSync(path.join(ROOT, "program-files-"))
+  const node = fileAt(programFiles, "nodejs", "node.exe")
+  const result = windowsShellHook(env(SHELLS.pathWithoutNode, { OS: "Windows_NT", ProgramFiles: programFiles }))
+  assert.equal(result.status, 0, result.stderr)
+  assert.equal(result.stderr.trim(), "")
+  const payload = JSON.parse(result.stdout)
+  assert.deepEqual(Object.keys(payload), ["additionalContext"])
+  assert.equal(payload.additionalContext, FOUND(forwardSlashes(node)))
+  assert.doesNotMatch(payload.additionalContext, /winget|nvm install/u)
+})
+
+test("Windows with an fnm node under LOCALAPPDATA but not on PATH: the shell message finds it there", { skip: SHELLS.bash ? NOTHING_FOUND_ON_WINDOWS : "no bash here" }, () => {
+  const localAppData = mkdtempSync(path.join(ROOT, "local-app-data-"))
+  const node = fileAt(localAppData, "fnm", "node-versions", "v22.18.0", "installation", "node.exe")
+  const emptyProgramFiles = mkdtempSync(path.join(ROOT, "empty-program-files-"))
+  const result = windowsShellHook(env(SHELLS.pathWithoutNode, { OS: "Windows_NT", ProgramFiles: emptyProgramFiles, LOCALAPPDATA: localAppData }))
+  assert.equal(result.status, 0, result.stderr)
+  assert.equal(JSON.parse(result.stdout).additionalContext, FOUND(forwardSlashes(node)))
+})
+
+test("Windows with no node where the check looks: the shell message keeps the winget install", { skip: SHELLS.bash ? NOTHING_FOUND_ON_WINDOWS : "no bash here" }, (t) => {
+  const empty = mkdtempSync(path.join(ROOT, "nothing-found-"))
+  const result = windowsShellHook(env(SHELLS.pathWithoutNode, { OS: "Windows_NT", ProgramFiles: empty, LOCALAPPDATA: empty }))
+  assertNodeMessage(t, "Windows shell with nothing found", result, { shape: "copilot", install: WINGET })
+  assert.doesNotMatch(result.stdout, /installed at/u)
+})
+
+test("Copilot on Windows with node.exe under ProgramFiles but not on PATH: the PowerShell sessionStart command says where it is and that nothing needs installing", { skip: WINDOWS && SHELLS.powershell ? false : "Windows PowerShell only" }, (t) => {
+  const programFiles = mkdtempSync(path.join(ROOT, "program-files-ps-"))
+  const node = fileAt(programFiles, "nodejs", "node.exe")
+  const result = run(SHELLS.powershell, copilotCommandFor("powershell"), env(mkdtempSync(path.join(ROOT, "empty-path-")), { ProgramFiles: programFiles }))
+  assert.equal(result.status, 0, result.stderr)
+  assert.equal(result.stderr.trim(), "")
+  const payload = JSON.parse(result.stdout)
+  assert.deepEqual(Object.keys(payload), ["additionalContext"])
+  assert.equal(payload.additionalContext, FOUND(node))
+  assert.doesNotMatch(payload.additionalContext, /winget|nvm install/u)
+  t.diagnostic(`copilot via ${path.basename(SHELLS.powershell)} with node under ProgramFiles: ${payload.additionalContext.slice(0, 120)}`)
 })
