@@ -346,11 +346,27 @@ test("the registry PATH reader expands variables and skips a value reg did not p
   assert.deepEqual(bootstrap.parseRegistryPath("ERROR: The system was unable to find the specified registry key or value.", env), [])
 })
 
-test("native: the real registry read returns the machine and user PATH folders", { skip: process.platform === "win32" ? false : "reg.exe exists only on Windows" }, () => {
-  const dirs = bootstrap.registryPathDirs(process.env, 5000)
-  assert.ok(dirs.length > 0)
-  assert.ok(dirs.some((dir) => /[\\/]system32$/iu.test(dir)), `a Windows PATH names System32: ${dirs.join(";")}`)
-  assert.ok(dirs.every((dir) => !dir.includes("%")), "every %NAME% reference is expanded")
+test("the registry read asks reg.exe for the machine and then the user PATH, and keeps each folder once", () => {
+  const asked = []
+  const answers = {
+    "HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment": { status: 0, stdout: "\r\n    Path    REG_SZ    C:\\Windows\\system32;C:\\Program Files\\nodejs\r\n" },
+    "HKCU\\Environment": { status: 0, stdout: "\r\n    Path    REG_EXPAND_SZ    C:\\Program Files\\nodejs;%USERPROFILE%\\bin\r\n" },
+  }
+  const dirs = bootstrap.registryPathDirs({ SystemRoot: "D:\\Win", USERPROFILE: "C:\\Users\\a" }, 1234, (file, args, options) => {
+    asked.push([file, args[1], options.timeout])
+    return answers[args[1]]
+  })
+  assert.deepEqual(dirs, ["C:\\Windows\\system32", "C:\\Program Files\\nodejs", "C:\\Users\\a\\bin"])
+  assert.deepEqual(asked.map(([, key, timeout]) => [key, timeout]), [[Object.keys(answers)[0], 1234], ["HKCU\\Environment", 1234]])
+  assert.equal(path.basename(asked[0][0]), "reg.exe")
+  const failed = bootstrap.registryPathDirs({}, 1, () => ({ status: 1, stdout: "" }))
+  assert.deepEqual(failed, [])
+})
+
+test("on Windows, the real registry read runs when no Node is found elsewhere", { skip: process.platform === "win32" ? "a Windows runner's own registry holds a Node" : false }, async () => {
+  const root = await mkTempRoot("desk-bootstrap-windows-real-registry-")
+  const selection = bootstrap.selectNode(machine(root, { platform: "win32", arch: "x64", env: { PATH: "" } }))
+  assert.equal(selection.node, null, "reg.exe is not here, so nothing more is found")
 })
 
 // ---- selection ----

@@ -274,12 +274,12 @@ function parseRegistryPath(output, env) {
   });
 }
 
-function registryPathDirs(env, timeoutMs) {
+function registryPathDirs(env, timeoutMs, spawnSync) {
   var reg = path.join(either(env.SystemRoot, either(env.windir, "C:\\Windows")), "System32", "reg.exe");
   var dirs = [];
   REGISTRY_PATH_KEYS.forEach(function (key) {
-    var result = childProcess.spawnSync(reg, ["query", key, "/v", "Path"], { encoding: "utf8", timeout: timeoutMs, windowsHide: true });
-    if (result.status !== 0 || typeof result.stdout !== "string") return;
+    var result = either(spawnSync, childProcess.spawnSync)(reg, ["query", key, "/v", "Path"], { encoding: "utf8", timeout: timeoutMs, windowsHide: true });
+    if (result.status !== 0) return;
     parseRegistryPath(result.stdout, env).forEach(function (dir) {
       if (dirs.indexOf(dir) === -1) dirs.push(dir);
     });
@@ -374,11 +374,9 @@ function selectFrom(options) {
 function selectNode(options) {
   var selection = selectFrom(options);
   if (selection.node !== null || options.platform !== "win32") return selection;
-  var read = either(options.registryPath, function (env) {
-    return registryPathDirs(env, 2000);
-  });
+  var read = either(options.registryPath, registryPathDirs);
   var known = either(options.env.PATH, "").toLowerCase().split(";");
-  var dirs = read(options.env).filter(function (dir) {
+  var dirs = read(options.env, 2000).filter(function (dir) {
     return known.indexOf(dir.toLowerCase()) === -1;
   });
   if (dirs.length === 0) return selection;
