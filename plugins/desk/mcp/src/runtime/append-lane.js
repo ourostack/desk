@@ -6,7 +6,7 @@
 // not build on, a Git failure) leaves the files written and waiting; the next append, or the next flush, tries again. A
 // process killed outright leaves the written file in the checkout, where the next append to it finds it and commits it.
 //
-// `spawnGit` and `schedulePush` are test seams; real callers pass the defaults.
+// `spawnGit` is a test seam; `schedulePush` is the caller's own push scheduler, which the commit calls once it lands.
 
 import { spawnSync } from "node:child_process"
 import { createHash } from "node:crypto"
@@ -14,7 +14,6 @@ import { readFileSync } from "node:fs"
 import * as path from "node:path"
 import { assertPublishedContentBase } from "../desk/content-home.js"
 import { commitPaths, hasUnstagedWork, stagePaths, stagedChanges } from "../util/git-stage.js"
-import { schedulePush as schedulePushDefault } from "./sync-worker.js"
 
 const APPEND_QUIET_MS = 5000
 const APPEND_MAX_WAIT_MS = 30_000
@@ -34,7 +33,7 @@ const digest = (file) => {
 function laneFor(root) {
   let lane = lanes.get(root)
   if (lane === undefined) {
-    lane = { root, pending: new Map(), timer: null, firstAt: 0, admission: null, label: null, spawnGit: spawnSync, schedulePush: schedulePushDefault, quietMs: APPEND_QUIET_MS, maxWaitMs: APPEND_MAX_WAIT_MS }
+    lane = { root, pending: new Map(), timer: null, firstAt: 0, admission: null, label: null, spawnGit: spawnSync, schedulePush: null, quietMs: APPEND_QUIET_MS, maxWaitMs: APPEND_MAX_WAIT_MS }
     lanes.set(root, lane)
   }
   return lane
@@ -92,7 +91,7 @@ function arm(lane, reason) {
  * Registers `rels` (relative to `root`, already written) for the lane's next commit and arms its timer. Returns how many
  * files now wait. `admission` is the content receipt the append was admitted under; the commit re-checks its base.
  */
-export function queueAppend({ root, rels, admission = null, spawnGit = spawnSync, schedulePush = schedulePushDefault, quietMs = APPEND_QUIET_MS, maxWaitMs = APPEND_MAX_WAIT_MS }) {
+export function queueAppend({ root, rels, admission = null, spawnGit = spawnSync, schedulePush, quietMs = APPEND_QUIET_MS, maxWaitMs = APPEND_MAX_WAIT_MS }) {
   const lane = laneFor(root)
   Object.assign(lane, { spawnGit, schedulePush, quietMs, maxWaitMs, admission })
   for (const rel of rels) lane.pending.set(posix(rel), digest(path.join(root, rel)))
