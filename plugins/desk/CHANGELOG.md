@@ -1,5 +1,13 @@
 # desk plugin — changelog
 
+## 3.2.174 — 2026-11-15
+
+Desk's session start no longer runs anything for the factory. The Copilot and Claude start hooks no longer start a delivery worker or the loop worker, the end-of-turn and end-of-session hooks no longer record or deliver factory facts, and the boot checks for the factory, the evaluator labels, andon issues and improvement cards are gone, together with their `Improvement cards: N open` line and the factory-consent instruction that the boot appended to its numbered list.
+
+The factory itself stays: its store, its commands (`node <Desk plugin folder>/mcp/scripts/factory.js`) and `desk_doctor`'s `factory_consent` answer all work when the operator asks for them, and `desk:session-start` now describes them as on-demand. A boot that skipped a check no longer writes a record into the factory's status file.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.173 — 2026-11-15
 
 The [Epoch 3 RFC](docs/agentic-engineering-v3-rfc.md) has a new "Crash and freeze recovery" section: housesitter detects a frozen or crashed app with plain programs on a timer, recovers it and resumes every working session, records why the Mac stopped, follows the recovery for six hours, and coordinates a pending macOS update; the agent is told once, after the fact.
