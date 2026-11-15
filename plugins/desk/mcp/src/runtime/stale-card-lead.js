@@ -8,8 +8,8 @@ import { personPrefix } from "../util/paths.js"
 import { staleCardLead } from "./focused-card.js"
 import { findFocus, sessionStateDir } from "./session-activity.js"
 
-/** `{ lead() }`: the nudge text the first time a finished check had one, else null. `root()` and `person()` give the desk this session writes to now. */
-export function createStaleCardLead({ env, focus, root, person, now = Date.now }) {
+/** `{ lead() }`: the nudge text the first time a finished check had one, else null. `context` is the session's (`context.root.root` is its desk, `context.person` who it writes as). */
+export function createStaleCardLead({ env, focus, context, now = Date.now }) {
   let running = false
   let delivered = false
   let text = null
@@ -25,8 +25,8 @@ export function createStaleCardLead({ env, focus, root, person, now = Date.now }
   const check = async () => {
     const task = await declared()
     if (task === null) return null
-    const desk = root()
-    return staleCardLead({ bases: [...new Set([personPrefix(desk, person()), desk])], focus: task, now: now() })
+    const desk = context.root.root
+    return staleCardLead({ bases: [...new Set([personPrefix(desk, context.person), desk])], focus: task, now: now() })
   }
   return {
     lead() {

@@ -62,7 +62,8 @@ async function* reverseLines(file, { stopAt, maxBytes }) {
       }
       carry = Buffer.from(data.subarray(0, end))
     }
-    if (position <= stopAt) yield carry.toString("utf8")
+    // The oldest fragment: the first line when the read reached it, else a partial line no reader parses.
+    yield carry.toString("utf8")
   } finally {
     await handle.close()
   }

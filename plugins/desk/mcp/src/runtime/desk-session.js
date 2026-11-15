@@ -182,7 +182,7 @@ export function createDeskSession(deps) {
   } = deps
   const context = { pendingRepairs: [], exceptions: [], launcher, phase: null, search: null }
   const focus = createFocusHolder()
-  const staleCard = createStaleCardLead({ env, focus, root: () => context.root.root, person: () => context.person })
+  const staleCard = createStaleCardLead({ env, focus, context })
   let headWatch = null
   let headTimer = null
   let headBinding = null
