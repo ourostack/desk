@@ -18,8 +18,20 @@ const FOLDER = "tool-commits"
 const KEEP = 2000
 const SHA = /^[0-9a-f]{40,64}$/u
 
+// Callers name the checkout by whatever folder they work in (a task's folder, the desk's folder), so the list is kept per repository: its top level.
+const tops = new Map()
+
+function topOf(root) {
+  if (!tops.has(root)) {
+    const top = spawnSync("git", ["-C", root, "rev-parse", "--show-toplevel"], { encoding: "utf8", windowsHide: true, timeout: 5000 })
+    if (top.status !== 0 || top.stdout.trim() === "") return root
+    tops.set(root, path.resolve(top.stdout.trim()))
+  }
+  return tops.get(root)
+}
+
 function ledgerPath(root, env) {
-  return path.join(resolveDeskStateDir({ env }), FOLDER, `${lastStartRootKey(root)}.txt`)
+  return path.join(resolveDeskStateDir({ env }), FOLDER, `${lastStartRootKey(topOf(root))}.txt`)
 }
 
 /** Records the commit now at HEAD of `root` as one Desk's tools made. Never throws. */
