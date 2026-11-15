@@ -71,6 +71,23 @@ Persistent agents are a buddy system: each keeps the other alive, because whatev
 
 > "buddy system / accountability partners".
 
+## Crash and freeze recovery
+
+Always-on only counts if the platform recovers by itself. On 2026-11-15 the app's window froze twice, it crashed once, and a macOS update then restarted the Mac; nobody was told, and a person recovered it by hand. The rule that came out of it:
+
+> "i also should never have needed to notice that the app froze!!! housesitter is FAILING me"; "housesitter should have handled ALL of this!!!! should prob have a no-token-used heartbeat or something".
+
+- **Housesitter owns recovery on the Mac, Ouroboros owns the telling.** Detection and recovery are plain programs that launchd runs on a timer, with no model turns. The agent hears once, after the fact, and only then.
+- **Probe what fails.** A heartbeat every 30 seconds asks the app's socket and its window (an accessibility read only the main thread can answer). The 2026-11-15 freeze kept the socket answering, so a socket-only probe would have called it healthy.
+- **A freeze is two minutes of failing probes.** Then: evidence first (a stack sample of the app and its helpers, process and memory state, the app's log), then a quit (SIGTERM, then SIGKILL to the exact pids), a relaunch, and a resume of every session that was working. The message says when it froze, that it was restarted, how many of how many sessions resumed, and where the evidence is. A second freeze in an hour names the pattern; after three recoveries in an hour it holds and says so, because the restart is not holding.
+- **A crash is relaunched** when a crash report names the app, or sessions were working and it stayed gone. An app a person quit stays quit.
+- **The Mac stopping is recorded with its cause.** A gap of five minutes or more between the heartbeat's own runs is classified from the boot time, the update history, the power log, panic reports and launchd's log (a reboot and for what, a sleep, a restart being prepared, or a hang), and told once after the sessions resumed. The 2026-11-15 reboot was a macOS update; launchd had stopped starting jobs while it prepared the restart.
+- **Nothing owed is forgotten.** Sessions that were working are written down before anything is quit, so whichever job survives (the resume watcher after a reboot) finishes the resume.
+- **Recovery is followed, not assumed.** For six hours after any restart a watch checks each resumed session (did it take a turn, is it erroring, is it stuck busy), asks again once, and reports by name only what stays broken.
+- **A pending OS update is coordinated, never sprung on a person.** It waits for the quiet hours and an idle Mac, gets every working session to a safe point (READY or DEFER), quits the app, arms the post-reboot prompts, installs and restarts, and checks that everything came back. If it needs an administrator's password, it says so once, with exactly what is needed, and installs nothing.
+
+The build is in [housesitter](https://github.com/ourostack/housesitter#what-it-does-when-the-app-freezes-crashes-or-the-mac-restarts), with the evidence for 2026-11-15 and a live rehearsal against a stand-in process that is hung with `kill -STOP`.
+
 ## Epochs and versions
 
 An **epoch** is a generation of the platform. "v" is only for package versions, such as Desk 3.2.103.

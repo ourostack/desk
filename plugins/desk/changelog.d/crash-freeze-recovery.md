@@ -1,0 +1,1 @@
+The [Epoch 3 RFC](docs/agentic-engineering-v3-rfc.md) has a new "Crash and freeze recovery" section: housesitter detects a frozen or crashed app with plain programs on a timer, recovers it and resumes every working session, records why the Mac stopped, follows the recovery for six hours, and coordinates a pending macOS update; the agent is told once, after the fact.
