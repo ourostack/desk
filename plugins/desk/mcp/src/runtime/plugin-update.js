@@ -161,8 +161,7 @@ export function pluginUpdateFinding({ env, pluginRoot, agentHost, homeDir, skip 
       const release = newest.get(loaded.name)
       if (release === undefined || skip.includes(loaded.name) || compareVersions(loaded.version, release.version) >= 0) continue
       if (!changesPerProcess(loaded.dir, release.dir, loaded.name)) continue
-      const seen = behind.get(loaded.name)
-      if (seen === undefined || compareVersions(loaded.version, seen.from) < 0) behind.set(loaded.name, { name: loaded.name, from: loaded.version, to: release.version })
+      behind.set(loaded.name, { name: loaded.name, from: loaded.version, to: release.version })
     }
     if (behind.size === 0) return null
     const plugins = [...behind.values()].sort((a, b) => a.name.localeCompare(b.name))
