@@ -1,5 +1,15 @@
 # desk plugin — changelog
 
+## 3.2.168 — 2026-11-15
+
+A session that ends its turn with its focused task card unfinished and nothing running is now nudged once per idle stretch: "Your focused card isn't done and nothing is running: walk its definition of done; continue, or write the final report (Asked / Delivered / Accept or send back?)." Long-running coordinators used to go quiet with their card open and no final report.
+
+`drains.js stalled poll` prints the nudges that are due, for an always-on runner to deliver the way it delivers drain and schedule wakes; `stalled status` is a dry run that lists who would be nudged and why each other session with a focused card is left alone. A session is nudged only after 15 idle minutes, and never while a subagent, shell job or coordinated session runs, while it waits on a person (a question, a plan, a permission prompt, a `collaborating` card, or a blocker that names a decision and a date), after it wrote a final report, or when it is a drain. A card opts out with `nudge: false`.
+
+Where no runner is installed, the first `desk_status` of a session whose focused card is unfinished and has not been updated for 15 minutes leads with the same nudge, once. See [Stalled-card nudges](docs/stalled-nudges.md).
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.167 — 2026-11-15
 
 On Windows, a session started by a process that predates a Node install (a background service or Hub-spawned tree whose PATH is stale) no longer gets told Node is missing when it is installed. When Desk's Node search finds nothing on PATH or in the usual install folders, it now also reads the registry's current PATH (the machine and user values) and searches those folders, in the MCP launcher, in the check for a Node that is too old, and in the background boot repair that reuses them. The session-start hook for a machine with no `node` on PATH looks there too: the shell hook (Git Bash) runs one `reg query` per key when nothing else turned up, and the PowerShell hook already read the same values.
