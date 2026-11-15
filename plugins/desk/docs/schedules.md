@@ -33,10 +33,10 @@ node <state>/ouroboros-skills/desk/drains/run.mjs schedule status   # one line p
 
 ## Running it from Ouroboros
 
-Give the always-on runtime a [wake runner](https://github.com/ourostack/ouroboros/blob/main/docs/app-sessions-sense.md#wake-runners) in the app-sessions sense's `wakeRunners`, with `"delivery": "enqueue"` so a prompt waits for the session's current run to end instead of interrupting it:
+Give the always-on runtime a [wake runner](https://github.com/ourostack/ouroboros/blob/main/docs/app-sessions-sense.md#wake-runners) in the app-sessions sense's `wakeRunners`, with `"delivery": "immediate"`: a prompt lands at the next turn boundary without interrupting a turn in flight, and the runner still sends at most one prompt per session. Don't use `"enqueue"`, because it waits for the session's whole run to end, and a coordinator with a long-running background subagent counts as busy for that whole run, so a watchdog can arrive hours late.
 
 ```json
-{ "name": "schedules", "command": ["<node>", "<state>/ouroboros-skills/desk/drains/run.mjs", "schedule", "poll"], "everySeconds": 60, "delivery": "enqueue" }
+{ "name": "schedules", "command": ["<node>", "<state>/ouroboros-skills/desk/drains/run.mjs", "schedule", "poll"], "everySeconds": 60, "delivery": "immediate" }
 ```
 
 `ouro status` then lists each schedule under the runner: its cadence, when it last landed and when it runs next.
