@@ -259,6 +259,31 @@ test("dispatch: the same head succeeding five times fires once, for that head, a
   assert.equal(whyRelay([relay], { [relay.name]: state }, relay.name).lastFiredHead, HEAD_A)
 })
 
+test("dispatch: a late success on a head that already fired, or was replaced by a newer head, never fires after the newer head", async () => {
+  const w = await setup([{ ...DISPATCH, everySeconds: 10 }])
+  let runs = [run(1)]
+  w.world.on("GET", runsRoute, () => ({ workflow_runs: runs }))
+  w.world.on("GET", /\/repos\/o\/pages$/u, () => ({ default_branch: "main" }))
+  await w.poll(NOW)
+  const at = async (seconds, add) => {
+    if (add) runs = [add, ...runs]
+    await w.poll(NOW + seconds * SECOND)
+  }
+  await at(10, run(2, { head_sha: HEAD_A }))
+  await at(20, run(3, { head_sha: HEAD_B }))
+  await at(90)
+  assert.deepEqual(w.world.writes.map((write) => write.body.inputs.cit_commit), [HEAD_B], "head A was replaced inside the settle")
+  await at(100, run(4, { head_sha: HEAD_A }))
+  await at(200, run(5, { head_sha: HEAD_B }))
+  await at(400)
+  assert.equal(w.world.writes.length, 1, "a later run on the replaced head, or on the fired head, fires nothing")
+  await at(410, run(6, { head_sha: "3".repeat(40) }))
+  await at(500)
+  await at(510, run(7, { head_sha: HEAD_B }))
+  await at(600)
+  assert.deepEqual(w.world.writes.map((write) => write.body.inputs.cit_commit), [HEAD_B, "3".repeat(40)], "a fired head stays fired after a newer head fired")
+})
+
 test("dispatch: two heads 20 seconds apart fire once, for the newer, once the newer one has settled", async () => {
   const w = await setup([{ ...DISPATCH, everySeconds: 10 }])
   let runs = [run(1)]
@@ -391,6 +416,15 @@ test("waitingOnChecks: a matrix job skipped under its unexpanded template name s
   assert.deepEqual(waitingOnChecks(required, [check(TEMPLATE, "failure")], true), ["npm test (ubuntu-latest, *): not started"], "only a skipped template matches, so a failed one still holds")
   assert.deepEqual(waitingOnChecks(required, [check(TEMPLATE, "success")], true), ["npm test (ubuntu-latest, *): not started"], "only a skipped template matches")
   assert.deepEqual(waitingOnChecks(["lint (*)"], [check(TEMPLATE, "skipped")], true), ["lint (*): not started"], "a different prefix does not match")
+})
+
+test("waitingOnChecks: a skipped template next to the expanded matrix jobs is ignored, whatever skippedPasses says", () => {
+  const TEMPLATE = "npm test (${{ matrix.os }}, ${{ matrix.shard }}/${{ strategy.job-total }})"
+  const required = ["npm test (ubuntu-latest, *)"]
+  const ran = [check(TEMPLATE, "skipped"), check("npm test (ubuntu-latest, 1/2)"), check("npm test (ubuntu-latest, 2/2)")]
+  assert.deepEqual(waitingOnChecks(required, ran), [])
+  assert.deepEqual(waitingOnChecks(required, ran, true), [])
+  assert.deepEqual(waitingOnChecks(required, [check(TEMPLATE, "skipped"), check("npm test (ubuntu-latest, 1/2)", "failure"), check("npm test (ubuntu-latest, 2/2)")]), ["npm test (ubuntu-latest, *): 1 of 2 not green (npm test (ubuntu-latest, 1/2) failure)"])
 })
 
 test("skippedPasses is true or false on a merge relay, and anything else is named", () => {
