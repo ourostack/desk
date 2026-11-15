@@ -1,0 +1,1 @@
+The [Epoch 2 RFC](docs/agentic-engineering-v2-rfc.md) now shows a current screenshot of the [public factory site](https://ourostack.github.io/factory/), The loom, where every agent session is a woven strip. The old picture showed the site's earlier "longest sessions" cards, which the site no longer has.
