@@ -108,7 +108,7 @@ const hostManifestFixtureFiles = [
   "plugins/desk/agents/worker.md",
   "plugins/desk/agents/observer.agent.md",
   "plugins/desk/agents/observer.md",
-  "plugins/desk/docs/agentic-engineering-v2-rfc.md",
+  "plugins/desk/docs/agentic-engineering-v3-rfc.md",
   "plugins/desk/hooks/hooks.json",
   "plugins/desk/hooks/copilot-hooks.json",
   "plugins/desk/hooks/copilot-session-start.cjs",

@@ -11,7 +11,7 @@ const { spawnSync } = require("node:child_process");
 const repoRoot = path.resolve(__dirname, "..");
 const pluginRoot = path.join(repoRoot, "plugins", "desk");
 const skillPath = path.join(pluginRoot, "skills", "using-desk", "SKILL.md");
-const installedRfcPath = path.join(pluginRoot, "docs", "agentic-engineering-v2-rfc.md");
+const installedRfcPath = path.join(pluginRoot, "docs", "agentic-engineering-v3-rfc.md");
 const maxSkillDescriptionLength = 1024;
 
 function escapeRegExp(value) {
@@ -216,12 +216,12 @@ function checkStartupHooks(skill) {
     fs.copyFileSync(skillPath, path.join(bare, "skills", "using-desk", "SKILL.md"));
     const bareClaude = runClaudeHook({ env: { ...env, CLAUDE_PLUGIN_ROOT: bare }, cwd: codeRepo, projectDir: codeRepo });
     assert.match(startupLine(bareClaude), couldNot, "claude must say it could not resolve the root");
-    assert.ok(bareClaude.includes(`\nDesk RFC: ${path.join(bare, "docs", "agentic-engineering-v2-rfc.md")}\n`), "claude RFC line uses the plugin root");
+    assert.ok(bareClaude.includes(`\nDesk RFC: ${path.join(bare, "docs", "agentic-engineering-v3-rfc.md")}\n`), "claude RFC line uses the plugin root");
     const bareCopilot = runCopilotHook({ env: { ...env, PLUGIN_ROOT: bare }, cwd: codeRepo, sessionCwd: codeRepo });
     assert.match(startupLine(bareCopilot), couldNot, "copilot must say it could not resolve the root");
     const windowsRoot = "C:\\Users\\someone\\.claude\\plugins\\cache\\ourostack\\desk\\3.2.0";
     const windowsClaude = runClaudeHook({ env: { ...env, CLAUDE_PLUGIN_ROOT: windowsRoot }, cwd: codeRepo, projectDir: codeRepo, args: [skillPath] });
-    assert.ok(windowsClaude.includes(`\nDesk RFC: ${windowsRoot}\\docs\\agentic-engineering-v2-rfc.md\n`), "claude RFC line keeps Windows separators");
+    assert.ok(windowsClaude.includes(`\nDesk RFC: ${windowsRoot}\\docs\\agentic-engineering-v3-rfc.md\n`), "claude RFC line keeps Windows separators");
     assert.match(startupLine(windowsClaude), couldNot);
 
     // A host that leaves stdin open must not stall startup: the hook stops waiting and uses the process folder.

@@ -156,6 +156,7 @@ export function compactStatus(payload) {
     },
     sync: syncLine(payload.sync),
     plugin_version: payload.runtime?.plugin?.version ?? null,
+    ...(typeof payload.plugin_update?.line === "string" ? { plugin_update: { line: payload.plugin_update.line, relay: payload.plugin_update.relay } } : {}),
     ...(payload.runtime?.plugin_root === undefined ? {} : { runtime: identityOf(payload.runtime) }),
     ...(detailPending && Array.isArray(payload.pending) ? { pending: payload.pending.filter((field) => COMPACT_PENDING.includes(field)) } : {}),
     ...(payload.status_detail === undefined ? {} : { status_detail: payload.status_detail }),

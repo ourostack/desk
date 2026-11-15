@@ -436,6 +436,7 @@ export function formatBootText(result) {
   if (waiting) lines.push(`Needs you first: ${result.needs_operator.question}`)
   if (typeof result.person?.problem === "string") lines.push(result.person.problem)
   if (typeof result.stale_desk?.line === "string") lines.push(result.stale_desk.line)
+  if (typeof result.plugin_update?.line === "string") lines.push(result.plugin_update.line)
   if (Array.isArray(result.other_sessions?.lines)) lines.push(...result.other_sessions.lines)
   if (typeof result.release_alert?.line === "string") lines.push(result.release_alert.line)
   if (typeof result.desk_problems?.line === "string") lines.push(result.desk_problems.line)

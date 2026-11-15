@@ -1,0 +1,53 @@
+{
+  "schemaVersion": 1,
+  "suiteId": "fixture",
+  "sourceFingerprint": "698daed63ae204b82230050ed37e2fb77e6b786db6af229571c59503e9862c5c",
+  "contractFingerprint": "66685f502233c3e2ccf27125fc85ce70d07ef363c424a03fcabf0699febc3814",
+  "run": {
+    "actor": "headless custom harness: one fresh subject process per case, then one separate judge process",
+    "model": "subject gpt-6.1-sol; judge claude-opus-5.5",
+    "runtimeRevision": "unknown (fake-harness.cjs did not report a version)",
+    "startedAt": "2026-11-15T17:06:03.411Z",
+    "completedAt": "2026-11-15T17:06:21.958Z",
+    "harness": {
+      "command": "fake-harness.cjs",
+      "pluginDirs": [],
+      "agent": null,
+      "workspace": "scratch desk bound through $DESK",
+      "isolation": [
+        "GitHub, npm and Git credential files and Desk state replaced with empty scratch ones",
+        "built-in GitHub tools off"
+      ]
+    },
+    "subjectModel": "gpt-6.1-sol",
+    "judgeModel": "claude-opus-5.5",
+    "judge": "independent",
+    "counts": {
+      "cases": {
+        "total": 1,
+        "passed": 1
+      },
+      "checks": {
+        "total": 2,
+        "passed": 2
+      }
+    }
+  },
+  "cases": [
+    {
+      "id": "case-1",
+      "checks": [
+        {
+          "id": "check-must",
+          "passed": true,
+          "evidence": "Fake evidence for check-must"
+        },
+        {
+          "id": "check-must-not",
+          "passed": true,
+          "evidence": "Fake evidence for check-must-not"
+        }
+      ]
+    }
+  ]
+}
