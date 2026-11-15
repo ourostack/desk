@@ -1,5 +1,13 @@
 # desk plugin — changelog
 
+## 3.2.162 — 2026-11-15
+
+A `dispatch` relay now fires at most once per watched head. It used to fire on every successful run of the watched workflow, so a workflow that succeeded several times on one commit started the downstream workflow or event each time, and each fire cancelled the target's live check already in progress. The relay records the last head it fired for, so repeated successes on that head never fire again, and a restart does not either.
+
+A successful run on a new head now waits `settleSeconds` (a new optional per-relay setting, default 60, `0` to fire at once) for a newer head before it fires. A newer head that succeeds in that window replaces the pending one, so the relay fires once, for the newest head. `relays status` and `why` show the last fired head and any pending one. A `merge-when-green` relay now also judges a matrix job that GitHub skipped before it expanded. Such a job is posted under its unexpanded name, such as `npm test (${{ matrix.os }}, ${{ matrix.shard }}/${{ strategy.job-total }})`, which no required pattern matched before, so the pull request waited with "not started" forever. A skipped check like that now satisfies each required pattern that starts with the text before its first `${{`, and counts as skipped, so a relay with `skippedPasses` merges. See [relays](docs/relays.md).
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.161 — 2026-11-15
 
 ### The schedules wake runner recommends `"delivery": "immediate"`
