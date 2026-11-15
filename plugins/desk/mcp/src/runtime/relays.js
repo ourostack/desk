@@ -1,5 +1,6 @@
 // Relays: small GitHub automations the always-on runtime runs for a repository whose own settings cannot (or not yet) do the job.
-// A `dispatch` relay watches a workflow and fires another workflow or a repository_dispatch event when a new run succeeds. A
+// A `dispatch` relay watches a workflow and fires another workflow or a repository_dispatch event once per new watched head whose
+// run succeeds, after a quiet period for a newer head. A
 // `merge-when-green` relay merges a labelled pull request once every check it names is green on its head and, if asked, the base
 // branch's latest completed run of a workflow is green. Like `drains.js poll`, no model turn is spent: each poll reads GitHub
 // with conditional requests (an unchanged answer is a free 304) and acts. See docs/relays.md.
@@ -14,6 +15,9 @@ const MIN_EVERY_SECONDS = 10
 /** A runner that fires every 30 s jitters, so a relay is due a little before its interval has fully passed. */
 const DUE_SLACK_MS = 5_000
 const HANDLED_KEPT = 200
+/** A dispatch fires once the newest successful run on a new head has been the newest for this long. */
+const DEFAULT_SETTLE_SECONDS = 60
+const MAX_SETTLE_SECONDS = 3600
 const HISTORY = 50
 const MERGED_KEPT = 20
 /** A refused merge is tried again after this long, or at once when the head changes. */
@@ -79,7 +83,8 @@ export function parseRelayConfig(raw, file) {
   })
 }
 
-function parseDispatch({ watch, fire }, at, bad) {
+function parseDispatch({ watch, fire, settleSeconds }, at, bad) {
+  if (settleSeconds !== undefined && (!Number.isInteger(settleSeconds) || settleSeconds < 0 || settleSeconds > MAX_SETTLE_SECONDS)) throw bad(`${at}.settleSeconds is not a whole number of seconds, from 0 to ${MAX_SETTLE_SECONDS}`)
   if (!isObject(watch) || !isRepo(watch.repo) || !isText(watch.workflow)) throw bad(`${at}.watch needs "repo" (owner/name) and "workflow" (a file name such as ci.yml)`)
   if (watch.branch !== undefined && !isText(watch.branch)) throw bad(`${at}.watch.branch is not a branch name`)
   if (watch.conclusion !== undefined && watch.conclusion !== "success") throw bad(`${at}.watch.conclusion is not "success", the only conclusion that fires`)
@@ -91,6 +96,7 @@ function parseDispatch({ watch, fire }, at, bad) {
   return {
     watch: { repo: watch.repo, workflow: watch.workflow.trim(), ...(watch.branch === undefined ? {} : { branch: watch.branch.trim() }), conclusion: "success" },
     fire: { repo: fire.repo, ...(isText(fire.workflow) ? { workflow: fire.workflow.trim() } : { event: fire.event.trim() }), ...(fire.ref === undefined ? {} : { ref: fire.ref.trim() }), ...(fire.inputs === undefined ? {} : { inputs: fire.inputs }) },
+    settleSeconds: settleSeconds ?? DEFAULT_SETTLE_SECONDS,
   }
 }
 
@@ -192,7 +198,27 @@ async function fireDispatch(ctx, state, relay, run) {
   return `${fire.repo} ${fire.event}`
 }
 
-/** Fires once for the newest of the runs that succeeded since the last poll, and remembers every one of them by run id. The first poll only records what already succeeded. */
+/**
+ * Records the fresh runs. The newest one on a head the relay has not fired for becomes the pending fire; a newer head restarts the
+ * quiet period, and another run on the same head only updates which run is named.
+ */
+function recordHead(state, ctx, fresh) {
+  const fired = state.lastFire?.headSha
+  const candidate = fresh.filter((run) => run.head_sha !== fired).reduce((best, run) => (best === undefined || run.id > best.id ? run : best), undefined)
+  if (!candidate) return
+  const pending = state.pending
+  const runs = (pending?.runs ?? 0) + fresh.length
+  const now = new Date(ctx.now).toISOString()
+  if (!pending) state.pending = { at: now, run: candidate, runs }
+  else if (candidate.id < pending.run.id) state.pending = { ...pending, runs }
+  else state.pending = { at: candidate.head_sha === pending.run.head_sha ? pending.at : now, run: candidate, runs }
+}
+
+/**
+ * Fires once per watched head: a successful run on a head the relay has already fired for is remembered and never fires again, so a
+ * restart does not either. A run on a new head waits `settleSeconds` for a newer head, then fires once for the newest one. The first
+ * poll only records the runs that already succeeded.
+ */
 async function runDispatch(relay, state, ctx) {
   const { watch } = relay
   const route = `/repos/${watch.repo}/actions/workflows/${encodeURIComponent(watch.workflow)}/runs?status=success&per_page=30&exclude_pull_requests=true${watch.branch ? `&branch=${encodeURIComponent(watch.branch)}` : ""}`
@@ -206,23 +232,32 @@ async function runDispatch(relay, state, ctx) {
   }
   const handled = new Set(state.handled)
   const fresh = runs.filter((run) => !handled.has(run.id))
-  if (fresh.length === 0) return
+  if (fresh.length > 0) {
+    state.handled = [...state.handled, ...fresh.map((run) => run.id)].slice(-HANDLED_KEPT)
+    recordHead(state, ctx, fresh)
+  }
+  const { pending } = state
+  if (!pending) return
+  const { head_sha: sha, id } = pending.run
+  if (ctx.now < Date.parse(pending.at) + relay.settleSeconds * 1000) {
+    state.waitingOn = `${relay.settleSeconds}s with no newer successful ${watch.workflow} run on a new head, then a fire for head ${short(sha)} (run ${id})`
+    return
+  }
   if (state.retryAt && ctx.now < Date.parse(state.retryAt)) {
     state.waitingOn = `a fire GitHub refused, to be tried again after ${state.retryAt}`
     return
   }
-  const newest = fresh.find((run) => run.id === Math.max(...fresh.map((candidate) => candidate.id)))
   let target
   try {
-    target = await fireDispatch(ctx, state, relay, newest)
+    target = await fireDispatch(ctx, state, relay, pending.run)
   } catch (error) {
     state.retryAt = new Date(ctx.now + REFUSED_MS).toISOString()
     throw error
   }
   delete state.retryAt
-  state.handled = [...state.handled, ...fresh.map((run) => run.id)].slice(-HANDLED_KEPT)
-  state.lastFire = { at: new Date(ctx.now).toISOString(), runId: newest.id, runUrl: newest.html_url, runs: fresh.length, target }
-  note(state, ctx.now, { event: "fired", runId: newest.id, runs: fresh.length, target })
+  delete state.pending
+  state.lastFire = { at: new Date(ctx.now).toISOString(), runId: id, runUrl: pending.run.html_url, headSha: sha, runs: pending.runs, target }
+  note(state, ctx.now, { event: "fired", runId: id, headSha: sha, runs: pending.runs, target })
   ctx.save()
 }
 
@@ -498,8 +533,9 @@ export function relayStatusLines(relays, states, now) {
     if (!state.lastPollAt) return `${head}: not polled yet${tail}`
     const polled = `polled ${ago(state.lastPollAt, now)}`
     if (relay.type === "dispatch") {
-      const last = state.lastFire ? `last fired ${ago(state.lastFire.at, now)} for run ${state.lastFire.runId} -> ${state.lastFire.target}` : "never fired"
-      return `${head} ${relay.watch.repo} ${relay.watch.workflow} -> ${relay.fire.repo}: ${polled}, ${last}, waiting on ${state.waitingOn}${tail}`
+      const last = state.lastFire ? `last fired ${ago(state.lastFire.at, now)} for run ${state.lastFire.runId}${state.lastFire.headSha ? ` on head ${short(state.lastFire.headSha)}` : ""} -> ${state.lastFire.target}` : "never fired"
+      const pending = state.pending ? `, head ${short(state.pending.run.head_sha)} (run ${state.pending.run.id}) pending` : ""
+      return `${head} ${relay.watch.repo} ${relay.watch.workflow} -> ${relay.fire.repo}: ${polled}, ${last}${pending}, settle ${relay.settleSeconds}s, waiting on ${state.waitingOn}${tail}`
     }
     const open = Object.entries(state.prs).filter(([, record]) => record.status !== "merged")
     const last = state.lastMerge ? `last merged #${state.lastMerge.number} ${ago(state.lastMerge.at, now)}` : "never merged"
@@ -513,7 +549,15 @@ export function whyRelay(relays, states, name) {
   const relay = relays.find((candidate) => candidate.name === name)
   if (!relay) return { relay: name, note: `no relay is configured as ${name}; relays.json lists them` }
   const state = states[name] ?? { history: [] }
-  return { relay: name, type: relay.type, config: relay, history: [...state.history].reverse().slice(0, 10), waiting: state.waitingOn ?? state.prs ?? null, lastError: state.lastError }
+  return {
+    relay: name,
+    type: relay.type,
+    config: relay,
+    history: [...state.history].reverse().slice(0, 10),
+    waiting: state.waitingOn ?? state.prs ?? null,
+    ...(relay.type === "dispatch" ? { lastFiredHead: state.lastFire?.headSha ?? null, pending: state.pending ?? null } : {}),
+    lastError: state.lastError,
+  }
 }
 
 /** What each merge relay has decided about one pull request, for `why owner/name#number`. */
