@@ -1,9 +1,12 @@
 import { spawnSync } from "node:child_process"
 import { createHash } from "node:crypto"
-import { existsSync } from "node:fs"
+import { existsSync, readFileSync } from "node:fs"
 import * as path from "node:path"
 import { deskFailure } from "../runtime/desk-failure.js"
 import { commandArgument } from "../runtime/pr-publication.js"
+import { catchUpBehind } from "../runtime/deliver.js"
+import { readSyncStatus } from "../runtime/sync-worker.js"
+import { readToolCommits } from "../util/tool-commits.js"
 
 const POLICY = ".desk/content-home.json"
 const repository = /^[\w.-]+\/[\w.-]+$/u
@@ -14,14 +17,44 @@ function refuse(tool, code, message) {
   throw new Error(`${tool}: ${code}: ${message}. Nothing was written or committed by this call; preserve the input and existing sources.`)
 }
 
+/** The Git runner this module uses; a test swaps `spawn` to cut a call off the way a slow machine does. */
+export const gitSeam = { spawn: spawnSync }
+
+const GIT_TIMEOUT_MS = 10_000
+
+// A call cut off by the clock is asked again with three times the room before anything concludes from it: a loaded
+// machine's slow answer is not the same fact as an answer of "no".
 function git(root, args) {
-  return spawnSync("git", ["-C", root, ...args], { encoding: "utf8", windowsHide: true, timeout: 10_000 })
+  const run = (timeout) => gitSeam.spawn("git", ["-C", root, ...args], { encoding: "utf8", windowsHide: true, timeout })
+  const first = run(GIT_TIMEOUT_MS)
+  return first.status === null && (first.error || first.signal) ? run(GIT_TIMEOUT_MS * 3) : first
 }
 
+// The commit the checkout's upstream names, as a Git result: `@{upstream}`, else the tracking ref the branch's own
+// settings name when `@{upstream}` cannot say (a fetch rule that does not map the branch to one).
+function upstreamCommit(root) {
+  const direct = git(root, ["rev-parse", "--verify", "@{upstream}^{commit}"])
+  if (direct.status === 0) return direct
+  const branch = git(root, ["symbolic-ref", "--short", "-q", "HEAD"]).stdout?.trim()
+  const remote = branch ? git(root, ["config", `branch.${branch}.remote`]).stdout?.trim() : ""
+  const merge = branch ? git(root, ["config", `branch.${branch}.merge`]).stdout?.trim() : ""
+  if (!remote || remote === "." || !merge?.startsWith("refs/heads/")) return direct
+  const named = git(root, ["rev-parse", "--verify", `refs/remotes/${remote}/${merge.slice("refs/heads/".length)}^{commit}`])
+  return named.status === 0 ? named : direct
+}
+
+// A published policy never changes under its commit, so what was read at a commit (a policy, or its absence) is read once per process.
+const publishedPolicies = new Map()
+
 function readPolicy(root, tool) {
+  const upstream = upstreamCommit(root)
+  const known = upstream.status === 0 ? publishedPolicies.get(`${root}\0${upstream.stdout.trim()}`) : undefined
+  if (known !== undefined) {
+    if (known.published === null && existsSync(path.join(known.policyRoot, POLICY))) refuse(tool, "content_home_policy_unpublished", `Publish ${POLICY} through the repository's checked source route before relying on it`)
+    return known.published
+  }
   const top = git(root, ["rev-parse", "--show-toplevel"])
   const policyRoot = top.status === 0 ? top.stdout.trim() : root
-  const upstream = git(root, ["rev-parse", "--verify", "@{upstream}^{commit}"])
   if (upstream.status !== 0) {
     const tracked = git(root, ["ls-tree", "--full-tree", "--name-only", "HEAD", "--", POLICY])
     if (existsSync(path.join(policyRoot, POLICY)) || tracked.stdout?.trim()) {
@@ -34,6 +67,7 @@ function readPolicy(root, tool) {
   if (listed.status !== 0) refuse(tool, "content_home_policy_invalid", `Cannot inspect the published ${POLICY}`)
   if (listed.stdout.trim() === "") {
     if (existsSync(path.join(policyRoot, POLICY))) refuse(tool, "content_home_policy_unpublished", `Publish ${POLICY} through the repository's checked source route before relying on it`)
+    publishedPolicies.set(`${root}\0${commit}`, { published: null, policyRoot })
     return null
   }
   const read = git(root, ["show", `${commit}:${POLICY}`])
@@ -49,7 +83,9 @@ function readPolicy(root, tool) {
       policy.context_purposes.some((name) => policy.product_purposes.includes(name))) {
     refuse(tool, "content_home_policy_invalid", `Published ${POLICY} needs schema_version 1, mode declared-purpose, its repository, and disjoint nonempty context_purposes and product_purposes`)
   }
-  return { policy, commit, sha256: sha256(read.stdout) }
+  const published = { policy, commit, sha256: sha256(read.stdout) }
+  publishedPolicies.set(`${root}\0${commit}`, { published, policyRoot })
+  return published
 }
 
 function classify(declaration, policy, tool) {
@@ -71,24 +107,71 @@ function classify(declaration, policy, tool) {
   }
 }
 
+// HEAD may stand ahead of the published base by commits Desk's own write tools made and are still waiting for their
+// publication, which on a checked-pull-request repository takes minutes. It may not hold a merge, another policy file or
+// a commit made any other way: those are the unpublished bytes this guard exists to keep out of a mutation.
+function holdsOnlyDeskWrites(root, head, admission) {
+  if (typeof admission.policy_sha256 !== "string") return false
+  let policySha = headPolicies.get(`${root}\0${head}`)
+  if (policySha === undefined) {
+    const policy = git(root, ["show", `${head}:${POLICY}`])
+    if (policy.status !== 0) return false
+    policySha = sha256(policy.stdout)
+    headPolicies.set(`${root}\0${head}`, policySha)
+  }
+  if (policySha !== admission.policy_sha256) return false
+  const listed = git(root, ["rev-list", "--right-only", "--cherry-pick", "--parents", `${admission.policy_commit}...HEAD`])
+  if (listed.status !== 0) return false
+  const delivered = new Set(readSyncStatus({ root, env: process.env })?.delivered ?? [])
+  const made = readToolCommits(root)
+  return listed.stdout.split("\n").filter(Boolean).map((line) => line.trim().split(/\s+/u)).every(([sha, ...parents]) => delivered.has(sha) || (parents.length === 1 && made.has(sha)))
+}
+
+// The policy file's digest at a commit never changes.
+const headPolicies = new Map()
+
 export function assertPublishedContentBase(root, admission, tool) {
   if (admission === null) return
   const head = git(root, ["rev-parse", "--verify", "HEAD^{commit}"])
-  if (head.status !== 0 || head.stdout.trim() !== admission.policy_commit) {
+  if (head.status !== 0) {
     throw new Error(deskFailure({
       code: "content_home_unpublished_base",
       thing: `${tool}: content_home_unpublished_base`,
-      probably: "this checkout's HEAD is not the commit the published purpose policy came from, probably because it holds commits that were never published or sits on a different base",
-      look: `call desk_doctor, or run \`git -C ${commandArgument(root)} log --oneline @{upstream}..HEAD\` to list the commits held here`,
-      keepWorking: "your input and the existing sources are untouched and nothing was written or committed, so keep working in the published checkout and never replay the held commits",
-      fix: "use the existing qualified published checkout, or finish the publication it already owns",
+      probably: "this checkout's HEAD could not be read",
+      look: `call desk_doctor, or run \`git -C ${commandArgument(root)} status\``,
+      keepWorking: "your input and the existing sources are untouched and nothing was written or committed, so keep working in the published checkout",
+      fix: "use the existing qualified published checkout",
     }))
   }
+  const tip = head.stdout.trim()
+  if (tip === admission.policy_commit) return
+  // A checkout that is only behind holds nothing unpublished: it is brought up to the base it is behind, as far as local changes let it, and the write goes ahead.
+  if (git(root, ["merge-base", "--is-ancestor", tip, admission.policy_commit]).status === 0) {
+    catchUpBehind({ root, spawnGit: gitSeam.spawn })
+    return
+  }
+  if (holdsOnlyDeskWrites(root, tip, admission)) return
+  throw new Error(deskFailure({
+    code: "content_home_unpublished_base",
+    thing: `${tool}: content_home_unpublished_base`,
+    probably: "this checkout's HEAD is not the commit the published purpose policy came from, and it holds commits Desk's tools did not make, a merge, or a changed policy, probably because it holds commits that were never published or sits on a different base",
+    look: `call desk_doctor, or run \`git -C ${commandArgument(root)} log --oneline @{upstream}..HEAD\` to list the commits held here`,
+    keepWorking: "your input and the existing sources are untouched and nothing was written or committed, so keep working in the published checkout and never replay the held commits",
+    fix: "use the existing qualified published checkout, or finish the publication it already owns",
+  }))
 }
 
-export function assertCleanContentTarget(root, relativePath, admission, tool) {
+// `ownedDigest` is the digest of bytes Desk itself wrote to the target and has not committed yet (the append lane's): a target holding exactly those is Desk's own work in flight, not a held draft.
+export function assertCleanContentTarget(root, relativePath, admission, tool, ownedDigest = null) {
   if (admission === null) return
   const status = git(root, ["status", "--porcelain", "--untracked-files=normal", "--", relativePath])
+  if (status.status === 0 && status.stdout !== "" && ownedDigest !== null) {
+    try {
+      if (sha256(readFileSync(path.join(root, relativePath))) === ownedDigest) return
+    } catch {
+      // Unreadable bytes are not Desk's own.
+    }
+  }
   if (status.status !== 0 || status.stdout !== "") {
     refuse(tool, "content_home_dirty_target", "The target already holds staged or working changes outside this supplied payload; preserve them rather than adopting or overwriting them")
   }

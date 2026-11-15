@@ -28,6 +28,8 @@ import { commitFailure, commitRoute, withNext } from "../util/route-around.js"
 import { operationAnswer } from "../util/cas-commit.js"
 import { deskPushNote, schedulePush as schedulePushDefault } from "../runtime/sync-worker.js"
 import { admitContent, assertCleanContentTarget } from "../desk/content-home.js"
+import { scratchPathWarning } from "../desk/scratch-paths.js"
+import { handoffReference, isHandoffPath } from "../desk/handoff-reference.js"
 
 // Every field desk_save reads off `input`, kept next to the handler so a
 // field added to its reads is a field added here in the same diff.
@@ -197,7 +199,18 @@ function tidyTrailer(message) {
 }
 
 export async function desk_save(args) {
-  return withNext(await saveDesk(args))
+  const answer = withNext(await saveDesk(args))
+  const files = Array.isArray(args.input?.files) ? args.input.files : []
+  const scratch = scratchPathWarning(files.map((file) => file?.content), "These files")
+  const out = scratch === undefined ? answer : { ...answer, scratch_paths: scratch }
+  if (out.status !== "committed") return out
+  // A file saved under a `handoffs/` folder is how work passes to another session: it is named by its repository URL, never by a local path.
+  const named = [...files.map((file) => file?.path), ...(Array.isArray(args.input?.paths) ? args.input.paths : [])].filter((rel) => typeof rel === "string" && isHandoffPath(rel))
+  const references = named.flatMap((rel) => {
+    const url = handoffReference(args.deskRoot, rel, args.spawnGit ?? spawnSync)
+    return url === undefined ? [] : [{ path: rel, url }]
+  })
+  return references.length === 0 ? out : { ...out, handoff_references: references, handoff_note: "Give the next session these URLs, never a path in a session folder or the temp folder; each resolves once the push lands." }
 }
 
 async function saveDesk({ deskRoot, input, person = null, spawnGit = spawnSync, schedulePush = schedulePushDefault }) {

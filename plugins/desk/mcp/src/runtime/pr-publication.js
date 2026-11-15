@@ -1,5 +1,8 @@
 import { fileURLToPath } from "node:url"
 import { shellQuote } from "../util/shell-quote.js"
+import { redactCredentialLikeText } from "../util/redact.js"
+
+const OBJECT_ID = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/u
 
 const POLICY = ".desk/publication.json"
 const FIELDS = "number,url,state,isDraft,headRefOid,baseRefName,baseRefOid,mergeCommit"
@@ -64,8 +67,14 @@ export function publicationRecovery(root, platform = process.platform) {
 
 /** Publishes one immutable candidate. No upstream ref is pushed; only GitHub's exact-head merge endpoint can advance it. */
 export function publishPullRequest({ git, spawnGit, root, upstream, head, onto, policy, clock = CLOCK }) {
-  const remote = git(["remote", "get-url", upstream.remote])
-  if (remote.status !== 0) throw Object.assign(new Error("Check the publication remote, then try again: Could not read the publication remote"), { code: "pr_publication_check_the_publication_remote_then" })
+  // Both candidates must be object ids: a head or base that was never read would build a branch name, and a command, with nothing in them.
+  if (!OBJECT_ID.test(String(head)) || !OBJECT_ID.test(String(onto))) {
+    throw Object.assign(new Error("Run it again: Desk has no readable commit to publish, so nothing was pushed"), { code: "pr_publication_run_it_again_desk_has_no" })
+  }
+  // `get-url` names a configured remote's address; `ls-remote --get-url` also takes an address as the remote and reads rewrite rules, still without the network.
+  let remote = git(["remote", "get-url", upstream.remote])
+  if (remote.status !== 0 || remote.stdout.trim() === "") remote = git(["ls-remote", "--get-url", upstream.remote])
+  if (remote.status !== 0 || remote.stdout.trim() === "") throw Object.assign(new Error("Run it again: Git could not read the address of the publication remote (the read was cut off or the remote is not configured), so nothing was pushed"), { code: "pr_publication_run_it_again_git_could_not" })
   const repo = repository(remote.stdout.trim())
   const base = upstream.merge.replace(/^refs\/heads\//u, "")
   const branch = `desk/publish/${head}`
@@ -133,8 +142,14 @@ export function publishPullRequest({ git, spawnGit, root, upstream, head, onto, 
     }
     return [...new Set(names)]
   }
-  const pushed = git(["push", "--quiet", upstream.remote, `${head}:refs/heads/${branch}`], 60_000)
-  if (pushed.status !== 0) throw Object.assign(new Error(`Push ${commandArgument(`${head}:refs/heads/${branch}`)} to ${commandArgument(upstream.remote)} yourself to read its admission diagnostic: the contribution branch push was refused by its hook or remote, and the upstream branch was not pushed.`), { code: "pr_publication_push_the_branch_with_the" })
+  const pushArgs = ["push", "--quiet", upstream.remote, `${head}:refs/heads/${branch}`]
+  let pushed = git(pushArgs, 60_000)
+  // A push cut off or refused once may have met a slow hook or a remote mid-update; the same push is repeated once, it is idempotent for one commit and one branch.
+  if (pushed.status !== 0) pushed = git(pushArgs, 120_000)
+  if (pushed.status !== 0) {
+    const said = redactCredentialLikeText(String(pushed.stderr ?? "").split("\n").find((line) => line.trim() !== "") ?? "").slice(0, 200)
+    throw Object.assign(new Error(`Run \`git push ${commandArgument(upstream.remote)} ${commandArgument(`${head}:refs/heads/${branch}`)}\` to read its admission diagnostic: the contribution branch push was ${pushed.status === null ? "cut off" : "refused by its hook or remote"} twice${said === "" ? "" : ` (${said})`}, and the upstream branch was not pushed.`), { code: "pr_publication_push_the_branch_with_the" })
+  }
   let pr = list()
   if (pr === undefined) {
     gh(["pr", "create", "--repo", repo.full, "--head", branch, "--base", base, "--title", "Publish workspace changes",
@@ -159,7 +174,7 @@ export function publishPullRequest({ git, spawnGit, root, upstream, head, onto, 
       pr = view()
       verify(pr)
       if (pr.state === "MERGED") break
-      if (pr.baseRefOid !== onto) throw Object.assign(new Error("Run it again: The publication base advanced; retry to qualify a fresh candidate"), { code: "pr_publication_run_it_again_the_publication" })
+      if (pr.baseRefOid !== onto) throw Object.assign(new Error("Run it again: The publication base advanced; retry to qualify a fresh candidate"), { code: "pr_publication_run_it_again_the_publication", requalify: true })
       const reported = loadChecks()
       const waiting = checkState(reported, policy.required_checks, observed, ruled)
       if (waiting.length === 0) {

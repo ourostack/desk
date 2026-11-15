@@ -16,6 +16,7 @@ import * as path from "node:path"
 
 import { budgeted, commitCaptured, operationAnswer } from "./cas-commit.js"
 import { defaultBranchForPublication, publishCardCommit } from "./main-publish.js"
+import { recordToolCommit } from "./tool-commits.js"
 
 // Bounds every git call so a hung hook or a held lock can never block a tool
 // call indefinitely. Git hooks stay enabled — disabling them is not this
@@ -23,6 +24,9 @@ import { defaultBranchForPublication, publishCardCommit } from "./main-publish.j
 // other slow git command and is reported the same way a stage or commit
 // failure is.
 const GIT_TIMEOUT_MS = 10_000
+// A commit gets one retry with this long after a first attempt the clock cut off; an index commit qualifies again at most this many times inside its one budget.
+const COMMIT_RETRY_TIMEOUT_MS = 60_000
+const QUALIFY_AGAIN = 3
 const TOOL_COMMIT_ENV = "DESK_TOOL_COMMIT" // the same name `desk/card-commit-guard.js` exports; card_commit_guard.test.js checks they match
 
 /**
@@ -158,7 +162,9 @@ const READBACK_LIMIT = 50
 
 /** HEAD's full hash, `""` for an unborn branch, or null when Git cannot say. A read; only `run`'s read retry applies. */
 function headOf(root, spawnGit) {
-  const result = run(spawnGit, root, ["rev-parse", "--verify", "-q", "HEAD"])
+  let result = run(spawnGit, root, ["rev-parse", "--verify", "-q", "HEAD"])
+  // Cut off by the clock, not answered: asked once more with three times the room.
+  if (result?.error) result = run(patiently(spawnGit), root, ["rev-parse", "--verify", "-q", "HEAD"])
   if (result?.error) return null
   if (result?.status === 0) return String(result.stdout).trim()
   return result?.status === 1 && String(result?.stdout ?? "").trim() === "" ? "" : null
@@ -232,9 +238,17 @@ export function readBackCommit(root, relPaths, message, before, expected, spawnG
 // so its route can finish exactly that change and never whatever the paths hold later (R2, R3). No capture means no route may commit.
 // `made` is set when the call is known to have made a commit object whose effect is uncertain (a branch update cut off, or a
 // post-commit hook that moved HEAD): a read-back that finds nothing then says `unknown`, never `absent`.
+// A read-back that could not answer is asked once more with three times the room each read had: on a slow machine the commit often did land, and "unknown" is only for a Git that still cannot say.
+const patiently = (spawnGit) => (command, args, options) => spawnGit(command, args, { ...options, timeout: (options?.timeout ?? GIT_TIMEOUT_MS) * 3 })
+
 function afterFailedCommit(stderr, root, relPaths, message, before, expected, spawnGit, branch, made = false) {
-  const { readback, landed } = readBackCommit(root, relPaths, message, before, expected, spawnGit)
-  if (readback === "committed") return { ok: true, stderr, readback }
+  let answer = readBackCommit(root, relPaths, message, before, expected, spawnGit)
+  if (answer.readback === "unknown" && answer.landed === undefined) answer = readBackCommit(root, relPaths, message, before, expected, patiently(spawnGit))
+  const { readback, landed } = answer
+  if (readback === "committed") {
+    recordToolCommit(root)
+    return { ok: true, stderr, readback }
+  }
   const capture = before !== null && expected !== null && branch ? { before, branch, expected } : null
   return { ok: false, stderr, readback: made && readback === "absent" ? "unknown" : readback, ...(landed ? { landed } : {}), ...(capture ? { capture } : {}) }
 }
@@ -263,7 +277,7 @@ export function commitIndexPaths(root, relPaths, entries, message, spawnGit, sta
   const step = budgeted(spawnGit, deadline)
   const refusal = commitBranchRefusal(root, step, stateBranch)
   if (refusal !== null) return { ok: false, stderr: refusal, readback: "absent" }
-  const before = headOf(root, step)
+  let before = headOf(root, step)
   const branch = branchOf(root, step)
   if (before === null || branch === null) return { ok: false, stderr: "Git could not read the branch and HEAD to commit on, so nothing was committed", readback: "absent" }
   // What this call means to commit is exactly `entries` at `relPaths`, and nothing at the paths the index does not hold.
@@ -275,8 +289,19 @@ export function commitIndexPaths(root, relPaths, entries, message, spawnGit, sta
   const operation = operationAnswer(step, root)
   if (operation) return failed(operation.reason, false)
   if (sameEntries(before === "" ? [] : treeEntries(root, before, relPaths, step), expected)) return failed("nothing to commit: HEAD already holds these paths as the index does", false)
-  const answer = commitCaptured({ root, paths: relPaths, wanted: expected, head: before, branch, message, spawnGit, env: { ...process.env, [TOOL_COMMIT_ENV]: "1" }, toolCommit: true, deadline })
-  if (answer.state === "finished") return { ok: true, stderr: "" }
+  let answer = commitCaptured({ root, paths: relPaths, wanted: expected, head: before, branch, message, spawnGit, env: { ...process.env, [TOOL_COMMIT_ENV]: "1" }, toolCommit: true, deadline })
+  // Another writer moved the branch while this commit was being qualified. Nothing was changed, so it is qualified again on the branch as it now is, here, within the same budget, rather than handed back.
+  for (let again = 0; answer.state === "held" && answer.moved === true && again < QUALIFY_AGAIN; again += 1) {
+    const now = headOf(root, step)
+    if (now === null || now === before) break
+    before = now
+    if (sameEntries(treeEntries(root, before, relPaths, step), expected)) return failed("nothing to commit: HEAD already holds these paths as the index does", false)
+    answer = commitCaptured({ root, paths: relPaths, wanted: expected, head: before, branch, message, spawnGit, env: { ...process.env, [TOOL_COMMIT_ENV]: "1" }, toolCommit: true, deadline })
+  }
+  if (answer.state === "finished") {
+    recordToolCommit(root)
+    return { ok: true, stderr: "" }
+  }
   return failed(answer.reason, answer.commit !== undefined)
 }
 
@@ -386,7 +411,15 @@ export function commitPaths(root, relPaths, message, spawnGit, stateBranch) {
   const expected = capturedPaths(root, relPaths, spawnGit)
   // The desk's own pre-commit hook (`desk/card-commit-guard.js`) refuses a commit that changes a task card unless Desk is the one committing:
   // this is Desk's commit path, so it says so for the git call (and only for that call).
-  const result = run(spawnGit, root, ["commit", "-m", message, "--", ...relPaths], { env: { ...process.env, [TOOL_COMMIT_ENV]: "1" } })
-  if (!timedOut(result) && result.status === 0) return { ok: true, stderr: result.stderr }
+  const env = { ...process.env, [TOOL_COMMIT_ENV]: "1" }
+  let result = run(spawnGit, root, ["commit", "-m", message, "--", ...relPaths], { env })
+  // A commit cut off by the clock on a slow machine is read back, and when it did not land it is run once more with room to finish, rather than handed back as a failure.
+  if (timedOut(result) && readBackCommit(root, relPaths, message, before, expected, spawnGit).readback === "absent" && !indexLockHeld(root, spawnGit)) {
+    result = run(spawnGit, root, ["commit", "-m", message, "--", ...relPaths], { env, timeout: COMMIT_RETRY_TIMEOUT_MS })
+  }
+  if (!timedOut(result) && result.status === 0) {
+    recordToolCommit(root)
+    return { ok: true, stderr: result.stderr }
+  }
   return afterFailedCommit(timedOut(result) ? "timeout" : result.stderr, root, relPaths, message, before, expected, spawnGit, branch)
 }

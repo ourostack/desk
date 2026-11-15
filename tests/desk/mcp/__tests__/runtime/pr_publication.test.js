@@ -27,6 +27,7 @@ function fixture(options = {}) {
   const git = (args) => {
     calls.push(["git", ...args])
     if (args[0] === "remote") return options.remoteResult ?? { status: 0, stdout: options.remote ?? "https://github.example/example/workspace.git" }
+    if (args[0] === "ls-remote") return options.lsRemoteResult ?? { status: 1 }
     if (args[0] === "push") return options.pushResult ?? { status: 0 }
     if (args[0] === "fetch") return options.fetchResult ?? { status: 0 }
     if (args[0] === "rev-parse") return { status: 0, stdout: merged }
@@ -108,11 +109,11 @@ test("HTTPS, SCP and SSH publication use an exact-head merge and never push upst
 
 test("remote, branch, JSON, lookup, creation and merge failures refuse without credential echoes", () => {
   const cases = [
-    [{ remoteResult: { status: 1 } }, /Could not read the publication remote/u],
+    [{ remoteResult: { status: 1 } }, /Git could not read the address of the publication remote/u],
     [{ remote: "file:///example/workspace" }, /needs a GitHub/u],
     [{ remote: "https://github.example/ambiguous" }, /unambiguous/u],
     [{ remote: "git@bad!host:example/workspace" }, /unambiguous/u],
-    [{ pushResult: { status: 1 } }, /^Push .* to .* yourself to read its admission diagnostic: the contribution branch push was refused/u],
+    [{ pushResult: { status: 1 } }, /^Run `git push .*` to read its admission diagnostic: the contribution branch push was refused by its hook or remote twice/u],
     [{ list: {} }, /unambiguous publication PR/u],
     [{ list: [{}, {}] }, /unambiguous publication PR/u],
     [{ create: true, noReadback: true }, /could not be read back/u],
@@ -353,4 +354,51 @@ test("an unreadable or malformed branch-rules read refuses clearly and never mer
     })
     assert.ok(!f.calls.some((call) => call.includes("PUT")), JSON.stringify(options))
   }
+})
+
+test("a remote `get-url` cannot name is read through `ls-remote --get-url` before publication gives up", () => {
+  const f = fixture({ create: true, remoteResult: { status: null }, lsRemoteResult: { status: 0, stdout: "https://github.example/example/workspace.git\n" } })
+  const result = publishPullRequest(f.request)
+  assert.equal(result.receipt.merge, merged)
+  assert.ok(f.calls.some((call) => call[0] === "git" && call[1] === "ls-remote"))
+})
+
+test("a head or base that was never read publishes nothing and names no command with an empty branch", () => {
+  for (const bad of [{ head: "" }, { head: undefined }, { onto: "" }, { head: "not-a-commit" }]) {
+    const f = fixture({ create: true })
+    assert.throws(() => publishPullRequest({ ...f.request, ...bad }), (error) => {
+      assert.match(error.message, /no readable commit to publish, so nothing was pushed/u)
+      assert.doesNotMatch(error.message, /refs\/heads|git push/u)
+      return true
+    })
+    assert.deepEqual(f.calls, [], "no Git or GitHub call was made")
+  }
+})
+
+test("a branch push that is refused once is repeated once, and a second refusal names a command with the real commit and branch", () => {
+  const pushes = []
+  const f = fixture({ create: true })
+  const git = f.request.git
+  const refusing = (args, timeout) => {
+    if (args[0] === "push") {
+      pushes.push(args.at(-1))
+      return { status: 1, stderr: "remote: hook declined\nsecond line" }
+    }
+    return git(args, timeout)
+  }
+  assert.throws(() => publishPullRequest({ ...f.request, git: refusing }), (error) => {
+    assert.match(error.message, new RegExp(`git push 'origin' '${head}:refs/heads/desk/publish/${head}'|git push origin ${head}:refs/heads/desk/publish/${head}`, "u"))
+    assert.match(error.message, /\(remote: hook declined\)/u)
+    assert.doesNotMatch(error.message, /publish\/['"]?(\s|$)/u)
+    return true
+  })
+  assert.equal(pushes.length, 2)
+})
+
+test("a branch push cut off once and then accepted publishes", () => {
+  let cut = true
+  const f = fixture({ create: true })
+  const git = f.request.git
+  const request = { ...f.request, git: (args, timeout) => (args[0] === "push" && cut ? ((cut = false), { status: null }) : git(args, timeout)) }
+  assert.equal(publishPullRequest(request).receipt.merge, merged)
 })

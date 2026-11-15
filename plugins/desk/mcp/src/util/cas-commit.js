@@ -110,7 +110,7 @@ function commitCaptured({ root, paths, wanted, head, branch, message, spawnGit: 
     // Read again before running anything: the private index is HEAD plus this change, so it is right only on that HEAD.
     const branchNow = git(spawnGit, root, ["symbolic-ref", "--short", "-q", "HEAD"])
     if (!branchNow.ok || branchNow.stdout.trim() !== branch || headOf(spawnGit, root, branch) !== head)
-      return held(`nothing was committed: ${branch} moved after the checks; read back again from the start`)
+      return held(`nothing was committed: ${branch} moved after the checks; read back again from the start`, { moved: true })
     const tree = git(spawnGit, root, ["write-tree"], { env: own })
     if (!tree.ok) return held(`nothing was committed: git write-tree failed: ${tree.stderr}`)
     // The whole tree built is checked against the capture before anything runs: exactly the captured entries at these paths,
@@ -171,7 +171,7 @@ function commitCaptured({ root, paths, wanted, head, branch, message, spawnGit: 
           : `does not hold ${commitId.slice(0, 12)}`
       return { state: "unknown", reason: `the branch update ${update} and ${ref} ${branchSays}; read back before anything else`, commit: commitId }
     }
-    return held(`nothing was committed: ${branch} moved after it was qualified, so the compare-and-swap refused to overwrite it (${moved.stderr || "no reason given"}); the other writer's commit stands`)
+    return held(`nothing was committed: ${branch} moved after it was qualified, so the compare-and-swap refused to overwrite it (${moved.stderr || "no reason given"}); the other writer's commit stands`, { moved: true })
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }

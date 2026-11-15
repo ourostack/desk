@@ -462,13 +462,13 @@ for (const indexed of [false, true]) {
     assert.equal(git(root, ["show", "HEAD:a.txt"]), "two\n")
   })
 
-  test(`a ${kind} commit that times out before it lands is read back as absent, dispatched once`, async () => {
+  test(`a ${kind} commit that times out before it lands is read back as absent${indexed ? ", dispatched once" : ", run once more with room, and absent when that times out too"}`, async () => {
     const root = await repoWithChange()
     await staged(root)
     const counter = { commits: 0 }
     const result = commit(root, neverRanThenTimedOut(counter, before))
     assert.deepEqual(said(withoutCapture(root, result), "timeout", /pre-commit hook was cut off/u), { ok: false, readback: "absent" })
-    assert.equal(counter.commits, 1)
+    assert.equal(counter.commits, indexed ? 1 : 2)
     assert.equal(commitCount(root), 1)
   })
 
@@ -699,20 +699,25 @@ async function stagedChange() {
   return root
 }
 
-function foreignCommit(root) {
-  writeFileSync(path.join(root, "foreign.txt"), "theirs\n")
-  git(root, ["add", "--", "foreign.txt"])
-  git(root, ["commit", "-q", "-m", "another writer", "--", "foreign.txt"])
+function foreignCommit(root, name = "foreign.txt") {
+  writeFileSync(path.join(root, name), "theirs\n")
+  git(root, ["add", "--", name])
+  git(root, ["commit", "-q", "-m", "another writer", "--", name])
   return headOf632(root)
 }
 
-// A real commit by another writer, made once, at the first Git call `when` picks.
-function raceAt(when) {
+// A real commit by another writer, made once (or at every opportunity with `always`), at the first Git call `when` picks.
+function raceAt(when, { always = false } = {}) {
   let theirs = null
+  let count = 0
   let seeded = false
   const spawn = (command, args, options) => {
     const verb = args.slice(2)
-    if (theirs === null && when(verb, seeded)) theirs = foreignCommit(args[1])
+    if ((theirs === null || always) && when(verb, seeded)) {
+      theirs = foreignCommit(args[1], count === 0 ? "foreign.txt" : `foreign-${count}.txt`)
+      count += 1
+      seeded = false
+    }
     if (verb[0] === "update-index" && verb.includes("--index-info")) seeded = true
     return spawnSync(command, args, options)
   }
@@ -723,39 +728,54 @@ const publishing = (verb) => verb[0] === "commit" || verb[0] === "update-ref"
 const afterSeeding = (verb, seeded) => seeded
 
 for (const [label, when] of [["after the private index is built", afterSeeding], ["at the call that would publish the commit", publishing]]) {
-  test(`#632: another writer's commit ${label} stands: nothing is committed over it, and the call carries its capture`, async () => {
+  test(`#632: another writer's commit ${label} stands, and this call qualifies again on top of it by itself`, async () => {
     const root = await stagedChange()
-    const before = headOf632(root)
     const entries = indexEntries(root, ["a.txt"], spawnSync)
     const race = raceAt(when)
     const result = commitIndexPaths(root, ["a.txt"], entries, "save", race.spawn)
     const theirs = race.theirs()
     assert.ok(theirs, "the other writer committed")
-    assert.equal(headOf632(root), theirs, "HEAD is the other writer's commit")
+    assert.equal(result.ok, true, result.stderr)
+    assert.equal(git(root, ["rev-parse", "HEAD^"]).trim(), theirs, "this call's commit sits on the other writer's")
     assert.equal(git(root, ["show", "HEAD:foreign.txt"]), "theirs\n", "their commit is not undone")
-    assert.equal(git(root, ["show", "HEAD:a.txt"]), "one\n", "nothing of this call's is committed")
-    assert.equal(result.ok, false)
-    assert.equal(result.readback, "absent")
-    assert.deepEqual(result.capture, { before, branch: branchOf632(root), expected: [`100644 ${git(root, ["rev-parse", ":a.txt"]).trim()}\ta.txt`] })
-    assert.deepEqual(git(root, ["diff", "--cached", "--name-only"]).trim().split("\n"), ["a.txt", "b.txt"], "the shared index and its staged selection are as they were")
+    assert.equal(git(root, ["show", "HEAD:a.txt"]), "two\n", "this call's change is committed")
+    assert.deepEqual(git(root, ["diff", "--cached", "--name-only"]).trim().split("\n"), ["b.txt"], "the rest of the shared index is as it was")
   })
 }
 
-test("#632: a HEAD that moves before the private index is seeded is not committed on: the capture names the HEAD that was read", async () => {
+for (const [label, when] of [["after the private index is built", afterSeeding], ["at the call that would publish the commit", publishing]]) {
+  test(`#632: a branch another writer keeps moving ${label} is held after the retries, with the capture, and nothing is committed over it`, async () => {
+    const root = await stagedChange()
+    const before = headOf632(root)
+    const entries = indexEntries(root, ["a.txt"], spawnSync)
+    const race = raceAt(when, { always: true })
+    const result = commitIndexPaths(root, ["a.txt"], entries, "save", race.spawn)
+    const theirs = race.theirs()
+    assert.ok(theirs, "the other writer committed")
+    assert.equal(headOf632(root), theirs, "HEAD is the other writer's commit")
+    assert.equal(git(root, ["show", "HEAD:a.txt"]), "one\n", "nothing of this call's is committed")
+    assert.equal(result.ok, false)
+    assert.equal(result.readback, "absent")
+    assert.equal(result.capture.expected[0], `100644 ${git(root, ["rev-parse", ":a.txt"]).trim()}\ta.txt`)
+    assert.notEqual(result.capture.before, before, "the capture names the HEAD the last qualification read")
+  })
+}
+
+test("#632: a HEAD that moves before the private index is seeded is not committed on: the call reads again and commits on the HEAD it finds", async () => {
   const root = await stagedChange()
-  const before = headOf632(root)
   const entries = indexEntries(root, ["a.txt"], spawnSync)
   const race = raceAt((verb) => verb[0] === "read-tree")
   const result = commitIndexPaths(root, ["a.txt"], entries, "save", race.spawn)
-  assert.equal(headOf632(root), race.theirs())
+  assert.equal(result.ok, true, result.stderr)
+  assert.equal(git(root, ["rev-parse", "HEAD^"]).trim(), race.theirs())
   assert.equal(git(root, ["show", "HEAD:foreign.txt"]), "theirs\n")
-  assert.deepEqual([result.ok, result.readback, result.capture?.before], [false, "absent", before])
+  assert.equal(git(root, ["show", "HEAD:a.txt"]), "two\n")
 })
 
 test("#632: the refused commit's capture finishes later on top of the other writer's commit, which stands", async () => {
   const root = await stagedChange()
   const entries = indexEntries(root, ["a.txt"], spawnSync)
-  const race = raceAt(publishing)
+  const race = raceAt(publishing, { always: true })
   const result = commitIndexPaths(root, ["a.txt"], entries, "save", race.spawn)
   const { before, branch, expected } = result.capture
   const finished = finishCommit({ root, paths: ["a.txt"], expected, before, branch, message: "save", commit: true, env: {} })
@@ -1179,4 +1199,35 @@ test("#632: a Git without `git hook run` holds with that reason, not as a hook r
   assert.deepEqual([result.ok, result.readback], [false, "absent"])
   assert.match(result.stderr, /needs Git 2\.36 or later/u)
   assert.equal(git(root, ["rev-parse", "HEAD"]).trim(), before)
+})
+
+// A commit that landed and was then reported as cut off, on a machine so slow that every read after it that has the ordinary
+// time is cut off too: only a read given more room answers.
+function landedThenCut() {
+  let landed = false
+  const cut = { status: null, stdout: "", stderr: "", error: Object.assign(new Error("spawnSync git ETIMEDOUT"), { code: "ETIMEDOUT" }) }
+  const spawn = (command, args, options) => {
+    const verb = args.slice(2)
+    if (verb[0] === "commit") {
+      spawnSync(command, args, options)
+      landed = true
+      return cut
+    }
+    if (landed && ["rev-parse", "rev-list", "diff-tree", "log", "ls-tree"].includes(verb[0]) && options.timeout <= 10_000) return cut
+    return spawnSync(command, args, options)
+  }
+  return { spawn }
+}
+
+test("a commit that landed and was cut off is read back as committed when the reads are asked again with more room, never unknown", async () => {
+  const root = await mkTempRepo()
+  await fs.writeFile(path.join(root, "a.txt"), "one\n")
+  git(root, ["add", "a.txt"])
+  git(root, ["commit", "-q", "-m", "first"])
+  await fs.writeFile(path.join(root, "a.txt"), "two\n")
+  git(root, ["add", "a.txt"])
+  const result = commitPaths(root, ["a.txt"], "save", landedThenCut().spawn)
+  assert.equal(result.ok, true, JSON.stringify(result))
+  assert.equal(commitCount(root), 2, "the commit was made once")
+  assert.equal(lastCommitMessage(root), "save")
 })

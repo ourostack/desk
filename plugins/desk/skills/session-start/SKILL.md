@@ -45,7 +45,7 @@ If the desk already exists and still shows Epoch 1 evidence (durable desk state 
 
 **Delivered, awaiting sign-off.** A boot section by that name and one numbered instruction list delivered tasks the operator has not answered; `details.md` says what to do with them, in short: after what the operator asked, raise them once, together.
 
-**Resume.** Hand a chosen task to `session-resumption`; its state machine lives in `task-lifecycle`. To start new work, follow `start-task`.
+**Resume.** Hand a chosen task to `session-resumption`; its state machine lives in `task-lifecycle`. Resume from the card's `**Next step:**` and its `log.md` (task_focus shows both), never from a host's session-state checkpoints or files. To start new work, follow `start-task`.
 
 **Status on request.** When the operator asks "status" or "where are we" later in the session, answer from `desk_status` with `{ detail: true }`: its `active_tasks` (by track, newest first, at most 20, then a count), each task's blocker or waiting reason, the local repos of open tasks with uncommitted or unpushed work (`git -C <path> status --porcelain`), and the last three entries in `$DESK/_meta/friction.md`. It is read-only: do not sync first, fetch trackers or change anything; end by asking which task to resume or whether to start new.
 

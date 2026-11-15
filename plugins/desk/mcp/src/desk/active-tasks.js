@@ -33,6 +33,7 @@ import { TERMINAL_STATES } from "./lifecycle.js"
 import { readSteps, summarizeSteps } from "./steps.js"
 import { dueResources } from "./resources.js"
 import { cardFiles, readCleanupIndex } from "./cleanup-index.js"
+import { scratchPathCount } from "./scratch-paths.js"
 
 const TERMINAL_STATUSES = new Set(TERMINAL_STATES)
 const MAX_CARD_BYTES = 64 * 1024
@@ -161,6 +162,12 @@ function stepsOf(content, truncated) {
 function cleanupOf(content, truncated, status) {
   const due = dueResources(content, { status, truncated }).length
   return due === 0 ? {} : { cleanup_due_count: due }
+}
+
+// How many paths into a session folder or a temp folder the card names: they die with the session, so a successor loses what they point at.
+function scratchOf(content) {
+  const count = scratchPathCount(content)
+  return count === 0 ? {} : { scratch_paths: count }
 }
 
 // The finished or archived cards this machine's cleanup index lists that still have rows due. A card still unfinished is left out: the scan above counts it.
@@ -354,6 +361,7 @@ async function scanDesk(deskRoot, scanRoot, desk, counts) {
         blocker: blockerOf(content),
         ...stepsOf(content, truncated),
         ...cleanupOf(content, truncated, status),
+        ...scratchOf(content),
       })
     }
     if (tasks.length === 0) continue

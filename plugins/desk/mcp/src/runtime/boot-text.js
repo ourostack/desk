@@ -235,6 +235,9 @@ function pushNotesByTask(accounts) {
   return byTask
 }
 
+// A card that points into a session or temp folder points at something that dies with the session; the fix leads.
+const SCRATCH_NOTE = (count) => `scratch paths: copy ${count === 1 ? "the file" : "those files"} into the task's folder with desk_save and link that; this card names ${count} path${count === 1 ? "" : "s"} in a session or temp folder that die${count === 1 ? "s" : ""} with the session`
+
 function taskLines(track, task, pushNotes) {
   const named = `${track.desk ? `${track.desk}/` : ""}${track.track}/${task.slug}`
   const title = typeof task.title === "string" && task.title !== task.slug ? ` "${task.title}"` : ""
@@ -245,7 +248,8 @@ function taskLines(track, task, pushNotes) {
   const elsewhere = saysElsewhere(task) ? [`  ${ELSEWHERE_NOTE}`] : []
   const cleanup = task.cleanup_due_count > 0 ? [`  cleanup due: ${task.cleanup_due_count}`] : []
   const large = task.card_kb > 0 ? [`  card is ${task.card_kb} KB; move history into its iteration folder (task_update replace_section) so boot can read all of it`] : []
-  return [`- ${named}${title}${updated}${hidden}`, ...stepLines(task), ...large, ...cleanup, ...elsewhere, ...push]
+  const scratch = task.scratch_paths > 0 ? [`  ${SCRATCH_NOTE(task.scratch_paths)}`] : []
+  return [`- ${named}${title}${updated}${hidden}`, ...stepLines(task), ...large, ...cleanup, ...scratch, ...elsewhere, ...push]
 }
 
 // A repo's path as boot prints it: already expanded against this machine's HOME, with the card's own spelling after it ("/home/me/code/x (~/code/x)"), so an agent never expands `~` itself

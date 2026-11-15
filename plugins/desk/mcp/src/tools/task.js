@@ -57,6 +57,8 @@ import { recordArchivedDisposition } from "./task-archived-resource.js"
 import { makeSessionLabelProposal } from "../runtime/session-label.js"
 import { archiveDueAnswer } from "./task-archive-due.js"
 import { admitContent, assertCleanContentTarget, assertPublishedContentBase } from "../desk/content-home.js"
+import { appendCardLog } from "./task-log.js"
+import { scratchPathWarning } from "../desk/scratch-paths.js"
 import { defaultBranchForPublication } from "../util/main-publish.js"
 
 // Said in the first lines of the response and in plain imperatives: an agent that has just made a change expects to publish it, and one that read only the tail of the response ran `git push` on the desk after this call.
@@ -322,7 +324,7 @@ const OPTIONAL_RUNTIME_FIELDS = [
 // __tests__/tool_schema_parity.test.js checks these against the tool's
 // declared schema in tool-schemas.js.
 export const TASK_CREATE_FIELDS = ["track", "slug", "title", "status", "body", "focus", "steps", "intake_proposal", "display_label", ...OPTIONAL_RUNTIME_FIELDS]
-export const TASK_UPDATE_FIELDS = ["track", "slug", "status", "frontmatter", "body_append", "note", "next_step", "evidence", "repos_removed_reason", "return_reason", "step", "resource", "display_label", "replace_section", "content_home"]
+export const TASK_UPDATE_FIELDS = ["track", "slug", "status", "frontmatter", "body_append", "note", "next_step", "evidence", "repos_removed_reason", "return_reason", "step", "resource", "display_label", "replace_section", "content_home", "log"]
 export const TASK_ARCHIVE_FIELDS = ["track", "slug", "evidence", "outcome"]
 
 // The three outcome records are written only by the task tools; a caller never supplies them.
@@ -802,6 +804,8 @@ export async function task_create({ deskRoot, input, person = null, search, stat
   }
   search?.noteChange(relPath(deskRoot, filePath))
   const result = { status: "created", path: relPath(deskRoot, filePath) }
+  const scratch = scratchPathWarning([body, values.title], "This card")
+  if (scratch !== undefined) result.scratch_paths = scratch
   result.work_context = { status: data.status, planning_complete: data.planning_complete === true }
   if (commit) result.commit = commit
   if (data.status === "drafting" && values.focus === true && data.planning_complete !== true) {
@@ -973,7 +977,7 @@ function refuseBodyOnlyKeys(frontmatter) {
   }
 }
 
-export async function task_update({ deskRoot, input, person = null, search, statusContext = {}, env = process.env, spawnGit = spawnSync, schedulePush = schedulePushDefault, finalize = requestTaskFinalize, fetchFn }) {
+export async function task_update({ deskRoot, input, person = null, search, statusContext = {}, env = process.env, spawnGit = spawnSync, schedulePush = schedulePushDefault, finalize = requestTaskFinalize, fetchFn, appendLane = {} }) {
   const values = input ?? {}
   // A field this tool does not read would otherwise be dropped in silence, and the agent would believe the card changed.
   const unknown = Object.keys(values).filter((key) => !TASK_UPDATE_FIELDS.includes(key))
@@ -996,6 +1000,15 @@ export async function task_update({ deskRoot, input, person = null, search, stat
       .filter(([key, value]) => !["track", "slug", "display_label", "content_home"].includes(key) && value !== undefined)
       .map(([id, value]) => ({ id, content: typeof value === "string" ? value : JSON.stringify(value) })),
   })
+  // `log` goes to log.md beside the card by the cheap append path. Alone, it is the whole call; with other fields, the rest of the call follows it.
+  let logged = null
+  if (values.log !== undefined) {
+    logged = await appendCardLog({ deskRoot, person, track, slug, text: requiredText(values.log, "log"), admission: contentAdmission, search, lane: { spawnGit, schedulePush, ...appendLane } })
+    if (Object.keys(values).every((key) => ["track", "slug", "display_label", "content_home", "log"].includes(key))) {
+      if (contentAdmission !== null) logged.content_admission = contentAdmission
+      return logged
+    }
+  }
   // Checked before anything is read or written: a string spread into the
   // card would write one key per character.
   const givenFrontmatter = objectInput(values.frontmatter, { tool: "task_update", field: "frontmatter" })
@@ -1213,6 +1226,9 @@ export async function task_update({ deskRoot, input, person = null, search, stat
   else if (returnReason !== undefined) await requestTaskReturnSync({ deskRoot, person, track, slug, env, finalize })
   const result = { status: "updated", path: relPath(deskRoot, filePath) }
   if (contentAdmission !== null) result.content_admission = contentAdmission
+  if (logged !== null) result.log = { path: logged.path, commit: logged.commit }
+  const scratch = scratchPathWarning([note, nextStep, body_append, section?.markdown, values.log], "This update")
+  if (scratch !== undefined) result.scratch_paths = scratch
   if (commit) result.commit = commit
   const cardBytes = (await fs.stat(filePath)).size
   if (cardBytes > CARD_WARN_BYTES) result.card_size_warning = `This card is ${Math.round(cardBytes / 1024)} KB. Boot reads only the first 64 KB of a card, so move older history into the task's iteration folder and shorten the card (task_update with replace_section).`

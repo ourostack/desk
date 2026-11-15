@@ -42,7 +42,7 @@ export const TOOL_DESCRIPTIONS = {
   task_create:
     "Use when new work needs its own card: create a task card at <track>/<slug>/task.md. `slug` must be an outcome name: 2-6 lowercase kebab-case words, not prompt-like or credential-like; a rejection says what to fix.",
   task_update:
-    "The only way to change an existing task card (direct edits are denied). Merge `frontmatter`, record progress with `note` and `next_step`, `body_append`, or change `step`, `resource` or a `replace_section`. A move to `done` needs `evidence`. A live done/cancelled result carries archive_due: the owning main agent calls task_archive before final delivery. The cue archives nothing itself.",
+    "The only way to change an existing task card (direct edits are denied). Merge `frontmatter`, record progress with `note` and `next_step`, `body_append`, put rulings and evidence pointers in `log` (a dated entry in the task's log.md; cheap to repeat, rapid entries share one commit), or change `step`, `resource` or a `replace_section`. A move to `done` needs `evidence`. A live done/cancelled result carries archive_due: the owning main agent calls task_archive before final delivery. The cue archives nothing itself.",
   task_archive:
     "Use when a task's work is finished or cancelled: move <track>/<slug>/ to <track>/_archive/<slug>/. A task not yet done or cancelled needs `evidence` or `outcome: \"cancelled\"`. Returns archive_pending with the retained path and next_action when publication is unproven; that is not completed publication. Repeating an archived task is safe.",
   task_move:

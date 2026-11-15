@@ -115,6 +115,8 @@ const TASK_PROGRESS = {
   next_step: text("Replaces the card's `**Next step:**` paragraph."),
 }
 
+const TASK_LOG = text("A dated entry for the task's `log.md` beside its card, the place for rulings, decisions and where the evidence is. Cheap to repeat: entries written close together share one commit and one push, and a call never waits on a publication still running.")
+
 const REPLACE_SECTION = {
   type: "object",
   properties: {
@@ -203,7 +205,7 @@ export const TOOL_INPUT_SCHEMAS = Object.freeze({
     origin_note: text("When the agent started the task: one line on what it noticed."),
     steps: { type: "array", items: STEP, description: "The outcome's steps, in order, written as the card's `## Steps` table. A new step needs `id`, `repo` and `depends_on`." },
   }, ["track", "slug", "title"]),
-  task_update: schema({ ...TASK_TARGET, status: text("Shorthand for `frontmatter.status`: one of drafting, processing, validating, collaborating, paused, blocked, done, cancelled. Moving to `done` needs `evidence`."), ...CARD_UPDATE, ...TASK_PROGRESS, evidence: TASK_DONE_EVIDENCE, repos_removed_reason: REPOS_REMOVED_REASON, return_reason: RETURN_REASON, step: STEP, resource: RESOURCE, display_label: DISPLAY_LABEL, replace_section: REPLACE_SECTION, content_home: CONTENT_HOME }, ["track", "slug"]),
+  task_update: schema({ ...TASK_TARGET, status: text("Shorthand for `frontmatter.status`: one of drafting, processing, validating, collaborating, paused, blocked, done, cancelled. Moving to `done` needs `evidence`."), ...CARD_UPDATE, ...TASK_PROGRESS, evidence: TASK_DONE_EVIDENCE, repos_removed_reason: REPOS_REMOVED_REASON, return_reason: RETURN_REASON, step: STEP, resource: RESOURCE, display_label: DISPLAY_LABEL, replace_section: REPLACE_SECTION, log: TASK_LOG, content_home: CONTENT_HOME }, ["track", "slug"]),
   task_archive: schema({ ...TASK_TARGET, evidence: TASK_DONE_EVIDENCE, outcome: TASK_ARCHIVE_OUTCOME }, ["track", "slug"]),
   task_signoff: schema({
     track: text("The track folder of the delivered task."),
@@ -296,7 +298,7 @@ export const TOOL_INPUT_SCHEMAS = Object.freeze({
       items: {
         type: "object",
         properties: {
-          path: text("Where to write the file, relative to the desk root."),
+          path: text("Where to write the file, relative to the desk root. To pass an artifact to another session, write it under the task's `handoffs/` folder: the reply gives the repository URL to hand over, never a path in a session or temp folder."),
           content: text("The file's full content, as UTF-8 text (at most 1 MiB)."),
         },
         required: ["path", "content"],
