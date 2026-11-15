@@ -51,7 +51,7 @@ const accessToken = (claims = {}) =>
 test("approved branding assets are public even while sign-in is unavailable", async (t) => {
   const { base } = await start(t, { unavailable: NOT_SET_UP });
   for (const [path, type, hash] of [
-    ["/assets/desk-logo.png", "image/png", "76dd2f6958c30d2f6975d287a758376d9c6a58cc5c0b035adc438cc75c4df022"],
+    ["/assets/desk-logo.png", "image/png", "66d0ad25b01028c509437a2839d5a4bd2a49a3313da0a722f72eb503279d5d3b"],
     ["/favicon.svg", "image/svg+xml", "0eedadf4cc9a2797d558f5f97ff6918fb7c44c11c676a8dd2b77083ce554079a"],
   ]) {
     const response = await fetch(`${base}${path}`);
