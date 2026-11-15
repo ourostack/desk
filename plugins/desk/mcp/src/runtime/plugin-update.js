@@ -4,11 +4,13 @@
 // release, and this process's sibling roots (`<agency data>/plugins/sessions/agency-plugin-<id>.p<pid>/root-N/<plugin>`)
 // show what it loaded, so the comparison is a few local reads: no network, no budget, no failure that can reach boot.
 //
-// When a loaded plugin is older than the newest release Agency has fetched, the finding carries one plain line the agent
-// can say once per session. On a Mac where Housesitter's auto-restart job is installed (its launchd agent file exists),
-// the line says the app will restart by itself instead.
+// When a loaded plugin is older than the newest release Agency has fetched, and the newer release differs in something a
+// process fixes at its start, the finding carries one plain line the agent can say once per session. A release that
+// changes only Desk's runtime (`mcp/src`, which updates in place) is no reason to restart, so it is not announced. On a
+// Mac where Housesitter's auto-restart job is installed (its launchd agent file exists), the line says the app will
+// restart by itself instead.
 
-import { existsSync, readdirSync, readFileSync } from "node:fs"
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs"
 import * as path from "node:path"
 import { agencyCache } from "./desk-channel.js"
 import { compareVersions } from "./stale-desk.js"
@@ -42,20 +44,21 @@ function manifest(dir) {
   return null
 }
 
-/** The plugins this process loaded: every plugin folder in the session folder's root-N siblings of Desk's own, as [{ name, version }]. */
+/** The plugins this process loaded: every plugin folder in the session folder's root-N siblings of Desk's own, as [{ name, version, dir }]. */
 export function loadedPlugins(sessionDir) {
   const out = []
   for (const root of list(sessionDir).filter((entry) => /^root-\d+$/u.test(entry))) {
     for (const plugin of list(path.join(sessionDir, root))) {
-      const found = manifest(path.join(sessionDir, root, plugin))
-      if (found !== null) out.push(found)
+      const dir = path.join(sessionDir, root, plugin)
+      const found = manifest(dir)
+      if (found !== null) out.push({ ...found, dir })
     }
   }
   return out
 }
 
-/** The newest release Agency has fetched for each plugin: this engine's unpinned entries (a branch or tag), the most recently fetched per name. Map name -> version. */
-export function newestFetched(cacheDir, engine) {
+/** The newest release Agency has fetched for each plugin: this engine's unpinned entries (a branch or tag), the most recently fetched per name. Map name -> { version, dir }. */
+function newestReleases(cacheDir, engine) {
   let entries
   try {
     entries = Object.values(JSON.parse(readFileSync(path.join(cacheDir, "cache_index.json"), "utf8")).entries)
@@ -65,11 +68,63 @@ export function newestFetched(cacheDir, engine) {
   const newest = new Map()
   for (const entry of entries) {
     if (typeof entry?.spec !== "string" || !entry.spec.startsWith(`${engine}:`) || PINNED.test(entry.spec) || typeof entry.dir_name !== "string") continue
-    const found = manifest(path.join(cacheDir, "entries", entry.dir_name))
+    const dir = path.join(cacheDir, "entries", entry.dir_name)
+    const found = manifest(dir)
     const fetched = Number(entry.fetched_at)
-    if (found !== null && (!newest.has(found.name) || fetched > newest.get(found.name).fetched)) newest.set(found.name, { version: found.version, fetched })
+    if (found !== null && (!newest.has(found.name) || fetched > newest.get(found.name).fetched)) newest.set(found.name, { version: found.version, dir, fetched })
   }
-  return new Map([...newest].map(([name, { version }]) => [name, version]))
+  return newest
+}
+
+/** Map name -> version of `newestReleases`. */
+export const newestFetched = (cacheDir, engine) => new Map([...newestReleases(cacheDir, engine)].map(([name, { version }]) => [name, version]))
+
+// What a process fixes at its start: its skills (text and descriptions), hooks, agents, manifests and MCP config, and for Desk
+// its MCP session layer (the tool names, descriptions and schemas the host registered). Housesitter's plugin-update job applies
+// the same rule when it decides to restart; keep the two lists in step.
+const FIXED_PER_PROCESS = ["skills/", "agents/", "hooks/", "plugin.json", ".claude-plugin/plugin.json", ".mcp.json", ".mcp.copilot.json", ".mcp.claude-codex.json", "agency.json", "settings.json"]
+const DESK_SESSION_LAYER = ["mcp/src/tool-names.js", "mcp/src/tool-schemas.js", "mcp/src/tool-schema-parts.js", "mcp/web-catalog.json"]
+
+function collect(root, paths) {
+  const files = new Map()
+  const add = (rel) => {
+    const full = path.join(root, ...rel.split("/"))
+    let info
+    try {
+      info = statSync(full)
+    } catch {
+      return
+    }
+    if (info.isFile()) files.set(rel, full)
+    else for (const entry of list(full)) add(`${rel}/${entry}`)
+  }
+  for (const rel of paths) add(rel.replace(/\/$/u, ""))
+  return files
+}
+
+function contentOf(file, rel) {
+  try {
+    const buffer = readFileSync(file)
+    if (!rel.endsWith("plugin.json")) return buffer
+    const manifestJson = JSON.parse(buffer.toString("utf8"))
+    delete manifestJson.version
+    return Buffer.from(JSON.stringify(manifestJson))
+  } catch {
+    return null
+  }
+}
+
+/** Does the newer release differ, in a file a process fixes at its start, from the copy a session loaded? (A manifest is compared without its version.) */
+export function changesPerProcess(loadedDir, newDir, name) {
+  const paths = name === "desk" ? [...FIXED_PER_PROCESS, ...DESK_SESSION_LAYER] : FIXED_PER_PROCESS
+  const before = collect(loadedDir, paths)
+  const after = collect(newDir, paths)
+  for (const rel of new Set([...before.keys(), ...after.keys()])) {
+    const a = before.has(rel) ? contentOf(before.get(rel), rel) : null
+    const b = after.has(rel) ? contentOf(after.get(rel), rel) : null
+    if (a === null || b === null || !a.equals(b)) return true
+  }
+  return false
 }
 
 /** Is Housesitter's auto-restart job installed on this Mac? (Its launchd agent file exists; no other OS has the folder.) */
@@ -100,11 +155,13 @@ export function pluginUpdateFinding({ env, pluginRoot, agentHost, homeDir, skip 
     if (root === undefined) return null
     const cache = agencyCache({ env, agentHost, pluginRoot: root, homeDir })
     if (cache === null) return null
-    const newest = newestFetched(cache.cacheDir, cache.engine)
+    const newest = newestReleases(cache.cacheDir, cache.engine)
     const behind = new Map()
     for (const loaded of loadedPlugins(SESSION_ROOT.exec(root)[1])) {
-      const to = newest.get(loaded.name)
-      if (to !== undefined && !skip.includes(loaded.name) && compareVersions(loaded.version, to) < 0) behind.set(loaded.name, { name: loaded.name, from: loaded.version, to })
+      const release = newest.get(loaded.name)
+      if (release === undefined || skip.includes(loaded.name) || compareVersions(loaded.version, release.version) >= 0) continue
+      if (!changesPerProcess(loaded.dir, release.dir, loaded.name)) continue
+      behind.set(loaded.name, { name: loaded.name, from: loaded.version, to: release.version })
     }
     if (behind.size === 0) return null
     const plugins = [...behind.values()].sort((a, b) => a.name.localeCompare(b.name))
