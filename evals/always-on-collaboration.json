@@ -80,7 +80,8 @@
   "reviewedSourceFingerprint": "0dd5ddfdcbe89f0a83fda64c19b07285d476f6ef285fbfc3c26b71f0508a239b",
   "knownFailure": [
     {"issue": "https://github.com/ourostack/desk/issues/852", "case": "voice-and-deletion-gates", "observed": "2026-11-14"},
-    {"issue": "https://github.com/ourostack/desk/issues/971", "case": "requirement-change-names-stale-proof", "observed": "2026-11-14"}
+    {"issue": "https://github.com/ourostack/desk/issues/971", "case": "requirement-change-names-stale-proof", "observed": "2026-11-14"},
+    {"issue": "https://github.com/ourostack/desk/issues/1024", "case": "investigation-is-not-purchase-or-edit", "observed": "2026-11-15"}
   ],
   "requirements": [
     {"id": "git-backed-memory", "description": "Disable native harness memory while Desk is active. Keep durable instructions and preferences in the Git-backed desk, never in store_memory, vote_memory or another host memory store."},
