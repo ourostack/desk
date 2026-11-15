@@ -311,9 +311,7 @@ export function catchUpBehind({ root, spawnGit = spawnSync }) {
   const upstream = upstreamOf(git)
   if (upstream === null) return { state: "no_upstream" }
   const head = git(["rev-parse", "HEAD"]).stdout.trim()
-  const resolved = git(["rev-parse", "--verify", "--quiet", `${upstream.tracking}^{commit}`])
-  if (resolved.status !== 0 || head === "") return { state: "no_upstream" }
-  const target = resolved.stdout.trim()
+  const target = git(["rev-parse", "--verify", "--quiet", `${upstream.tracking}^{commit}`]).stdout.trim()
   if (head === target) return { state: "current" }
   if (git(["merge-base", "--is-ancestor", head, target]).status !== 0) return { state: "diverged" }
   return followsUpstream({ git, upstream, head, target })

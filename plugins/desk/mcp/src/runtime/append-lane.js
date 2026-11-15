@@ -83,10 +83,8 @@ export function flushAppends(root) {
 
 // A commit that could not be made yet is tried again later, unhurried, while the process lives.
 function arm(lane, reason) {
-  if (lane.pending.size > 0 && lane.timer === null) {
-    lane.timer = setTimeout(() => flushAppends(lane.root), lane.maxWaitMs)
-    lane.timer.unref?.()
-  }
+  lane.timer = setTimeout(() => flushAppends(lane.root), lane.maxWaitMs)
+  lane.timer.unref?.()
   return reason
 }
 
