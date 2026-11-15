@@ -10,16 +10,20 @@ const BAD = new Set(["failure", "cancelled", "timed_out", "action_required", "st
 
 const decisions = async (fixture, options) => Promise.all(fixture.pulls.map(async (pull) => ({ pull, ...(await replayMerge(fixture, pull, options)) })))
 
-test("merge replay, large repository: 31 of 40 merge, and each of the 9 held back waits for the main branch's red run", async () => {
+test("merge replay, large repository: 23 of 40 merge; 9 wait for the main branch's red run and 8 more for a check nobody required that was failed, cancelled or unfinished at the merge", async () => {
   const fixture = loadFixture("merge-large.json")
   const results = await decisions(fixture)
   assert.equal(results.length, 40)
   const merges = results.filter((result) => result.merge)
   const held = results.filter((result) => !result.merge)
-  assert.equal(merges.length, 31)
-  for (const result of held) assert.match(result.waiting.join(" "), /main's latest completed ci\.yml run \d+ .* is failure/u, `${result.pull.name} waits for an unexpected reason: ${result.waiting}`)
-  assert.equal(held.length, 9)
-  assert.equal(held.filter((result) => /main's latest completed/u.test(result.waiting.join(" "))).length, 9)
+  assert.equal(merges.length, 23)
+  assert.equal(held.length, 17)
+  const mainRed = held.filter((result) => /main's latest completed ci\.yml run \d+ .* is failure/u.test(result.waiting.join(" ")))
+  assert.equal(mainRed.length, 9)
+  // Before the relay judged every check, these 8 merged over a check that no relay setting required, and the recorded pull requests did too.
+  const unrequired = held.filter((result) => !mainRed.includes(result))
+  assert.equal(unrequired.length, 8)
+  for (const result of unrequired) assert.match(result.waiting.join(" "), /^\d other checks? on the head not green \(.*(in_progress|failure|cancelled)/u, `${result.pull.name} waits for an unexpected reason: ${result.waiting}`)
   assert.equal(held.filter((result) => /visual proof failure/u.test(result.waiting.join(" "))).length, 1)
   assert.deepEqual(results.filter((result) => result.error), [])
 })
@@ -67,9 +71,9 @@ test("merge replay: a matrix job skipped before it expanded does not hold a pull
   const relay = mergeRelay(fixture, { skippedPasses: false, requireMainWorkflowGreen: undefined })
   const results = await Promise.all(fixture.pulls.map(async (pull) => ({ pull, ...(await replayMerge(fixture, pull, { relay })) })))
   const merged = results.filter((result) => result.merge)
-  assert.equal(merged.length, 34)
-  // A pull request whose checks were all skipped by path filters still waits without skippedPasses: a skip passes only when asked.
-  for (const result of results.filter((entry) => !entry.merge)) assert.match(result.waiting.join(" "), /skipped|visual proof failure/u)
+  assert.equal(merged.length, 25)
+  // A pull request whose required checks were all skipped by path filters still waits without skippedPasses: a skip passes only when asked.
+  for (const result of results.filter((entry) => !entry.merge)) assert.match(result.waiting.join(" "), /skipped|visual proof failure|other checks? on the head not green/u)
 })
 
 test("dispatch replay: a day of pushed runs fires once per head, after the settle", async () => {

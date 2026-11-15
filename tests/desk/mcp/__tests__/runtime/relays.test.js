@@ -41,7 +41,7 @@ const MERGE = {
 
 const run = (id, extra = {}) => ({ id, status: "completed", conclusion: "success", head_sha: `sha${id}`, head_branch: "main", html_url: `https://github.test/runs/${id}`, run_number: id, updated_at: new Date(NOW + id * SECOND).toISOString(), ...extra })
 const check = (name, conclusion = "success", status = "completed") => ({ name, status, conclusion: status === "completed" ? conclusion : null })
-const GREEN = [check("typecheck"), check("npm test (ubuntu-latest, 1/2)"), check("npm test (ubuntu-latest, 2/2)"), check("unrelated", "failure")]
+const GREEN = [check("typecheck"), check("npm test (ubuntu-latest, 1/2)"), check("npm test (ubuntu-latest, 2/2)")]
 
 /** A GitHub that answers by pattern, keeps If-None-Match semantics and records every read and write. */
 function github() {
@@ -94,10 +94,12 @@ const runsRoute = /\/repos\/o\/data\/actions\/workflows\/data\.yml\/runs\?status
 const prWrites = (world) => world.writes.filter((write) => write.route.includes("/pulls/"))
 const comments = (world) => world.writes.filter((write) => write.route.includes("/comments"))
 
-function mergeWorld(world, { checks = GREEN, main = [{ id: 9, conclusion: "success", html_url: "https://github.test/runs/9" }], pr = {} } = {}) {
+function mergeWorld(world, { checks = GREEN, statuses = [], main = [{ id: 9, conclusion: "success", html_url: "https://github.test/runs/9" }], pr = {} } = {}) {
   world.on("GET", /\/issues\?state=open&labels=merge-when-green/u, () => [{ number: 7, pull_request: {} }, { number: 8 }])
   world.pull(7, pr)
   world.on("GET", /\/commits\/a+\/check-runs/u, () => ({ total_count: checks.length, check_runs: checks }))
+  // With no statuses GitHub still answers a combined state of pending, which says nothing.
+  world.on("GET", /\/commits\/a+\/status/u, () => ({ state: statuses.length === 0 ? "pending" : "failure", total_count: statuses.length, statuses }))
   world.on("GET", /\/repos\/o\/pages$/u, () => ({ default_branch: "main" }))
   // As GitHub does, a runs list asked for with status=completed leaves out queued and in-progress runs.
   world.on("GET", /\/workflows\/ci\.yml\/runs\?branch=main/u, (route) => ({ workflow_runs: main.map((run) => ({ status: "completed", html_url: `https://github.test/runs/${run.id}`, ...run })).filter((run) => !route.includes("status=completed") || run.status === "completed") }))
@@ -392,6 +394,34 @@ test("waitingOnChecks names every required check that is missing, pending or not
   assert.deepEqual(waitingOnChecks(["a.b"], [check("axb")]), ["a.b: not started"], "only * is a wildcard")
 })
 
+test("waitingOnChecks: a check that is not required blocks while it failed or runs, and a skipped one that nothing requires does not", () => {
+  const verdict = (runs, statuses) => waitingOnChecks(["typecheck"], [check("typecheck"), ...runs], false, statuses)
+  assert.deepEqual(verdict([check("weekly-page", "failure")]), ["1 other check on the head not green (weekly-page failure)"])
+  assert.deepEqual(verdict([check("weekly-page", null, "in_progress")]), ["1 other check on the head not green (weekly-page in_progress)"])
+  assert.deepEqual(verdict([check("weekly-page", null, "queued"), check("docs", "cancelled")]), ["2 other checks on the head not green (weekly-page queued, docs cancelled)"])
+  for (const conclusion of ["timed_out", "action_required", "stale", "startup_failure"]) assert.equal(verdict([check("weekly-page", conclusion)]).length, 1, conclusion)
+  assert.deepEqual(verdict([check("weekly-page", "skipped"), check("docs", "neutral"), check("lint")]), [])
+  assert.deepEqual(waitingOnChecks(["typecheck"], [check("typecheck"), check("weekly-page", "skipped")], true), [])
+})
+
+test("waitingOnChecks: a failed attempt superseded by a green rerun of a check that is not required does not block, and a newer failed one does", () => {
+  const attempt = (id, conclusion, startedAt) => ({ id, name: "weekly-page", status: "completed", conclusion, started_at: startedAt })
+  const rest = [check("typecheck")]
+  assert.deepEqual(waitingOnChecks(["typecheck"], [attempt(1, "failure", "2026-11-14T20:42:38Z"), attempt(2, "success", "2026-11-14T20:47:21Z"), ...rest]), [])
+  assert.deepEqual(waitingOnChecks(["typecheck"], [attempt(1, "success", "2026-11-14T20:42:38Z"), attempt(2, "failure", "2026-11-14T20:47:21Z"), ...rest]), ["1 other check on the head not green (weekly-page failure)"])
+})
+
+test("waitingOnChecks: every commit status on the head must be success, a pending one counts as running, and a required name can be a status context", () => {
+  const verdict = (statuses, required = ["typecheck"]) => waitingOnChecks(required, [check("typecheck")], false, statuses)
+  assert.deepEqual(verdict([{ context: "ci/legacy", state: "success" }]), [])
+  assert.deepEqual(verdict([{ context: "ci/legacy", state: "failure" }]), ["1 other check on the head not green (ci/legacy failure)"])
+  assert.deepEqual(verdict([{ context: "ci/legacy", state: "error" }]), ["1 other check on the head not green (ci/legacy failure)"])
+  assert.deepEqual(verdict([{ context: "ci/legacy", state: "pending" }]), ["1 other check on the head not green (ci/legacy in_progress)"])
+  assert.deepEqual(verdict([{ context: "ci/legacy", state: "success" }], ["typecheck", "ci/*"]), [])
+  assert.deepEqual(verdict([{ context: "ci/legacy", state: "pending" }], ["typecheck", "ci/*"]), ["ci/*: ci/legacy in_progress"])
+  assert.deepEqual(waitingOnChecks(["typecheck"], [check("ci/legacy", "failure"), check("typecheck")], false, [{ context: "ci/legacy", state: "success" }]), ["1 other check on the head not green (ci/legacy failure)"], "a status does not hide a failed check run of the same name")
+})
+
 test("waitingOnChecks judges the newest attempt of a check, and a plain list with no attempt times takes its later entry", () => {
   assert.deepEqual(waitingOnChecks(["x"], [check("x", "failure"), check("x")]), [])
   assert.deepEqual(waitingOnChecks(["x"], [check("x"), check("x", "failure")]), ["x: x failure"])
@@ -413,7 +443,7 @@ test("waitingOnChecks: a matrix job skipped under its unexpanded template name s
   const required = ["npm test (ubuntu-latest, *)"]
   assert.deepEqual(waitingOnChecks(required, [check(TEMPLATE, "skipped")], true), [])
   assert.deepEqual(waitingOnChecks(required, [check(TEMPLATE, "skipped")]), [`npm test (ubuntu-latest, *): ${TEMPLATE} skipped`], "without skippedPasses a skipped check still holds")
-  assert.deepEqual(waitingOnChecks(required, [check(TEMPLATE, "failure")], true), ["npm test (ubuntu-latest, *): not started"], "only a skipped template matches, so a failed one still holds")
+  assert.deepEqual(waitingOnChecks(required, [check(TEMPLATE, "failure")], true), ["npm test (ubuntu-latest, *): not started", `1 other check on the head not green (${TEMPLATE} failure)`], "only a skipped template matches, so a failed one still holds")
   assert.deepEqual(waitingOnChecks(required, [check(TEMPLATE, "success")], true), ["npm test (ubuntu-latest, *): not started"], "only a skipped template matches")
   assert.deepEqual(waitingOnChecks(["lint (*)"], [check(TEMPLATE, "skipped")], true), ["lint (*): not started"], "a different prefix does not match")
 })
@@ -455,7 +485,7 @@ test("merge-when-green: with every check green and main green it squash-merges a
   assert.deepEqual(w.world.writes.filter((write) => write.method === "DELETE").map((write) => write.route), ["/repos/o/pages/git/refs/heads/feature/x"])
   assert.equal(comments(w.world).length, 1)
   assert.equal(comments(w.world)[0].method, "POST")
-  assert.match(comments(w.world)[0].body.body, /^<!-- desk-relay-status:pages merge -->\n\*\*merge-when-green\*\* merged this \(squash, head `aaaaaaa`, now `bbbbbbb`\)\. Every required check on the head was green and main's latest completed ci\.yml run 9 \(https:\/\/github\.test\/runs\/9\) was green; the branch is deleted\./u)
+  assert.match(comments(w.world)[0].body.body, /^<!-- desk-relay-status:pages merge -->\n\*\*merge-when-green\*\* merged this \(squash, head `aaaaaaa`, now `bbbbbbb`\)\. Every check and status on the head was green and main's latest completed ci\.yml run 9 \(https:\/\/github\.test\/runs\/9\) was green; the branch is deleted\./u)
   assert.equal(w.state("pages merge").lastMerge.number, 7)
   assert.match(relayStatusLines([MERGE], { "pages merge": w.state("pages merge") }, NOW)[0], /last merged #7/u)
   assert.equal(JSON.stringify(w.world.writes).match(/admin|bypass|auto_merge/iu), null, "no bypass of any kind is ever sent")
@@ -538,6 +568,39 @@ test("merge-when-green: a red latest completed main run holds the merge back and
   await w.poll()
   assert.deepEqual(prWrites(w.world), [])
   assert.deepEqual(w.state("pages merge").prs["7"].waitingOn, ["main's latest completed ci.yml run 9 (https://github.test/runs/9) is failure"])
+})
+
+test("merge-when-green: a failed or unfinished check that is not required, or a failed commit status, holds the merge", async () => {
+  const cases = [
+    { checks: [...GREEN, check("weekly-page", "failure")], waiting: "weekly-page failure" },
+    { checks: [...GREEN, check("weekly-page", null, "in_progress")], waiting: "weekly-page in_progress" },
+    { checks: [...GREEN, check("weekly-page", null, "queued")], waiting: "weekly-page queued" },
+    { checks: GREEN, statuses: [{ context: "ci/legacy", state: "failure" }], waiting: "ci/legacy failure" },
+    { checks: GREEN, statuses: [{ context: "ci/legacy", state: "pending" }], waiting: "ci/legacy in_progress" },
+  ]
+  for (const { checks, statuses, waiting } of cases) {
+    const w = await setup([MERGE])
+    mergeWorld(w.world, { checks, statuses })
+    await w.poll()
+    assert.deepEqual(prWrites(w.world), [], waiting)
+    assert.match(w.state("pages merge").prs["7"].waitingOn.join(" "), new RegExp(`other check on the head not green \\(${waiting}\\)`, "u"))
+  }
+  const green = await setup([MERGE])
+  mergeWorld(green.world, { checks: [...GREEN, check("weekly-page", "skipped")], statuses: [{ context: "ci/legacy", state: "success" }] })
+  await green.poll()
+  assert.deepEqual(prWrites(green.world).map((write) => write.method), ["PUT"])
+})
+
+test("merge-when-green: more than one page of commit statuses is read in full, so a failed one on a later page holds the merge", async () => {
+  const w = await setup([{ ...MERGE, requireMainWorkflowGreen: undefined }])
+  const many = Array.from({ length: 120 }, (_, index) => ({ context: `ci/${index}`, state: index === 110 ? "failure" : "success" }))
+  mergeWorld(w.world)
+  w.world.on("GET", /\/commits\/a+\/status\?per_page=100$/u, () => ({ state: "failure", total_count: 120, statuses: many.slice(0, 100) }))
+  w.world.on("GET", /\/commits\/a+\/status\?per_page=100&page=2$/u, () => ({ state: "failure", total_count: 120, statuses: many.slice(100) }))
+  await w.poll()
+  assert.deepEqual(prWrites(w.world), [])
+  assert.match(w.state("pages merge").prs["7"].waitingOn.join(" "), /ci\/110 failure/u)
+  assert.equal(Object.keys(w.state("pages merge").cache).some((route) => route.includes("/status")), false)
 })
 
 test("merge-when-green: a check rerun green counts by its newest attempt, and a newer failed attempt still holds the merge", async () => {

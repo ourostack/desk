@@ -98,6 +98,7 @@ export async function replayMerge(fixture, pull, { at = 0, source = "all", relay
       const runs = checksAt(pull, at, { source })
       return { total_count: runs.length, check_runs: runs }
     }
+    if (route.includes("/status?")) return { state: "pending", total_count: 0, statuses: [] }
     if (/\/repos\/[^/]+\/[^/]+$/u.test(route)) return { default_branch: "main" }
     if (route.includes("/actions/workflows/")) return { workflow_runs: mainRunsAt(pull, at) }
     if (route.includes("/comments")) return []
