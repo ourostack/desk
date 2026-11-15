@@ -1,5 +1,13 @@
 # desk plugin — changelog
 
+## 3.2.173 — 2026-11-15
+
+The [Epoch 3 RFC](docs/agentic-engineering-v3-rfc.md) has a new "Crash and freeze recovery" section: housesitter detects a frozen or crashed app with plain programs on a timer, recovers it and resumes every working session, records why the Mac stopped, follows the recovery for six hours, and coordinates a pending macOS update; the agent is told once, after the fact.
+
+The [Epoch 2 RFC](docs/agentic-engineering-v2-rfc.md) now shows a current screenshot of the [public factory site](https://ourostack.github.io/factory/), The loom, where every agent session is a woven strip. The old picture showed the site's earlier "longest sessions" cards, which the site no longer has.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.172 — 2026-11-15
 
 Desk now exposes 19 tools instead of 21: moving a task and renaming a track were never used in two weeks of real sessions, so they became options on the update tools. Old skill text that names a removed tool needs the new call:
