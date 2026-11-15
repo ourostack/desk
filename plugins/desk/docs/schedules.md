@@ -22,7 +22,7 @@ node <state>/ouroboros-skills/desk/drains/run.mjs schedule status   # one line p
 ] }
 ```
 
-`session`, `prompt` and `everyMinutes` (a whole number, 1 or more) are required. `name` defaults to the session id and must be unique, so give each schedule on one session its own. An invalid entry fails the command with the reason; it is never dropped, because a dropped schedule would stop a watchdog. Editing a prompt takes effect at the next poll; changing `everyMinutes` counts the next run from that poll. `--config` and `--state` point the command elsewhere.
+`session`, `prompt` and `everyMinutes` (a whole number, 1 or more) are required; `when`, `whenEveryMinutes` and `whenTimeoutSeconds` are optional and described under [Gating a schedule with `when`](#gating-a-schedule-with-when). `name` defaults to the session id and must be unique, so give each schedule on one session its own. An invalid entry fails the command with the reason; it is never dropped, because a dropped schedule would stop a watchdog. Editing a prompt takes effect at the next poll; changing `everyMinutes` counts the next run from that poll. `--config` and `--state` point the command elsewhere.
 
 ## How a schedule runs
 
@@ -30,6 +30,29 @@ node <state>/ouroboros-skills/desk/drains/run.mjs schedule status   # one line p
 - A due schedule is offered once per poll with the same wake id until a delivery lands. Three missed intervals send one prompt, because the next run is counted from the delivery that landed, never from the missed one.
 - If the runner cannot deliver (the session still has the last prompt queued, or the app refused), it reports the failure with `--error`, the schedule stays due and the same wake comes back with the next poll: one prompt waits, never a pile.
 - Each wake names its prompt as `replaces`, so a runner that supports it takes an older copy of the prompt still queued in the session back before it sends the new one.
+
+## Gating a schedule with `when`
+
+A watchdog that wakes a session every N minutes spends a full model turn even when nothing changed. Give the schedule a `when` command and the poll, which is plain code, decides first whether the prompt is worth a turn:
+
+```json
+{ "name": "epoch 3 watchdog", "session": "<session id>", "prompt": "Watchdog: check the lanes.", "everyMinutes": 30,
+  "when": ["node", "<state>/ouroboros-skills/desk/drains/gates/epoch-3.mjs"], "whenEveryMinutes": 5, "whenTimeoutSeconds": 30 }
+```
+
+`when` is an argv array, the program first, run directly with no shell, so a string such as `"node check.js"` is rejected with the entry named. Use a real executable (`node`, `git`, `gh`); on Windows a `.cmd` shim is not one. The poll runs it when the schedule is due, with the poll's own working directory and environment, no stdin, and a timeout of `whenTimeoutSeconds` (a whole number of seconds, default 30). What its exit means:
+
+| Exit | The poll |
+| --- | --- |
+| 0 | Delivers the prompt with the command's stdout, trimmed and cut at 2048 characters, appended as `Why now: …`. Empty output adds nothing. |
+| 1 | Skips quietly: nothing is sent, status records `skipped (when: nothing to do)` and the time, and the gate runs again one interval on. |
+| Anything else, a timeout, or a command that cannot start | Delivers the prompt with a `Note:` saying the gate failed and why (the exit code, the timeout, the start error and the first line of its stderr), so a broken gate never silences a watchdog. |
+
+`schedule status` shows the gate's last result on the schedule's line, such as `last gate: skipped (when: nothing to do) 3m ago`.
+
+`whenEveryMinutes` (a whole number, 1 or more) runs the gate more often than the prompt may go out: with `"everyMinutes": 30, "whenEveryMinutes": 5` the gate is checked every 5 minutes, and the prompt goes out at most every 30. After a delivery the gate is not run again until `everyMinutes` have passed, then it is checked every `whenEveryMinutes` until it says go. Without it, the gate runs once per `everyMinutes`.
+
+The rest is unchanged: a delivered prompt is one wake with one id until the runner reports it landed, and a runner that holds it gets the same wake and the same `Why now:` text back with the next poll, without the gate running again. Write a gate that only reads, because it runs on every due poll and a failure of the gate costs the cheap path, not the watchdog.
 
 ## Running it from Ouroboros
 
