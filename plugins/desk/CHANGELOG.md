@@ -1,5 +1,29 @@
 # desk plugin — changelog
 
+## 3.2.169 — 2026-11-15
+
+Session start now points to the [Epoch 3 RFC](docs/agentic-engineering-v3-rfc.md) on its `Desk RFC:` line, in place of the Epoch 2 RFC. The new document states the principles and working rules agreed for Epoch 3 in one short place, with the epoch-to-version map: Desk 3.2.86 and every release after belong to Epoch 3, which landed in place on `main`. The [Epoch 2 RFC](docs/agentic-engineering-v2-rfc.md) stays as history and now says so at the top. The `human-owned-work` eval was rerun against the changed source and now passes every case, so its known failure is removed.
+
+Desk now exposes 21 tools instead of 24, keeping the ones agents use and folding three rarely used ones into close neighbours. Old skill text that names a removed tool needs the new call:
+
+- `desk_timeline` is now `desk_search` with no `query` (or `newest: true`): it lists documents by update time, newest first, inside the `filters.since` to `filters.until` window, and the `track`, `status` and `kind` filters narrow it. In that mode `scope` defaults to `all`, as `desk_timeline` did.
+- `desk_reindex` is now `desk_doctor` with `reindex: true`. It answers once exact-word search is current, and says `search_starting` until the search engine has started.
+- `note_leave` and `note_ack` are now one tool, `note`: pass `to`, `subject` and `body` to leave a note, or `ack` with the note's path to acknowledge one. Its errors and the note files it writes name `note`, not the old tools. The Crew skills and the session-start details name the new calls.
+
+Boot and `desk_status` now tell the agent when a plugin the Copilot app loaded has a newer release. The app keeps a skill's text in memory for as long as it runs, so the skills of MS Desk, `cit`, Crew and Desk itself stay as they were when the app started, even after Agency has fetched a newer release. Desk's tools already update in place; skills cannot.
+
+Desk compares the plugins in this process's session folder (the `root-N` folders beside its own) with the newest release Agency has fetched for the same engine, with a few local reads and no network call. When one is older, boot prints one line under the status line, boot's JSON gains `plugin_update`, and `desk_status` carries the same line (`plugin_update`, with a note to say it once per session): "There's an update to `<plugin>` (`<from>` → `<to>`); restart the Copilot app when it suits you to pick it up." On a Mac where Housesitter's auto-restart job is installed (its launchd agent `bot.ouro.housesitter.plugin-update-restart` exists), the line says Housesitter will restart the app when nobody is using it, with each session asked to reach a safe point first and resumed after. Desk's own plugin is left out of this line while the stale-Desk line is printed, so one update is not announced twice. The check stays silent outside an Agency session, without a known engine, with no cache, and in a `node:test` run.
+
+Session start no longer adds boot lines that fired without telling the agent anything. Over 14 days of local sessions, the `unsaved-work` check ended in "not checked (boot budget exhausted)" in about four of five real sessions, because the earlier checks used the 300 ms boot budget first, and it never reported unsaved work. The check and its code are gone. The `workspace-tidy` check said "no bound desk" in about a third of the sessions and "budget exceeded; deferred, no agent action needed" in about another third; it now says nothing in those cases, nothing when the repair it started has nothing to report, and the registry records a budget overrun in the factory status as it does for any other check. A leftover from an earlier repair, a lock, an unreadable report or an inventory issue still produces its line, and the session-start skill no longer carries the sentence that told agents to ignore the noise.
+
+The Copilot boot no longer prints a 1.3 KB paragraph about a denied `ask_user` form. It described a local backstop hook that is not part of Desk, and the form is already off through Copilot's `askUser` setting, which Desk's session start sets. `interaction-style` keeps one short section: ask in chat, never rewrite a blocked question as a statement, and a blocked form is not an answer.
+
+`using-desk` no longer says "Never add AI attribution". Copilot's `includeCoAuthoredBy: false` is now set in each repository's `.github/copilot/settings.json`, and Desk's session start still sets it in the operator's own settings, so the always-on sentence repeated what the host already does. The "Durable context and attribution" section is now "Durable context". `git-hygiene` keeps its on-demand procedure for stripping attribution from history, and the attribution CI checks stay.
+
+New [`rnd-lab`](skills/rnd-lab/SKILL.md) skill for engineering R&D: standing up a lab of spikes, running them in parallel and ending in a reviewed design. Each spike gets one file with a question, a pass bar written before it runs, its status, the routes tried with their outcomes and reasons, and its evidence, so parallel lanes never collide and the operator can watch. Spikes use made-up data shaped like the real thing. When a spike doesn't work, the agent works out why and tries another route instead of stopping to ask for help while untried routes remain. The lab ends in a written design that an independent reviewer reads before it is called finished. It builds on `superpowers:brainstorming`'s "Spike to feel things out" for a single spike.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.168 — 2026-11-15
 
 A session that ends its turn with its focused task card unfinished and nothing running is now nudged once per idle stretch: "Your focused card isn't done and nothing is running: walk its definition of done; continue, or write the final report (Asked / Delivered / Accept or send back?)." Long-running coordinators used to go quiet with their card open and no final report.
