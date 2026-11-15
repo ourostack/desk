@@ -12,7 +12,7 @@ function text(value) {
   return typeof value === "string" && value.trim() !== ""
 }
 
-function agencyPluginsDir({ pluginRoot, homeDir }) {
+export function agencyPluginsDir({ pluginRoot, homeDir }) {
   // A session copy lives at <agency data>/plugins/sessions/agency-plugin-*/desk, so the cache is its sibling.
   const parts = path.resolve(pluginRoot).split(path.sep)
   const at = parts.lastIndexOf("sessions")
@@ -27,7 +27,7 @@ export function isAgencySession({ env, pluginRoot }) {
 }
 
 // This session's engine (`AGENCY_ENGINE`, else the agent host) and Agency's cache folder for it; null for an engine Agency does not run Desk on.
-function agencyCache({ env, agentHost, pluginRoot, homeDir }) {
+export function agencyCache({ env, agentHost, pluginRoot, homeDir }) {
   const engine = text(env.AGENCY_ENGINE) ? env.AGENCY_ENGINE.trim() : agentHost
   if (engine !== "copilot" && engine !== "claude") return null
   return { engine, cacheDir: path.join(agencyPluginsDir({ pluginRoot, homeDir }), "cache") }

@@ -175,7 +175,7 @@ test("sync and enforcement conditions that matter become short notes", () => {
   assert.equal(minimal.plugin_version, null)
 })
 
-async function makeSession(t, runtimePayload) {
+async function makeSession(t, runtimePayload, extra = {}) {
   const base = await mkTempRoot("desk-status-compact-")
   const root = path.join(base, "desk")
   mkdirSync(root, { recursive: true })
@@ -194,11 +194,22 @@ async function makeSession(t, runtimePayload) {
     }),
     loadRuntime: async () => ({ runtimeServer: runtime, runtimeStatus: { state: "ready" } }),
     setupDiagnostic: () => ({ status: "setup_required", mode: "setup", summary: "no desk" }),
+    ...extra,
   })
   t.after(() => session.dispose())
   await session.admission.refresh({ force: true })
   return session
 }
+
+test("desk_status carries the plugin-update line, compact and full, and nothing when no plugin is behind", async (t) => {
+  const finding = { plugins: [{ name: "cit", from: "0.1.81", to: "0.1.82" }], auto_restart: false, relay: "Tell the person once per session; skip it if you already have.", line: "There's an update to cit (0.1.81 → 0.1.82); restart the Copilot app when it suits you to pick it up." }
+  const behind = await makeSession(t, ready, { pluginUpdateFn: () => finding })
+  assert.deepEqual(payload(await behind.callTool({ name: "desk_status" })).plugin_update, { line: finding.line, relay: finding.relay })
+  assert.deepEqual(payload(await behind.callTool({ name: "desk_status", input: { detail: true } })).plugin_update, finding)
+  const current = await makeSession(t, ready, { pluginUpdateFn: () => null })
+  assert.ok(!("plugin_update" in payload(await current.callTool({ name: "desk_status" }))))
+  assert.ok(!("plugin_update" in payload(await current.callTool({ name: "desk_status", input: { detail: true } }))))
+})
 
 test("the desk_status tool is compact by default and returns the full payload only for detail: true", async (t) => {
   const full = { ...ready, active_embedding_spec: { id: "spec" }, snapshots: { module_state: "available" }, document_vectors: { chunks_total: 1 } }
