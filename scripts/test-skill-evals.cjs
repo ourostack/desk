@@ -1059,6 +1059,9 @@ try {
       const hung = run(["fixture", ...fake, "--suite-timeout-seconds", "2"], { FAKE_MODE: "hang-subject" });
       assert.equal(hung.status, 1);
       assert.match(hung.stdout, /fixture: timed out after 2 s with 0\/1 case\(s\) finished\. No receipt written/u, "a suite that runs out of time says so and stops its processes");
+      const spent = run(["fixture", ...fake, "--suite-timeout-seconds", "1"]);
+      assert.equal(spent.status, 1);
+      assert.match(spent.stdout + spent.stderr, /ran out of its 1 s/u, "a suite with no time left starts no case");
       assert.ok(Date.now() - startedHanging < 30000, "the suite timeout cuts the hanging subject short");
       assert.match(spawnSync(process.execPath, [cli, "run", "fixture", "--suite-timeout-seconds", "0"], { cwd: path.dirname(path.dirname(receiptFile)), encoding: "utf8" }).stderr, /--suite-timeout-seconds must be a positive whole number/u);
       const blankCase = run(["fixture", ...fake, "--case", ","]);
@@ -1477,7 +1480,7 @@ try {
       fs.writeFileSync(path.join(dir, "evals", "fixture.json"), `${JSON.stringify(moved, null, 2)}\n`);
       const added = { ...JSON.parse(JSON.stringify(moved).replace(/"(r\d|case-1|check-must(?:-not)?)"/gu, '"added-$1"')), id: "added" };
       fs.writeFileSync(path.join(dir, "evals", "added.json"), `${JSON.stringify(added, null, 2)}\n`);
-      const changed = run(["--changed", ...fake, "--base", "main"]);
+      const changed = run(["--changed", ...fake, "--base", "main", "--concurrency", "1"]);
       assert.equal(changed.status, 0, changed.stderr);
       assert.match(changed.stdout, /Running added:[\s\S]*Running fixture:|Running fixture:[\s\S]*Running added:/u, "a moved suite and a new suite both run");
       assert.match(changed.stdout, /Recorded evals\/receipts\/added\.json/u);
