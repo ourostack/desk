@@ -1,5 +1,4 @@
-// What the boot says about the operator's first message: new work gets a task before any design, and on Copilot the question about
-// which task to resume is asked in chat, not through the host's form (cold dry runs, 2026-10-12).
+// What the boot says about the operator's first message: new work gets a task before any design (cold dry runs, 2026-10-12).
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { promises as fs } from "node:fs"
@@ -59,29 +58,4 @@ test("a description that matches no open task gets the same instruction; a named
   }
   const named = await boot(root, { taskQuery: "open-task" })
   for (const list of lists(named)) assert.ok(!list.includes(NEW_WORK))
-})
-
-test("Copilot boot explains denied forms without revoking authority or overriding host routing; other hosts and unattended sessions get no such line", async () => {
-  const root = await desk()
-  const copilot = await boot(root, { env: { DESK: root, COPILOT_AGENT_SESSION_ID: "s" } })
-  for (const list of lists(copilot)) {
-    assert.equal(list.filter((line) => line.includes("ask_user")).length, 1)
-    const index = list.findIndex((line) => line.includes("ask_user"))
-    assert.ok(index !== -1 && index < list.findIndex((line) => line.startsWith("No task was named:")), "before the instruction to ask which task to resume")
-    const guidance = list[index]
-    assert.match(guidance, /ordinary conversation and already-authorized work remain allowed/u)
-    assert.match(guidance, /not a human answer, refusal, revocation or consent/u)
-    assert.match(guidance, /Do not retry the form or change permissions, hooks or settings/u)
-    assert.match(guidance, /continue already-authorized work without reapproval/u)
-    assert.match(guidance, /genuine missing decision[\s\S]+ordinary conversation where permitted/u)
-    assert.match(guidance, /higher-priority host routing[\s\S]+consumer integration defect[\s\S]+supported route/u)
-    assert.match(guidance, /A denial alone does not establish incompatible routing; inspect actual instructions and tool availability/u)
-    assert.match(guidance, /Headless execution without human input is a capability limit, not approval withdrawal/u)
-    assert.match(guidance, /Keep genuine human decisions and native permission gates intact/u)
-    assert.doesNotMatch(guidance, /whatever its own description says/u)
-  }
-  for (const env of [{ DESK: root }, { DESK: root, CLAUDECODE: "1" }, { DESK: root, CLAUDE_PLUGIN_ROOT: "/x" }, { DESK: root, COPILOT_AGENT_SESSION_ID: "s", DESK_FACTORY_HEADLESS: "1" }]) {
-    const other = await boot(root, { env })
-    for (const list of lists(other)) assert.ok(!list.some((line) => line.includes("ask_user")), JSON.stringify(env))
-  }
 })

@@ -41,13 +41,13 @@
 //      (mcp/src/factory/boot-check.js, mcp/src/factory/andon-watch.js);
 //   4. desk-health: the bound root's last Desk start, and a detached
 //      fast-forward of a clean state branch (mcp/src/runtime/desk-health.js);
-//   5. unsaved-work: read-only local publication evidence for the bound Crew
-//      workspace and its linked worktrees, without paths or branch names;
-//   6. workspace-tidy: stale worktree listing with its own detached repair
-//      (mcp/src/runtime/workspace-tidy.js). It launches that repair itself so
-//      its line can say whether the launch happened, and keeps a soft deadline
-//      inside its budget so an unfinished inspection still reports "deferred".
-//   7. improvement: the open improvement cards and the oldest one's age, or an
+//   5. workspace-tidy: stale worktree listing with its own detached repair
+//      (mcp/src/runtime/workspace-tidy.js). It launches that repair itself and
+//      keeps a soft deadline inside its budget; an unfinished inspection is
+//      recorded as skipped (the next start runs it again), and the check says
+//      nothing unless it has something for the agent: leftovers, an issue or a
+//      repair that could not start.
+//   6. improvement: the open improvement cards and the oldest one's age, or an
 //      unreadable card folder, as one status line, without a repair
 //      (mcp/src/factory/boot-check.js). The labels, andon and improvement
 //      checks say nothing in a noninteractive session and read the cards once.
@@ -210,7 +210,8 @@ async function checkWorkspace({ host, env = process.env, sessionFolder, launch =
     // real path are the same desk for the inventory, the report and the lock.
     const root = bound.root ? await canonicalDeskRoot(bound.root) : null;
     if (bound.unavailable) return "workspace-tidy skipped; the bound desk is unavailable; see desk_status.";
-    if (!root) return "workspace-tidy skipped; no bound desk.";
+    // Nothing to tidy without a bound desk, and nothing for the agent to do about it.
+    if (!root) return "";
     const inventory = await inspectWorkspace({ deskRoot: root, signal, budgetMs: inspectionBudgetMs });
     if (expired()) return "";
     let previous = "";
@@ -248,6 +249,8 @@ async function checkWorkspace({ host, env = process.env, sessionFolder, launch =
     // The repair gets the binding's own spelling and resolves it again itself.
     await launch(bound.root, env);
     const issues = inventory.issues.filter((issue) => !named.includes(issue));
+    // A repair that started and found nothing to report is not news for the agent.
+    if (previous === "" && issues.length === 0) return "";
     return `workspace-tidy ${oneLine(`${previous}deferred (${inventory.worktrees.length} listed)${issues.length ? `; ${issues.join("; ")}` : ""}`)}`;
   } catch (error) {
     return `workspace-tidy deferred; ${oneLine(error.message)}`;
@@ -263,14 +266,12 @@ async function runWorkspaceTidy(ctx) {
   try {
     const line = await Promise.race([
       checkWorkspace(ctx, () => expired, cancellation.signal),
-      new Promise((resolve) => {
+      new Promise((resolve, reject) => {
         timer = setTimeout(() => {
           stopAll();
           // Deferred, not stuck: the next session start runs this check fresh and launches the repair itself, so no
-          // agent action is required. The exact command is spelled out (docs/workspace-tidy.md) for an agent that
-          // wants it sooner, with the root left to `desk_status` rather than guessed, since a guessed root here could
-          // name the wrong desk.
-          resolve(`workspace-tidy budget exceeded; deferred to the next session start automatically, no agent action needed; to run it sooner: node ${REPAIR_ENTRY_POINT} --repair <desk_status root>`);
+          // agent action is required and the line would only be noise. The registry records the skip in the factory status.
+          reject(Object.assign(new Error("Run the check again: workspace-tidy ran past its budget"), { code: "boot_check_budget" }));
         }, Math.max(1, Math.min(ctx.tidyBudgetMs ?? Infinity, ctx.budgetMs - TIDY_SOFT_MARGIN_MS)));
       }),
     ]);
@@ -450,24 +451,6 @@ const deskHealthCheck = {
 };
 
 const workspaceTidyCheck = { id: "workspace-tidy", budgetMs: 260, run: runWorkspaceTidy };
-
-const unsavedWorkCheck = {
-  id: "unsaved-work",
-  budgetMs: 100,
-  budgetLine: "unsaved-work: not checked (boot budget exhausted); local publication state unknown.",
-  async run(ctx) {
-    const [{ resolveStartupRoot }, { resolveActivationConfigPath }, { inspectUnsavedWork }] = await Promise.all([
-      import("../../mcp/src/util/startup-direction.js"), import("../../mcp/src/util/paths.js"), import("../../mcp/src/runtime/unsaved-work.js"),
-    ]);
-    const bound = resolveStartupRoot({
-      env: ctx.env, activationConfigPath: resolveActivationConfigPath({ env: ctx.env }),
-      hostProjectRoot: ctx.host === "copilot" ? ctx.sessionFolder : ctx.env.CLAUDE_PROJECT_DIR,
-    });
-    if (bound.error || bound.unavailable) return { line: "unsaved-work: binding unavailable; local publication state unknown; see desk_status." };
-    if (!bound.root) return {};
-    return { line: await inspectUnsavedWork({ deskRoot: bound.root, deadline: ctx.deadline, signal: ctx.signal, git: ctx.unsavedWorkGit }) };
-  },
-};
 
 // ---------------------------------------------------------------------------
 // The registry.
@@ -815,7 +798,7 @@ async function runCompatible(script, args, { env = process.env, resolveNode = co
   return { started: true, node, code };
 }
 
-const checks = [factoryCheck, labelsCheck, andonCheck, deskHealthCheck, unsavedWorkCheck, workspaceTidyCheck, improvementCheck];
+const checks = [factoryCheck, labelsCheck, andonCheck, deskHealthCheck, workspaceTidyCheck, improvementCheck];
 
 // The command line of the entry file `hooks/boot-checks.cjs`: the spawned repair, fast-forward, compatible-node, acknowledge and revoke runs.
 function main(argv = process.argv.slice(2)) {

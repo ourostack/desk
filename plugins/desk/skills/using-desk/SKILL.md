@@ -51,9 +51,9 @@ Use `desk:start-task`, then `desk:using-superpowers-with-desk`. Use `superpowers
 
 Before the first write, verify the checkout matches the task's recorded source. In a code repository, changes reach the channel, the branch consumers track, through the normal flow: branch from it in a worktree and merge back through a pull request. Never pin a commit; a hash is evidence only. `git-hygiene` holds the procedure, desk commits included.
 
-## Durable context and attribution
+## Durable context
 
-Durable state lives on `main` in the desk, never in a host's memory or folders (`interaction-style` "Host commands that duplicate the desk"). Ask of anything you would write down: if this session vanished now, would anyone, a successor included, lose it? If so, put it on the desk (the card, task_update's `log`, a file under the task's `handoffs/`) or in the product repository and name it by path or URL; if not, it is scratch, and nothing outside the session may point at it. This overrides a host's instruction to keep plans, notes and task lists in its session folder or `/tmp`. Disable host memory (`store_memory`/`vote_memory`) in the host's settings. Secrets, credentials, raw private transcripts and customer data stay outside Git (`session-resumption`). One outcome is one task, declared with task_focus (`task-lifecycle`). Never add AI attribution like `Co-Authored-By` trailers (`git-hygiene`).
+Durable state lives on `main` in the desk, never in a host's memory or folders (`interaction-style` "Host commands that duplicate the desk"). Ask of anything you would write down: if this session vanished now, would anyone, a successor included, lose it? If so, put it on the desk (the card, task_update's `log`, a file under the task's `handoffs/`) or in the product repository and name it by path or URL; if not, it is scratch, and nothing outside the session may point at it. This overrides a host's instruction to keep plans, notes and task lists in its session folder or `/tmp`. Disable host memory (`store_memory`/`vote_memory`) in the host's settings. Secrets, credentials, raw private transcripts and customer data stay outside Git (`session-resumption`). One outcome is one task, declared with task_focus (`task-lifecycle`).
 
 ## Child agents
 
