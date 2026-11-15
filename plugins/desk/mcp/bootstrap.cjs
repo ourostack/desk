@@ -8,6 +8,8 @@
 //
 // It must parse and run on very old Node (8 and later), so it uses ES5 syntax only (var, function, no arrow functions, template literals, destructuring or optional chaining) and only the child_process, fs, os, path and url built-ins.
 //
+// On Windows, when that search finds nothing, it also reads the registry's current PATH (machine, then user), which a process started before a Node install does not have in its own environment. Every degraded answer puts `fix` before `summary`, so the fix leads.
+//
 // Known limit: with no `node` executable at all, the host cannot start this file, so Desk cannot answer. The session-start hook command checks for `node` in the host's own shell first and tells the session what to install (hooks/node-missing.sh); Desk's setup and desk_doctor make sure Node is installed.
 //
 // DESK_NODE_SYSTEM_PREFIX prefixes the fixed Homebrew and system paths on macOS and Linux, so tests can point them at a fixture tree.
@@ -220,6 +222,9 @@ function candidatePaths(options) {
     eachVersion(either(env.MISE_DATA_DIR, under(localAppData, "mise")), ["installs", "node"], [exe]);
     add(path.join(either(env.ProgramFiles, "C:\\Program Files"), "nodejs", exe));
     add(path.join(either(env["ProgramFiles(x86)"], "C:\\Program Files (x86)"), "nodejs", exe));
+    either(options.extraDirs, []).forEach(function (dir) {
+      add(path.join(dir, exe));
+    });
     return found;
   }
 
@@ -243,6 +248,45 @@ function candidatePaths(options) {
   return found;
 }
 
+// The Windows registry's current PATH, which a process started before a Node install (a Hub or service tree that predates it) never sees in its own environment: the machine PATH, then the user PATH, with %NAME% references expanded.
+var REGISTRY_PATH_KEYS = [
+  "HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment",
+  "HKCU\\Environment"
+];
+
+function expandWindowsVariables(text, env) {
+  var names = {};
+  Object.keys(env).forEach(function (name) {
+    names[name.toLowerCase()] = env[name];
+  });
+  return text.replace(/%([^%]+)%/g, function (whole, name) {
+    var value = names[name.toLowerCase()];
+    return typeof value === "string" ? value : whole;
+  });
+}
+
+// The folders of a `reg query <key> /v Path` answer; [] when the value is missing or the output is not what reg prints.
+function parseRegistryPath(output, env) {
+  var match = /^\s*Path\s+REG_(?:EXPAND_)?SZ\s+(.*?)\s*$/im.exec(output);
+  if (match === null) return [];
+  return expandWindowsVariables(match[1], env).split(";").filter(function (dir) {
+    return dir !== "" && dir.indexOf("%") === -1;
+  });
+}
+
+function registryPathDirs(env, timeoutMs, spawnSync) {
+  var reg = path.join(either(env.SystemRoot, either(env.windir, "C:\\Windows")), "System32", "reg.exe");
+  var dirs = [];
+  REGISTRY_PATH_KEYS.forEach(function (key) {
+    var result = either(spawnSync, childProcess.spawnSync)(reg, ["query", key, "/v", "Path"], { encoding: "utf8", timeout: timeoutMs, windowsHide: true });
+    if (result.status !== 0) return;
+    parseRegistryPath(result.stdout, env).forEach(function (dir) {
+      if (dirs.indexOf(dir) === -1) dirs.push(dir);
+    });
+  });
+  return dirs;
+}
+
 // A version manager keeps each install in a folder named after its version; read the last such folder in the real path.
 function versionFromPath(file) {
   var pattern = /[\\/]v?(\d+\.\d+\.\d+)(?=[\\/])/g;
@@ -263,7 +307,7 @@ function probeNode(file, env, timeoutMs) {
   return match ? { version: match[1], abi: match[2] } : null;
 }
 
-function selectNode(options) {
+function selectFrom(options) {
   var pkg = readPackage(options.mcpRoot);
   var abis = packAbis(options.mcpRoot, pkg.version, options.platform, options.arch);
   var now = either(options.now, Date.now);
@@ -326,6 +370,24 @@ function selectNode(options) {
   return { node: null, range: pkg.range, packAbis: abis };
 }
 
+// The search above covers PATH and the usual install folders. On Windows, a process that predates a Node install has a PATH without it, so when that search finds no usable Node the registry's current PATH is read and searched too. `options.registryPath` (a function from env to folders) is a test seam.
+function selectNode(options) {
+  var selection = selectFrom(options);
+  if (selection.node !== null || options.platform !== "win32") return selection;
+  var read = either(options.registryPath, registryPathDirs);
+  var known = either(options.env.PATH, "").toLowerCase().split(";");
+  var dirs = read(options.env, 2000).filter(function (dir) {
+    return known.indexOf(dir.toLowerCase()) === -1;
+  });
+  if (dirs.length === 0) return selection;
+  var widened = {};
+  Object.keys(options).forEach(function (name) {
+    widened[name] = options[name];
+  });
+  widened.extraDirs = dirs;
+  return selectFrom(widened);
+}
+
 // ---- the degraded responder ----
 
 // Whether an executable is on a macOS or Linux PATH.
@@ -369,7 +431,7 @@ function reconnectFix(action) {
 }
 
 function degraded(code, summary, fix, extra) {
-  var payload = { status: "degraded", state: "degraded:" + code, code: code, summary: summary, fix: fix };
+  var payload = { status: "degraded", state: "degraded:" + code, code: code, fix: fix, summary: summary };
   Object.keys(extra).forEach(function (key) {
     payload[key] = extra[key];
   });
@@ -541,7 +603,8 @@ function start(o, stderr, serve) {
     current: current,
     systemPrefix: o.systemPrefix !== undefined ? o.systemPrefix : either(env.DESK_NODE_SYSTEM_PREFIX, ""),
     probe: o.probe,
-    now: o.now
+    now: o.now,
+    registryPath: o.registryPath
   });
 
   if (selection.node === null) {
@@ -549,7 +612,7 @@ function start(o, stderr, serve) {
     stderr.write("[desk-mcp] bootstrap: no Node satisfies " + selection.range + " (this one is " + current.version + "); serving degraded:node_missing\n");
     return serve(degraded(
       "node_missing",
-      "Desk needs Node.js " + selection.range + (major === null ? "" : ", ideally Node " + major + ", which Desk ships a runtime pack for on this platform,") + " and found none on PATH or under the usual version managers, so every Desk tool is unavailable until one is installed.",
+      "Desk needs Node.js " + selection.range + (major === null ? "" : ", ideally Node " + major + ", which Desk ships a runtime pack for on this platform,") + " and found none on PATH" + (platform === "win32" ? ", under the usual version managers or on the Windows registry's PATH" : " or under the usual version managers") + ", so every Desk tool is unavailable until one is installed.",
       reconnectFix("Run `" + installCommand({ platform: platform, env: env, homeDir: homeDir, major: major }) + "` in a shell"),
       { required_node: selection.range, recommended_node_major: major, running_node: current.version }
     ));
@@ -613,6 +676,8 @@ module.exports = {
   reexec: reexec,
   run: run,
   satisfies: satisfies,
+  parseRegistryPath: parseRegistryPath,
+  registryPathDirs: registryPathDirs,
   selectNode: selectNode,
   serveDegraded: serveDegraded,
   versionFromPath: versionFromPath

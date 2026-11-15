@@ -2,8 +2,8 @@
 
 // The session-start hooks' first check. With no `node` at all, the host's own shell gives the message (hooks/node-missing.sh and the
 // PowerShell branch in copilot-hooks.json). This covers the next case: the hook runs in a Node older than Desk needs and no newer Node
-// is installed, so the tool servers can only answer that Node is missing. The session then gets the same message, with the install
-// command the MCP bootstrap's own desk_status fix names.
+// is installed, so the tool servers can only answer that Node is missing. The session then gets the same message, leading with the install
+// command the MCP bootstrap's own desk_status fix names. On Windows the bootstrap's search also reads the registry's current PATH.
 //
 // It must never say Node is missing when the tool server would find one, so it searches exactly as mcp/bootstrap.cjs does: the same
 // selectNode call, with the bootstrap's own probe and time budget. A search that runs out of time says nothing, because the server,
@@ -47,7 +47,7 @@ function nodeRequiredLine({
     const command = bootstrap().installCommand({ platform, env, homeDir, major: null });
     const floor = /^>=\s*v?(\d+)(?:\.([1-9]\d*))?\.0$/u.exec(String(range).trim());
     const needed = floor ? `Node.js ${floor[1]}${floor[2] ? `.${floor[2]}` : ""} or newer` : `Node.js ${range}`;
-    return `Desk needs ${needed}, and the \`node\` on PATH is ${current.version} with no newer Node.js installed, so the Desk tool servers (desk, desk-web) cannot run and Desk tools do not work in this session. Install it: run \`${command}\` in a terminal. ${RESTART}`;
+    return `To fix this, run \`${command}\` in a terminal. ${RESTART} Desk needs ${needed}, and the \`node\` on PATH is ${current.version} with no newer Node.js installed, so the Desk tool servers (desk, desk-web) cannot run and Desk tools do not work in this session.`;
   } catch {
     return "";
   }
