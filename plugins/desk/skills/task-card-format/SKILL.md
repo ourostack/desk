@@ -24,6 +24,7 @@ track: <track-directory-name>
 category: general                       # general | reminder | coordination | infrastructure | <free>
 cadence: "30m"                          # recurring cadence — daemon fires `ouro poke <agent> --task <id>` per cadence
 scheduledAt: 2026-05-21T09:00:00Z       # one-time scheduled fire (mutually compatible with `cadence` if both present)
+nudge: false                            # opt out of the stalled-card nudge (docs/stalled-nudges.md); default on
 requester: "ari"                        # who asked for this task (defaults to "self" when agent-initiated)
 validator: "ari"                        # who validates completion
 artifacts: [https://github.com/.../pull/123]  # outputs produced by this task (PR URLs / file paths)

@@ -26,6 +26,7 @@ import { diagnosticFormat, previewRuntimeSnapshot } from "./preview-snapshot.js"
 import { compactStatus } from "./status-compact.js"
 import { runtimeIdentity } from "./runtime-identity.js"
 import { GATE_WAIT_MS } from "./gate-wait.js"
+import { createStaleCardLead, withStaleCardLead } from "./stale-card-lead.js"
 import { inspectStateBranch, inspectWriteBranch, writeBranchProblem, repairStateBranch, runGit, stateBranchProblem, isStateBranchName, STATE_BRANCH_REPAIR } from "./state-branch.js"
 import { removeReadinessLeftovers } from "../readiness/leftovers.js"
 import { TOOL_NAMES } from "../tool-names.js"
@@ -181,6 +182,7 @@ export function createDeskSession(deps) {
   } = deps
   const context = { pendingRepairs: [], exceptions: [], launcher, phase: null, search: null }
   const focus = createFocusHolder()
+  const staleCard = createStaleCardLead({ env, focus, context })
   let headWatch = null
   let headTimer = null
   let headBinding = null
@@ -989,7 +991,8 @@ export function createDeskSession(deps) {
       ...(payload.detail_pending === true ? { pending: PENDING_STATUS_FIELDS.filter((field) => payload[field] === undefined) } : {}),
     }
     // Compact unless asked: the full payload is tens of KB, and an agent only wants "ready or not, and what do I do".
-    return jsonResult(input?.detail === true ? full : compactStatus(full))
+    const answer = input?.detail === true ? full : compactStatus(full)
+    return jsonResult(withStaleCardLead(answer, context.root ? staleCard.lead() : null))
   }
 
   function statusSnapshot() {
