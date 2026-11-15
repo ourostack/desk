@@ -19,7 +19,7 @@ import { runHook as endRunHook } from "../../../../../plugins/desk/hooks/lib/fac
 import { runHook as syncRunHook } from "../../../../../plugins/desk/hooks/lib/sync-end.cjs"
 import { bootFixtureEnv } from "../_boot_fixture.js"
 import { mkTempDeskRoot } from "../tools/_helpers.js"
-import { ID, STORE, json, scratch, session } from "./_session_helpers.js"
+import { ID, json, scratch, session } from "./_session_helpers.js"
 
 const require = createRequire(import.meta.url)
 const HOOKS = fileURLToPath(new URL("../../../../../plugins/desk/hooks/", import.meta.url))
@@ -139,20 +139,17 @@ test("bootOnce syncs nothing, installs no card guard and checks no stale refresh
   assert.deepEqual(calls.sort(), ["guard", "stale", "sync"])
 })
 
-test("bootOnce adds no factory consent instruction to a headless session and still asks an interactive one", async () => {
+test("bootOnce adds no factory consent instruction to any session, and isNoninteractive still reads the flag", async () => {
   const root = await mkTempDeskRoot()
   await fs.mkdir(path.join(root, "_meta"), { recursive: true })
   const gh = async () => ({ code: 0, stdout: "", stderr: "" })
   const run = (env) => bootOnce({
     env: { DESK: root, ...env }, cwd: root, homeDir: root, gh, jq: gh,
     syncFn: async () => ({ state: "synced" }),
-    factoryStatusFn: () => ({ store: STORE, source: "desk", consent: "undecided", stores: [], warnings: [] }),
     repoFn: () => ({ states: [], pending: [] }),
   })
-  const asked = (result) => result.instructions.some((text) => text.includes("Factory consent is undecided"))
-  assert.equal(asked(await run({})), true)
-  assert.equal(asked(await run({ DESK_FACTORY_HEADLESS: "1" })), false)
-  assert.equal(asked(await run({ DESK_FACTORY_HEADLESS: "0" })), true)
+  const mentions = (result) => result.instructions.some((text) => /Factory consent|factory_consent/u.test(text))
+  for (const env of [{}, { DESK_FACTORY_HEADLESS: "1" }, { DESK_FACTORY_HEADLESS: "0" }]) assert.equal(mentions(await run(env)), false, JSON.stringify(env))
   assert.equal(isNoninteractive({ DESK_FACTORY_HEADLESS: "1" }), true)
   assert.equal(isNoninteractive({ DESK_FACTORY_HEADLESS: "0" }), false)
   assert.equal(isNoninteractive({ CLAUDE_CODE_ENTRYPOINT: "sdk-cli" }), true)

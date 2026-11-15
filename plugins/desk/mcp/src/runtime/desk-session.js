@@ -53,7 +53,7 @@ const rootRank = (root) => ROOT_SOURCE_PRIORITY.indexOf(root.hint === true ? "la
 // reads is a field added here in the same diff.
 // __tests__/tool_schema_parity.test.js checks this against the tool's
 // declared schema in tool-schemas.js.
-export const DESK_DOCTOR_FIELDS = ["format", "repair", "reindex", "factory_consent", "factory_told"]
+export const DESK_DOCTOR_FIELDS = ["format", "repair", "reindex", "factory_consent"]
 const STATUS_WAIT_MS = 50
 const STATUS_DETAIL_MS = 120
 // The most desk_status spends on its own waits (a new admission attempt, then the runtime status), well inside the 200 ms it must answer in.
@@ -1093,8 +1093,7 @@ export function createDeskSession(deps) {
       if (!requirementMet("search", context)) return refusal("desk_doctor", "search")
       return runtimeCall("desk_doctor", { reindex: true }, signal)
     }
-    if (input.factory_consent !== undefined || input.factory_told !== undefined) {
-      if (input.factory_told !== undefined && input.factory_told !== true) return { content: [{ type: "text", text: "Pass factory_told as true: factory_told records that the operator was told." }], isError: true }
+    if (input.factory_consent !== undefined) {
       // The answer touches no desk file, so the next call need not wait for it; asking GitHub for the account can take a while.
       release?.()
       const result = await answerFactoryConsent({ env, deskRoot: context.root?.root ?? null, answer: input.factory_consent })
