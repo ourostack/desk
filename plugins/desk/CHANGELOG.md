@@ -1,5 +1,15 @@
 # desk plugin — changelog
 
+## 3.2.172 — 2026-11-15
+
+Desk now exposes 19 tools instead of 21: moving a task and renaming a track were never used in two weeks of real sessions, so they became options on the update tools. Old skill text that names a removed tool needs the new call:
+
+- `task_move` is now `task_update` with `to_track`, `to_slug`, `unarchive` or `into_task`, plus `handle` and `allow_dirty` as before. A move is sent alone: with `status`, `note` or any other update field the call refuses and changes nothing, so update the card in a second call.
+- `track_rename` is now `track_update` with `rename_to` (its old `to`), naming the track by `slug` (its old `track`) or `handle`. A rename is sent alone too.
+- The errors, error codes and commit messages of both now name `task_update` and `track_update`.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.171 — 2026-11-15
 
 Desk no longer reports "no upstream" as a sync problem when the branch's upstream disappears in the middle of a background push. A session start's `git pull --rebase` or a branch switch can briefly leave the checkout with no upstream. Desk now checks again a few times over about six seconds, delivers the commits if the upstream is back, and otherwise leaves them for the next commit or session start without marking sync blocked or filing a Desk problem. Real fetch, push and conflict failures are reported as before.
