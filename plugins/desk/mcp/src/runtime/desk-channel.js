@@ -12,7 +12,7 @@ function text(value) {
   return typeof value === "string" && value.trim() !== ""
 }
 
-export function agencyPluginsDir({ pluginRoot, homeDir }) {
+function agencyPluginsDir({ pluginRoot, homeDir }) {
   // A session copy lives at <agency data>/plugins/sessions/agency-plugin-*/desk, so the cache is its sibling.
   const parts = path.resolve(pluginRoot).split(path.sep)
   const at = parts.lastIndexOf("sessions")
