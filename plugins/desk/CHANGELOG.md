@@ -1,5 +1,13 @@
 # desk plugin — changelog
 
+## 3.2.165 — 2026-11-15
+
+A `merge-when-green` relay now merges only when every check run and commit status on the pull request's head is green at its latest attempt, not only the ones in `requiredChecks`. It merged a pull request while a path-filtered check that no one had listed was failing, because that check was not required, and the repository's main branch went red. Now a non-required check that is failed, cancelled, timed out, waiting on action, stale, queued or running holds the merge, as does a commit status that is failing or pending. A failed attempt that a rerun superseded still does not hold it, `requiredChecks` must still exist and pass, a skipped or neutral check that nothing requires is ignored, and `requireMainWorkflowGreen` is unchanged. The status comment names what holds the pull request. See [relays](docs/relays.md).
+
+Replayed against the recorded merges, the 20 pull requests of the small repository still merge, and 8 of the 40 of the large one that merged earlier are now held, each because a check that no relay setting required was failed, cancelled or unfinished at the merge.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.164 — 2026-11-15
 
 On Windows, when Node.js is installed but is not on the PATH of the session that started, Desk's session-start message now says where Node.js is and to restart the app or service that started the session, instead of telling you to install Node.js again.
