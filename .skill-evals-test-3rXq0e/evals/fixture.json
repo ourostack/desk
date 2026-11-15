@@ -1,0 +1,48 @@
+{
+  "schemaVersion": 1,
+  "id": "fixture",
+  "description": "Fixture suite.",
+  "sources": [
+    "source.txt",
+    "evals/worlds/fixture/case-1/notes/x.md"
+  ],
+  "reviewedSourceFingerprint": "9bb313dadef12a8b24c2f892343438edb6bc7cfc65b6ef53bd4916aedb330a6b",
+  "requirements": [
+    {
+      "id": "r1",
+      "description": "First requirement."
+    },
+    {
+      "id": "r2",
+      "description": "Second requirement."
+    }
+  ],
+  "cases": [
+    {
+      "id": "case-1",
+      "description": "Fixture case.",
+      "prompt": "Evaluate the fixture.",
+      "checks": [
+        {
+          "id": "check-must",
+          "polarity": "must",
+          "evidenceType": "response",
+          "covers": [
+            "r1"
+          ],
+          "description": "Required evidence."
+        },
+        {
+          "id": "check-must-not",
+          "polarity": "must_not",
+          "evidenceType": "tool_call",
+          "covers": [
+            "r2"
+          ],
+          "description": "Forbidden evidence."
+        }
+      ],
+      "world": "evals/worlds/fixture/case-1"
+    }
+  ]
+}

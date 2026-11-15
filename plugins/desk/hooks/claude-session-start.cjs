@@ -110,7 +110,7 @@ async function bootSection() {
     // The foundation points at the RFC through this line: the installed copy, which the agent can open from any repository.
     // A Windows plugin root keeps its backslash separators, so the separator follows the root's own spelling.
     const sep = pluginRoot.includes("\\") ? "\\" : "/";
-    const rfc = `Desk RFC: ${pluginRoot}${sep}docs${sep}agentic-engineering-v2-rfc.md`;
+    const rfc = `Desk RFC: ${pluginRoot}${sep}docs${sep}agentic-engineering-v3-rfc.md`;
     // The startup line goes first, then the head of the boot: they have to sit inside the 2 KB preview, so the foundation and the RFC line come after them.
     emit(`${direction}\n\n${bootText ? `${bootText}\n\n` : ""}${foundation}\n\n${plainLanguagePointer()}${rfc}\n`);
   } catch {

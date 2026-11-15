@@ -63,7 +63,7 @@ test("the hook prints the SessionStart envelope: the startup line first, then th
   assert.ok(text.indexOf("Desk runs the session boot itself") < foundation)
   // The separator follows the plugin root's own spelling: a Windows root keeps its backslashes.
   const sep = plugin.includes("\\") ? "\\" : "/"
-  assert.ok(text.endsWith(`Desk RFC: ${plugin}${sep}docs${sep}agentic-engineering-v2-rfc.md\n`))
+  assert.ok(text.endsWith(`Desk RFC: ${plugin}${sep}docs${sep}agentic-engineering-v3-rfc.md\n`))
 })
 
 test("the foundation path defaults to the plugin's own when the host passes none, and the plugin root to the hook's own folder", () => {
@@ -75,7 +75,7 @@ test("the foundation path defaults to the plugin's own when the host passes none
   assert.match(text, /The human supplies intent/u)
   const root = path.resolve(path.dirname(hook), "..")
   const sep = root.includes("\\") ? "\\" : "/"
-  assert.ok(text.endsWith(`Desk RFC: ${root}${sep}docs${sep}agentic-engineering-v2-rfc.md\n`))
+  assert.ok(text.endsWith(`Desk RFC: ${root}${sep}docs${sep}agentic-engineering-v3-rfc.md\n`))
 })
 
 test("a foundation that cannot be read prints the boot fallback, which names no script, and still exits 0", () => {

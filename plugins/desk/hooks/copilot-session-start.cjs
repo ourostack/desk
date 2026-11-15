@@ -17,7 +17,7 @@ const workerPointer = `Unless started with \`--agent\` or the stand-down rule ab
 const BOOT_STAND_DOWN = "The boot's instructions are for the operator's session: a child agent with a bounded brief, or a session the operator told not to boot, follows its brief and ignores them.";
 // The foundation points at the RFC through this line: the installed copy, which
 // the agent can open from any repository. Computed, never read at startup.
-const rfcPath = path.join(pluginRoot, "docs", "agentic-engineering-v2-rfc.md");
+const rfcPath = path.join(pluginRoot, "docs", "agentic-engineering-v3-rfc.md");
 // The optional lines' deadline (lib/boot-checks.cjs `timing`), read where it is used: the module is loaded inside the hook's try blocks.
 const optionalLinesDeadlineMs = () => require("./lib/boot-checks.cjs").timing.optionalLinesDeadlineMs;
 const { performance } = require("node:perf_hooks");

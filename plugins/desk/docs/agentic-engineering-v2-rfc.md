@@ -1,6 +1,8 @@
 <!-- canonical-agentic-engineering-v2-rfc -->
 # Agentic Engineering Epoch 2
 
+> **History.** The current RFC is [Agentic Engineering Epoch 3](agentic-engineering-v3-rfc.md), with the epoch-to-version map. This document describes the Epoch 2 design and the machinery it built.
+
 Agentic Engineering Epoch 2 is a way of working in which humans hand agents whole engineering outcomes and agents carry them to an accepted result: planned together, executed autonomously, verified at the level of the claim, remembered across sessions, and measured so the work itself can be designed. This document is the reason the pieces exist and the contract they keep. It is written for the people who adopt Epoch 2 and, just as much, for the agents who do the work.
 
 **How to read it:** with your agent. Start a session and ask it to walk you through this RFC and how it applies to what you're doing. The agents are the ones doing the work, and the agent living inside a system often sees what is broken better than we do ([The work spoke back](https://ouroboros.bot/blog/designing-with-your-agent/)), so its reading matters as much as yours. Agents load short foundations at the start of every session, one per layer; this document is the longer “why” behind them, read when someone wants the conversation, not on every boot.

@@ -478,8 +478,8 @@ async function checkStartupComposition({ repoRoot, mcpRoot, errors, checked }) {
     "plugins/desk/skills/using-desk/SKILL.md",
   ));
   const installedRfc = {
-    claude: path.join(repoRoot, "plugins", "desk", "docs", "agentic-engineering-v2-rfc.md"),
-    copilot: path.join(repoRoot, "plugins", "desk", "docs", "agentic-engineering-v2-rfc.md"),
+    claude: path.join(repoRoot, "plugins", "desk", "docs", "agentic-engineering-v3-rfc.md"),
+    copilot: path.join(repoRoot, "plugins", "desk", "docs", "agentic-engineering-v3-rfc.md"),
   };
   for (const [host, startup] of startups) {
     const foundationCount = countOccurrences(startup, foundation);
