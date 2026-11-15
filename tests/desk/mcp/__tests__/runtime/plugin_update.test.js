@@ -43,6 +43,7 @@ async function agency({ loaded, fetched }) {
 
 const spec = (name, ref = "main", engine = "copilot") => `${engine}:github:org/repo:plugins/${name}@${ref}`
 const env = { AGENCY_ENGINE: "copilot" }
+const find = (a, extra = {}) => pluginUpdateFinding({ env, pluginRoot: a.pluginRoot, agentHost: undefined, homeDir: a.home, skip: [], ...extra })
 
 test("loadedPlugins reads every root beside Desk's, in both manifest places", async () => {
   const a = await agency({ loaded: { desk: "3.2.154", crew: "0.2.23", cit: "0.1.81" }, fetched: [] })
@@ -58,9 +59,11 @@ test("newestFetched takes this engine's branch and tag entries, never a pinned c
       { spec: spec("desk", "b".repeat(40)), name: "desk", version: "3.2.82", at: 3000 },
       { spec: spec("desk", "main", "claude"), name: "desk", version: "9.9.9", at: 4000 },
       { spec: spec("cit"), name: "cit", version: "0.1.82", at: 10 },
+      { spec: spec("desk", "older"), name: "desk", version: "3.2.100", at: 1500 },
+      { spec: spec("desk", "newer"), name: "desk", version: "3.2.168", at: 2500 },
     ],
   })
-  assert.deepEqual([...newestFetched(a.cache, "copilot")].sort(), [["cit", "0.1.82"], ["desk", "3.2.167"]])
+  assert.deepEqual([...newestFetched(a.cache, "copilot")].sort(), [["cit", "0.1.82"], ["desk", "3.2.168"]], "the most recently fetched entry wins, whatever its version")
   assert.equal(newestFetched(path.join(a.home, "none"), "copilot").size, 0)
 })
 
@@ -73,7 +76,7 @@ test("a loaded plugin older than the newest fetched release is named, with the o
       { spec: spec("ms-desk"), name: "ms-desk", version: "2.32.0" },
     ],
   })
-  const finding = pluginUpdateFinding({ env, pluginRoot: a.pluginRoot, homeDir: a.home, platform: "darwin" })
+  const finding = find(a)
   assert.deepEqual(finding.plugins, [{ name: "cit", from: "0.1.81", to: "0.1.82" }, { name: "desk", from: "3.2.154", to: "3.2.167" }])
   assert.equal(finding.line, "There's an update to cit (0.1.81 → 0.1.82), desk (3.2.154 → 3.2.167); restart the Copilot app when it suits you to pick it up.")
   assert.equal(finding.auto_restart, false)
@@ -85,9 +88,9 @@ test("with Housesitter's auto-restart job installed the line says the app will r
   const dir = path.join(a.home, "Library", "LaunchAgents")
   mkdirSync(dir, { recursive: true })
   writeFileSync(path.join(dir, `${HOUSESITTER_AGENT_LABEL}.plist`), "<plist/>")
-  assert.equal(housesitterRestartsApp({ homeDir: a.home, platform: "darwin" }), true)
-  assert.equal(housesitterRestartsApp({ homeDir: a.home, platform: "win32" }), false, "the job is a Mac's launchd agent")
-  const finding = pluginUpdateFinding({ env, pluginRoot: a.pluginRoot, homeDir: a.home, platform: "darwin" })
+  assert.equal(housesitterRestartsApp(a.home), true)
+  assert.equal(housesitterRestartsApp(path.join(a.home, "elsewhere")), false)
+  const finding = find(a)
   assert.equal(finding.auto_restart, true)
   assert.equal(finding.line, pluginUpdateLine(finding.plugins, true))
   assert.match(finding.line, /^There's an update to cit \(0\.1\.81 → 0\.1\.82\); Housesitter on this Mac will restart the app to pick it up when nobody is using it/u)
@@ -98,27 +101,42 @@ test("nothing is said when every loaded plugin is current or newer, a plugin has
     loaded: { desk: "3.2.154", cit: "0.1.83", other: "1.0.0" },
     fetched: [{ spec: spec("desk", "release"), name: "desk", version: "3.2.167" }, { spec: spec("cit"), name: "cit", version: "0.1.82" }],
   })
-  assert.equal(pluginUpdateFinding({ env, pluginRoot: a.pluginRoot, homeDir: a.home, skip: ["desk"] }), null)
+  assert.equal(find(a, { skip: ["desk"] }), null)
 })
 
 test("it says nothing outside an Agency session folder, without an engine, or when the cache is missing; it never throws", async () => {
   const a = await agency({ loaded: { cit: "0.1.81" }, fetched: [{ spec: spec("cit"), name: "cit", version: "0.1.82" }] })
-  assert.equal(pluginUpdateFinding({ env: {}, pluginRoot: "/somewhere/plugins/desk", homeDir: a.home }), null, "not a session root")
-  assert.equal(pluginUpdateFinding({ env: {}, pluginRoot: a.pluginRoot, homeDir: a.home }), null, "no engine to pick cache entries by")
+  assert.equal(find(a, { env: {}, pluginRoot: "/somewhere/plugins/desk" }), null, "not a session root")
+  assert.equal(find(a, { env: {} }), null, "no engine to pick cache entries by")
+  const unreadable = { get DESK_PLUGIN_ROOT() { throw new Error("env") } }
+  assert.equal(find(a, { env: unreadable }), null, "a failing read is no finding")
   await fs.rm(a.cache, { recursive: true })
-  assert.equal(pluginUpdateFinding({ env, pluginRoot: a.pluginRoot, homeDir: a.home }), null)
-  assert.equal(pluginUpdateFinding(), null)
+  assert.equal(find(a), null)
 })
 
 test("the launcher's own root is used when Desk runs from a newer release copy outside the session folder", async () => {
   const a = await agency({ loaded: { cit: "0.1.81" }, fetched: [{ spec: spec("cit"), name: "cit", version: "0.1.82" }] })
-  const finding = pluginUpdateFinding({ env: { ...env, DESK_PLUGIN_ROOT: a.pluginRoot }, pluginRoot: "/home/x/.cache/release-copies/3.2.167", homeDir: a.home })
+  const finding = find(a, { env: { ...env, DESK_PLUGIN_ROOT: a.pluginRoot }, pluginRoot: "/home/x/.cache/release-copies/3.2.167" })
   assert.equal(finding.plugins[0].name, "cit")
 })
 
 test("checkPluginUpdate stays off inside a node:test run", async () => {
   const a = await agency({ loaded: { cit: "0.1.81" }, fetched: [{ spec: spec("cit"), name: "cit", version: "0.1.82" }] })
-  assert.equal(checkPluginUpdate({ env: { ...env, NODE_TEST_CONTEXT: "child-v8" }, pluginRoot: a.pluginRoot, homeDir: a.home }), null)
+  assert.equal(checkPluginUpdate({ env, pluginRoot: a.pluginRoot, agentHost: undefined, homeDir: a.home, skip: [] }), null)
+})
+
+test("a manifest that is missing, unreadable, nameless or without a semver version is not a plugin, and a cache entry with no copy is skipped", async () => {
+  const a = await agency({ loaded: { cit: "0.1.81" }, fetched: [{ spec: spec("cit"), name: "cit", version: "0.1.82" }, { spec: spec("gone"), name: "gone", version: "1.0.0" }] })
+  const root = path.join(a.session, "root-1")
+  writeFileSync(path.join(a.session, "stray-file"), "x")
+  mkdirSync(path.join(root, "empty"), { recursive: true })
+  mkdirSync(path.join(root, "broken"), { recursive: true })
+  writeFileSync(path.join(root, "broken", "plugin.json"), "{not json")
+  plugin(path.join(root, "nameless"), 7, "1.0.0")
+  plugin(path.join(root, "loose"), "loose", "banana")
+  assert.deepEqual(loadedPlugins(a.session).map((p) => p.name), ["cit"])
+  await fs.rm(path.join(a.cache, "entries", "e1"), { recursive: true })
+  assert.deepEqual([...newestFetched(a.cache, "copilot")], [["cit", "0.1.82"]])
 })
 
 const jq = async () => ({ code: 0, stdout: "jq-1.7\n", stderr: "" })

@@ -13,6 +13,7 @@
 
 import { statSync, unwatchFile, watchFile, promises as headFileSystem, constants as headConstants } from "node:fs"
 import { createHash } from "node:crypto"
+import * as os from "node:os"
 import * as path from "node:path"
 
 import { validateAdmissionAuthority, verifyAdmissionAuthority } from "../activation/admit.js"
@@ -986,7 +987,7 @@ export function createDeskSession(deps) {
     if (context.search) payload = { ...payload, search: context.search.searchStatus() }
     const admitted = withAdmission(payload, stamped ?? statusSnapshot())
     // Who is serving comes from this process, never from the slow runtime status, so every answer carries it; only the fields that status fills can be pending, and the answer names them.
-    const pluginUpdate = pluginUpdateFn({ env, pluginRoot: deskPluginRoot(env) }) ?? null
+    const pluginUpdate = pluginUpdateFn({ env, pluginRoot: deskPluginRoot(env), homeDir: os.homedir(), skip: [] }) ?? null
     const full = {
       ...admitted,
       runtime: { ...admitted.runtime, ...servingIdentity() },
