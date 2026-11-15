@@ -79,7 +79,7 @@ Entrance B must never route into Entrance A choices or initialize over the exist
 
 Both entrances end at one Desk, one active plugin chain, admitted MCPs (the Desk server and the `desk-web` browser), startup foundations present, and the operator ready to resume or start the first real job from the same durable workspace. Later healthy sessions resume through ordinary `session-start` flow instead of replaying onboarding.
 
-At the endpoint, ask the factory contribution question once when `desk_status` with `{ detail: true }` reports `factory.consent` as `undecided`. Use the words that `desk:session-start`'s boot script puts in its `instructions` (`mcp/src/runtime/boot.js`): what is published, what never is, that the store is public, and that one of the contributor's GitHub accounts appears as the intake pull request's author. Record yes or no by calling `desk_doctor` with `{ "factory_consent": "yes" }` or `{ "factory_consent": "no" }`, so the next session start does not ask again; Desk finds the account itself. Skip the question in a noninteractive session, and never block onboarding on it.
+The factory's contribution question is not part of onboarding: nothing asks it at an endpoint or at session start. When the operator asks to contribute, follow "Factory consent" in `desk:session-start`'s `details.md`.
 
 The public RFC stays optional and on demand. Use it when the operator wants design context; do not require healthy startup or resumption to reread it.
 

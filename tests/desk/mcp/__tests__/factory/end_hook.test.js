@@ -258,7 +258,7 @@ const HOST_TIMEOUT_MS = Math.min(...(() => {
     ...Object.values(claude).flat().flatMap((group) => group.hooks).filter((entry) => /(?:factory|session)-end\.cjs/u.test(entry.command)).map((entry) => entry.timeout),
     ...Object.values(copilot).flat().filter((entry) => /(?:factory|session)-end\.cjs/u.test(entry.bash)).map((entry) => entry.timeoutSec),
   ]
-  assert.ok(seconds.length >= 4 && seconds.every((value) => Number.isFinite(value) && value > 0), "every host declares a timeout for the end hook")
+  assert.ok(seconds.length >= 2 && seconds.every((value) => Number.isFinite(value) && value > 0), "every host declares a timeout for the end hook")
   return seconds.map((value) => value * 1000)
 })())
 // A detached derivation of this two-line log takes well under a second on an idle machine; the wait watches for its output and gives a loaded machine ample room.

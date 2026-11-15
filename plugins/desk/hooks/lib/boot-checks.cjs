@@ -11,9 +11,7 @@
 // line and repair discarded, when its budget timer fires, when it took longer
 // than its budget (a check that blocks synchronously settles before its timer
 // can fire), when it throws, or when it stops itself at `ctx.deadline` by
-// throwing an error whose code is `boot_check_budget`. When factory state
-// exists the skip and its elapsed milliseconds are recorded in the protected
-// status.json (`boot_checks`). Repairs start detached with
+// throwing an error whose code is `boot_check_budget`. Repairs start detached with
 // ignored stdio after every check has run. The hook appends exactly one line,
 // `Desk boot pre-checks: <line>; <line>`, addressed to the agent, and nothing at all when
 // no check has a line, so its output is then byte-identical to the output it
@@ -22,40 +20,24 @@
 // Index tracing (spec.md §3): none of the checks below is designed to touch
 // the Git index, so a `git diff --cached --name-only` snapshot taken
 // immediately before and after each `check.run(...)` call — against the same
-// desk root `factoryCheck`/`deskHealthCheck` already resolve, only when it is
+// desk root `deskHealthCheck` already resolves, only when it is
 // itself a Git repository — catches a check that stages a path it never
 // should. A drift appends a `Desk problem: index-drift — ...`
 // block (`mcp/src/runtime/index-drift.js`) to the same output; it names the
 // check and the exact paths, never undoes the staging, and never blocks.
 //
 // The registry, in order:
-//   1. factory: whether the bound desk's store has a consent decision, and a
-//      detached `factory.js finalize` for finished jobs whose facts are not
-//      delivered yet (mcp/src/factory/boot-check.js);
-//   2. labels: what the plugin's own evaluator is doing about the finished jobs
-//      whose waste labels are not complete yet, and the finished jobs whose
-//      labels are quarantined, as status lines and never a repair
-//      (mcp/src/factory/boot-check.js);
-//   3. andon: the open andon issues the last start-time refresh recorded for
-//      each contributing store, one line per store, without a repair
-//      (mcp/src/factory/boot-check.js, mcp/src/factory/andon-watch.js);
-//   4. desk-health: the bound root's last Desk start, and a detached
+//   1. desk-health: the bound root's last Desk start, and a detached
 //      fast-forward of a clean state branch (mcp/src/runtime/desk-health.js);
-//   5. workspace-tidy: stale worktree listing with its own detached repair
+//   2. workspace-tidy: stale worktree listing with its own detached repair
 //      (mcp/src/runtime/workspace-tidy.js). It launches that repair itself and
 //      keeps a soft deadline inside its budget; an unfinished inspection is
-//      recorded as skipped (the next start runs it again), and the check says
+//      skipped for this start (the next start runs it again), and the check says
 //      nothing unless it has something for the agent: leftovers, an issue or a
 //      repair that could not start.
-//   6. improvement: the open improvement cards and the oldest one's age, or an
-//      unreadable card folder, as one status line, without a repair
-//      (mcp/src/factory/boot-check.js). The labels, andon and improvement
-//      checks say nothing in a noninteractive session and read the cards once.
 //
-// `startFactory` starts factory-start.cjs (sweep, then flush and refresh andon
-// for every consented store) detached, and then loop-start.cjs (the loop worker's
-// launcher); the hooks call it after their output is built, and only when a
-// store has `contribute: true`.
+// The factory runs nothing at session start: no check, no line and no delivery worker.
+// Its store and its tools stay, and run when someone asks (`mcp/scripts/factory.js`, `desk_doctor`).
 //
 // The hook runs in whatever `node` the host puts first on PATH, so all of
 // this keeps to what Node 16 has, and the boot path never searches for a
@@ -66,7 +48,6 @@
 // the MCP's engines range and runs the real work there.
 
 const fs = require("node:fs/promises");
-const { existsSync } = require("node:fs");
 const path = require("node:path");
 const { createHash, randomUUID } = require("node:crypto");
 const { spawn, spawnSync } = require("node:child_process");
@@ -96,12 +77,10 @@ const timing = {
   optionalLinesDeadlineMs: 3500,
 };
 const TIDY_SOFT_MARGIN_MS = 20;
-const FACTORY_SCRIPT = path.join(PLUGIN_ROOT_DIR, "mcp", "scripts", "factory.js");
 const DESK_PROBLEM_SCRIPT = path.join(PLUGIN_ROOT_DIR, "mcp", "scripts", "file-desk-problem.js");
 const BOOT_CHECK_FIX_ATTEMPT = "not auto-repaired -- reinstall Desk or inspect this check's own code.";
 const INDEX_DRIFT_FIX_ATTEMPT = "not auto-repaired -- staged paths are left as-is for inspection.";
 const MIGRATIONS_FIX_ATTEMPT = "not auto-repaired -- the migration registry itself needs investigation.";
-const PERSON = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/u;
 
 // `root` is the bound desk's canonical identity, its real path, so every
 // spelling of one desk (a symlink alias, its real path) shares one report and
@@ -270,7 +249,7 @@ async function runWorkspaceTidy(ctx) {
         timer = setTimeout(() => {
           stopAll();
           // Deferred, not stuck: the next session start runs this check fresh and launches the repair itself, so no
-          // agent action is required and the line would only be noise. The registry records the skip in the factory status.
+          // agent action is required and the line would only be noise.
           reject(Object.assign(new Error("Run the check again: workspace-tidy ran past its budget"), { code: "boot_check_budget" }));
         }, Math.max(1, Math.min(ctx.tidyBudgetMs ?? Infinity, ctx.budgetMs - TIDY_SOFT_MARGIN_MS)));
       }),
@@ -286,25 +265,8 @@ async function runWorkspaceTidy(ctx) {
 // The factory and desk-health checks.
 // ---------------------------------------------------------------------------
 
-// The person's folder as the factory names it (`desks/<alias>`), or "" when there is none or the alias is not one the factory accepts.
-function factoryPrefix(who) {
-  const alias = who.status === "ok" ? who.personPrefix.replace(/^desks\//u, "") : "";
-  return PERSON.test(alias) ? `desks/${alias}` : "";
-}
-
 /**
- * The person the Desk tools resolve for this start, from what is known without a network call
- * (`improvement-person.js`, which uses the tool server's own resolver), read once and kept in `ctx.shared`.
- */
-function sessionPerson(ctx, root) {
-  ctx.shared.person ??= import("../../mcp/src/desk/improvement-person.js")
-    .then(({ improvementPerson }) => improvementPerson({ deskRoot: root, env: ctx.env, now: Date.now() }))
-    .catch(() => ({ status: "unresolved", reason: "invalid_member" }));
-  return ctx.shared.person;
-}
-
-/**
- * The root the factory end hook binds sessions to, resolved the same way as
+ * The root the session binds to, resolved the same way as
  * resolve-desk-root.js `resolveHookDeskRoot` (bounded activation reads), and
  * shared by the checks of one start. It imports the resolver's parts rather
  * than that script, which is the Claude hook's entry point and is still
@@ -328,109 +290,6 @@ async function boundRoot(ctx) {
   })();
   return ctx.shared.root;
 }
-
-const factoryCheck = {
-  id: "factory",
-  budgetMs: 100,
-  async run(ctx) {
-    const root = await boundRoot(ctx);
-    if (!root) return {};
-    const [{ factoryBootCheck }, { readSmallText }, { PATTERNS }] = await Promise.all([
-      import("../../mcp/src/factory/boot-check.js"), import("../../mcp/src/factory/marker.js"), import("../../mcp/src/factory/schema.js"),
-    ]);
-    const { metadata } = require("../../mcp/src/factory/plugin-sources.cjs");
-    const home = ctx.env.HOME || require("node:os").homedir();
-    const pluginRoot = ctx.env.PLUGIN_ROOT || PLUGIN_ROOT_DIR;
-    let plugins = { dirs: [], incomplete: true };
-    try {
-      plugins = metadata({ host: ctx.host === "copilot" ? "copilot" : "claude", pluginRoot, home, env: ctx.env, readSmallText, PATTERNS, deadline: ctx.deadline, sources: false });
-    } catch {
-      // An unreadable plugin set leaves only the desk's own declaration.
-    }
-    if (plugins.timedOut) throw Object.assign(new Error("Run the check again: plugin scan past the check's deadline"), { code: "boot_check_budget" });
-    const who = await sessionPerson(ctx, root);
-    const result = factoryBootCheck({
-      env: ctx.env, deskRoot: root, personPrefix: factoryPrefix(who), pluginDirs: plugins.dirs, pluginScanIncomplete: plugins.incomplete, deadline: ctx.deadline,
-    });
-    const repair = result.jobs?.length ? { command: compatibleCommand(FACTORY_SCRIPT, "finalize", ...result.jobs.flatMap((job) => ["--job", job])) } : undefined;
-    return { line: result.line, repair };
-  },
-};
-
-/**
- * The improvement cards, read once for the checks of one start and kept in `ctx.shared`: null when no desk is bound.
- * The read carries no deadline of its own, so one check's budget never spoils the answer for the next; each check then
- * keeps to its own deadline with `withinDeadline`.
- */
-function improvementCards(ctx) {
-  ctx.shared.improvement ??= (async () => {
-    const root = await boundRoot(ctx);
-    if (!root) return null;
-    const { improvementBootCheck } = await import("../../mcp/src/factory/boot-check.js");
-    // The person the Desk tools resolve, from what is known without a network call; a crew desk whose person is not known is said, never read as empty.
-    const who = await sessionPerson(ctx, root);
-    if (who.status !== "ok") return { status: "unchecked", reason: who.reason };
-    return improvementBootCheck({ deskRoot: root, personPrefix: who.personPrefix, env: ctx.env, now: Date.now() });
-  })();
-  return ctx.shared.improvement;
-}
-
-function withinDeadline(ctx) {
-  if (performance.now() >= ctx.deadline) throw Object.assign(new Error("Run the check again: improvement cards read past the check's deadline"), { code: "boot_check_budget" });
-}
-
-// No line in a session with no operator in it (a headless factory session, an unattended or CI run), and none of these lines starts a repair:
-// the plugin runs the evaluator itself.
-const labelsCheck = {
-  id: "labels",
-  budgetMs: 60,
-  async run(ctx) {
-    const [{ isNoninteractive }, { labelsBootCheck, labelsLine, labelsQuarantinedLine, cardOpenState, loopWorkerLine }] = await Promise.all([import("../../mcp/src/factory/session-kind.js"), import("../../mcp/src/factory/boot-check.js")]);
-    if (isNoninteractive(ctx.env)) return {};
-    const labels = labelsBootCheck({ env: ctx.env });
-    // Where the loop worker's last run was not a normal one, the line says so even when no label waits.
-    const worker = loopWorkerLine({ env: ctx.env });
-    if (labels.count === 0 && labels.quarantined === 0) return worker === "" ? {} : { line: worker };
-    const cards = await improvementCards(ctx);
-    withinDeadline(ctx);
-    const lines = [
-      ...(labels.count > 0 ? [labelsLine(labels, { cardOpen: cardOpenState(cards, "loop_alarm:headless_blocked") })] : []),
-      ...(labels.quarantined > 0 ? [labelsQuarantinedLine(labels.quarantined, { cardOpen: cardOpenState(cards, "loop_alarm:labels_quarantined") })] : []),
-    ];
-    return { line: [...lines, ...(worker === "" ? [] : [worker])].join("; ") };
-  },
-};
-
-const andonCheck = {
-  id: "andon",
-  budgetMs: 30,
-  async run(ctx) {
-    const [{ isNoninteractive }, { andonBootCheck, andonLine, andonUnknown, andonUnknownLine }] = await Promise.all([import("../../mcp/src/factory/session-kind.js"), import("../../mcp/src/factory/boot-check.js")]);
-    if (isNoninteractive(ctx.env)) return {};
-    // An andon state that is not known is said out loud, never left to read as "no open andon".
-    const unknown = andonUnknown({ env: ctx.env }).map(andonUnknownLine);
-    const found = andonBootCheck({ env: ctx.env });
-    if (found.length === 0) return unknown.length === 0 ? {} : { line: unknown.join("; ") };
-    const cards = await improvementCards(ctx);
-    withinDeadline(ctx);
-    const openKeys = cards === null || cards.status !== "ok" ? null : cards.open_keys;
-    return { line: [...unknown, ...found.map(({ store, issues }) => andonLine(store, issues, { openKeys, complete: cards?.truncated !== true }))].join("; ") };
-  },
-};
-
-// The open improvement cards, or an unreadable card folder said out loud; nothing when no desk is bound or no card is open.
-const improvementCheck = {
-  id: "improvement",
-  budgetMs: 80,
-  async run(ctx) {
-    const [{ isNoninteractive }, { improvementLine }] = await Promise.all([import("../../mcp/src/factory/session-kind.js"), import("../../mcp/src/factory/boot-check.js")]);
-    if (isNoninteractive(ctx.env)) return {};
-    const cards = await improvementCards(ctx);
-    withinDeadline(ctx);
-    const line = improvementLine(cards);
-    return line === "" ? {} : { line };
-  },
-};
 
 const deskHealthCheck = {
   id: "desk-health",
@@ -456,24 +315,12 @@ const workspaceTidyCheck = { id: "workspace-tidy", budgetMs: 260, run: runWorksp
 // The registry.
 // ---------------------------------------------------------------------------
 
-/**
- * Records skipped checks in the protected factory status.json, only when factory state already exists and no other
- * writer holds its lock: waiting on a lock that a crashed holder keeps for 10 minutes would hold session start.
- */
-async function recordSkipped(env, skipped) {
-  const { factoryStateRoot, writeStatus } = await import("../../mcp/src/factory/outbox.js");
-  const root = await factoryStateRoot(env, { create: false });
-  if (root === null || existsSync(path.join(root, "status.json.lock"))) return false;
-  await writeStatus(env, { boot_checks: { at: new Date().toISOString(), skipped } });
-  return true;
-}
-
 const validRepair = (repair) => Array.isArray(repair?.command) && repair.command.length > 0 && repair.command.every((part) => typeof part === "string" && part !== "");
 
 /**
  * Runs the registry (see the header). Options: `host`, `env`, `sessionFolder`,
  * plus for tests `checks`, `totalBudgetMs`, `checkBudgets` ({ id: ms }),
- * `launchRepair(command, env)`, `record(env, skipped)`, `launch` (the
+ * `launchRepair(command, env)`, `launch` (the
  * workspace-tidy repair launcher), `loadRedaction`, `loadArgvSafeReason` and
  * `spawnGit` (the index-tracing Git seam; real callers never pass it).
  * Resolves `""` or one `Desk boot pre-checks:` line; never rejects. The line names
@@ -483,7 +330,7 @@ const validRepair = (repair) => Array.isArray(repair?.command) && repair.command
  */
 async function runBootChecks(options = {}) {
   const {
-    checks: registry = checks, totalBudgetMs = TOTAL_BUDGET_MS, checkBudgets = {}, launchRepair: startRepair = launchCommand, record = recordSkipped,
+    checks: registry = checks, totalBudgetMs = TOTAL_BUDGET_MS, checkBudgets = {}, launchRepair: startRepair = launchCommand,
     loadRedaction = () => import("../../mcp/src/util/redact.js"),
     loadArgvSafeReason = () => import("../../mcp/src/runtime/argv-safe-reason.js"),
     spawnGit = spawnSync,
@@ -497,9 +344,8 @@ async function runBootChecks(options = {}) {
   const shared = {};
   const lines = [];
   const repairs = [];
-  const skipped = [];
-  // Index tracing (spec.md §3): resolved once, the same way `factoryCheck`/
-  // `deskHealthCheck` resolve their own desk root, and only watched when it
+  // Index tracing (spec.md §3): resolved once, the same way
+  // `deskHealthCheck` resolves its own desk root, and only watched when it
   // is itself a Git repository.
   const { snapshotStagedPaths, diffStagedPaths, formatIndexDriftProblem, formatDeskProblem } = await import("../../mcp/src/runtime/index-drift.js");
   const driftRoot = await boundRoot({ env, host: options.host, sessionFolder: options.sessionFolder, shared });
@@ -532,7 +378,6 @@ async function runBootChecks(options = {}) {
     let budget = Math.min(checkBudgets[check.id] ?? check.budgetMs, remaining());
     // Timers resolve to whole milliseconds, so less than one left is none left.
     if (budget < 1) {
-      skipped.push({ id: check.id, reason: "total_budget" });
       if (check.budgetLine) lines.push(oneLine(check.budgetLine));
       continue;
     }
@@ -541,7 +386,6 @@ async function runBootChecks(options = {}) {
     const beforeStaged = tracksIndex ? snapshotStagedPaths({ root: driftRoot, spawnGit, timeoutMs: remaining() }) : null;
     budget = Math.min(budget, remaining());
     if (budget < 1) {
-      skipped.push({ id: check.id, reason: "total_budget" });
       if (check.budgetLine) lines.push(oneLine(check.budgetLine));
       continue;
     }
@@ -572,12 +416,10 @@ async function runBootChecks(options = {}) {
     }
     if (outcome.overrun || elapsed > budget || remaining() < 1) {
       cancellation.abort();
-      skipped.push({ id: check.id, reason: "budget", elapsed_ms: Math.round(elapsed) });
       if (check.budgetLine) lines.push(oneLine(check.budgetLine));
       continue;
     }
     if (outcome.failed) {
-      skipped.push({ id: check.id, reason: "error", elapsed_ms: Math.round(elapsed) });
       const reason = oneLine(outcome.error?.message ?? String(outcome.error ?? "unknown error"));
       const safeReason = argvSafeReason(reason);
       const launch = shouldLaunchFiler({ env, mechanism: check.id, signature: safeReason });
@@ -602,13 +444,6 @@ async function runBootChecks(options = {}) {
       await startRepair(command, env);
     } catch {
       // A repair that cannot start is retried at the next session start.
-    }
-  }
-  if (skipped.length > 0) {
-    try {
-      await record(env, skipped);
-    } catch {
-      // Recording a skip never changes the startup output.
     }
   }
   if (lines.length === 0) return "";
@@ -662,28 +497,6 @@ async function migrationLine({ host, env = process.env, sessionFolder, budgetMs,
     });
   } catch {
     return "";
-  }
-}
-
-/** Starts factory-start.cjs detached when a store has `contribute: true`; resolves whether it started. Never rejects. */
-async function startFactory({ env = process.env, launch = launchCommand } = {}) {
-  try {
-    if (isHeadless(env)) return false;
-    const { hasContributingStore } = await import("../../mcp/src/factory/boot-check.js");
-    if (!hasContributingStore(env)) return false;
-    let delivery = false;
-    try {
-      await launch(compatibleCommand(path.join(HOOKS_DIR, "factory-start.cjs")), env);
-      delivery = true;
-    } catch { /* the loop worker below does not wait on delivery */ }
-    // The loop worker (loop-start.cjs) starts after delivery, in its own detached process; neither start depends on the other. Switched off, it starts nothing at all.
-    // Session start writes nothing for the off switch: the session-start line reads it from the environment, and the health record reads it when it is next written.
-    if (require("../../mcp/src/factory/loop-switch.cjs").isLoopEnabled(env)) {
-      try { await launch(compatibleCommand(path.join(HOOKS_DIR, "loop-start.cjs")), env); } catch { /* the loop retries at the next session start */ }
-    }
-    return delivery;
-  } catch {
-    return false;
   }
 }
 
@@ -798,7 +611,7 @@ async function runCompatible(script, args, { env = process.env, resolveNode = co
   return { started: true, node, code };
 }
 
-const checks = [factoryCheck, labelsCheck, andonCheck, deskHealthCheck, workspaceTidyCheck, improvementCheck];
+const checks = [deskHealthCheck, workspaceTidyCheck];
 
 // The command line of the entry file `hooks/boot-checks.cjs`: the spawned repair, fast-forward, compatible-node, acknowledge and revoke runs.
 function main(argv = process.argv.slice(2)) {
@@ -823,8 +636,8 @@ function main(argv = process.argv.slice(2)) {
 }
 
 module.exports = {
-  checks, factoryCheck, labelsCheck, andonCheck, deskHealthCheck, workspaceTidyCheck, improvementCheck,
-  runBootChecks, startFactory, boundRoot, migrationLine, launchCommand, recordSkipped,
+  checks, deskHealthCheck, workspaceTidyCheck,
+  runBootChecks, boundRoot, migrationLine, launchCommand,
   runRepair, startRepair, launchRepair, runCompatible, compatibleCommand, acknowledgeRepair, reportPath, readReport, TOTAL_BUDGET_MS, REPAIR_NODE_ENV,
   timing, main,
 };

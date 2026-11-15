@@ -229,30 +229,16 @@ function checkClaudePlugin({ repoRoot, methodId, errors, checked }) {
 
 function validateFactoryHooks(claude, copilot) {
   const errors = [];
-  // Session end is one command per host (session-end.cjs runs the factory capture and the unpushed check in one detached worker);
-  // the per-turn event runs only the bounded factory end hook, never the unpushed check.
-  const claudeExpected = {
-    SessionEnd: [{ hooks: [{ type: "command", command: 'node "${CLAUDE_PLUGIN_ROOT}/hooks/session-end.cjs" claude', timeout: 5 }] }],
-    Stop: [{ hooks: [{ type: "command", command: 'node "${CLAUDE_PLUGIN_ROOT}/hooks/factory-end.cjs" claude', timeout: 3 }] }],
+  // Session end is one command per host (session-end.cjs runs the unpushed check in one detached worker). The per-turn event registers
+  // nothing: since Epoch 3 no factory hook runs at session start or after a turn.
+  const sessionEnd = {
+    claude: [{ hooks: [{ type: "command", command: 'node "${CLAUDE_PLUGIN_ROOT}/hooks/session-end.cjs" claude', timeout: 5 }] }],
+    copilot: [{ type: "command", bash: 'node "${PLUGIN_ROOT}/hooks/session-end.cjs" copilot', powershell: 'node "${PLUGIN_ROOT}/hooks/session-end.cjs" copilot', timeoutSec: 3 }],
   };
-  for (const [event, expected] of Object.entries(claudeExpected)) {
-    if (!sameJson(claude.hooks?.[event], expected)) {
-      errors.push(event === "SessionEnd"
-        ? "factory-hooks SessionEnd must register only session-end.cjs, which runs the factory capture and the unpushed check (M4-6 Part 3)"
-        : `factory-hooks ${event} must register only the bounded, silent factory end hook, and never the unpushed check (M4-6 Part 3: it fires after every turn)`);
-    }
-  }
-  const copilotExpected = {
-    sessionEnd: [{ type: "command", bash: 'node "${PLUGIN_ROOT}/hooks/session-end.cjs" copilot', powershell: 'node "${PLUGIN_ROOT}/hooks/session-end.cjs" copilot', timeoutSec: 3 }],
-    agentStop: [{ type: "command", bash: 'node "${PLUGIN_ROOT}/hooks/factory-end.cjs" copilot', powershell: 'node "${PLUGIN_ROOT}/hooks/factory-end.cjs" copilot', timeoutSec: 3 }],
-  };
-  for (const [event, expected] of Object.entries(copilotExpected)) {
-    if (!sameJson(copilot.hooks?.[event], expected)) {
-      errors.push(event === "sessionEnd"
-        ? "factory-hooks sessionEnd must register only session-end.cjs, which runs the factory capture and the unpushed check (M4-6 Part 3)"
-        : `factory-hooks ${event} must register only the bounded, silent factory end hook, and never the unpushed check (M4-6 Part 3: it fires after every turn)`);
-    }
-  }
+  if (!sameJson(claude.hooks?.SessionEnd, sessionEnd.claude)) errors.push("factory-hooks SessionEnd must register only session-end.cjs, which runs the unpushed check (M4-6 Part 3)");
+  if (!sameJson(copilot.hooks?.sessionEnd, sessionEnd.copilot)) errors.push("factory-hooks sessionEnd must register only session-end.cjs, which runs the unpushed check (M4-6 Part 3)");
+  if (claude.hooks?.Stop !== undefined) errors.push("factory-hooks Stop must register nothing: the factory has no per-turn hook (Epoch 3)");
+  if (copilot.hooks?.agentStop !== undefined) errors.push("factory-hooks agentStop must register nothing: the factory has no per-turn hook (Epoch 3)");
   return errors;
 }
 

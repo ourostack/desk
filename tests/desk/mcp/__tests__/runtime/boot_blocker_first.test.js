@@ -1,4 +1,4 @@
-// Blocker first: a boot that must ask the operator one question says so right after the headline, in JSON and text, and drops the consent line.
+// Blocker first: a boot that must ask the operator one question says so right after the headline, in JSON and text, and carries no factory line.
 import { formatBootText } from "../../../../../plugins/desk/mcp/src/runtime/boot-text.js"
 import { test } from "node:test"
 import assert from "node:assert/strict"
@@ -73,16 +73,6 @@ test("a degraded boot keeps its degraded headline and still prints the Needs you
   assert.equal(text.split("\n")[1], "Needs you first: Where is x cloned?")
 })
 
-test("with an ask-and-stop blocker the boot omits the factory consent instruction in JSON and in text; without one it is there", async () => {
-  const root = await deskWithTask(CARD)
-  const stopped = await bootNamed(root, [state({})], "undecided")
-  for (const list of [stopped.instructions, stopped.text_instructions]) assert.ok(!list.some((line) => /Factory consent|factory details/u.test(line)), "no consent line while the operator has a question to answer")
-  assert.ok(!formatBootText(stopped).includes("Factory consent"))
-  const clear = await bootNamed(root, [state({ present: true })], "undecided")
-  assert.ok(clear.instructions.some((line) => line.startsWith("Factory consent is undecided")))
-  assert.ok(clear.text_instructions.some((line) => line.startsWith("Factory consent is undecided")))
-})
-
 test("a task whose next step or blocker says it lives only on another machine gets a not-here note: ask, never clone or fetch to look for it", () => {
   const base = { status: "ready", degraded: [], pending: [] }
   const tasks = (task) => ({ ...base, active_tasks: { task_count: 1, tracks: [{ track: "lighthouse-relay", desk: null, tasks: [{ slug: "push-check", handle: "h", status: "processing", ...task }] }] } })
@@ -142,18 +132,12 @@ test("a waiting boot says so in a degraded headline too, and the headline names 
   assert.ok(four.needs_operator.question.includes("Where is d cloned"), "every repo is in a question that fits")
 })
 
-const OPEN_CARDS = async () => ({ status: "ok", open: 2, oldest_days: 3, open_keys: [], truncated: false, set_aside: 0, unreadable_files: 0 })
-
-test("with an ask-and-stop blocker the boot does not tell the agent to pick up an improvement card; without one the card line comes before consent, which stays last in both orders", async () => {
+test("with or without an ask-and-stop blocker the boot carries no factory or improvement-card line", async () => {
   const root = await deskWithTask(CARD)
-  const stopped = await bootNamed(root, [state({})], "undecided", "flash-valves", { improvementFn: OPEN_CARDS })
-  for (const list of [stopped.instructions, stopped.text_instructions]) assert.ok(!list.some((line) => line.startsWith("Improvement cards")), "no card pickup while the operator has a question to answer")
-  const clear = await bootNamed(root, [state({ present: true })], "undecided", "flash-valves", { improvementFn: OPEN_CARDS })
-  assert.match(clear.text_instructions.at(-1), /^Factory consent is undecided/u)
-  const card = (list) => list.findIndex((line) => line.startsWith("Improvement cards"))
-  const consent = (list) => list.findIndex((line) => line.startsWith("Factory consent is undecided"))
-  for (const list of [clear.instructions, clear.text_instructions]) {
-    assert.ok(card(list) !== -1 && card(list) < consent(list), "the card line comes before the consent line")
+  const openCards = async () => ({ status: "ok", open: 2, oldest_days: 3, open_keys: [], truncated: false, set_aside: 0, unreadable_files: 0 })
+  for (const states of [[state({})], [state({ present: true })]]) {
+    const result = await bootNamed(root, states, "undecided", "flash-valves", { improvementFn: openCards })
+    for (const list of [result.instructions, result.text_instructions]) assert.ok(!list.some((line) => /Factory|Improvement cards|factory details/u.test(line)))
+    assert.ok(!/Factory consent|Improvement cards/u.test(formatBootText(result)))
   }
-  assert.ok(clear.instructions.slice(consent(clear.instructions)).every((line) => !line.startsWith("Improvement cards")))
 })

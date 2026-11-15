@@ -49,7 +49,7 @@
     "evals/worlds/crew-shared-initiatives/empty-and-unsafe-read-only/desk/desks/alex/service-health/track.md",
     "evals/worlds/crew-shared-initiatives/empty-and-unsafe-read-only/desk/desks/sam/README.md"
   ],
-  "reviewedSourceFingerprint": "cbecf036a822f4cbc634de92bc4cb8f688f562240f9dad488faccd46db45a9ba",
+  "reviewedSourceFingerprint": "df85dcd99ede23ea5ea650cba3cc1300bb14ffb1436cdbc185f76345250b0296",
   "requirements": [
     { "id": "single-home", "description": "Reuse existing shared tracks; new initiatives use a README in the same home." },
     { "id": "preserve-work", "description": "Keep personal tasks, ownership and state unchanged unless separately authorized." },

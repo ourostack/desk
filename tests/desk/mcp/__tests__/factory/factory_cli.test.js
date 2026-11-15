@@ -40,8 +40,6 @@ import { factoryStateRoot, readConsent, readMachineSecret, setConsent, updateSta
 import { STOP_FACTS_BINDING_VERSION } from "../../../../../plugins/desk/mcp/src/factory/evaluate-run.js"
 import { keyedJobId } from "../../../../../plugins/desk/mcp/src/factory/publish.js"
 import { indexJob } from "./_index_helper.js"
-import { consentMentioned } from "../../../../../plugins/desk/mcp/src/runtime/consent-mentioned.js"
-import { resolveDeskStateDir } from "../../../../../plugins/desk/mcp/src/runtime/last-start.js"
 import { osEnv } from "../_os_env.js"
 import { removeTree } from "../_remove_tree.js"
 import { closeWindowsAclSessions } from "../../../../../plugins/desk/mcp/src/factory/windows-acl.js"
@@ -1052,20 +1050,7 @@ test("runConsentCommand rejects malformed argv, a missing --store, and a --contr
   await assert.rejects(() => runConsentCommand({ argv: ["--store"], env }), /Usage: factory\.js consent/u)
   await assert.rejects(() => runConsentCommand({ argv: ["--contribute", "yes"], env }), /Usage: factory\.js consent/u)
   await assert.rejects(() => runConsentCommand({ argv: ["--store", "a/b", "--contribute", "maybe"], env }), /Usage: factory\.js consent/u)
-}))
-
-test("runConsentCommand records that the operator was told about a store, without deciding anything", () => scratch(async (env) => {
-  const first = await runConsentCommand({ argv: ["--store", "ourostack/factory", "--mentioned", "yes"], env })
-  assert.equal(first.store, "ourostack/factory")
-  assert.match(first.mentioned_at, /^\d{4}-\d{2}-\d{2}T/u)
-  assert.deepEqual(await runConsentCommand({ argv: ["--mentioned", "yes", "--store", "ourostack/factory"], env }), first, "a second record keeps the first time")
-  assert.equal(consentMentioned(resolveDeskStateDir({ env }), "ourostack/factory"), true)
-  assert.deepEqual((await readConsent(env)).stores, {}, "no decision is recorded")
-  await assert.rejects(() => runConsentCommand({ argv: ["--store", "ourostack/factory", "--mentioned", "no"], env }), /Usage: factory\.js consent/u)
-  await assert.rejects(() => runConsentCommand({ argv: ["--mentioned", "yes"], env }), /Usage: factory\.js consent/u)
-  await assert.rejects(() => runConsentCommand({ argv: ["--store", "ourostack/factory", "--mentioned", "yes", "--contribute", "yes"], env }), /Usage: factory\.js consent/u)
-  await assert.rejects(() => runConsentCommand({ argv: ["--store", "ourostack/factory", "--mentioned", "yes", "--account", "ari"], env }), /Usage: factory\.js consent/u)
-  await assert.rejects(() => runConsentCommand({ argv: ["--store", "not a store", "--mentioned", "yes"], env }), /store must be <owner\/repo>/u)
+  await assert.rejects(() => runConsentCommand({ argv: ["--store", "a/b", "--mentioned", "yes"], env }), /Usage: factory\.js consent/u)
 }))
 
 test("runConsentCommand rejects an unknown option", () => scratch(async (env) => {
