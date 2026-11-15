@@ -200,11 +200,13 @@ async function fireDispatch(ctx, state, relay, run) {
 
 /**
  * Records the fresh runs. The newest one on a head the relay has not fired for becomes the pending fire; a newer head restarts the
- * quiet period, and another run on the same head only updates which run is named.
+ * quiet period, and another run on the same head only updates which run is named. A head the relay fired for, or passed over for a
+ * newer one, is remembered, so a second event's run that finishes on it later never fires it again, and never after a newer head.
  */
 function recordHead(state, ctx, fresh) {
-  const fired = state.lastFire?.headSha
-  const candidate = fresh.filter((run) => run.head_sha !== fired).reduce((best, run) => (best === undefined || run.id > best.id ? run : best), undefined)
+  const finished = new Set([state.lastFire?.headSha, ...(state.firedHeads ?? []), ...(state.passedOver ?? [])])
+  const eligible = fresh.filter((run) => !finished.has(run.head_sha))
+  const candidate = eligible.reduce((best, run) => (best === undefined || run.id > best.id ? run : best), undefined)
   if (!candidate) return
   const pending = state.pending
   const runs = (pending?.runs ?? 0) + fresh.length
@@ -212,11 +214,13 @@ function recordHead(state, ctx, fresh) {
   if (!pending) state.pending = { at: now, run: candidate, runs }
   else if (candidate.id < pending.run.id) state.pending = { ...pending, runs }
   else state.pending = { at: candidate.head_sha === pending.run.head_sha ? pending.at : now, run: candidate, runs }
+  const passed = [pending?.run.head_sha, ...eligible.map((run) => run.head_sha)].filter((sha) => sha && sha !== state.pending.run.head_sha)
+  if (passed.length > 0) state.passedOver = [...new Set([...(state.passedOver ?? []), ...passed])].slice(-HANDLED_KEPT)
 }
 
 /**
- * Fires once per watched head: a successful run on a head the relay has already fired for is remembered and never fires again, so a
- * restart does not either. A run on a new head waits `settleSeconds` for a newer head, then fires once for the newest one. The first
+ * Fires once per watched head: a successful run on a head the relay has already fired for, or passed over for a newer one, is
+ * remembered and never fires again, so a restart does not either. A run on a new head waits `settleSeconds` for a newer head, then fires once for the newest one. The first
  * poll only records the runs that already succeeded.
  */
 async function runDispatch(relay, state, ctx) {
@@ -256,6 +260,7 @@ async function runDispatch(relay, state, ctx) {
   }
   delete state.retryAt
   delete state.pending
+  state.firedHeads = [...(state.firedHeads ?? []), sha].slice(-HANDLED_KEPT)
   state.lastFire = { at: new Date(ctx.now).toISOString(), runId: id, runUrl: pending.run.html_url, headSha: sha, runs: pending.runs, target }
   note(state, ctx.now, { event: "fired", runId: id, headSha: sha, runs: pending.runs, target })
   ctx.save()
@@ -324,12 +329,17 @@ const skippedTemplateMatches = (run, required) => {
   return run.conclusion === "skipped" && at > 0 && required.startsWith(run.name.slice(0, at))
 }
 
+/** An unexpanded matrix template that GitHub skipped stands in for a matrix that never ran; it says nothing once the matrix ran under expanded names. */
+const isTemplateSkip = (run) => run.conclusion === "skipped" && run.name.includes("${{")
+
 /** What each required check is still missing, as one line per entry that is not fully green. Only the newest attempt of each check counts, and it counts only when it completed with `success`, or with `skipped` or `neutral` when `skippedPasses` is set. */
 export function waitingOnChecks(requiredChecks, runs, skippedPasses = false) {
   const green = (run) => run.status === "completed" && (run.conclusion === "success" || (skippedPasses && SKIPPED_PASSES.has(run.conclusion)))
   const newest = latestCheckRuns(runs)
   return requiredChecks.flatMap((required) => {
-    const matching = newest.filter((run) => globPattern(required).test(run.name) || skippedTemplateMatches(run, required))
+    const found = newest.filter((run) => globPattern(required).test(run.name) || skippedTemplateMatches(run, required))
+    const expanded = found.filter((run) => !isTemplateSkip(run))
+    const matching = expanded.length > 0 ? expanded : found
     if (matching.length === 0) return [`${required}: not started`]
     const notGreen = matching.filter((run) => !green(run))
     return notGreen.length === 0 ? [] : [`${required}: ${notGreen.length === matching.length && matching.length === 1 ? shown(notGreen) : `${notGreen.length} of ${matching.length} not green (${shown(notGreen)})`}`]
