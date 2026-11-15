@@ -391,7 +391,7 @@ test("Copilot root package docs avoid healthy-path manual dependency setup", () 
 
 test("Copilot runs the unpushed check (session-end.cjs) under sessionEnd, not agentStop (M4-6 Part 3, Review Focus: never raise on every turn)", () => {
   const copilotHooks = loadJson("plugins", "desk", "hooks", "copilot-hooks.json")
-  const registeredUnder = (event) => copilotHooks.hooks[event].some((entry) => entry.bash.includes("session-end.cjs"))
+  const registeredUnder = (event) => (copilotHooks.hooks[event] ?? []).some((entry) => entry.bash.includes("session-end.cjs"))
   assert.ok(registeredUnder("sessionEnd"), "copilot-hooks.json's sessionEnd array must register session-end.cjs")
   assert.ok(!registeredUnder("agentStop"), "session-end.cjs must never bind to agentStop, which fires after every turn")
 })
@@ -436,7 +436,7 @@ test("Copilot packaging validation rejects missing root surfaces and stale versi
   staleDeskVersion.deskPlugin.version = "1.7.2"
   assert.deepEqual(
     validateCopilotPackagingContract(staleDeskVersion),
-    ["Copilot root Desk version must match activation version 3.2.172"],
+    ["Copilot root Desk version must match activation version 3.2.174"],
   )
 
   const staleWorkSuiteVersion = clone(currentCopilotPackagingInput())

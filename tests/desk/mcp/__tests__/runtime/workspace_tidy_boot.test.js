@@ -149,14 +149,12 @@ test("the complete boot check has a deadline even when launching repair stalls",
   const f = await fixture()
   // Real time: a stalled launch never resolves, so the check returns only through its own timer. The bound is generous for a loaded machine and still fails a check that waits on the launch.
   const started = performance.now()
-  const recorded = []
-  const line = await tidy({ host: "copilot", env: f.env, sessionFolder: f.desk, budgetMs: 60, launch: () => new Promise(() => {}), record: async (_env, skipped) => { recorded.push(...skipped) } })
+  const line = await tidy({ host: "copilot", env: f.env, sessionFolder: f.desk, budgetMs: 60, launch: () => new Promise(() => {}) })
   const elapsed = performance.now() - started
   t.diagnostic(`a 60 ms budget returned in ${Math.round(elapsed)} ms with the launch stalled`)
   assert.ok(elapsed < STALLED_LAUNCH_LIMIT_MS, `the boot check took ${Math.round(elapsed)} ms`)
-  // The next start retries the check by itself, so the agent hears nothing; the skip is recorded for the factory status.
+  // The next start retries the check by itself, so the agent hears nothing.
   assert.equal(line, "")
-  assert.deepEqual(recorded.map(({ id, reason }) => ({ id, reason })), [{ id: "workspace-tidy", reason: "budget" }])
 
   // Mocked time: the check ends exactly at the budget it was given, not at the 500 ms default, once the launch has begun and stalled.
   t.mock.timers.enable({ apis: ["setTimeout"] })

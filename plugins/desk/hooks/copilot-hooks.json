@@ -18,14 +18,6 @@
         "timeoutSec": 3
       }
     ],
-    "agentStop": [
-      {
-        "type": "command",
-        "bash": "node \"${PLUGIN_ROOT}/hooks/factory-end.cjs\" copilot",
-        "powershell": "node \"${PLUGIN_ROOT}/hooks/factory-end.cjs\" copilot",
-        "timeoutSec": 3
-      }
-    ],
     "sessionStart": [
       {
         "type": "command",

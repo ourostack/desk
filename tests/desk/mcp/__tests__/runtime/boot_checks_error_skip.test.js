@@ -26,7 +26,7 @@ const isolatedEnv = () => {
   return { HOME: home, XDG_STATE_HOME: path.join(home, "state") }
 }
 after(() => { for (const home of tempHomes) rmSync(home, { recursive: true, force: true }) })
-const quiet = { launchRepair: async () => {}, launch: async () => {}, record: async () => {} }
+const quiet = { launchRepair: async () => {}, launch: async () => {} }
 // These cases test error classification, not cold import or filesystem latency.
 beforeEach((t) => { t.mock.method(performance, "now", () => 0) })
 
@@ -85,7 +85,6 @@ test("cold setup consumes the registry deadline before any error-classification 
   let now = 0
   t.mock.method(performance, "now", () => now)
   let ran = false
-  const recorded = []
   const line = await runBootChecks({
     ...quiet,
     env: isolatedEnv(),
@@ -94,11 +93,9 @@ test("cold setup consumes the registry deadline before any error-classification 
       return { argvSafeReason: (value) => value }
     },
     checks: [{ id: "probe", budgetMs: 50, run: async () => { ran = true; throw new Error("must not run after setup exhausts the budget") } }],
-    record: async (_env, skipped) => { recorded.push(...skipped) },
   })
   assert.equal(line, "")
   assert.equal(ran, false)
-  assert.deepEqual(recorded, [{ id: "probe", reason: "total_budget" }])
 })
 
 test("several checks that each throw produce a block per check, in order, alongside any well-behaved check's own line", async () => {
@@ -151,19 +148,6 @@ test("a check's filer argv carries the fixed 'reason unavailable' placeholder, n
   const reasonIndex = launched[0].command.indexOf("--reason")
   assert.ok(reasonIndex >= 0)
   assert.equal(launched[0].command[reasonIndex + 1], "reason unavailable (redactor not loaded)")
-})
-
-test("the failing check's own skip is still recorded in the protected status.json, exactly as before", async () => {
-  const recorded = []
-  await runBootChecks({
-    ...quiet,
-    env: isolatedEnv(),
-    checks: [{ id: "probe", budgetMs: 50, run: async () => { throw new Error("boom") } }],
-    record: async (env, skipped) => { recorded.push(skipped) },
-  })
-  assert.equal(recorded.length, 1)
-  assert.equal(recorded[0][0].id, "probe")
-  assert.equal(recorded[0][0].reason, "error")
 })
 
 test("the error-skip tests never write the filing throttle under the process HOME", async () => {

@@ -370,7 +370,6 @@
   "runtime/sync_worker.test.js": 37.5,
   "runtime/temp_root_controller_wait.test.js": 1.4,
   "runtime/test_state_guard.test.js": 0.3,
-  "runtime/unsaved_work_boot.test.js": 31.4,
   "runtime/workspace_tidy.test.js": 69.2,
   "runtime/workspace_tidy_boot.test.js": 25.5,
   "runtime/workspace_tidy_receipts.test.js": 64.4,

@@ -15,7 +15,7 @@ import { ID, scratch, session } from "./_session_helpers.js"
 
 import { runBoundedHook } from "../../../../../plugins/desk/hooks/lib/factory-end.cjs"
 const SCRIPT = fileURLToPath(new URL("../../../../../plugins/desk/hooks/factory-end.cjs", import.meta.url))
-const SESSION_END = fileURLToPath(new URL("../../../../../plugins/desk/hooks/session-end.cjs", import.meta.url))
+const SESSION_END = fileURLToPath(new URL("../../../../../plugins/desk/hooks/factory-end.cjs", import.meta.url))
 const WAIT_MS = 30000
 
 const stopPayload = (ctx, marker) => ({ session_id: ID, cwd: ctx.desk, transcript_path: marker.log_path, hook_event_name: "Stop" })

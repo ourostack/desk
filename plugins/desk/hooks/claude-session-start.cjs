@@ -26,8 +26,7 @@ function stripTrailingNewlines(text) {
 // Ask the MCP server's own resolver which desk this session binds and let it compose the startup line, so the hook and the
 // server can never disagree. It honours the Claude project folder when it is a desk, the saved binding, $DESK and the home
 // fallbacks, names where the root came from, and with the boot checks adds one "Desk boot pre-checks:" line only when a
-// check has something to say, then starts factory delivery detached with ignored stdio, after the output is built.
-// An empty answer means the resolver could not load or run.
+// check has something to say. An empty answer means the resolver could not load or run.
 async function startupDirection() {
   try {
     const { main } = await import(pathToFileURL(path.join(pluginRoot, "mcp", "scripts", "resolve-desk-root.js")).href);

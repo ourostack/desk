@@ -48,14 +48,15 @@
     "plugins/desk/hooks": {
       "entry": [
         // Registered in hooks.json and copilot-hooks.json.
-        "factory-end.cjs",
         "session-end.cjs",
         "claude-session-start.cjs",
         "copilot-session-start.cjs",
         "copilot-boot-prompt.cjs",
         "copilot-intake-context.cjs",
-        // Started by path, never imported: factory-start.cjs and loop-start.cjs detached by boot-checks `startFactory`, and boot-checks.cjs itself as a command (--repair, --compatible, --fast-forward, --ack, --revoke) by the hooks, the docs and the doctor.
+        // Started by path, never imported: boot-checks.cjs as a command (--repair, --compatible, --fast-forward, --ack, --revoke) by the hooks, the docs and the doctor.
         "boot-checks.cjs",
+        // The factory's own hooks. Since Epoch 3 no manifest registers them and no session start runs them: they run only where someone starts them (a host that registers factory-end.cjs, `node hooks/factory-start.cjs`, `node hooks/loop-start.cjs`).
+        "factory-end.cjs",
         "factory-start.cjs",
         "loop-start.cjs"
       ],

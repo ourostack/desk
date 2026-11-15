@@ -1030,24 +1030,20 @@ contract("factory-evaluator stays public-safe", () => {
   assert.ok(Buffer.byteLength(skill) <= 12288, `rubric is ${Buffer.byteLength(skill)} bytes; keep it concise`);
 });
 requires("plugins/desk/skills/task-lifecycle/SKILL.md", "task-lifecycle records the evaluation request itself on done or cancelled and hands its answer to session-start",
-  /transitioning to `done` or `cancelled` → the same `task_update` \(or `task_archive`\) call already records the job's evaluation request[\s\S]+kept in protected factory state[\s\S]+Both statuses request one: a cancelled job is still a finished job[\s\S]+evaluate --pending[\s\S]+as `desk:session-start`'s factory lines say[\s\S]+Neither status waits for the evaluator/u);
-// One owner for the evaluator answer and the Factory label lines: session-start, which every session loads first.
-requires("plugins/desk/skills/session-start/details.md", "session-start owns the Factory lines and the evaluator answer",
-  /## Factory lines[\s\S]+Factory evaluator:[\s\S]+quarantined waste labels[\s\S]+`ready` → start a fresh `desk:observer` subagent in the background[\s\S]+`desk:factory-evaluator`[\s\S]+nothing else from this conversation[\s\S]+`no_sessions`[\s\S]+never reopens a task/u);
-// The factory's one-time consent question (M3-11): asked once per store, in plain words, recorded yes or no
-// through `desk_doctor`'s `factory_consent`, never asked again, and never asked in a noninteractive session.
+  /transitioning to `done` or `cancelled` → the same `task_update` \(or `task_archive`\) call already records the job's evaluation request[\s\S]+kept in protected factory state[\s\S]+Both statuses request one: a cancelled job is still a finished job[\s\S]+evaluate --pending[\s\S]+as `desk:session-start`'s "Factory on demand" says[\s\S]+Neither status waits for the evaluator/u);
+// One owner for the evaluator answer: session-start, which every session loads first. Nothing about the factory runs at session start.
+requires("plugins/desk/skills/session-start/details.md", "session-start owns the factory on demand section and the evaluator answer",
+  /## Factory on demand[\s\S]+runs nothing at session start[\s\S]+\*\*handling an `evaluate` answer\*\*[\s\S]+`ready` → start a fresh `desk:observer` subagent in the background[\s\S]+`desk:factory-evaluator`[\s\S]+nothing else from this conversation[\s\S]+`no_sessions`[\s\S]+never reopens a task/u);
+// The factory's one-time consent question: asked only when the operator asks, in plain words, recorded yes or no
+// through `desk_doctor`'s `factory_consent`, and never asked in a noninteractive session. Nothing at session start raises it.
 const sessionStart = "plugins/desk/skills/session-start/SKILL.md";
 const bootSource = "plugins/desk/mcp/src/runtime/boot.js";
-contract("session-start asks the factory contribution question once, in plain words, and records either answer", () => {
+contract("the factory consent question is on demand only: the boot and the skill raise nothing, and the details ask it in plain words", () => {
   const source = text(bootSource);
-  const step = source.slice(source.indexOf("const FACTORY_QUESTION"), source.indexOf("function buildInstructions"));
-  assert.ok(step.includes("factory?.consent"), "the boot script builds the factory consent instruction");
-  assert.match(step, /consent === "undecided" && !noninteractive/u);
-  // Once per store, not once per session: the agent that said the sentence records it, and a later boot says not to raise it.
-  assert.match(step, /desk_doctor with \{"factory_told": true\}/u);
-  assert.match(step, /the operator was already told that Desk can contribute to it: do not raise it again/u);
-  assert.match(step, /never asked again|is never asked again/u);
-  const question = step.split("\n", 2)[0];
+  assert.doesNotMatch(source, /factory consent|Factory consent|FACTORY_QUESTION|factoryStatus|improvementBootCheck/u, "the boot says nothing about the factory");
+  const details = text("plugins/desk/skills/session-start/details.md");
+  const step = details.slice(details.indexOf("## Factory consent"), details.indexOf("## Delivered tasks awaiting sign-off"));
+  const question = step.split("\n").find((line) => line.startsWith("1. Ask this:"));
   for (const published of ["durations", "counts", "tool kinds", "plugin and model versions", "public repositories"]) {
     assert.match(question, new RegExp(`What it publishes:[^.]*${published}`, "u"), `the question says it publishes ${published}`);
   }
@@ -1055,20 +1051,17 @@ contract("session-start asks the factory contribution question once, in plain wo
     assert.match(question, new RegExp(`What it never publishes:[^.]*${never}`, "u"), `the question says it never publishes ${never}`);
   }
   assert.match(question, /is a public repository/u);
-  assert.match(question, /signed-in GitHub accounts[^.]*appears as the author of the intake pull requests/u);
-  assert.match(step, /desk_doctor with \{"factory_consent": "yes"\} or \{"factory_consent": "no"\}/u);
-  assert.doesNotMatch(step, /node \$\{|factory\.js/u, "the boot never tells an agent to run the factory script");
-  assert.match(step, /a no is a decision too/u);
-  assert.match(step, /never comes before the work the operator asked for[\s\S]+defer the notice to a later turn and preserve the required sign-off/u);
-  assert.match(step, /raise it at most once as this statement/u);
-  assert.match(step, /if \(!consentUndecided\(factory, noninteractive\)\) return \[\]/u);
-  assert.doesNotMatch(step, /consent\.json/u, "the boot records consent only through the tool");
+  assert.match(question, /signed-in GitHub account[^.]*appears as the author of the intake pull requests/u);
+  assert.match(step, /desk_doctor` with `\{"factory_consent": "yes"\}` or `\{"factory_consent": "no"\}`/u);
+  assert.match(step, /A no is a decision too and is never asked again/u);
+  assert.match(step, /Nothing at session start raises it/u);
+  assert.match(step, /never in a noninteractive session/u);
   assert.match(step, /not_recorded/u);
   assert.doesNotMatch(step, /gh api user/u, "the active account is never assumed");
-  assert.doesNotMatch(text(sessionStart), /noninteractive session/u, "the skill leaves the consent wording to the boot instructions");
+  assert.doesNotMatch(text(sessionStart), /Factory consent/u, "the skill leaves the consent wording to the details");
 });
-contract("session-start still owns the factory consent question", () => {
-  assert.match(text(sessionStart), /factory consent/u);
+contract("session-start points at the on-demand factory section", () => {
+  assert.match(text(sessionStart), /factory on demand/u);
 });
 // Kaizen card 4, round 9: the desk's own interaction contract (its AGENTS.md) reaches the agent because boot prints it,
 // not because a step orders the agent to go and read it (agents skipped that step in 11 of 12 runs). The same goes for
@@ -1104,8 +1097,8 @@ contract("archive-workflow stages only the paths it moved", () => {
   }
   assert.match(body, /`git-hygiene`[^\n]+targeted staging/u);
 });
-requires("plugins/desk/skills/first-run-bootstrap/SKILL.md", "first-run-bootstrap asks the factory question once at the converged endpoint",
-  /### Converged endpoint[\s\S]+factory contribution question once[\s\S]+`desk:session-start`'s boot script puts in its `instructions`[\s\S]+`desk_doctor` with `\{ "factory_consent"/u);
+requires("plugins/desk/skills/first-run-bootstrap/SKILL.md", "first-run-bootstrap leaves the factory question to the operator's ask",
+  /### Converged endpoint[\s\S]+factory's contribution question is not part of onboarding[\s\S]+"Factory consent" in `desk:session-start`'s `details.md`/u);
 requires("plugins/desk/skills/task-lifecycle/SKILL.md", "task-lifecycle says done writes the report link and never waits for the store",
   /transitioning to `done`[^\n]+`task_update`[^\n]+`factory_report: <link>`[^\n]+resolved store has consent and the desk is known to be private[^\n]+`factory_report_unavailable: <reason code>`[^\n]+finalize request[^\n]+fills a missing link by itself[^\n]+`done` does not wait for the store[^\n]+resolves once the store merges/u);
 contract("task-card-format documents the optional factory_report field", () => {
@@ -1427,9 +1420,6 @@ contract("no skill or doc tells an agent to remove or change a billing or sign-i
   assert.match(section, /Desk problem closes after 7 days quiet[^\n]*`closed_confirmed`[^.\n]*measured[^.\n]*`closed_unverified` otherwise/u);
   assert.match(section, /`unavailable` with the reason `not_recorded`[\s\S]+store_not_compared[\s\S]+kept on this machine/u);
   assert.match(text("plugins/desk/skills/desk-problem/SKILL.md"), /`closed_confirmed`[^.\n]*measured[^.\n]*`closed_unverified` otherwise/u);
-  const start = text("plugins/desk/skills/session-start/details.md");
-  const would = start.split("\n").find((line) => line.includes("(`disabled_would_bill`)"));
-  assert.ok(would && !/sign_in_unknown/u.test(would), "the disabled_would_bill bullet must not carry sign_in_unknown");
 });
 contract("every improvement tool named in a skill or doc is registered, and the only other improvement_ names are known record names", () => {
   const registry = text("plugins/desk/mcp/src/tool-names.js");
@@ -1457,8 +1447,8 @@ requires(
 );
 requires(
   "plugins/desk/skills/session-start/details.md",
-  "session-start says what each factory line asks of the agent now that the plugin runs the evaluator",
-  /## Factory lines[\s\S]+Factory evaluator:[\s\S]+the plugin labels them in the background[\s\S]+sign_in_unknown[\s\S]+disabled_would_bill[\s\S]+Improvement cards:[\s\S]+not an assignment[\s\S]+existing repair owner[\s\S]+quarantined waste labels[\s\S]+open andon issues[\s\S]+each has an improvement card[\s\S]+only when you retry[\s\S]+`ready` → start a fresh `desk:observer` subagent/u,
+  "session-start keeps the factory out of the session start and names the evaluate retry",
+  /## Factory on demand[\s\S]+only when the operator asks you to retry a job's evaluation[\s\S]+`ready` → start a fresh `desk:observer` subagent/u,
 );
 requires(
   "plugins/desk/skills/friction-management/SKILL.md",
