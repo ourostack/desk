@@ -611,7 +611,7 @@ test("track_update refuses an invalid new name and never echoes the candidate", 
   await assert.rejects(
     () => renameTrack({ deskRoot: root, input: { track: "old-track", to: "misc" } }),
     (error) => {
-      assert.match(error.message, /invalid to/)
+      assert.match(error.message, /invalid rename_to/)
       assertNoCandidateLeak(error.message, "misc")
       return true
     },
@@ -630,7 +630,7 @@ test("track_update refuses a name after the desk's own git identity", async () =
 
   await assert.rejects(
     () => renameTrack({ deskRoot: root, input: { track: "old-track", to: "ari-mendelow" } }),
-    /invalid to/,
+    /invalid rename_to/,
   )
 })
 
@@ -646,11 +646,11 @@ test("track_update requires track and to", async () => {
   const root = await mkTempDeskRoot()
   await assert.rejects(
     () => renameTrack({ deskRoot: root, input: { to: "somewhere-new" } }),
-    /`track` is required, or `handle` in its place/,
+    /`slug` is required, or `handle` in its place/,
   )
   await assert.rejects(
     () => renameTrack({ deskRoot: root, input: { track: "main-track" } }),
-    /`to` is required, with `track` or `handle`/,
+    /`rename_to` is required, with `slug` or `handle`/,
   )
 })
 
@@ -659,7 +659,7 @@ test("track_update rejects a traversal-shaped source track without quoting it", 
   await assert.rejects(
     () => renameTrack({ deskRoot: root, input: { track: "../evil", to: "somewhere-new" } }),
     (error) => {
-      assert.match(error.message, /`track` must be a non-empty path segment/)
+      assert.match(error.message, /`slug` must be a non-empty path segment/)
       assertNoCandidateLeak(error.message, "../evil")
       return true
     },
@@ -670,7 +670,7 @@ test("track_update defaults a missing input to an empty object", async () => {
   const root = await mkTempDeskRoot()
   await assert.rejects(
     () => renameTrack({ deskRoot: root }),
-    /`to` is required/,
+    /`rename_to` is required/,
   )
 })
 
@@ -896,7 +896,7 @@ test("track_update renames a track by its handle and never shows the old name", 
   const handle = folderHandle("track", root, path.join(root, "pw-hunter2-track"))
 
   await assert.rejects(() => renameTrack({ deskRoot: root, input: { handle: "track-0000000000", to: "access-work" } }), /no track in this session's desk has that handle/)
-  await assert.rejects(() => renameTrack({ deskRoot: root, input: { handle, track: "pw-hunter2-track", to: "access-work" } }), /pass `handle` or `track`, not both/)
+  await assert.rejects(() => renameTrack({ deskRoot: root, input: { handle, track: "pw-hunter2-track", to: "access-work" } }), /pass `handle` or `slug`, not both/)
 
   const result = await renameTrack({ deskRoot: root, input: { handle, to: "access-work" }, schedulePush: () => {} })
   assert.doesNotMatch(JSON.stringify(result), /hunter/)

@@ -70,11 +70,11 @@ const CARD_UPDATE = {
 
 const TASK_MOVE = {
   handle: text("Only with a move: the task's handle from active_tasks, desk_status `detail: true` or a desk_doctor finding, in place of track and slug; use it for a name shown as <redacted segment>."),
-  to_track: text("Move the task to this track instead of updating it; its track.md must already exist. Give nothing else but track and slug."),
-  to_slug: text("Rename the task to this name (an outcome name) instead of updating it."),
-  unarchive: flag("Reopen an archived task into a live folder instead of updating it."),
-  into_task: text("Merge this duplicate task into the named keeper task, under the keeper's _iterations/ folder. A live task cannot merge into a done or cancelled one."),
-  allow_dirty: flag("With a move: move even though the folder has unstaged or untracked changes."),
+  to_track: text("Move the task to this track (live or archived; archived stays archived); its track.md must already exist. A move takes no other update field, and the target must not exist."),
+  to_slug: text("Rename the task to this name, an outcome name."),
+  unarchive: flag("Reopen an archived task into a live folder."),
+  into_task: text("Merge this duplicate task into the named keeper task, under the keeper's _iterations/ folder; nothing is deleted. A live task cannot merge into a done or cancelled one."),
+  allow_dirty: flag("With a move: move even though the folder has unstaged or untracked changes, which a Git desk otherwise refuses."),
 }
 
 const REPOS_REMOVED_REASON = text("One line on why. Required to remove every repo from a card; not with `status: done`, and not needed with `status: cancelled`.")
@@ -242,8 +242,8 @@ export const TOOL_INPUT_SCHEMAS = Object.freeze({
     slug: text("The track folder name."),
     handle: text("The track's handle from the boot result's active_tasks, desk_status with detail: true, or a desk_doctor finding, in place of slug; use it for a name shown as <redacted segment>. Only with rename_to."),
     ...CARD_UPDATE,
-    rename_to: text("Rename the track to this name (an outcome name) instead of updating it; give nothing else but slug or handle."),
-    allow_dirty: flag("With rename_to: rename even though the track has unstaged or untracked changes."),
+    rename_to: text("Rename the track to this name, a valid track name that doesn't exist yet, instead of updating it; give nothing else but slug or handle. Rewrites `track:` in every task.md under the moved tree, live and archived, stages those cards and commits the moved directory."),
+    allow_dirty: flag("With rename_to: rename even though the track has unstaged changes or untracked, non-ignored files, which a Git desk otherwise refuses because another session may be working there."),
   }),
   friction_add: schema({
     track: text("Track for a track-local entry; omit for the cross-cutting log."),

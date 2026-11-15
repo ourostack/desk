@@ -718,15 +718,14 @@ contract("start-task reopens an archived task with task_update unarchive, not a 
 });
 contract("task_update and track_update document refusing another session's unstaged work unless allow_dirty", () => {
   const names = text("plugins/desk/mcp/src/tool-names.js");
+  const schemas = text("plugins/desk/mcp/src/tool-schemas.js");
   const description = (tool) => new RegExp(`\\n  ${tool}:\\n    "([^\\n]+)",`, "u").exec(names)[1];
-  for (const tool of ["task_update", "track_update"]) {
-    const pinned = tool === "task_update"
-      ? /a folder with unstaged or untracked changes is refused unless `allow_dirty: true`/u
-      : /refuses a track with unstaged changes or untracked, non-ignored files, because another session may be working there, unless `allow_dirty: true`; the refusal never quotes names/u
-    assert.match(description(tool), pinned, tool);
-  }
-  assert.match(description("task_update"), /refused for a live task into a done or cancelled one/u);
-  assert.match(description("track_update"), /It stages the task cards it rewrites\./u);
+  assert.match(schemas, /allow_dirty: flag\("With a move: move even though the folder has unstaged or untracked changes, which a Git desk otherwise refuses\."\)/u);
+  assert.match(schemas, /allow_dirty: flag\("With rename_to: rename even though the track has unstaged changes or untracked, non-ignored files, which a Git desk otherwise refuses because another session may be working there\."\)/u);
+  assert.match(schemas, /A live task cannot merge into a done or cancelled one\./u);
+  assert.match(schemas, /stages those cards and commits the moved directory/u);
+  assert.match(description("task_update"), /pass `to_track`, `to_slug`, `unarchive` or `into_task` alone/u);
+  assert.match(description("track_update"), /pass `rename_to` alone/u);
   assert.match(description("track_create"), /On a Git desk it stages and commits the new track\.md; a commit failure never loses the write, reported via a `commit` field\./u);
   assert.match(description("track_update"), /On a Git desk it stages and commits the track\.md when that file held no unstaged changes before the write, so it never adopts another session's edit; a commit failure never loses the write, reported via a `commit` field\./u);
   const readme = text("plugins/desk/mcp/README.md");
