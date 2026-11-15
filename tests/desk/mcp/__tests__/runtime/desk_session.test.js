@@ -731,9 +731,8 @@ test("head_sampler_withheld_callback_authoritative_transition", async (t) => {
 test("tool requirements: status, doctor, reads, search and writes", () => {
   assert.equal(toolRequirement("desk_status"), "status")
   assert.equal(toolRequirement("desk_doctor"), "doctor")
-  for (const name of ["desk_search", "desk_recall", "desk_timeline"]) assert.equal(toolRequirement(name), "read")
-  assert.equal(toolRequirement("desk_reindex"), "search")
-  for (const name of ["task_create", "track_rename", "friction_add", "lesson_add", "desk_save", "note_leave", "note_ack"]) assert.equal(toolRequirement(name), "write")
+  for (const name of ["desk_search", "desk_recall"]) assert.equal(toolRequirement(name), "read")
+  for (const name of ["task_create", "track_rename", "friction_add", "lesson_add", "desk_save", "note"]) assert.equal(toolRequirement(name), "write")
   const readable = { runtimeServer: {}, root: {} }
   assert.equal(requirementMet("read", {}), false)
   assert.equal(requirementMet("read", readable), true)
@@ -751,9 +750,10 @@ test("unknown tools are refused; reads and writes dispatch to the runtime with t
   const { session, runtime } = await makeSession(t)
   assert.equal((await session.callTool({ name: "nope" })).isError, true)
   assert.equal(payload(await session.callTool({ name: "desk_search", input: { query: "x" } })).tool, "desk_search")
-  assert.equal(payload(await session.callTool({ name: "desk_reindex" })).tool, "desk_reindex")
+  assert.equal(payload(await session.callTool({ name: "desk_doctor", input: { reindex: true } })).tool, "desk_doctor")
   assert.equal(payload(await session.callTool({ name: "task_create" })).tool, "task_create")
-  assert.deepEqual(runtime.calls.map((call) => call.name), ["desk_search", "desk_reindex", "task_create"])
+  assert.deepEqual(runtime.calls.map((call) => call.name), ["desk_search", "desk_doctor", "task_create"])
+  assert.deepEqual(runtime.calls[1].input, { reindex: true })
   assert.deepEqual(runtime.calls[2].input, {})
   assert.equal(runtime.calls[2].search, session.context.search, "a write tells the search engine what it changed")
   assert.equal(typeof runtime.calls[2].search.noteChange, "function")
@@ -1469,7 +1469,7 @@ test("authority failures refuse writes; a search engine that cannot start keeps 
   const write = await session.callTool({ name: "task_create" })
   assert.equal(payload(write).tool, "task_create")
   assert.equal(runtime.calls.at(-1).search, null, "without a search engine the write changes only its files")
-  assert.equal(payload(await session.callTool({ name: "desk_reindex" })).code, "search_unavailable")
+  assert.equal(payload(await session.callTool({ name: "desk_doctor", input: { reindex: true } })).code, "search_unavailable")
   thrown = null
   assert.equal((await session.admission.refresh({ force: true })).state, "ready", "the next attempt starts it")
   assert.notEqual(session.context.search, null)

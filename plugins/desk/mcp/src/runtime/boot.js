@@ -1541,7 +1541,7 @@ export async function bootOnce({
   } catch {
     lessonsShelf = null
   }
-  // The notes teammates left in this person's inbox (note_leave), in a shared workspace only: the open ones, oldest first.
+  // The notes teammates left in this person's inbox (note), in a shared workspace only: the open ones, oldest first.
   let notes = null
   try {
     if (who?.status === "ok" && who.personPrefix !== "") notes = notesFn(root.path, who.personPrefix)

@@ -20,7 +20,7 @@ const CLAUDE_CASES = [
   ["mcp__plugin_desk_desk__track_update", "desk"],
   ["mcp__plugin_desk_desk__friction_add", "desk"],
   ["mcp__plugin_desk_desk__lesson_add", "desk"],
-  ["mcp__plugin_desk_desk__note_leave", "desk"],
+  ["mcp__plugin_desk_desk__note", "desk"],
   ["mcp__plugin_desk_desk__desk_status", "desk"],
   // A desk-named MCP server tool that isn't one of those 6 verbs stays a generic mcp tool.
   ["mcp__plugin_desk_desk__search", "mcp"],
@@ -49,7 +49,7 @@ const COPILOT_CASES = [
   ["desk-friction_add", "desk"], ["desk-lesson_add", "desk"],
   ["desk-desk_status", "desk"], ["desk-desk_search", "desk"], ["desk-desk_recall", "desk"],
   ["desk-task_focus", "desk"], ["desk-task_signoff", "desk"], ["desk-desk_save", "desk"], ["desk-task_move", "desk"],
-  ["desk-note_leave", "desk"], ["desk-note_ack", "desk"],
+  ["desk-note", "desk"],
   ["skill", "skill"],
   ["some-server-tool", "mcp"],
   ["randomtool", "other"],

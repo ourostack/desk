@@ -1,6 +1,6 @@
-// Session start lists the open notes teammates left in this person's `_inbox/` (note_leave), oldest first and bounded,
+// Session start lists the open notes teammates left in this person's `_inbox/` (note), oldest first and bounded,
 // with one instruction: tell the operator early without displacing the work, read a note before related work, and
-// call note_ack once the operator has seen it.
+// call note with ack once the operator has seen it.
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { promises as fs } from "node:fs"
@@ -62,7 +62,7 @@ test("boot carries the person's open notes and says what to do with them, and no
 })
 
 test("notesInstruction tells the agent to raise the notes early without displacing the work, read them first and acknowledge them", () => {
-  assert.equal(notesInstruction(NOTES), "1 open note from a teammate is waiting in desks/saranya/_inbox/ (listed under \"Notes from teammates\", oldest first). Tell the operator about it early in your reply, in a line or two, and keep doing the work they asked for: a note never displaces it. Read a note before you act on work it relates to. Once the operator has seen a note, call note_ack with its path; until then every session start lists it.")
+  assert.equal(notesInstruction(NOTES), "1 open note from a teammate is waiting in desks/saranya/_inbox/ (listed under \"Notes from teammates\", oldest first). Tell the operator about it early in your reply, in a line or two, and keep doing the work they asked for: a note never displaces it. Read a note before you act on work it relates to. Once the operator has seen a note, call note with ack set to its path; until then every session start lists it.")
   assert.match(notesInstruction({ ...NOTES, count: 7 }), /^7 open notes from teammates are waiting in desks\/saranya\/_inbox\/ [^]* Tell the operator about them early/u)
 })
 

@@ -375,7 +375,7 @@ function cleanupLines(result) {
 /** The one instruction about the open notes teammates left (`result.notes`, from runtime/inbox.js). */
 export function notesInstruction(notes) {
   const one = notes.count === 1
-  return `${notes.count} open ${one ? "note from a teammate is" : "notes from teammates are"} waiting in ${notes.path}/ (listed under "Notes from teammates", oldest first). Tell the operator about ${one ? "it" : "them"} early in your reply, in a line or two, and keep doing the work they asked for: a note never displaces it. Read a note before you act on work it relates to. Once the operator has seen a note, call note_ack with its path; until then every session start lists it.`
+  return `${notes.count} open ${one ? "note from a teammate is" : "notes from teammates are"} waiting in ${notes.path}/ (listed under "Notes from teammates", oldest first). Tell the operator about ${one ? "it" : "them"} early in your reply, in a line or two, and keep doing the work they asked for: a note never displaces it. Read a note before you act on work it relates to. Once the operator has seen a note, call note with ack set to its path; until then every session start lists it.`
 }
 
 // The open notes, one line each, before the task list: bounded by NOTES_SHOWN_CAP, so they are never shortened away.

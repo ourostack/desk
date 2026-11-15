@@ -19,7 +19,7 @@
 // false positives/negatives — direct destructuring
 // (`const { track, slug } = values`), a loop over a module-local optional-
 // fields array, a field read three call-frames away inside a query-router-
-// dispatched `indexed*` helper (desk_search, desk_recall, desk_timeline),
+// dispatched `indexed*` helper (desk_search, desk_recall),
 // and one tool (`desk_doctor`) whose top-level
 // fields (`format`, `repair`) are actually read by its session-layer
 // dispatcher (`runtime/desk-session.js`), not by the module `server.js`
@@ -45,14 +45,12 @@ import { TRACK_CREATE_FIELDS, TRACK_UPDATE_FIELDS } from "../../../../plugins/de
 import { IMPROVEMENT_OPEN_FIELDS, IMPROVEMENT_NEXT_FIELDS, IMPROVEMENT_UPDATE_FIELDS } from "../../../../plugins/desk/mcp/src/tools/improvement.js"
 import { FRICTION_ADD_FIELDS } from "../../../../plugins/desk/mcp/src/tools/friction.js"
 import { LESSON_ADD_FIELDS } from "../../../../plugins/desk/mcp/src/tools/lesson.js"
-import { NOTE_ACK_FIELDS, NOTE_LEAVE_FIELDS } from "../../../../plugins/desk/mcp/src/tools/note.js"
+import { NOTE_FIELDS } from "../../../../plugins/desk/mcp/src/tools/note.js"
 import { DESK_SAVE_FIELDS } from "../../../../plugins/desk/mcp/src/tools/desk-save.js"
 import {
   DESK_SEARCH_FIELDS,
   DESK_RECALL_FIELDS,
-  DESK_TIMELINE_FIELDS,
 } from "../../../../plugins/desk/mcp/src/tools/search.js"
-import { DESK_REINDEX_FIELDS } from "../../../../plugins/desk/mcp/src/tools/reindex.js"
 import { DESK_STATUS_FIELDS } from "../../../../plugins/desk/mcp/src/tools/status.js"
 import { DESK_DOCTOR_FIELDS } from "../../../../plugins/desk/mcp/src/runtime/desk-session.js"
 
@@ -71,12 +69,9 @@ const HANDLER_FIELDS = {
   friction_add: FRICTION_ADD_FIELDS,
   lesson_add: LESSON_ADD_FIELDS,
   desk_save: DESK_SAVE_FIELDS,
-  note_leave: NOTE_LEAVE_FIELDS,
-  note_ack: NOTE_ACK_FIELDS,
+  note: NOTE_FIELDS,
   desk_search: DESK_SEARCH_FIELDS,
   desk_recall: DESK_RECALL_FIELDS,
-  desk_timeline: DESK_TIMELINE_FIELDS,
-  desk_reindex: DESK_REINDEX_FIELDS,
   desk_status: DESK_STATUS_FIELDS,
   desk_skill: DESK_SKILL_FIELDS,
   desk_doctor: DESK_DOCTOR_FIELDS,

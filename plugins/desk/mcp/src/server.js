@@ -4,12 +4,12 @@
 // tool to a real implementation:
 //   - Unit 3: task_create, task_update, task_archive, track_create,
 //             track_update, friction_add, lesson_add
-//   - Crew teammate notes: note_leave, note_ack
+//   - Crew teammate notes: note
 //   - M4-2 (cheap moves): task_move, track_rename
 //   - M4-6 Part 2: desk_save (commits hand-written files the same way every
 //     other write tool commits its own)
-//   - Unit 5: desk_search, desk_recall, desk_timeline
-//   - Index mgmt: desk_reindex (re-reads the desk into this session's search engine)
+//   - Unit 5: desk_search (also the newest-first listing), desk_recall
+//   - Index mgmt: desk_doctor `reindex` (re-reads the desk into this session's search engine)
 //   - Health/status: desk_status and desk_doctor (session-start-safe, non-mutating)
 //
 // There is no qualitative feedback tool here. Preview feedback a participant
@@ -42,14 +42,12 @@ import { friction_add } from "./tools/friction.js"
 import { improvement_open, improvement_next, improvement_update } from "./tools/improvement.js"
 import { lesson_add } from "./tools/lesson.js"
 import { desk_save } from "./tools/desk-save.js"
-import { note_ack, note_leave } from "./tools/note.js"
+import { note } from "./tools/note.js"
 import {
   desk_search,
   desk_recall,
-  desk_timeline,
 } from "./tools/search.js"
 import { deskSkill } from "./runtime/skills.js"
-import { desk_reindex } from "./tools/reindex.js"
 import { desk_status } from "./tools/status.js"
 export { waitForStatusInspection } from "./tools/status.js"
 import { doctorRuntime } from "./tools/doctor.js"
@@ -74,12 +72,9 @@ export const TOOL_IMPLS = {
   friction_add,
   lesson_add,
   desk_save,
-  note_leave,
-  note_ack,
+  note,
   desk_search,
   desk_recall,
-  desk_timeline,
-  desk_reindex,
   desk_status,
   desk_doctor: doctorRuntime,
   desk_skill: ({ input }) => deskSkill(input),

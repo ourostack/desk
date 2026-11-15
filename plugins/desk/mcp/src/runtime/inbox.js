@@ -1,8 +1,8 @@
-// Teammate notes on disk. In a Crew workspace, note_leave writes a note into the recipient's `desks/<alias>/_inbox/`
-// through a pull request; session start lists the open ones; note_ack marks one acknowledged. This module holds the file
+// Teammate notes on disk. In a Crew workspace, the note tool writes a note into the recipient's `desks/<alias>/_inbox/`
+// through a pull request; session start lists the open ones; its `ack` marks one acknowledged. This module holds the file
 // format and the reads, with no dependency beyond Node, because session start loads it.
 //
-// A note is Markdown with frontmatter that note_leave writes itself, every value JSON-quoted (valid YAML):
+// A note is Markdown with frontmatter that the note tool writes itself, every value JSON-quoted (valid YAML):
 //   from, to (aliases), created (ISO time with offset), status (open | acknowledged), subject, related (list), and
 //   acknowledged (the time, once acknowledged).
 
@@ -21,7 +21,7 @@ export function renderNote({ from, to, created, subject, related, body }) {
   const head = ["---", `from: ${quote(from)}`, `to: ${quote(to)}`, `created: ${quote(created)}`, "status: open", `subject: ${quote(subject)}`]
   head.push(...(related.length === 0 ? ["related: []"] : ["related:", ...related.map((link) => `  - ${quote(link)}`)]), "---")
   const links = related.length === 0 ? [] : ["Related:", "", ...related.map((link) => `- ${link}`), ""]
-  return [...head, "", body.trim(), "", ...links, `${from} left this note with note_leave. Ask ${from} if anything here is unclear.`, ""].join("\n")
+  return [...head, "", body.trim(), "", ...links, `${from} left this note with Desk's note tool. Ask ${from} if anything here is unclear.`, ""].join("\n")
 }
 
 function scalar(raw) {
