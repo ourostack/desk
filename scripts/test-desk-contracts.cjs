@@ -1512,7 +1512,7 @@ requires(
 contract("question guidance asks in chat and treats a blocked form as no answer", () => {
   const questions = subsection("plugins/desk/skills/interaction-style/SKILL.md", "No question forms");
   assert.match(questions, /`AskUserQuestion` on Claude Code, `ask_user` on the Copilot CLI/u);
-  assert.match(questions, /A blocked form is not a human answer, refusal or consent/u);
+  assert.match(questions, /A blocked form is not a human answer, refusal or consent: recheck the request and the existing go, then continue already-authorized work without reapproval/u);
   assert.match(text("plugins/desk/skills/session-start/SKILL.md"), /the one question \(resume which, or start new\), written as a sentence in the reply and never put through the host's question form/u);
 });
 contract("interaction-style opens the reply to a human who is leaving with what it needs, or that it needs nothing", () => {
