@@ -1,0 +1,53 @@
+{
+  "schemaVersion": 1,
+  "id": "fixture",
+  "description": "Fixture suite.",
+  "sources": [
+    "source.txt"
+  ],
+  "reviewedSourceFingerprint": "698daed63ae204b82230050ed37e2fb77e6b786db6af229571c59503e9862c5c",
+  "requirements": [
+    {
+      "id": "r1",
+      "description": "First requirement."
+    },
+    {
+      "id": "r2",
+      "description": "Second requirement."
+    }
+  ],
+  "cases": [
+    {
+      "id": "case-1",
+      "description": "Fixture case.",
+      "prompt": "Evaluate the fixture.",
+      "checks": [
+        {
+          "id": "check-must",
+          "polarity": "must",
+          "evidenceType": "response",
+          "covers": [
+            "r1"
+          ],
+          "description": "Required evidence."
+        },
+        {
+          "id": "check-must-not",
+          "polarity": "must_not",
+          "evidenceType": "tool_call",
+          "covers": [
+            "r2"
+          ],
+          "description": "Forbidden evidence."
+        }
+      ]
+    }
+  ],
+  "knownFailure": [
+    {
+      "issue": "https://github.com/owner/repo/issues/1",
+      "case": "case-1",
+      "observed": "2026-11-13"
+    }
+  ]
+}

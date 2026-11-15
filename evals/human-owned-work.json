@@ -8,8 +8,7 @@
     "plugins/desk/skills/operator-voice-comments/human-voice.md",
     "plugins/desk/docs/agentic-engineering-v2-rfc.md"
   ],
-  "reviewedSourceFingerprint": "290c67afed3c053327fc5236eb3dafcaf748791963731e3649d37cf7eaf8e7f3",
-  "knownFailure": {"issue": "https://github.com/ourostack/desk/issues/963", "case": "casey-calendar-findings", "observed": "2026-11-14"},
+  "reviewedSourceFingerprint": "16de1e01d965bc9038cdabde46df4414c4586983bcd07979f905b725615e15f8",
   "requirements": [
     { "id": "human-actor", "description": "A person speaking about authorized work is the ordinary actor; tool use is normally implicit." },
     { "id": "no-invented-participation", "description": "Ownership does not invent manual execution, personal reading, human review, approval, attendance, consent or decisions." },

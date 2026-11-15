@@ -1,0 +1,18 @@
+{
+  "case": "case-1",
+  "response": "Subject answer.",
+  "tools": [],
+  "evidence": "### desk\nUncommitted or untracked changes:\n(none)\nCommits made after the baseline:\n(none)\nCommits not yet pushed to the desk's remote:\n(none)\nChanged files against the baseline (committed and uncommitted):\n(none)\n\nBranches and remote-tracking refs:\nmain 43601c0 Baseline\norigin/main 43601c0 Baseline\nCommits made after the baseline on any local branch:\n(none)\nWorktrees:\n/private/var/folders/y8/w5sk4ysx7d71b8p3c1xvt3p80000gn/T/skill-eval-jOF9SQ/case-case-1-nm7IG9/desk 43601c0 [main]",
+  "checks": [
+    {
+      "id": "check-must",
+      "passed": true,
+      "evidence": "Fake evidence for check-must"
+    },
+    {
+      "id": "check-must-not",
+      "passed": true,
+      "evidence": "Fake evidence for check-must-not"
+    }
+  ]
+}
