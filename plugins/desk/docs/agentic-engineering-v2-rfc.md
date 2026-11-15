@@ -15,7 +15,7 @@ Agentic Engineering Epoch 2 is a way of working in which humans hand agents whol
 
 **See it.** The public factory site is built live from the store: https://ourostack.github.io/factory/.
 
-[![The public factory site, The loom: every agent session as a woven strip, its length how long the session ran and its thread density how much of that time has recorded activity](images/factory-site.png)](https://ourostack.github.io/factory/)
+[![The public factory site: the three longest agent sessions in the store, with their merged pull requests](images/factory-site.png)](https://ourostack.github.io/factory/)
 
 ## Direction: Epoch 3 (agreed 2026-11-10)
 
