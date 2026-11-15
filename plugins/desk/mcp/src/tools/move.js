@@ -53,12 +53,9 @@ export const TRACK_UPDATE_RENAME_FIELDS = ["handle", "rename_to", "allow_dirty"]
 
 const given = (values, fields) => fields.some((field) => values?.[field] !== undefined)
 
-function refuseMixed(tool, values, allowed, verb, code) {
-  const extra = Object.keys(values).filter((key) => values[key] !== undefined && !allowed.includes(key))
-  if (extra.length > 0) {
-    throw Object.assign(new Error(
-      `${tool}: Send the ${verb} alone, then update: ${extra.map((key) => `\`${key}\``).join(", ")} cannot go with a ${verb}; nothing was changed`), { code })
-  }
+// The fields given that a move or rename does not take, as a list for the refusal, or "" when there are none.
+function mixedFields(values, allowed) {
+  return Object.keys(values).filter((key) => values[key] !== undefined && !allowed.includes(key)).map((key) => `\`${key}\``).join(", ")
 }
 
 /** task_update reads any of these fields as a move or rename of the task, which takes no other update. */
@@ -67,7 +64,10 @@ export function taskMoveRequested(input) {
 }
 
 export function moveTaskAlone(args) {
-  refuseMixed("task_update", args.input, TASK_MOVE_FIELDS, "move", "task_update_move_cannot_be_combined_with_update")
+  const extra = mixedFields(args.input, TASK_MOVE_FIELDS)
+  if (extra !== "") {
+    throw Object.assign(new Error(`task_update: Send the move alone, then update: ${extra} cannot go with a move; nothing was changed`), { code: "task_update_move_cannot_be_combined_with_update" })
+  }
   return moveTask(args)
 }
 
@@ -77,7 +77,10 @@ export function trackRenameRequested(input) {
 }
 
 export function renameTrackAlone(args) {
-  refuseMixed("track_update", args.input, ["slug", ...TRACK_UPDATE_RENAME_FIELDS], "rename", "track_update_rename_cannot_be_combined_with_update")
+  const extra = mixedFields(args.input, ["slug", ...TRACK_UPDATE_RENAME_FIELDS])
+  if (extra !== "") {
+    throw Object.assign(new Error(`track_update: Send the rename alone, then update: ${extra} cannot go with a rename; nothing was changed`), { code: "track_update_rename_cannot_be_combined_with_update" })
+  }
   const { slug, handle, rename_to: to, allow_dirty } = args.input
   const input = Object.fromEntries(Object.entries({ track: slug, handle, to, allow_dirty }).filter(([, value]) => value !== undefined))
   return renameTrack({ ...args, input })
