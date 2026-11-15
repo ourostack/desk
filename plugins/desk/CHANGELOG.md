@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.164 — 2026-11-15
+
+On Windows, when Node.js is installed but is not on the PATH of the session that started, Desk's session-start message now says where Node.js is and to restart the app or service that started the session, instead of telling you to install Node.js again.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.163 — 2026-11-15
 
 A `merge-when-green` relay no longer holds a pull request for a matrix job that GitHub skipped before it expanded when the same matrix also ran under expanded names. The skipped template, such as `npm test (${{ matrix.os }}, ${{ matrix.shard }}/${{ strategy.job-total }})`, counted as a not-green match for every pattern that starts like it, so a relay without `skippedPasses` waited forever on a pull request whose real jobs were all green. Now it counts only when it is the only match, as the stand-in for a matrix that never ran.

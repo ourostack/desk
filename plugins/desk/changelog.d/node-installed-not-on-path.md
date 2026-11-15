@@ -1,1 +1,0 @@
-On Windows, when Node.js is installed but is not on the PATH of the session that started, Desk's session-start message now says where Node.js is and to restart the app or service that started the session, instead of telling you to install Node.js again.
