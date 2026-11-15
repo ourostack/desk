@@ -126,6 +126,22 @@ test("server.callTool routes a track_update rename to the real implementation", 
   assert.equal(body.to, "new-track")
 })
 
+test("server.callTool routes a track_update without a rename to the plain update", async () => {
+  const root = await mkTempDeskRoot()
+  await callTool({
+    deskRoot: root,
+    name: "track_create",
+    input: { slug: "old-track", title: "T", scope: "fixture scope; not anything else" },
+  })
+  const res = await callTool({
+    deskRoot: root,
+    name: "track_update",
+    input: { slug: "old-track", body_append: "More." },
+  })
+  assert.ok(!res.isError)
+  assert.equal(parseResult(res).to, undefined)
+})
+
 test("task_update and track_update refuse a move or rename mixed with other fields, and change nothing", async () => {
   const root = await mkTempDeskRoot()
   await callTool({ deskRoot: root, name: "track_create", input: { slug: "old-track", title: "T", scope: "fixture scope; not anything else" } })
