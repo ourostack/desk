@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.170 — 2026-11-15
+
+The plugin-update notice at boot and in `desk_status` now speaks only when the newer release changes something a session fixes at its start. Desk's own runtime updates in place, so a release that touches only `mcp/src` (and docs) is no reason to restart and is not announced. What counts: a skill's text or description, a hook, an agent, a manifest (compared without its version) or MCP config, and for Desk its MCP session layer (the tool names, descriptions and schemas in `mcp/src/tool-names.js`, `tool-schemas.js`, `tool-schema-parts.js` and `mcp/web-catalog.json`). Any other plugin counts on a skill, hook or agent change. Desk compares the session's loaded copy with the newest fetched release, with local reads only. Housesitter's auto-restart job applies the same rule.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.169 — 2026-11-15
 
 Session start now points to the [Epoch 3 RFC](docs/agentic-engineering-v3-rfc.md) on its `Desk RFC:` line, in place of the Epoch 2 RFC. The new document states the principles and working rules agreed for Epoch 3 in one short place, with the epoch-to-version map: Desk 3.2.86 and every release after belong to Epoch 3, which landed in place on `main`. The [Epoch 2 RFC](docs/agentic-engineering-v2-rfc.md) stays as history and now says so at the top. The `human-owned-work` eval was rerun against the changed source and now passes every case, so its known failure is removed.
