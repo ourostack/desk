@@ -199,7 +199,8 @@ test("with no node and nvm installed, the shell message says to install through 
     const posix = run(SHELLS.sh, claudeCommandFor(), { ...env(SHELLS.pathWithoutNode), HOME: home })
     assertNodeMessage(t, "claude with nvm", posix, { shape: "claude", install: NVM_POSIX })
   }
-  const windows = run(SHELLS.sh, claudeCommandFor(), env(SHELLS.pathWithoutNode, { OS: "Windows_NT", NVM_HOME: "C:\\nvm" }))
+  // The Windows branch uses bash's `${var//\\//}`, and Claude Code on Windows runs hooks in Git Bash, so this part runs under bash whatever sh is here.
+  const windows = run(SHELLS.bash, claudeCommandFor(), env(SHELLS.pathWithoutNode, { OS: "Windows_NT", NVM_HOME: "C:\\nvm" }))
   assertNodeMessage(t, "claude with nvm-windows", windows, { shape: "claude", install: NVM_WINDOWS })
 })
 
