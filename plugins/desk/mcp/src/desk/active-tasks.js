@@ -33,7 +33,7 @@ import { TERMINAL_STATES } from "./lifecycle.js"
 import { readSteps, summarizeSteps } from "./steps.js"
 import { dueResources } from "./resources.js"
 import { cardFiles, readCleanupIndex } from "./cleanup-index.js"
-import { scratchPathCount } from "./scratch-paths.js"
+import { scratchCardNote, scratchPathCount } from "./scratch-paths.js"
 
 const TERMINAL_STATUSES = new Set(TERMINAL_STATES)
 const MAX_CARD_BYTES = 64 * 1024
@@ -167,7 +167,7 @@ function cleanupOf(content, truncated, status) {
 // How many paths into a session folder or a temp folder the card names: they die with the session, so a successor loses what they point at.
 function scratchOf(content) {
   const count = scratchPathCount(content)
-  return count === 0 ? {} : { scratch_paths: count }
+  return count === 0 ? {} : { scratch_paths: count, scratch_fix: scratchCardNote(count) }
 }
 
 // The finished or archived cards this machine's cleanup index lists that still have rows due. A card still unfinished is left out: the scan above counts it.
@@ -380,6 +380,7 @@ async function scanDesk(deskRoot, scanRoot, desk, counts) {
  * where `next_step` is the card's `**Next step:**` paragraph on one line, in full, or null, `blocker` is why the card says the task is blocked (a `## Blocker` section or a `Blocker:` line) on one line, or null,
  * where `repos` is `[{ name?, local_path?, mode? }]`, and `steps` (only on a card with a readable `## Steps` table) is `{ total, delivered, ready: [id], blocked: [{ id, reason }] }`, dropped steps not counted, and `cleanup_due_count` (only when some) is how many of its `## Resources` rows are due for cleanup.
  * `cleanup` (only when some rows are due): `{ items, cards, finished: [{ card, due }], more }` (`finished` lists the first 20; `more` counts the rest), over the unfinished cards above and the finished or archived cards this machine's cleanup index lists (./cleanup-index.js); `finished` names the latter.
+ * a task's `scratch_paths` and `scratch_fix` (only when its card names paths in a session or temp folder): how many, and the fix to read first.
  * `handle`: the folder's stable handle (./handles.js), which task_move and
  * track_rename take in place of a name, so a redacted folder can be renamed.
  * `redacted`: `{ names, titles }`, how many names and titles were hidden.

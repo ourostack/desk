@@ -9,6 +9,7 @@ import { taskFocus } from "../../../../../plugins/desk/mcp/src/tools/task-focus.
 import { desk_save } from "../../../../../plugins/desk/mcp/src/tools/desk-save.js"
 import { drainAppendLanes, pendingCount, flushAppends } from "../../../../../plugins/desk/mcp/src/runtime/append-lane.js"
 import { activeTasks } from "../../../../../plugins/desk/mcp/src/desk/active-tasks.js"
+import { formatBootText } from "../../../../../plugins/desk/mcp/src/runtime/boot-text.js"
 
 const POLICY = {
   schema_version: 1,
@@ -136,11 +137,13 @@ test("a write names the session or temp paths it keeps, and still saves them", a
   assert.match(created.scratch_paths, /session-state/u)
 })
 
-test("the active task list counts the scratch paths a card names", async (t) => {
+test("the active task list counts the scratch paths a card names, and boot leads with the fix", async (t) => {
   const root = await fixture(t)
   await call(root, { note: "Brief at ~/.copilot/session-state/84b913b0/files/a.md and /tmp/ghw." })
   const tracks = (await activeTasks(root)).tracks
   assert.equal(tracks[0].tasks[0].scratch_paths, 2)
+  assert.match(tracks[0].tasks[0].scratch_fix, /^Copy those files into the task's folder with desk_save and link that: this card names 2 paths/u)
+  assert.match(formatBootText({ status: "ready", active_tasks: await activeTasks(root) }), /\n {2}Copy those files into the task's folder with desk_save/u)
 })
 
 test("a file saved under handoffs/ comes back with the repository URL to hand over", async (t) => {

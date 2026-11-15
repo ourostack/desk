@@ -26,6 +26,9 @@ function scratchPaths(text) {
 /** How many scratch paths `text` names. */
 export const scratchPathCount = (text) => scratchPaths(text).length
 
+/** What the task list says beside a card that names `count` scratch paths: the fix first, then why. */
+export const scratchCardNote = (count) => `Copy ${count === 1 ? "the file" : "those files"} into the task's folder with desk_save and link that: this card names ${count} path${count === 1 ? "" : "s"} in a session or temp folder that die${count === 1 ? "s" : ""} with the session.`
+
 const SHOWN = 3
 
 /**
