@@ -74,7 +74,7 @@ export function publishPullRequest({ git, spawnGit, root, upstream, head, onto, 
   // `get-url` names a configured remote's address; `ls-remote --get-url` also takes an address as the remote and reads rewrite rules, still without the network.
   let remote = git(["remote", "get-url", upstream.remote])
   if (remote.status !== 0 || remote.stdout.trim() === "") remote = git(["ls-remote", "--get-url", upstream.remote])
-  if (remote.status !== 0 || remote.stdout.trim() === "") throw Object.assign(new Error("Run it again: Git could not read the address of the publication remote (the read was cut off or the remote is not configured), so nothing was pushed"), { code: "pr_publication_run_it_again_git_could_not" })
+  if (remote.status !== 0 || remote.stdout.trim() === "") throw Object.assign(new Error("Run it again: nothing was pushed because Git's read of the publication remote's address was cut off or the remote is not configured"), { code: "pr_publication_run_it_again_git_could_not" })
   const repo = repository(remote.stdout.trim())
   const base = upstream.merge.replace(/^refs\/heads\//u, "")
   const branch = `desk/publish/${head}`
@@ -148,7 +148,7 @@ export function publishPullRequest({ git, spawnGit, root, upstream, head, onto, 
   if (pushed.status !== 0) pushed = git(pushArgs, 120_000)
   if (pushed.status !== 0) {
     const said = redactCredentialLikeText(String(pushed.stderr ?? "").split("\n").find((line) => line.trim() !== "") ?? "").slice(0, 200)
-    throw Object.assign(new Error(`Run \`git push ${commandArgument(upstream.remote)} ${commandArgument(`${head}:refs/heads/${branch}`)}\` to read its admission diagnostic: the contribution branch push was ${pushed.status === null ? "cut off" : "refused by its hook or remote"} twice${said === "" ? "" : ` (${said})`}, and the upstream branch was not pushed.`), { code: "pr_publication_push_the_branch_with_the" })
+    throw Object.assign(new Error(`Push ${commandArgument(`${head}:refs/heads/${branch}`)} to ${commandArgument(upstream.remote)} yourself to read its admission diagnostic: the contribution branch push was ${pushed.status === null ? "cut off" : "refused by its hook or remote"} twice${said === "" ? "" : ` (${said})`}, and the upstream branch was not pushed.`), { code: "pr_publication_push_the_branch_with_the" })
   }
   let pr = list()
   if (pr === undefined) {

@@ -45,12 +45,19 @@ export function gitEnv() {
 // Reads of the local repository: a read the clock cut off is asked again with more room, because on a loaded machine its answer is late, not missing. Anything that writes or reaches the network is never asked twice.
 const LOCAL_READS = new Set(["rev-parse", "remote", "config", "merge-base", "rev-list", "symbolic-ref", "ls-tree", "show", "cat-file"])
 
+// The Git subcommand of an argument list that may open with `-c key=value` pairs.
+function subcommand(args) {
+  let at = 0
+  while (args[at] === "-c") at += 2
+  return args[at] ?? ""
+}
+
 function runner(spawnGit, cwd) {
   return (args, timeout = GIT_TIMEOUT_MS) => {
     const env = remoteIdentityEnv({ root: cwd, args, env: gitEnv(), spawn: spawnGit })
     const once = (limit) => spawnGit("git", ["-C", cwd, ...args], { windowsHide: true, encoding: "utf8", timeout: limit, env, maxBuffer: 64 * 1024 * 1024 })
     let result = once(timeout)
-    if (result.status === null && LOCAL_READS.has(args[0])) result = once(timeout * 3)
+    if (result.status === null && LOCAL_READS.has(subcommand(args))) result = once(timeout * 3)
     return { status: result.status, stdout: typeof result.stdout === "string" ? result.stdout : "", stderr: typeof result.stderr === "string" ? result.stderr : "" }
   }
 }
@@ -341,7 +348,7 @@ export function deliver({ root, env = process.env, spawnGit = spawnSync, deliver
     // A built head Git could not read back (the call was cut off) is no commit to push: nothing is published from it, and the next push retries.
     if (!OBJECT_ID.test(built.head)) {
       if (!fastForward) removeWorktree(git, paths)
-      return { state: "failed", reason: "deadline", error: "Git could not read the commit it built for publication in time, so nothing was pushed", delivered: [], skipped: [] }
+      return { state: "failed", reason: "deadline", error: "Run the push again: nothing was pushed because Git's read of the commit built for publication was cut off by its time limit", delivered: [], skipped: [] }
     }
     let pushed, publication, target = built.head
     if (policy !== null && built.head !== onto) {

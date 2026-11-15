@@ -109,7 +109,7 @@ test("HTTPS, SCP and SSH publication use an exact-head merge and never push upst
 
 test("remote, branch, JSON, lookup, creation and merge failures refuse without credential echoes", () => {
   const cases = [
-    [{ remoteResult: { status: 1 } }, /Git could not read the address of the publication remote/u],
+    [{ remoteResult: { status: 1 } }, /Git's read of the publication remote's address was cut off/u],
     [{ remote: "file:///example/workspace" }, /needs a GitHub/u],
     [{ remote: "https://github.example/ambiguous" }, /unambiguous/u],
     [{ remote: "git@bad!host:example/workspace" }, /unambiguous/u],
