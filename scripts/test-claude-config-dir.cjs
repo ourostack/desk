@@ -69,7 +69,7 @@ assert.deepEqual(violations, [], `hard-coded Claude config directory without the
   for (const target of ["settings.json", "CLAUDE.md", "agents/", "projects/", "plugins/data/desk-ourostack/desk.activation.json"]) {
     assert.ok(setup.includes(`$CLAUDE_DIR/${target}`), `SETUP.md must reach ${target} through $CLAUDE_DIR`);
   }
-  // Desk forbids AI attribution (using-desk's "Durable context and attribution"), so the settings step must turn
+  // Desk's setup keeps AI attribution off at the host, so the settings step must turn
   // it off in the profile SETUP.md produces, not rely on the operator noticing later. The three-field object form,
   // not the `attribution: false` shorthand, is what stays readable to the Claude Code versions SETUP.md still
   // supports: the shorthand needs v2.1.281+, and an older version rejects the whole settings file that holds it.
