@@ -75,6 +75,21 @@ test("a commit Git refuses leaves the entry staged and waiting", async (t) => {
   assert.deepEqual(pushes, [])
 })
 
+test("a commit that could not be made is tried again on its own once the wait runs out", async (t) => {
+  const root = await fixture(t)
+  await fs.writeFile(path.join(root, "log.md"), "one\n")
+  let failing = true
+  const spawnGit = (command, args, options) => (failing && args.includes("commit") ? { status: 1, stdout: "", stderr: "hook refused" } : spawnSync(command, args, options))
+  const { queue, pushes } = lane(root, { spawnGit, maxWaitMs: 40 })
+  queue(["log.md"])
+  assert.equal(flushAppends(root), "commit_failed")
+  assert.equal(pendingCount(root), 1)
+  failing = false
+  for (let waited = 0; pendingCount(root) > 0 && waited < 100; waited += 1) await new Promise((resolve) => setTimeout(resolve, 50))
+  assert.equal(pendingCount(root), 0)
+  assert.equal(pushes.length, 1)
+})
+
 test("a base the write may not build on keeps the entry waiting", async (t) => {
   const root = await fixture(t)
   await fs.writeFile(path.join(root, "log.md"), "one\n")

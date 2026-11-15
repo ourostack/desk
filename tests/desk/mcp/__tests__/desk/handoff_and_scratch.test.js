@@ -1,4 +1,6 @@
 import { test } from "node:test"
+import * as os from "node:os"
+import * as path from "node:path"
 import { strict as assert } from "node:assert"
 import { handoffReference, isHandoffPath } from "../../../../../plugins/desk/mcp/src/desk/handoff-reference.js"
 import { scratchCardNote, scratchPathCount, scratchPathWarning } from "../../../../../plugins/desk/mcp/src/desk/scratch-paths.js"
@@ -40,6 +42,7 @@ test("a desk with no GitHub-style origin, or a Git that throws, has no hand-off 
   assert.equal(handoffReference("/desk", "h/handoffs/a.md", gitSays({ [`config --get ${REMOTE}`]: "/srv/bare.git" })), undefined)
   assert.equal(handoffReference("/desk", "h/handoffs/a.md", () => { throw new Error("no git") }), undefined)
   assert.equal(handoffReference("/desk", "h/handoffs/a.md", () => ({ status: 0, stdout: undefined })), undefined)
+  assert.equal(handoffReference(path.join(os.tmpdir(), "desk-no-such-folder"), "h/handoffs/a.md"), undefined)
 })
 
 test("scratch paths are found in a session folder, a history folder and a temp folder, once each, and never in a URL", () => {

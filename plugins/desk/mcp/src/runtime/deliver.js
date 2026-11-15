@@ -49,7 +49,7 @@ const LOCAL_READS = new Set(["rev-parse", "remote", "config", "merge-base", "rev
 function subcommand(args) {
   let at = 0
   while (args[at] === "-c") at += 2
-  return args[at] ?? ""
+  return args[at]
 }
 
 function runner(spawnGit, cwd) {
@@ -285,7 +285,7 @@ function upstreamOf(git) {
   const branch = git(["symbolic-ref", "-q", "--short", "HEAD"]).stdout.trim()
   const remote = git(["config", `branch.${branch}.remote`]).stdout.trim()
   const merge = git(["config", `branch.${branch}.merge`]).stdout.trim()
-  let tracking = git(["rev-parse", "--symbolic-full-name", "@{u}"]).stdout.trim()
+  let tracking = git(["rev-parse", "--symbolic-full-name", "--verify", "--quiet", "@{u}"]).stdout.trim()
   // `@{u}` fails when the remote's fetch rule does not map the branch to a tracking ref, though the branch's own settings name one that exists.
   if (tracking === "" && remote !== "" && remote !== "." && merge.startsWith("refs/heads/")) {
     const named = `refs/remotes/${remote}/${merge.slice("refs/heads/".length)}`
@@ -344,11 +344,12 @@ export function deliver({ root, env = process.env, spawnGit = spawnSync, deliver
       return { state: "failed", reason: "publication_blocked", error: `Fix .desk/publication.json through a PR, then run ${publicationRecovery(root)}: ${error.message}`, delivered: [], skipped: [] }
     }
     const fastForward = git(["merge-base", "--is-ancestor", onto, head]).status === 0
+    const cleanup = () => { if (!fastForward) removeWorktree(git, paths) }
     const built = fastForward ? { head, replayed: commits, skipped: [] } : replay({ git, spawnGit, paths, onto, commits, prefix })
     if (built.error !== undefined) return { state: "failed", reason: "replay_failed", error: built.error.trim(), delivered: [], skipped: [] }
     // A built head Git could not read back (the call was cut off) is no commit to push: nothing is published from it, and the next push retries.
     if (!OBJECT_ID.test(built.head)) {
-      if (!fastForward) removeWorktree(git, paths)
+      cleanup()
       return { state: "failed", reason: "deadline", error: "Run the push again: nothing was pushed because Git's read of the commit built for publication was cut off by its time limit", delivered: [], skipped: [] }
     }
     let pushed, publication, target = built.head
@@ -359,17 +360,17 @@ export function deliver({ root, env = process.env, spawnGit = spawnSync, deliver
         publication = published.receipt
         pushed = { status: 0 }
       } catch (error) {
-        if (!fastForward) removeWorktree(git, paths)
+        cleanup()
         // The base moved while the checks ran: the candidate is rebuilt on the new base and qualified again, here, not handed back. The abandoned pull request is closed.
         if (error.requalify === true && attempt < REQUALIFY_ATTEMPTS) {
-          if (error.publication?.url) spawnGit("gh", ["pr", "close", error.publication.url, "--delete-branch", "--comment", "The base moved while its checks ran; Desk rebuilt the change on the new base and opened a fresh pull request."], { cwd: root, encoding: "utf8", windowsHide: true, timeout: 60_000, env: process.env })
+          spawnGit("gh", ["pr", "close", error.publication.url, "--delete-branch", "--comment", "The base moved while its checks ran; Desk rebuilt the change on the new base and opened a fresh pull request."], { cwd: root, encoding: "utf8", windowsHide: true, timeout: 60_000, env: process.env })
           continue
         }
         const recovery = error.message.includes("Fix:") ? "" : `. Fix: run ${publicationRecovery(root)}`
         return { state: "failed", reason: "publication_blocked", error: error.message + recovery, publication: error.publication ?? null, delivered: [], skipped: [] }
       }
     } else pushed = built.head === onto ? { status: 0 } : git(["push", "--quiet", upstream.remote, `${built.head}:${upstream.merge}`], NETWORK_TIMEOUT_MS)
-    if (!fastForward) removeWorktree(git, paths)
+    cleanup()
     if (pushed.status === 0) {
       git(["update-ref", upstream.tracking, target])
       const checkout = built.skipped.length === 0 ? followsUpstream({ git, upstream, head, target }) : { state: "behind", reason: "skipped_commits" }

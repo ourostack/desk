@@ -761,6 +761,54 @@ for (const [label, when] of [["after the private index is built", afterSeeding],
   })
 }
 
+// The qualification's own read of HEAD after another writer moved it: cut short (unanswered), or answering the HEAD it had already.
+function racedThenReadAs(answer) {
+  const race = raceAt(publishing)
+  const spawn = (command, args, options) => {
+    const verb = args.slice(2)
+    if (race.theirs() !== null && verb[0] === "rev-parse" && verb.includes("--verify") && verb.at(-1) === "HEAD") return answer(args[1])
+    return race.spawn(command, args, options)
+  }
+  return { spawn, theirs: race.theirs }
+}
+
+test("#632: a HEAD the qualification cannot read again after another writer moved it is held, not committed on", async () => {
+  const root = await stagedChange()
+  const entries = indexEntries(root, ["a.txt"], spawnSync)
+  const raced = racedThenReadAs(() => ({ status: 2, stdout: "", stderr: "" }))
+  const result = commitIndexPaths(root, ["a.txt"], entries, "save", raced.spawn)
+  assert.equal(result.ok, false)
+  assert.equal(headOf632(root), raced.theirs())
+  assert.equal(git(root, ["show", "HEAD:a.txt"]), "one\n")
+})
+
+test("#632: a HEAD that reads as the one already qualified is held after the move, not committed on", async () => {
+  const root = await stagedChange()
+  const before = headOf632(root)
+  const entries = indexEntries(root, ["a.txt"], spawnSync)
+  const raced = racedThenReadAs(() => ({ status: 0, stdout: `${before}\n`, stderr: "" }))
+  const result = commitIndexPaths(root, ["a.txt"], entries, "save", raced.spawn)
+  assert.equal(result.ok, false)
+  assert.equal(git(root, ["show", "HEAD:a.txt"]), "one\n")
+})
+
+test("#632: another writer who committed the very change this call holds leaves nothing to commit, and the call says so", async () => {
+  const root = await stagedChange()
+  const entries = indexEntries(root, ["a.txt"], spawnSync)
+  let done = false
+  const spawn = (command, args, options) => {
+    if (!done && publishing(args.slice(2))) {
+      done = true
+      writeFileSync(path.join(root, "a.txt"), "two\n")
+      git(root, ["commit", "-q", "-m", "same change by another writer", "--", "a.txt"])
+    }
+    return spawnSync(command, args, options)
+  }
+  const result = commitIndexPaths(root, ["a.txt"], entries, "save", spawn)
+  assert.equal(result.ok, false)
+  assert.match(result.stderr, /nothing to commit/u)
+})
+
 test("#632: a HEAD that moves before the private index is seeded is not committed on: the call reads again and commits on the HEAD it finds", async () => {
   const root = await stagedChange()
   const entries = indexEntries(root, ["a.txt"], spawnSync)

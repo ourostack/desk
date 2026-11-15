@@ -210,6 +210,16 @@ test("a policy found missing upstream is remembered, and one that then appears l
   await assert.rejects(call(root, { note: "Now it exists." }), /content_home_policy_unpublished/u)
 })
 
+test("a policy file that exists only in the checkout, with the upstream resolvable and holding none, is refused as unpublished on first sight", async (t) => {
+  const root = await fixture(t)
+  git(root, ["rm", "-q", ".desk/content-home.json"])
+  git(root, ["commit", "-qm", "Drop the policy"])
+  git(root, ["update-ref", "refs/remotes/origin/main", "HEAD"])
+  await fs.mkdir(path.join(root, ".desk"), { recursive: true })
+  await fs.writeFile(path.join(root, ".desk/content-home.json"), JSON.stringify(POLICY))
+  await assert.rejects(call(root, { note: "Now it exists." }), /content_home_policy_unpublished/u)
+})
+
 const policySha = (root) => createHash("sha256").update(git(root, ["show", "HEAD:.desk/content-home.json"])).digest("hex")
 
 async function aheadOfBase(t) {
@@ -226,6 +236,7 @@ test("a commit made by hand is held when the receipt predates policy digests, wh
   assert.throws(() => assertPublishedContentBase(root, { policy_commit: base }, "task_update"), /content_home_unpublished_base/u)
   const sha = policySha(root)
   assert.throws(() => assertPublishedContentBase(root, { policy_commit: "0".repeat(40), policy_sha256: sha }, "task_update"), /content_home_unpublished_base/u)
+  assert.throws(() => assertPublishedContentBase(root, { policy_commit: base, policy_sha256: "f".repeat(64) }, "task_update"), /content_home_unpublished_base/u)
   git(root, ["rm", "-q", ".desk/content-home.json"])
   git(root, ["commit", "-qm", "Lose the policy"])
   assert.throws(() => assertPublishedContentBase(root, { policy_commit: base, policy_sha256: sha }, "task_update"), /content_home_unpublished_base/u)

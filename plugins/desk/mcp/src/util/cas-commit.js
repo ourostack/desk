@@ -81,7 +81,7 @@ const held = (reason, extra = {}) => ({ state: "held", reason, ...extra })
  * hooks see (a Desk tool's commit, which the card guard lets through), and `deadline` holds every Git call it makes, the reads
  * after the branch update included, to one total time budget ending then (see `budgeted`), in place of each step's own bound.
  */
-function commitCaptured({ root, paths, wanted, head, branch, message, spawnGit: unbudgeted, env, toolCommit = false, deadline = null }) {
+function commitCaptured({ root, paths, wanted, head, branch, message, spawnGit: unbudgeted, env, toolCommit, deadline = null }) {
   const spawnGit = budgeted(unbudgeted, deadline)
   const bound = deadline === null ? `the ${COMMIT_TIMEOUT_MS / 1000} s bound` : "the end of the commit's time budget"
   const prefixRead = git(spawnGit, root, ["rev-parse", "--show-prefix"])
