@@ -591,6 +591,18 @@ test("merge-when-green: a failed or unfinished check that is not required, or a 
   assert.deepEqual(prWrites(green.world).map((write) => write.method), ["PUT"])
 })
 
+test("merge-when-green: more than one page of commit statuses is read in full, so a failed one on a later page holds the merge", async () => {
+  const w = await setup([{ ...MERGE, requireMainWorkflowGreen: undefined }])
+  const many = Array.from({ length: 120 }, (_, index) => ({ context: `ci/${index}`, state: index === 110 ? "failure" : "success" }))
+  mergeWorld(w.world)
+  w.world.on("GET", /\/commits\/a+\/status\?per_page=100$/u, () => ({ state: "failure", total_count: 120, statuses: many.slice(0, 100) }))
+  w.world.on("GET", /\/commits\/a+\/status\?per_page=100&page=2$/u, () => ({ state: "failure", total_count: 120, statuses: many.slice(100) }))
+  await w.poll()
+  assert.deepEqual(prWrites(w.world), [])
+  assert.match(w.state("pages merge").prs["7"].waitingOn.join(" "), /ci\/110 failure/u)
+  assert.equal(Object.keys(w.state("pages merge").cache).some((route) => route.includes("/status")), false)
+})
+
 test("merge-when-green: a check rerun green counts by its newest attempt, and a newer failed attempt still holds the merge", async () => {
   const attempt = (id, conclusion, startedAt) => ({ id, name: "visual proof", status: "completed", conclusion, started_at: startedAt })
   const VISUAL = { ...MERGE, requiredChecks: ["visual proof"] }

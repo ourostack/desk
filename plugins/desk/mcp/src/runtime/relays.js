@@ -312,9 +312,9 @@ async function readChecks(ctx, state, repo, sha) {
 async function readStatuses(ctx, state, repo, sha) {
   const route = `/repos/${repo}/commits/${sha}/status?per_page=${CHECKS_PAGE}`
   return cached(ctx, state, route, async (body) => {
-    const statuses = [...(body.statuses ?? [])]
-    for (let page = 2; page <= Math.ceil((body.total_count ?? 0) / CHECKS_PAGE); page++) statuses.push(...((await ctx.api.get(`${route}&page=${page}`)).body.statuses ?? []))
-    return { statuses: statuses.map((status) => ({ context: status.context, state: status.state })), volatile: (body.total_count ?? 0) > CHECKS_PAGE }
+    const statuses = [...body.statuses]
+    for (let page = 2; page <= Math.ceil(body.total_count / CHECKS_PAGE); page++) statuses.push(...(await ctx.api.get(`${route}&page=${page}`)).body.statuses)
+    return { statuses: statuses.map((status) => ({ context: status.context, state: status.state })), volatile: body.total_count > CHECKS_PAGE }
   })
 }
 
