@@ -1,1 +1,0 @@
-The Copilot session-start hook's deadline for its optional lines (3.5 s) is now read from one `timing` object in `hooks/lib/boot-checks.cjs` when the hook runs, instead of from a constant in the hook. The value is unchanged, so what you see at session start is the same; the change lets Desk's own tests give a slow host a longer deadline.

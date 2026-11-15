@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.166 — 2026-11-15
+
+The Copilot session-start hook's deadline for its optional lines (3.5 s) is now read from one `timing` object in `hooks/lib/boot-checks.cjs` when the hook runs, instead of from a constant in the hook. The value is unchanged, so what you see at session start is the same; the change lets Desk's own tests give a slow host a longer deadline.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.165 — 2026-11-15
 
 A `merge-when-green` relay now merges only when every check run and commit status on the pull request's head is green at its latest attempt, not only the ones in `requiredChecks`. It merged a pull request while a path-filtered check that no one had listed was failing, because that check was not required, and the repository's main branch went red. Now a non-required check that is failed, cancelled, timed out, waiting on action, stale, queued or running holds the merge, as does a commit status that is failing or pending. A failed attempt that a rerun superseded still does not hold it, `requiredChecks` must still exist and pass, a skipped or neutral check that nothing requires is ignored, and `requireMainWorkflowGreen` is unchanged. The status comment names what holds the pull request. See [relays](docs/relays.md).
