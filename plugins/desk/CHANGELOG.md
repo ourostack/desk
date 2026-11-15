@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.171 — 2026-11-15
+
+Desk no longer reports "no upstream" as a sync problem when the branch's upstream disappears in the middle of a background push. A session start's `git pull --rebase` or a branch switch can briefly leave the checkout with no upstream. Desk now checks again a few times over about six seconds, delivers the commits if the upstream is back, and otherwise leaves them for the next commit or session start without marking sync blocked or filing a Desk problem. Real fetch, push and conflict failures are reported as before.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.170 — 2026-11-15
 
 The plugin-update notice at boot and in `desk_status` now speaks only when the newer release changes something a session fixes at its start. Desk's own runtime updates in place, so a release that touches only `mcp/src` (and docs) is no reason to restart and is not announced. What counts: a skill's text or description, a hook, an agent, a manifest (compared without its version) or MCP config, and for Desk its MCP session layer (the tool names, descriptions and schemas in `mcp/src/tool-names.js`, `tool-schemas.js`, `tool-schema-parts.js` and `mcp/web-catalog.json`). Any other plugin counts on a skill, hook or agent change. Desk compares the session's loaded copy with the newest fetched release, with local reads only. Housesitter's auto-restart job applies the same rule.
