@@ -33,7 +33,6 @@
   {"match":"  failed: ${failed.length}","reason":"runtime/session-retention.js: not yet in the Ouro AX problem shape"},
   {"match":"git status failed","reason":"runtime/session-retention.js: not yet in the Ouro AX problem shape"},
   {"match":"session-retention failed: ${error.stack}\\n","reason":"runtime/session-retention.js: not yet in the Ouro AX problem shape"},
-  {"match":"${totals.failed} checkout${totals.failed === 1 ? \"\" : \"s\"} could not be inspected","reason":"runtime/unsaved-work.js: not yet in the Ouro AX problem shape"},
   {"match":"Git inspection failed: ${args[0]}","reason":"runtime/workspace-tidy.js: not yet in the Ouro AX problem shape"},
   {"match":"Meaning-based search could not load its model (${reason}); exact-word search is ready, and Desk tries again shortly.","reason":"search/engine.js: not yet in the Ouro AX problem shape"},
   {"match":"archive index could not be read","reason":"tools/archive-state.js: not yet in the Ouro AX problem shape"},

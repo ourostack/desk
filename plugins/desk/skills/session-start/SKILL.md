@@ -51,8 +51,6 @@ If the desk already exists and still shows Epoch 1 evidence (durable desk state 
 
 **More detail, only when it applies** (all in `details.md`): the Desk MCP repair path, a crew workspace, the friction backlog, the workspace MCP link, the factory label clauses, and the routing prompts for `curator` and `pr-feedback-on-own-pr`.
 
-**Startup hook lines.** A `Desk boot pre-checks: workspace-tidy budget exceeded; deferred` line needs no action: the check retries at the next session start.
-
 ## Never skip
 
 Every session does what the boot's instructions say, unless the stand-down rule applies. Auto-mode is license for action, not for skipping a safety check. Work unrelated to the desk should not use the desk root as its working directory: scratch dropped there has ended up committed.
