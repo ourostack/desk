@@ -272,12 +272,30 @@ test("dispatch: two heads 20 seconds apart fire once, for the newer, once the ne
     assert.equal(w.world.writes.length, at === 90 ? 1 : 0, `at ${at}s`)
     if (at === 70) {
       const [relay] = readRelayConfig(w.paths.config)
-      assert.match(relayStatusLines([relay], { [relay.name]: w.state(relay.name) }, NOW + at * SECOND)[0], /head 2222222 \(run 3\) pending, settle 60s, waiting on 60s with no newer/u)
+      const states = { [relay.name]: w.state(relay.name) }
+      assert.match(relayStatusLines([relay], states, NOW + at * SECOND)[0], /head 2222222 \(run 3\) pending, settle 60s, waiting on 60s with no newer/u)
+      assert.deepEqual([whyRelay([relay], states, relay.name).pending.run.id, whyRelay([relay], states, relay.name).lastFiredHead], [3, null])
     }
   }
   assert.deepEqual(w.world.writes[0].body.inputs, { cit_commit: HEAD_B, delivery_id: "relay-3" }, "the older head never fires")
   assert.equal(w.state(DISPATCH.name).lastFire.runs, 2)
   assert.equal(w.state(DISPATCH.name).pending, undefined)
+})
+
+test("dispatch: an older run that is listed late does not displace the newer head that is pending", async () => {
+  const w = await setup([{ ...DISPATCH, everySeconds: 10 }])
+  let runs = [run(1)]
+  w.world.on("GET", runsRoute, () => ({ workflow_runs: runs }))
+  w.world.on("GET", /\/repos\/o\/pages$/u, () => ({ default_branch: "main" }))
+  await w.poll(NOW)
+  runs = [run(3, { head_sha: HEAD_B }), ...runs]
+  await w.poll(NOW + 30 * SECOND)
+  runs = [run(2, { head_sha: HEAD_A }), ...runs]
+  await w.poll(NOW + 40 * SECOND)
+  await w.poll(NOW + 60 * SECOND)
+  assert.equal(w.world.writes.length, 0, "the newer head keeps its own quiet period")
+  await w.poll(NOW + 90 * SECOND)
+  assert.deepEqual(w.world.writes.map((write) => write.body.inputs), [{ cit_commit: HEAD_B, delivery_id: "relay-3" }])
 })
 
 test("dispatch: a restart neither refires a fired head nor loses a fire that is still settling", async () => {
