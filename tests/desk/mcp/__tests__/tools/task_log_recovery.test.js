@@ -4,9 +4,10 @@ import { promises as fs, writeFileSync } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 import { spawnSync } from "node:child_process"
+import { createHash } from "node:crypto"
 import { task_update } from "../../../../../plugins/desk/mcp/src/tools/task.js"
 import { drainAppendLanes, flushAppends } from "../../../../../plugins/desk/mcp/src/runtime/append-lane.js"
-import { gitSeam } from "../../../../../plugins/desk/mcp/src/desk/content-home.js"
+import { assertPublishedContentBase, gitSeam } from "../../../../../plugins/desk/mcp/src/desk/content-home.js"
 import { catchUpBehind } from "../../../../../plugins/desk/mcp/src/runtime/deliver.js"
 
 // The ways one small append to a repository that publishes through checked pull requests used to cost five calls.
@@ -179,4 +180,61 @@ test("3: a commit that landed and was reported cut off is not made twice, and th
   assert.equal(flushAppends(root), "committed")
   assert.equal(git(root, ["rev-list", "--count", "HEAD"]), "2")
   assert.equal(flushAppends(root), "empty")
+})
+
+test("2: a branch no setting can map to an upstream ref leaves the published policy unresolved, and the write is refused", async (t) => {
+  const root = await fixture(t)
+  git(root, ["update-ref", "-d", "refs/remotes/origin/main"])
+  await assert.rejects(call(root, { log: "Ruling: go." }), /upstream cannot be resolved/u)
+  assert.equal(catchUpBehind({ root }).state, "no_upstream")
+})
+
+test("2: the same fallback finds the tracking ref when the delivery catches a checkout up", async (t) => {
+  const root = await fixture(t)
+  git(root, ["config", "remote.origin.fetch", "+refs/heads/other:refs/remotes/origin/other"])
+  assert.equal(catchUpBehind({ root }).state, "current")
+  const tip = upstreamMoves(root, { "incoming.md": "from elsewhere\n" })
+  assert.equal(catchUpBehind({ root }).state, "caught_up")
+  assert.equal(git(root, ["rev-parse", "HEAD"]), tip)
+})
+
+test("a policy found missing upstream is remembered, and one that then appears locally is refused as unpublished", async (t) => {
+  const root = await fixture(t)
+  git(root, ["rm", "-q", ".desk/content-home.json"])
+  git(root, ["commit", "-qm", "Drop the policy"])
+  git(root, ["update-ref", "refs/remotes/origin/main", "HEAD"])
+  const plain = await task_update({ deskRoot: root, input: { track: "track", slug: "work", note: "No policy yet." }, schedulePush() {} })
+  assert.equal(plain.status, "updated")
+  await fs.mkdir(path.join(root, ".desk"), { recursive: true })
+  await fs.writeFile(path.join(root, ".desk/content-home.json"), JSON.stringify(POLICY))
+  await assert.rejects(call(root, { note: "Now it exists." }), /content_home_policy_unpublished/u)
+})
+
+const policySha = (root) => createHash("sha256").update(git(root, ["show", "HEAD:.desk/content-home.json"])).digest("hex")
+
+async function aheadOfBase(t) {
+  const root = await fixture(t)
+  const base = git(root, ["rev-parse", "HEAD"])
+  await fs.writeFile(path.join(root, "held.md"), "Held.\n")
+  git(root, ["add", "held.md"])
+  git(root, ["commit", "-qm", "Held by hand"])
+  return { root, base }
+}
+
+test("a commit made by hand is held when the receipt predates policy digests, when HEAD lost the policy, and when the base is unreadable", async (t) => {
+  const { root, base } = await aheadOfBase(t)
+  assert.throws(() => assertPublishedContentBase(root, { policy_commit: base }, "task_update"), /content_home_unpublished_base/u)
+  const sha = policySha(root)
+  assert.throws(() => assertPublishedContentBase(root, { policy_commit: "0".repeat(40), policy_sha256: sha }, "task_update"), /content_home_unpublished_base/u)
+  git(root, ["rm", "-q", ".desk/content-home.json"])
+  git(root, ["commit", "-qm", "Lose the policy"])
+  assert.throws(() => assertPublishedContentBase(root, { policy_commit: base, policy_sha256: sha }, "task_update"), /content_home_unpublished_base/u)
+})
+
+test("a base that cannot be read at all is named, and no admission means no check", async (t) => {
+  const root = await fixture(t)
+  assert.equal(assertPublishedContentBase(root, null, "task_update"), undefined)
+  const bare = await fs.mkdtemp(path.join(os.tmpdir(), "desk-no-repo-"))
+  t.after(() => fs.rm(bare, { recursive: true, force: true }))
+  assert.throws(() => assertPublishedContentBase(bare, { policy_commit: "0".repeat(40) }, "task_update"), /content_home_unpublished_base/u)
 })

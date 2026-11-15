@@ -27,7 +27,7 @@ const GIT_TIMEOUT_MS = 10_000
 function git(root, args) {
   const run = (timeout) => gitSeam.spawn("git", ["-C", root, ...args], { encoding: "utf8", windowsHide: true, timeout })
   const first = run(GIT_TIMEOUT_MS)
-  return first.status === null && (first.error || first.signal) ? run(GIT_TIMEOUT_MS * 3) : first
+  return first.status === null ? run(GIT_TIMEOUT_MS * 3) : first
 }
 
 // The commit the checkout's upstream names, as a Git result: `@{upstream}`, else the tracking ref the branch's own

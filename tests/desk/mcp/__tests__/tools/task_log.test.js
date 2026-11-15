@@ -8,6 +8,7 @@ import { task_update, task_create } from "../../../../../plugins/desk/mcp/src/to
 import { taskFocus } from "../../../../../plugins/desk/mcp/src/tools/task-focus.js"
 import { desk_save } from "../../../../../plugins/desk/mcp/src/tools/desk-save.js"
 import { drainAppendLanes, pendingCount, flushAppends } from "../../../../../plugins/desk/mcp/src/runtime/append-lane.js"
+import { logSummary } from "../../../../../plugins/desk/mcp/src/tools/task-log.js"
 import { activeTasks } from "../../../../../plugins/desk/mcp/src/desk/active-tasks.js"
 import { formatBootText } from "../../../../../plugins/desk/mcp/src/runtime/boot-text.js"
 
@@ -164,4 +165,46 @@ test("task_focus points at the log's newest entry", async (t) => {
   assert.equal(log.path, "track/work/log.md")
   assert.equal(log.entries, 2)
   assert.match(log.latest, /^\d{4}-\d\d-\d\d \d\d:\d\d: Ruling: second\.$/u)
+})
+
+test("a hand edit made while an entry waits for its commit is not adopted", async (t) => {
+  const root = await fixture(t, { policy: true })
+  await call(root, { log: "Mine.", content_home })
+  await fs.appendFile(path.join(root, "track/work/log.md"), "\nHand edit.\n")
+  await assert.rejects(call(root, { log: "Next.", content_home }), /content_home_dirty_target/u)
+})
+
+test("a log's summary counts its entries, cuts a long newest one, and is absent without a log", async (t) => {
+  const root = await fixture(t)
+  const card = path.join(root, "track/work/task.md")
+  assert.equal(logSummary(root, card), undefined)
+  const log = path.join(root, "track/work/log.md")
+  await fs.writeFile(log, "# Log\n\nNo entries yet.\n")
+  const empty = logSummary(root, card)
+  assert.equal(empty.entries, 0)
+  assert.equal("latest" in empty, false)
+  await fs.writeFile(log, `# Log\n\n## 2026-01-02 03:04\n\n${"word ".repeat(100)}\n`)
+  const long = logSummary(root, card)
+  assert.equal(long.entries, 1)
+  assert.match(long.latest, /^2026-01-02 03:04: word word .* \.\.\.$/u)
+})
+
+test("a saved file under handoffs/ gets no URL without an origin, and one named by path gets it with one", async (t) => {
+  const root = await fixture(t)
+  await fs.mkdir(path.join(root, "track/work/handoffs"))
+  await fs.writeFile(path.join(root, "track/work/handoffs/by-path.md"), "Brief.\n")
+  const named = await desk_save({ deskRoot: root, input: { message: "Hand off by path", paths: ["track/work/handoffs/by-path.md"] }, schedulePush() {} })
+  assert.equal(named.status, "committed")
+  assert.equal(named.handoff_references[0].url, "https://github.com/sample/context/blob/main/track/work/handoffs/by-path.md")
+  git(root, ["remote", "remove", "origin"])
+  const quiet = await desk_save({ deskRoot: root, input: { message: "Hand off locally", files: [{ path: "track/work/handoffs/local.md", content: "Brief.\n" }] }, schedulePush() {} })
+  assert.equal(quiet.status, "committed")
+  assert.equal(quiet.handoff_references, undefined)
+})
+
+test("desk_save flags a scratch path in what it saves, and still saves it", async (t) => {
+  const root = await fixture(t)
+  const answer = await desk_save({ deskRoot: root, input: { message: "Notes", files: [{ path: "track/work/notes.md", content: "Evidence at /tmp/ghw/run.log.\n" }] }, schedulePush() {} })
+  assert.equal(answer.status, "committed")
+  assert.match(answer.scratch_paths, /^Copy the file into the task's folder with desk_save.*These files names `\/tmp\/ghw\/run\.log`/u)
 })

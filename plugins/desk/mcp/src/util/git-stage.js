@@ -239,7 +239,7 @@ export function readBackCommit(root, relPaths, message, before, expected, spawnG
 // `made` is set when the call is known to have made a commit object whose effect is uncertain (a branch update cut off, or a
 // post-commit hook that moved HEAD): a read-back that finds nothing then says `unknown`, never `absent`.
 // A read-back that could not answer is asked once more with three times the room each read had: on a slow machine the commit often did land, and "unknown" is only for a Git that still cannot say.
-const patiently = (spawnGit) => (command, args, options) => spawnGit(command, args, { windowsHide: true, ...options, timeout: (options?.timeout ?? GIT_TIMEOUT_MS) * 3 })
+const patiently = (spawnGit) => (command, args, options) => spawnGit(command, args, { windowsHide: true, ...options, timeout: options.timeout * 3 })
 
 function afterFailedCommit(stderr, root, relPaths, message, before, expected, spawnGit, branch, made = false) {
   let answer = readBackCommit(root, relPaths, message, before, expected, spawnGit)

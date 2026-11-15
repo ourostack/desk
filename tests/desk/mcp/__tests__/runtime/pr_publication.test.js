@@ -402,3 +402,12 @@ test("a branch push cut off once and then accepted publishes", () => {
   const request = { ...f.request, git: (args, timeout) => (args[0] === "push" && cut ? ((cut = false), { status: null }) : git(args, timeout)) }
   assert.equal(publishPullRequest(request).receipt.merge, merged)
 })
+
+test("a branch push cut off twice says it was cut off and shows no remote line", () => {
+  const f = fixture({ create: true })
+  const git = f.request.git
+  assert.throws(() => publishPullRequest({ ...f.request, git: (args, timeout) => (args[0] === "push" ? { status: null } : git(args, timeout)) }), (error) => {
+    assert.match(error.message, /the contribution branch push was cut off twice, and the upstream branch was not pushed\.$/u)
+    return true
+  })
+})
