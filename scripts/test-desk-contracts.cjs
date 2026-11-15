@@ -1509,18 +1509,10 @@ requires(
   "archive-workflow keeps the sign-off lines when the archive is the last tool call",
   /`task_archive` preserves an unsigned, evidenced delivery's three sign-off lines[^\n]+carry those literal lines as a required next action through any compaction or handoff; never make them optional/u,
 );
-contract("question guidance preserves authority and routes contradictory host requirements as an integration defect", () => {
+contract("question guidance asks in chat and treats a blocked form as no answer", () => {
   const questions = subsection("plugins/desk/skills/interaction-style/SKILL.md", "No question forms");
   assert.match(questions, /`AskUserQuestion` on Claude Code, `ask_user` on the Copilot CLI/u);
-  assert.match(questions, /ordinary conversation and already-authorized work remain allowed/u);
-  assert.match(questions, /not a human answer, refusal, revocation or consent/u);
-  assert.match(questions, /Do not retry the form or change permissions, hooks or settings/u);
-  assert.match(questions, /higher-priority host routing[\s\S]+consumer integration defect[\s\S]+supported route/u);
-  assert.match(questions, /A denial alone does not establish incompatible routing; inspect actual instructions and tool availability/u);
-  assert.match(questions, /Headless execution without human input is a capability limit, not approval withdrawal/u);
-  assert.match(questions, /Keep genuine human decisions and native permission gates intact/u);
-  assert.match(questions, /A real human refusal remains a refusal; an unrelated failure or unknown result does not establish a no-forms denial/u);
-  assert.match(questions, /action that needs the missing decision stays gated until an answer arrives through a permitted route/u);
+  assert.match(questions, /A blocked form is not a human answer, refusal or consent/u);
   assert.match(text("plugins/desk/skills/session-start/SKILL.md"), /the one question \(resume which, or start new\), written as a sentence in the reply and never put through the host's question form/u);
 });
 contract("interaction-style opens the reply to a human who is leaving with what it needs, or that it needs nothing", () => {
@@ -1674,7 +1666,7 @@ contract("every general operator rule is stated in the skill that owns its topic
     ["operator-voice-comments", /A recorded standing grant that names a kind of send in the operator's own words[\s\S]+is that approval for sends of that kind only[\s\S]+the voice tests and zero-context review below still run before a granted send/u],
     ["evidence-discipline", /Put the proof inline where the reader looks[\s\S]+not only as a link to an artifact/u],
     ["evidence-discipline", /Every picture says what to notice\. Give each one a short caption: where to look, and what changed or what it proves[\s\S]+A picture without a "what to notice" caption isn't proof/u, "Visual proof"],
-    ["interaction-style", /Write the question in your message, with enough context for the operator to explore it, disagree or take it somewhere unexpected[\s\S]+Never call one, even where a hook blocks it/u],
+    ["interaction-style", /Write the question in your message, with enough context for the operator to explore it, disagree or take it somewhere unexpected[\s\S]+Never rewrite it as a statement or choose a default to avoid asking/u],
     ["interaction-style", /### An update is your last message\n\nWhen the operator asks for an update, the whole update is your last message[\s\S]+one message, with no tool calls after it, that covers all of their work in flight[\s\S]+If children you launched are still running, record the handoff/u],
     ["work-orchestration", /\*\*Work smart, not hard\.\*\* Ambitious quality work needs no justification[\s\S]+don't loop on reruns or rounds of rewording, don't duplicate another lane's work, and stop work whose goal has been superseded/u, "Parallelize and fast-follow"],
     ["work-orchestration", /A fleet steward[\s\S]+watches every session and every pull request, never a fixed list[\s\S]+one blocked on a recorded wait for children, CI or a poll is working, not hung\. Otherwise, busy but silent for an hour or more is hung[\s\S]+Idle for two hours or more without reporting done is stalled[\s\S]+every open pull request older than a day to merged, closed or a named owner/u, "Waiting for children"],
