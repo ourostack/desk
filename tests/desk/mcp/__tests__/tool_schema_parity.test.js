@@ -40,7 +40,7 @@ import { NO_INPUT_TOOLS, TOOL_INPUT_SCHEMAS } from "../../../../plugins/desk/mcp
 import { TASK_CREATE_FIELDS, TASK_UPDATE_FIELDS, TASK_ARCHIVE_FIELDS } from "../../../../plugins/desk/mcp/src/tools/task.js"
 import { TASK_FOCUS_FIELDS } from "../../../../plugins/desk/mcp/src/tools/task-focus.js"
 import { TASK_SIGNOFF_FIELDS } from "../../../../plugins/desk/mcp/src/tools/task-signoff.js"
-import { TASK_MOVE_FIELDS, TRACK_RENAME_FIELDS } from "../../../../plugins/desk/mcp/src/tools/move.js"
+import { TASK_UPDATE_MOVE_FIELDS, TRACK_UPDATE_RENAME_FIELDS } from "../../../../plugins/desk/mcp/src/tools/move.js"
 import { TRACK_CREATE_FIELDS, TRACK_UPDATE_FIELDS } from "../../../../plugins/desk/mcp/src/tools/track.js"
 import { IMPROVEMENT_OPEN_FIELDS, IMPROVEMENT_NEXT_FIELDS, IMPROVEMENT_UPDATE_FIELDS } from "../../../../plugins/desk/mcp/src/tools/improvement.js"
 import { FRICTION_ADD_FIELDS } from "../../../../plugins/desk/mcp/src/tools/friction.js"
@@ -58,14 +58,12 @@ import { DESK_DOCTOR_FIELDS } from "../../../../plugins/desk/mcp/src/runtime/des
 // with that tool's real handler (see the header for which module that is).
 const HANDLER_FIELDS = {
   task_create: TASK_CREATE_FIELDS,
-  task_update: TASK_UPDATE_FIELDS,
+  task_update: [...TASK_UPDATE_FIELDS, ...TASK_UPDATE_MOVE_FIELDS],
   task_archive: TASK_ARCHIVE_FIELDS,
-  task_move: TASK_MOVE_FIELDS,
   task_focus: TASK_FOCUS_FIELDS,
   task_signoff: TASK_SIGNOFF_FIELDS,
   track_create: TRACK_CREATE_FIELDS,
-  track_update: TRACK_UPDATE_FIELDS,
-  track_rename: TRACK_RENAME_FIELDS,
+  track_update: [...TRACK_UPDATE_FIELDS, ...TRACK_UPDATE_RENAME_FIELDS],
   friction_add: FRICTION_ADD_FIELDS,
   lesson_add: LESSON_ADD_FIELDS,
   desk_save: DESK_SAVE_FIELDS,

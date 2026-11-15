@@ -397,7 +397,7 @@ test("current shipped pack loads current source and the card persistence tools",
     assert.equal(native.status, 0, native.stderr || native.error?.message)
     assert.equal(native.stderr, "")
     assert.match(native.stdout, /committed native pack loaded on/u)
-    for (const name of ["desk_save", "task_focus", "task_signoff", "task_move", "track_rename"]) {
+    for (const name of ["desk_save", "task_focus", "task_signoff"]) {
       assert.equal(typeof server.TOOL_IMPLS[name], "function", `${name} must come from the current source`)
     }
   } finally {

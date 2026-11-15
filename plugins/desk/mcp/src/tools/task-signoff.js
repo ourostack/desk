@@ -3,7 +3,7 @@
 // The one tool that writes `signoff`. A call is recorded as the operator's answer: Desk does not check which turn or which agent made it.
 //
 // A refusal also sends the task back to `processing` and records the return (`refuse`), after bringing an archived card back to the live tree through
-// `task_move`. The card is written, staged, committed and finalized the way `task_update` writes it. Everything is checked before anything is written.
+// `task_update`. The card is written, staged, committed and finalized the way `task_update` writes it. Everything is checked before anything is written.
 //
 // The answer carries the slug, codes and the desk-relative card path only: no title, no body text, no absolute path.
 
@@ -16,7 +16,7 @@ import { readRecord, toFrontmatter, sign, refuse, STATUSES, REFUSAL_REASONS, RET
 import { deskPushNote, schedulePush as schedulePushDefault } from "../runtime/sync-worker.js"
 import { findCard } from "./task-focus.js"
 import { refreshSignoffStatus } from "../desk/unsigned-deliveries.js"
-import { task_move } from "./move.js"
+import { moveTask } from "./move.js"
 import { DESK_COMMIT_NOTE, DESK_COMMIT_HASH_NOTE, relPath, stagingAllowed, stageAndCommitCard, headSha, updateTrackRow, taskJobOrNull, requestTaskFinalize } from "./task.js"
 
 export const TASK_SIGNOFF_FIELDS = ["track", "slug", "outcome", "reason", "return_reason"]
@@ -109,9 +109,9 @@ export async function taskSignoff({
   }
   if (refused && found.archived) {
     try {
-      await task_move({ deskRoot, input: { track, slug, unarchive: true }, person, search, statusContext, spawnGit, schedulePush })
+      await moveTask({ deskRoot, input: { track, slug, unarchive: true }, person, search, statusContext, spawnGit, schedulePush })
     } catch (error) {
-      throw Object.assign(new Error(`task_signoff: Use task_move (unarchive: true) to bring it back, then try again: the archived task could not be brought back (${error.message}); nothing was recorded. Bring it back with task_move (unarchive: true), then call task_signoff again.`), { code: "task_signoff_true_to_bring_it_back" })
+      throw Object.assign(new Error(`task_signoff: Use task_update (unarchive: true) to bring it back, then try again: the archived task could not be brought back (${error.message}); nothing was recorded. Bring it back with task_update (unarchive: true), then call task_signoff again.`), { code: "task_signoff_true_to_bring_it_back" })
     }
     file = path.join(path.dirname(path.dirname(path.dirname(found.file))), slug, "task.md")
     result.path = relPath(deskRoot, file)

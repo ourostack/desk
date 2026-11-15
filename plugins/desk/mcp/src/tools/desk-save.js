@@ -88,7 +88,7 @@ function pathRefusal(relativePath) {
   if (parts.includes(".git")) return "it is inside a .git folder"
   if (parts[0] === ".state") return "it is inside .state/, which Desk keeps for itself"
   if (parts[0] === ".github" && parts[1] === "workflows") return "it is a GitHub Actions workflow, which the desk's push credentials cannot push"
-  if (isLiveCardPath(relativePath)) return "it is a task card; write it with task_update, task_create, task_move or task_archive"
+  if (isLiveCardPath(relativePath)) return "it is a task card; write it with task_update, task_create or task_archive"
   return null
 }
 
@@ -160,7 +160,7 @@ async function writeFiles(checked) {
  *   }
  *
  * `tidy: true` commits housekeeping that moved task cards. `paths` are the old and new path of every move, plus any file the tidy fixed or recorded
- * (`_meta/organization.json`). Moves and renames are already staged by task_move, track_rename or `git mv`; files that are not task cards and hold
+ * (`_meta/organization.json`). Moves and renames are already staged by task_update, track_update or `git mv`; files that are not task cards and hold
  * unstaged changes are staged here. A task card is never staged here, and it is accepted only as a staged pure rename (`R100`) or deletion, so a
  * card edit cannot ride through. The commit is limited to `paths`, so other staged work stays staged, and the message ends with the
  * `Desk-Tidy: true` trailer (added when missing) so reports count it as housekeeping. The same call commits the undo of a tidy after
@@ -224,7 +224,7 @@ async function saveDesk({ deskRoot, input, person = null, spawnGit = spawnSync, 
     }
     // Desk's commit path is the one the desk's pre-commit hook trusts, so a card must not be able to ride through it.
     if (!tidy && isLiveCardPath(path.relative(deskRoot, absolute).split(path.sep).join("/"))) {
-      throw Object.assign(new Error(`desk_save: remove ${relativePath} from \`paths\` and write the task card with task_update, task_create, task_move or task_archive, which commit it; to commit a tidy that moved cards, pass tidy: true`), { code: "desk_save_true" })
+      throw Object.assign(new Error(`desk_save: remove ${relativePath} from \`paths\` and write the task card with task_update, task_create or task_archive, which commit it; to commit a tidy that moved cards, pass tidy: true`), { code: "desk_save_true" })
     }
   }
   const checked = files.length > 0 ? await checkFiles(deskRoot, person, effectiveRoot, files) : []
@@ -345,7 +345,7 @@ function commitTidy({ deskRoot, paths, message, spawnGit, schedulePush }) {
   const cards = rels.filter(isCard)
   const others = rels.filter((p) => !isCard(p))
   if (cards.length > 0 && hasUnstagedWork(deskRoot, cards, spawnGit)) {
-    throw Object.assign(new Error("desk_save: Run task_update for a card edit, or restore the card and pass only moved cards: a task card in `paths` has an unstaged change, is untracked, or git could not check it; run task_update for a card edit, or unstage and restore the card, and pass only cards that task_move, track_rename or a Git move staged as moves"), { code: "desk_save_a_task_card_in_paths_2" })
+    throw Object.assign(new Error("desk_save: Run task_update for a card edit, or restore the card and pass only moved cards: a task card in `paths` has an unstaged change, is untracked, or git could not check it; run task_update for a card edit, or unstage and restore the card, and pass only cards that task_update, track_update or a Git move staged as moves"), { code: "desk_save_a_task_card_in_paths_2" })
   }
   // Only the paths that hold unstaged work are staged. The old side of a move `git mv` already staged is neither on disk nor in the index, and `git add` refuses the whole call for one such path.
   const unstaged = others.filter((p) => hasUnstagedWork(deskRoot, [p], spawnGit))

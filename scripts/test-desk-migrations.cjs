@@ -1014,7 +1014,7 @@ test("the tidy migration tidies and announces: announce-and-proceed wording and 
   assert.match(blocks.Migrate, /If the tidy cannot finish in this session for any reason[\s\S]{0,200}run: \$defer/u);
   assert.doesNotMatch(blocks.Migrate, /unstage it/u);
   // Fix round 4: the tidy stages as it goes, so its own earlier steps never read as another session's work.
-  assert.match(blocks.Migrate, /Stage as you go[\s\S]{0,200}task_move, track_rename, track_create and track_update stage what they write\. Right after any other change the tidy makes[\s\S]{0,120}git add exactly that path[.;]/u);
+  assert.match(blocks.Migrate, /Stage as you go[\s\S]{0,200}task_update, track_update and track_create stage what they write\. Right after any other change the tidy makes[\s\S]{0,120}git add exactly that path[.;]/u);
   assert.match(blocks.Migrate, /let staged changes through as this tidy's own work and refuse unstaged changes or untracked files, which belong to another session; never pass allow_dirty/u);
   assert.match(blocks.Migrate, /git diff --name-only -- <tidy paths> and git ls-files --others --exclude-standard -- <tidy paths> print nothing[\s\S]{0,400}Otherwise write _meta\/organization\.json[\s\S]{0,40}\$record\n {3}Then commit with desk_save/u);
   assert.doesNotMatch(blocks.Migrate, /git status --porcelain -- <path>/u, "mid-tidy, git status also lists the tidy's own staged work");
@@ -1091,7 +1091,7 @@ test("tidy Migrate prints the findings and the steps, changes nothing, and never
     assert.match(migrate.stdout, new RegExp(`^Desk tools: ${tidy.desk}\\nThis script: ${tidy.desk}\\nThis session's own desk: ${tidy.desk}\\nOrganization findings in it: \\d+\\n`, "u"));
     assert.match(migrate.stdout, /\nUncommitted changes in it: 0\n/u);
     assert.match(migrate.stdout, /^ {2}track_catch_all: inbox \(handle track-[0-9a-f]{10}\) — /mu);
-    assert.match(migrate.stdout, /^ {2}name_credential_like: normal-track\/<redacted segment> \(handle task-[0-9a-f]{10}\) — .*rename with task_move \(handle, to_slug\)/mu);
+    assert.match(migrate.stdout, /^ {2}name_credential_like: normal-track\/<redacted segment> \(handle task-[0-9a-f]{10}\) — .*rename with task_update \(handle, to_slug\)/mu);
     assert.ok(!migrate.stdout.includes(CARD_SECRET.slice(0, 6)), "no part of a credential-like name is printed");
     assert.match(migrate.stdout, new RegExp(`with: node '${tidy.env.DESK_PLUGIN_ROOT}/mcp/scripts/tidy-status\\.js' --write-record --claim '[0-9a-f-]{36}'\\n`, "u"));
     assert.equal(snapshot(tidy.desk), before, "Migrate itself changes nothing; the agent does the tidy");
@@ -1182,7 +1182,7 @@ test("tidy Migrate lists another session's uncommitted work and never prints a p
     assert.equal(migrate.status, 0, migrate.stderr);
     assert.match(migrate.stdout, /^Uncommitted changes in it: 1\n {2}normal-track\/ship-the-refactor\/doing\.md$/mu);
     assert.ok(!migrate.stdout.includes("hunter"), "no part of a password value is printed");
-    assert.match(migrate.stdout, /^ {2}name_credential_like: normal-track\/<redacted segment> \(handle task-[0-9a-f]{10}\) — .*rename with task_move \(handle, to_slug\)/mu);
+    assert.match(migrate.stdout, /^ {2}name_credential_like: normal-track\/<redacted segment> \(handle task-[0-9a-f]{10}\) — .*rename with task_update \(handle, to_slug\)/mu);
   });
 });
 

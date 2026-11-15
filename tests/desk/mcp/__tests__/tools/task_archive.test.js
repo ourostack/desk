@@ -14,7 +14,7 @@ import {
   task_archive,
   task_update,
 } from "../../../../../plugins/desk/mcp/src/tools/task.js"
-import { task_move } from "../../../../../plugins/desk/mcp/src/tools/move.js"
+import { moveTask } from "../../../../../plugins/desk/mcp/src/tools/move.js"
 import { writeMarkdown } from "../../../../../plugins/desk/mcp/src/util/fm.js"
 import { mkTempDeskRoot, readFront, exists } from "./_helpers.js"
 import { beforeLanding } from "../_index_commit_seam.js"
@@ -663,7 +663,7 @@ async function archivedValidating(root, slug, { withFlow }) {
     await writeMarkdown(file, card.data, card.content)
   }
 }
-const unarchive = (root, slug) => task_move({ deskRoot: root, input: { track: "t", slug, unarchive: true } })
+const unarchive = (root, slug) => moveTask({ deskRoot: root, input: { track: "t", slug, unarchive: true } })
 const back = (root, slug, extra = {}) => task_update({ deskRoot: root, input: { track: "t", slug, frontmatter: { status: "processing" }, ...extra }, finalize: async () => {} })
 
 for (const withFlow of [true, false]) {

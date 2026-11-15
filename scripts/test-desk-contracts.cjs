@@ -710,28 +710,27 @@ contract("start-task reopens a finished task for another round of the same job",
   assert.match(skill, /`<task>\/_iterations\/<YYYY-MM-DD>-<slug>\/`/u);
   assert.match(text("plugins/desk/skills/task-lifecycle/SKILL.md"), /^\| `done` → `processing` \| NOTIFY \|[^\n]*reopen/imu);
 });
-contract("start-task reopens an archived task with task_move unarchive, not a hand-run git mv", () => {
+contract("start-task reopens an archived task with task_update unarchive, not a hand-run git mv", () => {
   const skill = text("plugins/desk/skills/start-task/SKILL.md");
   const reopen = skill.split("- **`done` or archived task:**", 2)[1].split("\n", 1)[0];
-  assert.match(reopen, /`task_move` and `unarchive: true`[\s\S]*restores its row in the track's `## Tasks` table/u);
+  assert.match(reopen, /`task_update` and `unarchive: true`[\s\S]*restores its row in the track's `## Tasks` table/u);
   assert.doesNotMatch(reopen, /git mv <track>\/_archive/u);
 });
-contract("task_move and track_rename document refusing another session's unstaged work unless allow_dirty", () => {
+contract("task_update and track_update document refusing another session's unstaged work unless allow_dirty", () => {
   const names = text("plugins/desk/mcp/src/tool-names.js");
+  const schemas = text("plugins/desk/mcp/src/tool-schemas.js");
   const description = (tool) => new RegExp(`\\n  ${tool}:\\n    "([^\\n]+)",`, "u").exec(names)[1];
-  for (const tool of ["task_move", "track_rename"]) {
-    const pinned = tool === "task_move"
-      ? /refuses a folder with unstaged or untracked changes unless `allow_dirty: true`/u
-      : /refuses a track with unstaged changes or untracked, non-ignored files, because another session may be working there, unless `allow_dirty: true`; the refusal never quotes names/u
-    assert.match(description(tool), pinned, tool);
-  }
-  assert.match(description("task_move"), /refused for a live task into a done or cancelled one/u);
-  assert.match(description("track_rename"), /It stages the task cards it rewrites\./u);
+  assert.match(schemas, /allow_dirty: flag\("With a move: move even though the folder has unstaged or untracked changes, which a Git desk otherwise refuses\."\)/u);
+  assert.match(schemas, /allow_dirty: flag\("With rename_to: rename even though the track has unstaged changes or untracked, non-ignored files, which a Git desk otherwise refuses because another session may be working there\."\)/u);
+  assert.match(schemas, /A live task cannot merge into a done or cancelled one\./u);
+  assert.match(schemas, /stages those cards and commits the moved directory/u);
+  assert.match(description("task_update"), /pass `to_track`, `to_slug`, `unarchive` or `into_task` alone/u);
+  assert.match(description("track_update"), /pass `rename_to` alone/u);
   assert.match(description("track_create"), /On a Git desk it stages and commits the new track\.md; a commit failure never loses the write, reported via a `commit` field\./u);
   assert.match(description("track_update"), /On a Git desk it stages and commits the track\.md when that file held no unstaged changes before the write, so it never adopts another session's edit; a commit failure never loses the write, reported via a `commit` field\./u);
   const readme = text("plugins/desk/mcp/README.md");
-  assert.match(readme, /- `task_move` —[^\n]+refuses a task, or a `track\.md` it would edit, with unstaged changes or untracked files[^\n]+`allow_dirty: true`, and it stages every file it writes/u);
-  assert.match(readme, /- `track_rename` —[^\n]+refuses a track with unstaged changes or untracked files unless `allow_dirty: true`, and stages the task cards it rewrites/u);
+  assert.match(readme, /`task_update` also moves and renames:[^\n]+refuses a task, or a `track\.md` it would edit, with unstaged changes or untracked files[^\n]+`allow_dirty: true`, and it stages every file it writes/u);
+  assert.match(readme, /`track_update` with `rename_to` renames a track instead[^\n]+refuses a track with unstaged changes or untracked files unless `allow_dirty: true`, and stages the task cards it rewrites/u);
   assert.match(readme, /- `track_create`, `track_update` \(on a Git desk, each stages the `track\.md` it writes/u);
   assert.match(text("plugins/desk/skills/interaction-style/SKILL.md"), /refuse a folder with uncommitted changes that are not staged, or with untracked files,[^\n]+never overrides that with `allow_dirty`\. The Desk tools stage everything they write, so a staged change is the tidy's own work in progress\./u);
   assert.match(text("plugins/desk/migrations/02-tidy-desk.md"), /never pass allow_dirty/u);
@@ -761,7 +760,7 @@ contract("directory-structure says what may sit where", () => {
   assert.match(skill, /decides the destination[\s\S]{0,300}one line/iu);
   assert.match(skill, /^ {6}_iterations\/ +# /mu, "the layout names where a task with no repositories keeps its iterations");
   assert.match(skill, /reports, status notes and handoffs belong in a task or iteration folder, committed to `main`/iu);
-  assert.match(skill, /`task_move`[\s\S]+`track_rename`/u);
+  assert.match(skill, /`task_update`[\s\S]+`track_update`/u);
   assert.match(skill, /`desk_doctor`[\s\S]{0,200}`loose_file`/u);
 });
 contract("interaction-style owns tidy-and-announce and its safety rules", () => {
@@ -1355,12 +1354,12 @@ contract("session start lists active tasks from desk_status, never a script or a
     assert.match(skill, /`active_tasks`/u, `${file} does not read desk_status active_tasks`);
   }
   assert.match(text(sessionStart), /never glob the desk instead/u);
-  assert.match(text("plugins/desk/skills/session-start/details.md"), /`task_move` with `handle` and an outcome `to_slug`/u);
+  assert.match(text("plugins/desk/skills/session-start/details.md"), /`task_update` with `handle` and an outcome `to_slug`/u);
 });
 contract("the tidy renames a redacted folder by its handle, never by listing its parent", () => {
   const tidy = text("plugins/desk/migrations/02-tidy-desk.md");
   assert.doesNotMatch(tidy, /listing its parent yourself/u);
-  assert.match(tidy, /by the handle its finding shows: a task with task_move \(handle, to_slug\), a track with track_rename \(handle, to\)/u);
+  assert.match(tidy, /by the handle its finding shows: a task with task_update \(handle, to_slug\), a track with track_update \(handle, rename_to\)/u);
 });
 
 contract("a task with no plan routes to writing-plans or brainstorming, never to executing-plans", () => {
@@ -1560,7 +1559,7 @@ contract("the improvement-loop bounds in the doc are the constants in the code",
 requires(
   "plugins/desk/mcp/README.md",
   "the MCP readme lists the three improvement tools",
-  /## Tools exposed \(21\)[\s\S]+`improvement_open`[\s\S]+`improvement_next`[\s\S]+`improvement_update`[\s\S]+All 21 tools are wired/u,
+  /## Tools exposed \(19\)[\s\S]+`improvement_open`[\s\S]+`improvement_next`[\s\S]+`improvement_update`[\s\S]+All 19 tools are wired/u,
 );
 contract("the changelog text for the loop has no heading and says what changed for the reader", () => {
   // Before a release the text is the fragment. The release folds the fragment into the changelog and deletes it, and

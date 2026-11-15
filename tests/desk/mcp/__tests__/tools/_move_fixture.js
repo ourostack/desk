@@ -1,4 +1,4 @@
-// Fixtures shared by the task_move and track_rename tests, which are split over two files so the Windows suite can run them at the same time.
+// Fixtures shared by the task_update and track_update tests, which are split over two files so the Windows suite can run them at the same time.
 import { strict as assert } from "node:assert"
 import * as path from "node:path"
 import { spawnSync } from "node:child_process"
@@ -91,4 +91,4 @@ export async function trackBody(root, slug) {
   return content
 }
 
-// ── task_move: same-track rename ────────────────────────────────────────────
+// ── task_update: same-track rename ────────────────────────────────────────────

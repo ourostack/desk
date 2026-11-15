@@ -18,7 +18,7 @@ For overlays with their own work-item tracker (and a work-item ID), consumer ove
 One job is one task (`task-lifecycle`). Before creating anything, search the desk for a task with the same outcome, live or archived (`desk_search` with `scope: "all"`). A follow-up, a re-review or a retry of the same outcome is a new iteration of the existing task, not a new task:
 
 - **Live task:** add the iteration under it and continue there.
-- **`done` or archived task:** reopen it. An archived task sits under `<track>/_archive/<slug>/`; move it back with `task_move` and `unarchive: true`, which stages the move with `git mv`, restores its row in the track's `## Tasks` table and validates any new name as usual. Then set its status back to `processing` with `task_update`, record why in the card (which new round of the job this is and what asked for it), and say so in one line.
+- **`done` or archived task:** reopen it. An archived task sits under `<track>/_archive/<slug>/`; move it back with `task_update` and `unarchive: true`, which stages the move with `git mv`, restores its row in the track's `## Tasks` table and validates any new name as usual. Then set its status back to `processing` with `task_update`, record why in the card (which new round of the job this is and what asked for it), and say so in one line.
 
 An iteration goes where `directory-structure` puts it: `<task>/<repo>/<YYYY-MM-DD>-<slug>/` for each repository the task touches, or `<task>/_iterations/<YYYY-MM-DD>-<slug>/` for a task with no repositories (`repos: []`).
 
@@ -26,7 +26,7 @@ An iteration goes where `directory-structure` puts it: `<task>/<repo>/<YYYY-MM-D
 
 Name the task yourself from the outcome it delivers, with no proposal step and no wait for confirmation. The name is 2 to 6 lowercase kebab-case words and at most 48 characters, such as `oauth-login-fix` or `api-validation-layer`. Build it from what the work achieves, never from the words the human typed: a name never starts with a greeting or request word (`hi`, `please`, `can`, `lets`, `help`), and never carries a secret, an address or other sensitive text. `task_create` enforces these rules; when it rejects a name, name the outcome again rather than trimming the rejected text.
 
-A name that turns out weak is cheap to fix later with `task_move`, so choose a good name quickly and move on.
+A name that turns out weak is cheap to fix later with `task_update`, so choose a good name quickly and move on.
 
 ## Route by scope line
 

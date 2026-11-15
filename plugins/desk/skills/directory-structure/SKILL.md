@@ -74,7 +74,7 @@ iteration frontmatter carries scope identifiers (`track`, `task`, `repo`, `itera
 - **repo workspace**: matches the upstream repo name exactly. example: `OrderService`, `OrderUI`.
 - **system directories**: `artifacts/`, `_planning/`, `_archive/`, `_meta/`, `_history/`. these are not task directories. `_`-prefixed dirs sort to the top in `ls`; `artifacts/` is deliberately plain because it is shared repo data, not a hidden local cache.
 
-The agent chooses every track and task name itself, from the outcome, without asking (`start-task` has the rules; `task_create`, `track_create`, `task_move` and `track_rename` enforce them). Names are not permanent. Rename or move a task with `task_move` (to another track, a new name or both) and rename a track with `track_rename`. Both stage the move with `git mv` on a Git desk, update `track:` in the moved task cards and the `## Tasks` tables, and report other files that still mention the old path; fix the ones that matter in the same commit.
+The agent chooses every track and task name itself, from the outcome, without asking (`start-task` has the rules; `task_create`, `track_create`, `task_update` and `track_update` enforce them). Names are not permanent. Rename or move a task with `task_update` (to another track, a new name or both) and rename a track with `track_update`. Both stage the move with `git mv` on a Git desk, update `track:` in the moved task cards and the `## Tasks` tables, and report other files that still mention the old path; fix the ones that matter in the same commit.
 
 ## rules
 

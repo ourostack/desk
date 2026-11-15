@@ -42,7 +42,7 @@ consumer agents extending this with their own work-tracker schema (e.g. enterpri
 
 `track_create` requires it and rejects a missing, multi-line or over-long scope. `track_update` sets or changes it with the same check (`frontmatter.scope`). Tracks created before the scope line existed stay readable; `desk_doctor` reports each one as `track_missing_scope`, and the agent adds the line when it tidies (`interaction-style` section 2).
 
-A track name follows the same rules as a task name (see `start-task`), and in addition a track is never named after a person and never a catch-all such as `misc`, `general` or `inbox`: `track_create` and `track_rename` reject both. A track is created together with its first task; a track with no live tasks is archived (`archive-workflow`).
+A track name follows the same rules as a task name (see `start-task`), and in addition a track is never named after a person and never a catch-all such as `misc`, `general` or `inbox`: `track_create` and `track_update` reject both. A track is created together with its first task; a track with no live tasks is archived (`archive-workflow`).
 
 ## Schema versioning
 

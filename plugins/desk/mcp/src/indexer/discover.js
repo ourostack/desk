@@ -37,7 +37,7 @@ import {
 /**
  * Filenames we always pick up regardless of where they sit in the tree.
  * `merged-task.md` is the card of a duplicate task merged into the task that
- * keeps the job (`task_move` with `into_task`, M4-5). It is indexed with the
+ * keeps the job (`task_update` with `into_task`, M4-5). It is indexed with the
  * kind `merged-task`, never `task`, so its content stays searchable without
  * counting as a live task.
  */

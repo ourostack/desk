@@ -19,12 +19,10 @@ const SURFACE_BEFORE_FEEDBACK_RETIREMENT = [
   "task_create",
   "task_update",
   "task_archive",
-  "task_move",
   "task_focus",
   "task_signoff",
   "track_create",
   "track_update",
-  "track_rename",
   "friction_add",
   "lesson_add",
   "desk_save",
@@ -94,7 +92,7 @@ test("server.callTool routes task_create to the real implementation", async () =
   assert.equal(body.path, path.posix.join("t", "book-flights", "task.md"))
 })
 
-test("server.callTool routes task_move to the real implementation", async () => {
+test("server.callTool routes a task_update move to the real implementation", async () => {
   const root = await mkTempDeskRoot()
   await callTool({
     deskRoot: root,
@@ -103,7 +101,7 @@ test("server.callTool routes task_move to the real implementation", async () => 
   })
   const res = await callTool({
     deskRoot: root,
-    name: "task_move",
+    name: "task_update",
     input: { track: "some-track", slug: "book-flights", to_slug: "book-flights-now" },
   })
   assert.ok(!res.isError)
@@ -111,7 +109,7 @@ test("server.callTool routes task_move to the real implementation", async () => 
   assert.equal(body.to, path.posix.join("some-track", "book-flights-now"))
 })
 
-test("server.callTool routes track_rename to the real implementation", async () => {
+test("server.callTool routes a track_update rename to the real implementation", async () => {
   const root = await mkTempDeskRoot()
   await callTool({
     deskRoot: root,
@@ -120,12 +118,44 @@ test("server.callTool routes track_rename to the real implementation", async () 
   })
   const res = await callTool({
     deskRoot: root,
-    name: "track_rename",
-    input: { track: "old-track", to: "new-track" },
+    name: "track_update",
+    input: { slug: "old-track", rename_to: "new-track" },
   })
   assert.ok(!res.isError)
   const body = parseResult(res)
   assert.equal(body.to, "new-track")
+})
+
+test("server.callTool routes a track_update without a rename to the plain update", async () => {
+  const root = await mkTempDeskRoot()
+  await callTool({
+    deskRoot: root,
+    name: "track_create",
+    input: { slug: "old-track", title: "T", scope: "fixture scope; not anything else" },
+  })
+  const res = await callTool({
+    deskRoot: root,
+    name: "track_update",
+    input: { slug: "old-track", body_append: "More." },
+  })
+  assert.ok(!res.isError)
+  assert.equal(parseResult(res).to, undefined)
+})
+
+test("task_update and track_update refuse a move or rename mixed with other fields, and change nothing", async () => {
+  const root = await mkTempDeskRoot()
+  await callTool({ deskRoot: root, name: "track_create", input: { slug: "old-track", title: "T", scope: "fixture scope; not anything else" } })
+  await callTool({ deskRoot: root, name: "task_create", input: { track: "old-track", slug: "book-flights", title: "T" } })
+  const move = await callTool({ deskRoot: root, name: "task_update", input: { track: "old-track", slug: "book-flights", to_slug: "book-flights-now", note: "x" } })
+  assert.equal(move.isError, true)
+  assert.match(parseResult(move).message, /Send the move alone, then update: `note` cannot go with a move; nothing was changed/)
+  const rename = await callTool({ deskRoot: root, name: "track_update", input: { slug: "old-track", rename_to: "new-track", body_append: "x" } })
+  assert.equal(rename.isError, true)
+  assert.match(parseResult(rename).message, /Send the rename alone, then update: `body_append` cannot go with a rename/)
+  const byHandle = await callTool({ deskRoot: root, name: "track_update", input: { slug: "old-track", handle: "x", rename_to: "new-track" } })
+  assert.match(parseResult(byHandle).message, /pass `handle` or `slug`, not both/)
+  const bare = await callTool({ deskRoot: root, name: "track_update", input: { handle: "track-0000000000", rename_to: "new-track" } })
+  assert.equal(bare.isError, true)
 })
 
 test("server.callTool surfaces tool errors as isError with structured body", async () => {

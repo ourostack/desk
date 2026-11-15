@@ -121,7 +121,7 @@
 // `repoLookup(absolutePath)`, which answers `{ repo: "owner/name" }`,
 // `{ none: true }` (a true none) or `{ unavailable: true }`, and the optional
 // `mergedInto(track, slug)`, the `{ track, slug }` a task with no card of
-// its own was merged into (`task_move into_task`), so a focus held on it
+// its own was merged into (`task_update into_task`), so a focus held on it
 // follows into the task that keeps the job (null, or left out: no merge
 // is followed). The desk root is passed in rather than resolved here: `src/util/paths.js` is
 // outside `src/factory`, so the caller resolves it (with
@@ -537,7 +537,7 @@ export function bindSession({ events, agents, session, deskRoot, deskRemote, per
       const at = msOf(call?.at)
       if (call?.clear === true) focusCalls.push({ agent: 0, at, clear: true })
       else if (isTaskSegment(call?.track) && isTaskSegment(call.slug)) {
-        // A focus on a task later merged into another (`task_move into_task`) follows it into the task that keeps the job, as the held focus
+        // A focus on a task later merged into another (`task_update into_task`) follows it into the task that keeps the job, as the held focus
         // did. A focus on a task whose card is otherwise gone still ends the stretch before it, and binds nothing.
         const keeper = taskOf(call) === null ? mergedInto(call.track, call.slug) : null
         const task = keeper === null ? taskOf(call) : taskOf(keeper)

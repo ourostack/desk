@@ -901,13 +901,13 @@ test("parseCardRenames keeps a rename whose creation time is unchanged or only r
   assert.deepEqual(parseCardRenames("diff --git a/a b/a\nindex 1..2\n"), [], "a block that is not a rename")
 })
 
-test("mergedInto follows a task merged with task_move into_task to the task that keeps the job, after renames on either side", () => {
+test("mergedInto follows a task merged with task_update into_task to the task that keeps the job, after renames on either side", () => {
   const repo = renameRepo("merged-into")
   writeIn(repo, "a/dup/task.md", card(["status: processing", `created: "2026-09-20T10:00:00.000Z"`], "# Duplicate\n\nThe duplicate's own body, long enough for Git to pair it after the merge.\n".repeat(3)))
   writeIn(repo, "a/keeper/task.md", taskCard("merged-into-keeper"))
   commitIn(repo, "2026-09-25T08:00:00Z", "add")
   moveIn(repo, "a/dup", "a/dup-renamed", "2026-09-25T08:30:00Z")
-  // What task_move into_task commits: the folder under the keeper's iterations, the card renamed to merged-task.md with merged_into set.
+  // What task_update into_task commits: the folder under the keeper's iterations, the card renamed to merged-task.md with merged_into set.
   mkdirSync(path.join(repo, "a", "keeper", "_iterations"), { recursive: true })
   gitIn(repo, ["mv", "a/dup-renamed", "a/keeper/_iterations/2026-09-20-dup-renamed"])
   gitIn(repo, ["mv", "a/keeper/_iterations/2026-09-20-dup-renamed/task.md", "a/keeper/_iterations/2026-09-20-dup-renamed/merged-task.md"])
