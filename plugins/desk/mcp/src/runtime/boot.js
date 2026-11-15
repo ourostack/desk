@@ -89,6 +89,7 @@ import { resolveStartupDeskRoot, resolveStartupStateBranch } from "./startup-res
 import { installCardGuard } from "../desk/card-commit-guard.js"
 import { COPILOT_ASK_IN_CHAT_INSTRUCTION, NEW_WORK_INSTRUCTION, NEW_WORK_INSTRUCTION_UNATTENDED, NO_TASK_INSTRUCTION, NO_TASK_INSTRUCTION_TEXT, ROUTE_CHECKED, UNMATCHED_TASK_INSTRUCTION, UNMATCHED_TASK_INSTRUCTION_TEXT, formatBootText, lastSyncedAt, notesInstruction, pushRoute, readAgentsMd, shownRepoPath, syncSummary } from "./boot-text.js"
 import { checkStaleDesk } from "./stale-desk.js"
+import { checkPluginUpdate } from "./plugin-update.js"
 import { checkReleaseAlert } from "./release-alert.js"
 import { planStaleRefresh, startStaleRefresh, startedLine } from "./stale-desk-refresh.js"
 import { deferredToolsHint } from "../util/deferred-tools.js"
@@ -1020,6 +1021,7 @@ function emptyResult({ status, degraded, pending, instructions = [], root, host 
     task: null,
     factory: null,
     stale_desk: null,
+    plugin_update: null,
     other_sessions: null,
     release_alert: null,
     desk_problems: null,
@@ -1359,6 +1361,7 @@ export async function bootOnce({
   personFn = improvementPerson,
   memberFn = resolveMember,
   staleDeskFn = checkStaleDesk,
+  pluginUpdateFn = checkPluginUpdate,
   otherSessionsFn = otherSessions,
   releaseAlertFn = checkReleaseAlert,
   nestedCards = NESTED_CARD_FIELDS,
@@ -1660,6 +1663,8 @@ export async function bootOnce({
   const task = taskQuery === null ? null : namedTaskResult(taskQuery, cards, { root, host, homeDir })
 
   const staleFinding = await staleDesk
+  // Plugins other than Desk's tools load once per app process: when Agency has fetched a newer release of one, say so (the stale-Desk line already covers Desk itself).
+  const pluginUpdate = headless ? null : (() => { try { return pluginUpdateFn({ env, pluginRoot, agentHost: host.agent, homeDir, skip: staleFinding === null ? [] : ["desk"] }) ?? null } catch { return null } })()
   const otherWork = await others
   const releaseFinding = await releaseAlert
   const status = healthWord(degraded)
@@ -1695,6 +1700,7 @@ export async function bootOnce({
     task,
     factory,
     stale_desk: staleFinding,
+    plugin_update: pluginUpdate,
     other_sessions: otherWork,
     release_alert: releaseFinding?.release_alert ?? null,
     desk_problems: releaseFinding?.desk_problems ?? null,

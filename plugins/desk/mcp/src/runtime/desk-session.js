@@ -13,6 +13,7 @@
 
 import { statSync, unwatchFile, watchFile, promises as headFileSystem, constants as headConstants } from "node:fs"
 import { createHash } from "node:crypto"
+import * as os from "node:os"
 import * as path from "node:path"
 
 import { validateAdmissionAuthority, verifyAdmissionAuthority } from "../activation/admit.js"
@@ -25,6 +26,8 @@ import { appendRepairLog, createLastStartWriter, lastStartPath } from "./last-st
 import { diagnosticFormat, previewRuntimeSnapshot } from "./preview-snapshot.js"
 import { compactStatus } from "./status-compact.js"
 import { runtimeIdentity } from "./runtime-identity.js"
+import { checkPluginUpdate } from "./plugin-update.js"
+import { deskPluginRoot } from "../package-metadata.js"
 import { GATE_WAIT_MS } from "./gate-wait.js"
 import { createStaleCardLead, withStaleCardLead } from "./stale-card-lead.js"
 import { inspectStateBranch, inspectWriteBranch, writeBranchProblem, repairStateBranch, runGit, stateBranchProblem, isStateBranchName, STATE_BRANCH_REPAIR } from "./state-branch.js"
@@ -178,6 +181,7 @@ export function createDeskSession(deps) {
     env = process.env,
     headIO = headFileSystem,
     runtimeRefresher = null,
+    pluginUpdateFn = checkPluginUpdate,
     answerFactoryConsent = async (request) => (await import("../factory/consent-answer.js")).answerFactoryConsent(request),
   } = deps
   const context = { pendingRepairs: [], exceptions: [], launcher, phase: null, search: null }
@@ -985,9 +989,11 @@ export function createDeskSession(deps) {
     if (context.search) payload = { ...payload, search: context.search.searchStatus() }
     const admitted = withAdmission(payload, stamped ?? statusSnapshot())
     // Who is serving comes from this process, never from the slow runtime status, so every answer carries it; only the fields that status fills can be pending, and the answer names them.
+    const pluginUpdate = pluginUpdateFn({ env, pluginRoot: deskPluginRoot(env), homeDir: os.homedir(), skip: [] }) ?? null
     const full = {
       ...admitted,
       runtime: { ...admitted.runtime, ...servingIdentity() },
+      ...(pluginUpdate === null ? {} : { plugin_update: pluginUpdate }),
       ...(payload.detail_pending === true ? { pending: PENDING_STATUS_FIELDS.filter((field) => payload[field] === undefined) } : {}),
     }
     // Compact unless asked: the full payload is tens of KB, and an agent only wants "ready or not, and what do I do".
