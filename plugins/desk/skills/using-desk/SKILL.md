@@ -51,9 +51,9 @@ Use `desk:start-task`, then `desk:using-superpowers-with-desk`. Use `superpowers
 
 Before the first write, verify the checkout matches the task's recorded source. In a code repository, changes reach the channel, the branch consumers track, through the normal flow: branch from it in a worktree and merge back through a pull request. Never pin a commit; a hash is evidence only. `git-hygiene` holds the procedure, desk commits included.
 
-## Durable context and attribution
+## Durable context
 
-Durable state lives on `main` in the desk, never in a host's memory or folders (`interaction-style` "Host commands that duplicate the desk"). Disable host memory (`store_memory`/`vote_memory`) in the host's settings. Secrets, credentials, raw private transcripts and customer data stay outside Git (`session-resumption`). One outcome is one task, declared with task_focus (`task-lifecycle`). Never add AI attribution like `Co-Authored-By` trailers (`git-hygiene`).
+Durable state lives on `main` in the desk, never in a host's memory or folders (`interaction-style` "Host commands that duplicate the desk"). Disable host memory (`store_memory`/`vote_memory`) in the host's settings. Secrets, credentials, raw private transcripts and customer data stay outside Git (`session-resumption`). One outcome is one task, declared with task_focus (`task-lifecycle`).
 
 ## Child agents
 

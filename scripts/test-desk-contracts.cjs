@@ -255,7 +255,7 @@ const ownedRules = [
   [/tidy up my desk/iu, "interaction-style"],
   [/Cite every factual claim/u, "using-desk and evidence-discipline"],
   [/Own the stack/u, "using-desk"],
-  [/Commit \+ push/u, "using-desk \"Durable context and attribution\""],
+  [/Commit \+ push/u, "using-desk \"Durable context\""],
   [/Long-lived work, bounded processes/u, "session-resumption"],
   [/Delivery has an owner|cleanup_pending/u, "task-lifecycle"],
   [/Friction is about how worker operated|Mark friction items landed/u, "friction-management"],
