@@ -1,9 +1,0 @@
-Running engineering-v2-kernel: 3 case(s); subject gpt-6.1-sol, judge claude-opus-5.5
-  installing the unicode-slug fixture's frozen dependencies
-  v2-primary-source-status: the subject produced no final response; running the case once more
-  v2-new-work-alignment: 5/5 checks passed
-  v2-approved-local-delivery: 8/8 checks passed
-  v2-primary-source-status: 4/4 checks passed
-engineering-v2-kernel: 17/17 check(s) passed across 3 case(s)
-Recorded evals/receipts/engineering-v2-kernel.json; commit it with the fingerprint change.
-done 0
