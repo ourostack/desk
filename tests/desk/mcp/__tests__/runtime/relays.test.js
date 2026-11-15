@@ -24,6 +24,10 @@ const DISPATCH = {
   watch: { repo: "o/data", workflow: "data.yml", branch: "main", conclusion: "success" },
   fire: { repo: "o/pages", workflow: "pages.yml", inputs: { cit_commit: "{{run.head_sha}}", delivery_id: "relay-{{run.id}}" } },
 }
+/** The run-by-run cases below fire on the poll that sees a head, so they settle at once; the default settle has its own tests. */
+const IMMEDIATE = { ...DISPATCH, settleSeconds: 0 }
+const HEAD_A = "1".repeat(40)
+const HEAD_B = "2".repeat(40)
 const MERGE = {
   name: "pages merge",
   type: "merge-when-green",
@@ -128,8 +132,12 @@ test("a relay config is validated: a bad entry is named, never dropped", () => {
   bad({ ...mergeless, requireMainWorkflowGreen: 5 }, /requireMainWorkflowGreen is not a workflow file name/u)
   assert.throws(() => parseRelayConfig("null", "relays.json"), /has no "relays" array/u)
   assert.throws(() => parseRelayConfig(JSON.stringify({ relays: [DISPATCH, DISPATCH] }), "relays.json"), /reuses the name data to pages/u)
+  bad({ ...DISPATCH, settleSeconds: -1 }, /\.settleSeconds is not a whole number of seconds, from 0 to 3600/u)
+  bad({ ...DISPATCH, settleSeconds: 1.5 }, /\.settleSeconds is not a whole number/u)
+  bad({ ...DISPATCH, settleSeconds: 3601 }, /\.settleSeconds is not a whole number/u)
   const [loose, full] = parseRelayConfig(JSON.stringify({ relays: [{ name: " x ", type: "dispatch", account: " me ", everySeconds: 45, watch: { repo: "o/a", workflow: " a.yml " }, fire: { repo: "o/b", workflow: " b.yml ", ref: " dev " } }, { ...mergeless, label: " go ", method: "rebase", deleteBranch: false, requireMainWorkflowGreen: " ci.yml " }] }), "relays.json")
-  assert.deepEqual(loose, { name: "x", type: "dispatch", account: "me", everySeconds: 45, watch: { repo: "o/a", workflow: "a.yml", conclusion: "success" }, fire: { repo: "o/b", workflow: "b.yml", ref: "dev" } })
+  assert.deepEqual(loose, { name: "x", type: "dispatch", account: "me", everySeconds: 45, watch: { repo: "o/a", workflow: "a.yml", conclusion: "success" }, fire: { repo: "o/b", workflow: "b.yml", ref: "dev" }, settleSeconds: 60 })
+  assert.equal(parseRelayConfig(JSON.stringify({ relays: [{ ...DISPATCH, settleSeconds: 0 }] }), "relays.json")[0].settleSeconds, 0)
   assert.deepEqual(full, { name: "m", type: "merge-when-green", everySeconds: 30, repo: "o/r", label: "go", method: "rebase", deleteBranch: false, requiredChecks: ["ci"], requireMainWorkflowGreen: "ci.yml" })
   assert.throws(() => parseRelayConfig("{", "relays.json"), /is not valid JSON/u)
   const [merge] = parseRelayConfig(JSON.stringify({ relays: [mergeless] }), "relays.json")
@@ -146,7 +154,7 @@ test("a missing relays file is no relays, and an unreadable one is an error that
 })
 
 test("dispatch: the first poll only records the runs that already succeeded, then each new run fires once", async () => {
-  const w = await setup([DISPATCH])
+  const w = await setup([IMMEDIATE])
   let runs = [run(1), run(2)]
   w.world.on("GET", runsRoute, () => ({ workflow_runs: runs }))
   w.world.on("GET", /\/repos\/o\/pages$/u, () => ({ default_branch: "trunk" }))
@@ -170,7 +178,7 @@ test("dispatch: the first poll only records the runs that already succeeded, the
 })
 
 test("dispatch: a failed run never fires, and runs that pile up between polls fire once for the newest", async () => {
-  const w = await setup([{ ...DISPATCH, fire: { repo: "o/pages", event: "data-ready" } }])
+  const w = await setup([{ ...IMMEDIATE, fire: { repo: "o/pages", event: "data-ready" } }])
   let runs = [run(1)]
   w.world.on("GET", runsRoute, () => ({ workflow_runs: runs }))
   await w.poll(NOW)
@@ -186,7 +194,7 @@ test("dispatch: a failed run never fires, and runs that pile up between polls fi
 })
 
 test("dispatch: a 304 costs nothing and changes nothing, across a restart too, and a new run after it still fires", async () => {
-  const w = await setup([DISPATCH])
+  const w = await setup([IMMEDIATE])
   let runs = [run(1)]
   w.world.on("GET", runsRoute, () => ({ workflow_runs: runs }))
   w.world.on("GET", /\/repos\/o\/pages$/u, () => ({ default_branch: "main" }))
@@ -205,7 +213,7 @@ test("dispatch: a 304 costs nothing and changes nothing, across a restart too, a
 })
 
 test("dispatch: the handled runs survive a restart, so nothing fires again, and a refused fire is kept for a retry", async () => {
-  const w = await setup([DISPATCH])
+  const w = await setup([IMMEDIATE])
   const runs = [run(1)]
   w.world.on("GET", runsRoute, () => ({ workflow_runs: runs }))
   w.world.on("GET", /\/repos\/o\/pages$/u, () => ({ default_branch: "main" }))
@@ -224,11 +232,97 @@ test("dispatch: the handled runs survive a restart, so nothing fires again, and 
   assert.equal(w.world.writes.length, 2)
   assert.deepEqual((await w.poll(NOW + 8 * MIN)).errors, [])
   assert.equal(w.world.writes.length, 2)
-  const again = await setup([DISPATCH])
+  const again = await setup([IMMEDIATE])
   writeFileSync(again.paths.state, readFileSync(w.paths.state))
   again.world.on("GET", runsRoute, () => ({ workflow_runs: runs }))
   await again.poll(NOW + 9 * MIN)
   assert.equal(again.world.writes.length, 0, "a fresh process with the saved state does not fire the handled run")
+})
+
+test("dispatch: the same head succeeding five times fires once, for that head, and later successes on it never fire", async () => {
+  const w = await setup([DISPATCH])
+  let runs = [run(1)]
+  w.world.on("GET", runsRoute, () => ({ workflow_runs: runs }))
+  w.world.on("GET", /\/repos\/o\/pages$/u, () => ({ default_branch: "main" }))
+  await w.poll(NOW)
+  for (const id of [2, 3, 4, 5, 6]) {
+    runs = [run(id, { head_sha: HEAD_A }), ...runs]
+    await w.poll(NOW + (id - 1) * 30 * SECOND)
+  }
+  assert.equal(w.world.writes.length, 1, "the head fires once, after its settle, and not on each success")
+  assert.equal(w.world.writes[0].body.inputs.cit_commit, HEAD_A)
+  const state = w.state(DISPATCH.name)
+  assert.deepEqual({ runId: state.lastFire.runId, headSha: state.lastFire.headSha, runs: state.lastFire.runs }, { runId: 4, headSha: HEAD_A, runs: 3 }, "it names the newest run on the head, and counts the successes it covers")
+  const [relay] = readRelayConfig(w.paths.config)
+  const [line] = relayStatusLines([relay], { [relay.name]: state }, NOW + 150 * SECOND)
+  assert.match(line, /last fired 1m ago for run 4 on head 1111111 -> o\/pages pages\.yml, settle 60s, waiting on/u)
+  assert.equal(whyRelay([relay], { [relay.name]: state }, relay.name).lastFiredHead, HEAD_A)
+})
+
+test("dispatch: two heads 20 seconds apart fire once, for the newer, once the newer one has settled", async () => {
+  const w = await setup([{ ...DISPATCH, everySeconds: 10 }])
+  let runs = [run(1)]
+  w.world.on("GET", runsRoute, () => ({ workflow_runs: runs }))
+  w.world.on("GET", /\/repos\/o\/pages$/u, () => ({ default_branch: "main" }))
+  await w.poll(NOW)
+  for (let at = 10; at <= 90; at += 10) {
+    if (at === 10) runs = [run(2, { head_sha: HEAD_A }), ...runs]
+    if (at === 30) runs = [run(3, { head_sha: HEAD_B }), ...runs]
+    await w.poll(NOW + at * SECOND)
+    assert.equal(w.world.writes.length, at === 90 ? 1 : 0, `at ${at}s`)
+    if (at === 70) {
+      const [relay] = readRelayConfig(w.paths.config)
+      const states = { [relay.name]: w.state(relay.name) }
+      assert.match(relayStatusLines([relay], states, NOW + at * SECOND)[0], /head 2222222 \(run 3\) pending, settle 60s, waiting on 60s with no newer/u)
+      assert.deepEqual([whyRelay([relay], states, relay.name).pending.run.id, whyRelay([relay], states, relay.name).lastFiredHead], [3, null])
+    }
+  }
+  assert.deepEqual(w.world.writes[0].body.inputs, { cit_commit: HEAD_B, delivery_id: "relay-3" }, "the older head never fires")
+  assert.equal(w.state(DISPATCH.name).lastFire.runs, 2)
+  assert.equal(w.state(DISPATCH.name).pending, undefined)
+})
+
+test("dispatch: an older run that is listed late does not displace the newer head that is pending", async () => {
+  const w = await setup([{ ...DISPATCH, everySeconds: 10 }])
+  let runs = [run(1)]
+  w.world.on("GET", runsRoute, () => ({ workflow_runs: runs }))
+  w.world.on("GET", /\/repos\/o\/pages$/u, () => ({ default_branch: "main" }))
+  await w.poll(NOW)
+  runs = [run(3, { head_sha: HEAD_B }), ...runs]
+  await w.poll(NOW + 30 * SECOND)
+  runs = [run(2, { head_sha: HEAD_A }), ...runs]
+  await w.poll(NOW + 40 * SECOND)
+  await w.poll(NOW + 60 * SECOND)
+  assert.equal(w.world.writes.length, 0, "the newer head keeps its own quiet period")
+  await w.poll(NOW + 90 * SECOND)
+  assert.deepEqual(w.world.writes.map((write) => write.body.inputs), [{ cit_commit: HEAD_B, delivery_id: "relay-3" }])
+})
+
+test("dispatch: a restart neither refires a fired head nor loses a fire that is still settling", async () => {
+  const mocks = (world, current) => {
+    world.on("GET", runsRoute, () => ({ workflow_runs: current() }))
+    world.on("GET", /\/repos\/o\/pages$/u, () => ({ default_branch: "main" }))
+  }
+  const w = await setup([DISPATCH])
+  let runs = [run(1)]
+  mocks(w.world, () => runs)
+  await w.poll(NOW)
+  runs = [run(2, { head_sha: HEAD_A }), ...runs]
+  await w.poll(NOW + 30 * SECOND)
+  const restarted = await setup([DISPATCH])
+  writeFileSync(restarted.paths.state, readFileSync(w.paths.state))
+  mocks(restarted.world, () => runs)
+  await restarted.poll(NOW + 60 * SECOND)
+  assert.equal(restarted.world.writes.length, 0, "the pending fire is still settling after the restart")
+  await restarted.poll(NOW + 90 * SECOND)
+  assert.equal(restarted.world.writes.length, 1, "and it fires once the settle has passed")
+  const again = await setup([DISPATCH])
+  writeFileSync(again.paths.state, readFileSync(restarted.paths.state))
+  mocks(again.world, () => runs)
+  await again.poll(NOW + 3 * MIN)
+  await again.poll(NOW + 4 * MIN)
+  assert.equal(again.world.writes.length, 0, "a fired head does not fire again after a restart")
+  assert.equal(again.state(DISPATCH.name).lastFire.headSha, HEAD_A)
 })
 
 test("a relay polls about every 30 seconds, never twice as often, and pauses when the quota is nearly spent", async () => {
@@ -289,6 +383,16 @@ test("waitingOnChecks with skippedPasses: skipped and neutral pass, while every 
   assert.deepEqual(verdict([check("typecheck", "skipped"), check("shard-1", "skipped"), check("shard-2", "failure")]), ["shard-*: 1 of 2 not green (shard-2 failure)"])
 })
 
+test("waitingOnChecks: a matrix job skipped under its unexpanded template name satisfies the pattern that starts like it, as a skipped check", () => {
+  const TEMPLATE = "npm test (${{ matrix.os }}, ${{ matrix.shard }}/${{ strategy.job-total }})"
+  const required = ["npm test (ubuntu-latest, *)"]
+  assert.deepEqual(waitingOnChecks(required, [check(TEMPLATE, "skipped")], true), [])
+  assert.deepEqual(waitingOnChecks(required, [check(TEMPLATE, "skipped")]), [`npm test (ubuntu-latest, *): ${TEMPLATE} skipped`], "without skippedPasses a skipped check still holds")
+  assert.deepEqual(waitingOnChecks(required, [check(TEMPLATE, "failure")], true), ["npm test (ubuntu-latest, *): not started"], "only a skipped template matches, so a failed one still holds")
+  assert.deepEqual(waitingOnChecks(required, [check(TEMPLATE, "success")], true), ["npm test (ubuntu-latest, *): not started"], "only a skipped template matches")
+  assert.deepEqual(waitingOnChecks(["lint (*)"], [check(TEMPLATE, "skipped")], true), ["lint (*): not started"], "a different prefix does not match")
+})
+
 test("skippedPasses is true or false on a merge relay, and anything else is named", () => {
   const merge = (extra) => parseRelayConfig(JSON.stringify({ relays: [{ ...MERGE, ...extra }] }), "relays.json")[0]
   assert.equal(merge({ skippedPasses: true }).skippedPasses, true)
@@ -321,6 +425,19 @@ test("merge-when-green: with every check green and main green it squash-merges a
   assert.equal(w.state("pages merge").lastMerge.number, 7)
   assert.match(relayStatusLines([MERGE], { "pages merge": w.state("pages merge") }, NOW)[0], /last merged #7/u)
   assert.equal(JSON.stringify(w.world.writes).match(/admin|bypass|auto_merge/iu), null, "no bypass of any kind is ever sent")
+})
+
+test("merge-when-green: a matrix job skipped under its template name lets skippedPasses merge, and holds the merge without it", async () => {
+  const TEMPLATE = "npm test (${{ matrix.os }}, ${{ matrix.shard }}/${{ strategy.job-total }})"
+  const passing = await setup([{ ...MERGE, skippedPasses: true }])
+  mergeWorld(passing.world, { checks: [check("typecheck"), check(TEMPLATE, "skipped")] })
+  assert.deepEqual((await passing.poll()).errors, [])
+  assert.deepEqual(prWrites(passing.world).map((write) => write.method), ["PUT"])
+
+  const held = await setup([MERGE])
+  mergeWorld(held.world, { checks: [check("typecheck"), check(TEMPLATE, "skipped")] })
+  await held.poll()
+  assert.deepEqual(prWrites(held.world), [])
 })
 
 test("merge-when-green: it never merges while a required check is missing, pending or failed, and keeps one status comment it edits", async () => {
@@ -494,7 +611,7 @@ test("drains status shows each relay, and why answers for a relay name and for a
   assert.equal(polled.code, 0, polled.err)
   assert.deepEqual(JSON.parse(polled.out).wakes, [])
   const status = JSON.parse((await cli(["status"])).out).status.join("\n")
-  assert.match(status, /relay data to pages \(dispatch\) o\/data data\.yml -> o\/pages: polled 0s ago, never fired, waiting on the next successful data\.yml run on main/u)
+  assert.match(status, /relay data to pages \(dispatch\) o\/data data\.yml -> o\/pages: polled 0s ago, never fired, settle 60s, waiting on the next successful data\.yml run on main/u)
   assert.match(status, /relay pages merge \(merge-when-green\) o\/pages: polled 0s ago, never merged, #7 waiting on typecheck: typecheck queued/u)
   const byName = JSON.parse((await cli(["why", "--relay", "pages merge"])).out)
   assert.equal(byName.type, "merge-when-green")
@@ -535,7 +652,8 @@ test("a relay that cannot reach GitHub records why, still prints its status, and
 test("relay status lines: never polled, hours since the last poll, and a relay whose state is gone", () => {
   assert.deepEqual(relayStatusLines([DISPATCH], {}, NOW), ["relay data to pages (dispatch): not polled yet"])
   const states = { "data to pages": { lastPollAt: new Date(NOW - 3 * 3_600_000).toISOString(), waitingOn: "the next one", lastFire: { at: new Date(NOW - 2 * MIN).toISOString(), runId: 4, target: "o/pages pages.yml" } } }
-  assert.match(relayStatusLines([DISPATCH], states, NOW)[0], /polled 3h ago, last fired 2m ago for run 4 -> o\/pages pages\.yml, waiting on the next one$/u)
+  const [relay] = parseRelayConfig(JSON.stringify({ relays: [DISPATCH] }), "relays.json")
+  assert.match(relayStatusLines([relay], states, NOW)[0], /polled 3h ago, last fired 2m ago for run 4 -> o\/pages pages\.yml, settle 60s, waiting on the next one$/u)
   assert.equal(whyRelay([MERGE], {}, "pages merge").waiting, null)
   assert.match(whyRelay([MERGE], {}, "other").note, /no relay is configured as other/u)
   assert.deepEqual(relaysOfPull([MERGE], {}, "o/pages", 7), [])
@@ -543,8 +661,8 @@ test("relay status lines: never polled, hours since the last poll, and a relay w
 })
 
 test("dispatch: a fire with a ref and no inputs, and an event GitHub refuses, are both reported exactly", async () => {
-  const bare = { name: "bare", type: "dispatch", watch: { repo: "o/data", workflow: "data.yml" }, fire: { repo: "o/pages", workflow: "pages.yml", ref: "dev" } }
-  const event = { ...DISPATCH, name: "event", fire: { repo: "o/pages", event: "data-ready" } }
+  const bare = { name: "bare", type: "dispatch", watch: { repo: "o/data", workflow: "data.yml" }, fire: { repo: "o/pages", workflow: "pages.yml", ref: "dev" }, settleSeconds: 0 }
+  const event = { ...IMMEDIATE, name: "event", fire: { repo: "o/pages", event: "data-ready" } }
   const w = await setup([bare, event])
   let runs = [run(1)]
   w.world.on("GET", /data\.yml\/runs\?status=success&per_page=30&exclude_pull_requests=true$/u, () => ({ workflow_runs: runs }))

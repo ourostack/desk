@@ -29,8 +29,9 @@ Every relay has `name` (unique), `type`, and optionally `account` and `everySeco
 - `watch.workflow` is the workflow's file name. `branch` is optional. `conclusion` can only be `"success"`.
 - `fire` has `workflow` (a `workflow_dispatch` target, run on `ref`, default the repository's default branch, with optional `inputs`) or `event` (a `repository_dispatch` type, sent with `relay`, `run_id`, `run_url`, `head_sha` and `head_branch` in `client_payload`).
 - `inputs` values may use `{{run.id}}`, `{{run.head_sha}}`, `{{run.head_branch}}`, `{{run.html_url}}` and `{{run.run_number}}` from the run that triggered the fire.
+- `settleSeconds` (a whole number from 0 to 3600, default 60) is how long the newest successful head must stay the newest before the relay fires for it. `0` fires on the poll that sees the head.
 
-The first poll only records the runs that already succeeded. After that, a new successful run fires once, remembered by run id in `relays-state.json`, so a restart never fires it again. Runs that succeeded between two polls fire once, for the newest. A failed or cancelled run never fires. If GitHub refuses the fire, the run stays unhandled and the relay tries again after five minutes.
+The first poll only records the runs that already succeeded. After that the relay fires at most once per watched `head_sha`, and it never fires again for a head it has fired for. A successful run on a head that has not fired yet starts a pending fire for that head. A newer head that succeeds within `settleSeconds` replaces it and starts the quiet period again, and another run on the same head only renames the run. Once the quiet period passes, the relay fires once for the newest head. The last fired head, the pending head and the run ids are kept in `relays-state.json`, so a restart neither fires a head twice nor drops a fire that is still settling. A failed or cancelled run never fires. If GitHub refuses the fire, the pending fire waits and the relay tries again after five minutes.
 
 ### `merge-when-green`
 
@@ -41,7 +42,7 @@ The first poll only records the runs that already succeeded. After that, a new s
 ```
 
 - `label`, `method` (`squash`, `merge` or `rebase`) and `deleteBranch` default to `merge-when-green`, `squash` and `true`.
-- `requiredChecks` is a non-empty list of check-run names; `*` matches any text. A pattern needs at least one match, and the newest attempt of every match must have completed with `success`: GitHub keeps a rerun's earlier attempts on the same head, and only the newest counts, as branch rules judge it. A missing, queued, skipped or failed check keeps the pull request waiting. Name a check exactly when its count matters.
+- `requiredChecks` is a non-empty list of check-run names; `*` matches any text. A pattern needs at least one match, and the newest attempt of every match must have completed with `success`: GitHub keeps a rerun's earlier attempts on the same head, and only the newest counts, as branch rules judge it. A missing, queued, skipped or failed check keeps the pull request waiting. Name a check exactly when its count matters. GitHub posts a matrix job that it skipped before the matrix expanded under its unexpanded name, such as `npm test (${{ matrix.os }}, ${{ matrix.shard }}/${{ strategy.job-total }})`. A skipped check like that satisfies each required pattern that starts with the text before its first `${{`, here `npm test (`, and it counts as skipped, so it passes only with `skippedPasses`.
 - `skippedPasses` (`true` or `false`, default off) lets a match that completed `skipped` or `neutral` count as green. Use it for a check that a repository's own path filters skip on a change that does not touch its area. `failure`, `cancelled`, `timed_out`, `action_required` and any other conclusion, a check still running, and a missing check keep the pull request waiting either way.
 - `requireMainWorkflowGreen` names a workflow file; the latest completed run of it on the repository's default branch must be `success`, whichever branch the pull request targets. Queued and in-progress runs are not judged, so a busy branch does not hold a merge back; the status and `why` name the run that was judged.
 
@@ -53,7 +54,7 @@ Only check runs are read, so a check that reports as a commit status never count
 
 ## Visibility
 
-`status` and `relays status` print one line per relay: when it last polled, its last fire or merge, and what it is waiting on (the next successful run, or each labelled pull request with the checks it lacks), plus `held:` when the quota paused it and `last error:` when the last poll failed. `why` answers for one relay (`--relay <name>`) or one pull request.
+`status` and `relays status` print one line per relay: when it last polled, its last fire or merge, and what it is waiting on (the next successful run, or each labelled pull request with the checks it lacks), plus `held:` when the quota paused it and `last error:` when the last poll failed. A dispatch line also names the head it last fired for and any pending head with its settle. `why` answers for one relay (`--relay <name>`, which gives a dispatch's `lastFiredHead`, `pending` and `settleSeconds`) or one pull request.
 
 ## Quota
 
