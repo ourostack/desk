@@ -16,7 +16,7 @@ const repoRoot = path.resolve(here, "../../../../..")
 
 // Strings the extractor reads as errors that are not: they stay in the manifest as texts, which are still checked for
 // scripts, but are not held to "lead with the fix". A carrier wraps a message whose call sites are checked themselves.
-const NOT_ERRORS_AT_MOST = 158
+const NOT_ERRORS_AT_MOST = 159
 const NOT_ERRORS = {
   "plugins/desk/hooks/copilot-session-start.cjs#desk-memory-use-the-supported": "a hook's stderr line",
   "plugins/desk/hooks/lib/copilot-intake-context.cjs#check-desk-s-intake-context": "a hook's stderr line",
@@ -56,6 +56,7 @@ const NOT_ERRORS = {
   "plugins/desk/mcp/src/runtime/pending-migrations.js#migrations-js-name-a-migration": "a command-line usage line: the exit status is its code",
   "plugins/desk/mcp/src/runtime/session-sync.js#session-sync-js-pass-root": "a command-line usage line: the exit status is its code",
   "plugins/desk/mcp/src/runtime/deliver.js#fix-desk-publication-json-through": "a result whose `reason` is its stable code",
+  "plugins/desk/mcp/src/runtime/deliver.js#run-the-push-again-nothing": "a result whose `reason` is its stable code",
   "plugins/desk/mcp/src/runtime/state-branch.js#run-it-again-head-moved": "a result whose `reason` is its stable code",
   "plugins/desk/mcp/src/runtime/deliver.js#check-the-replay-worktree-s": "an internal result the caller records as the replay_failed reason",
   "plugins/desk/mcp/src/runtime/desk-session.js#start-the-session-from-the": "its code is the exported DESK_ROOT_UNAVAILABLE constant callers compare with; renaming it would change behavior",

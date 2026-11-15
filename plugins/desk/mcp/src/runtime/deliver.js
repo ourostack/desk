@@ -32,6 +32,8 @@ const GIT_TIMEOUT_MS = 10_000
 const NETWORK_TIMEOUT_MS = 60_000
 const CHECKOUT_TIMEOUT_MS = 120_000
 const PUSH_ATTEMPTS = 3
+// A publication whose base moved during its checks is rebuilt and qualified again this many times before it is reported.
+const REQUALIFY_ATTEMPTS = 4
 
 // `GIT_SSH_COMMAND` gets `-o BatchMode=yes` so an SSH remote can never prompt; a caller's own command is extended.
 export function gitEnv() {
@@ -40,13 +42,27 @@ export function gitEnv() {
   return { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_SSH_COMMAND: sshCommand, GIT_EDITOR: "true", GIT_LFS_SKIP_SMUDGE: "1" }
 }
 
+// Reads of the local repository: a read the clock cut off is asked again with more room, because on a loaded machine its answer is late, not missing. Anything that writes or reaches the network is never asked twice.
+const LOCAL_READS = new Set(["rev-parse", "remote", "config", "merge-base", "rev-list", "symbolic-ref", "ls-tree", "show", "cat-file"])
+
+// The Git subcommand of an argument list that may open with `-c key=value` pairs.
+function subcommand(args) {
+  let at = 0
+  while (args[at] === "-c") at += 2
+  return args[at]
+}
+
 function runner(spawnGit, cwd) {
   return (args, timeout = GIT_TIMEOUT_MS) => {
     const env = remoteIdentityEnv({ root: cwd, args, env: gitEnv(), spawn: spawnGit })
-    const result = spawnGit("git", ["-C", cwd, ...args], { windowsHide: true, encoding: "utf8", timeout, env, maxBuffer: 64 * 1024 * 1024 })
+    const once = (limit) => spawnGit("git", ["-C", cwd, ...args], { windowsHide: true, encoding: "utf8", timeout: limit, env, maxBuffer: 64 * 1024 * 1024 })
+    let result = once(timeout)
+    if (result.status === null && LOCAL_READS.has(subcommand(args))) result = once(timeout * 3)
     return { status: result.status, stdout: typeof result.stdout === "string" ? result.stdout : "", stderr: typeof result.stderr === "string" ? result.stderr : "" }
   }
 }
+
+const OBJECT_ID = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/u
 
 const lines = (text) => text.split("\n").map((line) => line.trim()).filter((line) => line !== "")
 
@@ -269,7 +285,12 @@ function upstreamOf(git) {
   const branch = git(["symbolic-ref", "-q", "--short", "HEAD"]).stdout.trim()
   const remote = git(["config", `branch.${branch}.remote`]).stdout.trim()
   const merge = git(["config", `branch.${branch}.merge`]).stdout.trim()
-  const tracking = git(["rev-parse", "--symbolic-full-name", "@{u}"]).stdout.trim()
+  let tracking = git(["rev-parse", "--symbolic-full-name", "--verify", "--quiet", "@{u}"]).stdout.trim()
+  // `@{u}` fails when the remote's fetch rule does not map the branch to a tracking ref, though the branch's own settings name one that exists.
+  if (tracking === "" && remote !== "" && remote !== "." && merge.startsWith("refs/heads/")) {
+    const named = `refs/remotes/${remote}/${merge.slice("refs/heads/".length)}`
+    if (git(["rev-parse", "--verify", "-q", named]).status === 0) tracking = named
+  }
   return branch === "" || remote === "" || merge === "" || tracking === "" ? null : { branch, remote, merge, tracking }
 }
 
@@ -277,6 +298,23 @@ function failure(result, reason) {
   const cause = classifyPullFailure({ stderr: result.stderr, timedOut: result.status === null })
   const error = result.stderr.split("\n").find((line) => line.trim() !== "")?.trim() ?? ""
   return { state: "failed", reason: NOT_A_DESK_DEFECT.has(cause) ? cause : reason, error, delivered: [], skipped: [] }
+}
+
+/**
+ * Brings a checkout that is only behind its upstream (everything it holds is already there) up to the upstream's last
+ * fetched commit, the way `git checkout` would: a file another session changed, or an untracked file in the way, stops the
+ * move instead of being overwritten. Returns `{ state: "current" | "caught_up" | "behind" | "diverged" | "other_branch" | "no_upstream", ... }`.
+ * Local only: it never fetches, and `diverged` means the checkout holds commits the upstream does not, which it leaves alone.
+ */
+export function catchUpBehind({ root, spawnGit = spawnSync }) {
+  const git = runner(spawnGit, root)
+  const upstream = upstreamOf(git)
+  if (upstream === null) return { state: "no_upstream" }
+  const head = git(["rev-parse", "HEAD"]).stdout.trim()
+  const target = git(["rev-parse", "--verify", "--quiet", `${upstream.tracking}^{commit}`]).stdout.trim()
+  if (head === target) return { state: "current" }
+  if (git(["merge-base", "--is-ancestor", head, target]).status !== 0) return { state: "diverged" }
+  return followsUpstream({ git, upstream, head, target })
 }
 
 /**
@@ -304,8 +342,14 @@ export function deliver({ root, env = process.env, spawnGit = spawnSync, deliver
       return { state: "failed", reason: "publication_blocked", error: `Fix .desk/publication.json through a PR, then run ${publicationRecovery(root)}: ${error.message}`, delivered: [], skipped: [] }
     }
     const fastForward = git(["merge-base", "--is-ancestor", onto, head]).status === 0
+    const cleanup = () => { if (!fastForward) removeWorktree(git, paths) }
     const built = fastForward ? { head, replayed: commits, skipped: [] } : replay({ git, spawnGit, paths, onto, commits, prefix })
     if (built.error !== undefined) return { state: "failed", reason: "replay_failed", error: built.error.trim(), delivered: [], skipped: [] }
+    // A built head Git could not read back (the call was cut off) is no commit to push: nothing is published from it, and the next push retries.
+    if (!OBJECT_ID.test(built.head)) {
+      cleanup()
+      return { state: "failed", reason: "deadline", error: "Run the push again: nothing was pushed because Git's read of the commit built for publication was cut off by its time limit", delivered: [], skipped: [] }
+    }
     let pushed, publication, target = built.head
     if (policy !== null && built.head !== onto) {
       try {
@@ -314,12 +358,17 @@ export function deliver({ root, env = process.env, spawnGit = spawnSync, deliver
         publication = published.receipt
         pushed = { status: 0 }
       } catch (error) {
-        if (!fastForward) removeWorktree(git, paths)
+        cleanup()
+        // The base moved while the checks ran: the candidate is rebuilt on the new base and qualified again, here, not handed back. The abandoned pull request is closed.
+        if (error.requalify === true && attempt < REQUALIFY_ATTEMPTS) {
+          spawnGit("gh", ["pr", "close", error.publication.url, "--delete-branch", "--comment", "The base moved while its checks ran; Desk rebuilt the change on the new base and opened a fresh pull request."], { cwd: root, encoding: "utf8", windowsHide: true, timeout: 60_000, env: process.env })
+          continue
+        }
         const recovery = error.message.includes("Fix:") ? "" : `. Fix: run ${publicationRecovery(root)}`
         return { state: "failed", reason: "publication_blocked", error: error.message + recovery, publication: error.publication ?? null, delivered: [], skipped: [] }
       }
     } else pushed = built.head === onto ? { status: 0 } : git(["push", "--quiet", upstream.remote, `${built.head}:${upstream.merge}`], NETWORK_TIMEOUT_MS)
-    if (!fastForward) removeWorktree(git, paths)
+    cleanup()
     if (pushed.status === 0) {
       git(["update-ref", upstream.tracking, target])
       const checkout = built.skipped.length === 0 ? followsUpstream({ git, upstream, head, target }) : { state: "behind", reason: "skipped_commits" }

@@ -19,6 +19,7 @@ import { redactCredentialLikeText } from "../util/redact.js"
 import { makeSessionLabelProposal } from "../runtime/session-label.js"
 import { archiveDueAnswer } from "./task-archive-due.js"
 import { SHELF_FILE, readShelf, shelfForTask } from "../runtime/lessons-shelf.js"
+import { logSummary } from "./task-log.js"
 
 export const TASK_FOCUS_FIELDS = ["track", "slug", "clear", "display_label"]
 
@@ -87,7 +88,7 @@ export async function shelvedLessons({ deskRoot, person, task }) {
  * Returns: { status: "focused", track, slug, task_status, recent_progress: [string], next_step: string | null, archived?: true,
  * shelved_lessons?: { path, lessons: [string], not_shown } } or { status: "cleared" }. `shelved_lessons` carries the
  * person's shelved lessons (see `shelvedLessons`) when they have any, those closest to this task first. A card found only under `_archive/` is still focused (a session may be wrapping up or
- * reopening finished work) and the answer says `archived: true`. `recent_progress` is the last PROGRESS_ENTRIES entries
+ * reopening finished work) and the answer says `archived: true`. `log` names the task's `log.md` with its entry count and newest entry when it has one. `recent_progress` is the last PROGRESS_ENTRIES entries
  * of the card's `## Progress log`, each cut to PROGRESS_ENTRY_CHARS characters, and is empty when the card has none.
  * Throws `card not found: <track>/<slug>` for a missing card, leaving the focus as it was.
  */
@@ -120,6 +121,8 @@ export async function taskFocus({ deskRoot, input, person = null, statusContext 
   }
   if (card.data.planning_complete === true) result.planning_complete = true
   if (found.archived) result.archived = true
+  const log = logSummary(deskRoot, found.file)
+  if (log !== undefined) result.log = log
   const lessons = await shelvedLessons({ deskRoot, person, task: [track, slug, card.data.title, result.next_step].join(" ") })
   if (lessons !== undefined) result.shelved_lessons = lessons
   const proposal = makeSessionLabelProposal({ task: { track, slug }, displayLabel })

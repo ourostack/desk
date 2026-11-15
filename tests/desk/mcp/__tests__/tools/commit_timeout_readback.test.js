@@ -265,13 +265,13 @@ test("desk_save: written bytes whose commit landed but timed out are committed a
   assert.equal(git(root, ["diff", "--cached", "--name-only"]), "other.md\n", "the unrelated staged entry is still staged")
 })
 
-test("desk_save: written bytes whose commit timed out before landing are not committed, never replayed, and leave another staged entry alone", async () => {
+test("desk_save: written bytes whose commit timed out before landing are asked once more, and when that times out too are not committed and leave another staged entry alone", async () => {
   const { root, base, result, commits, pushes } = await savedNotes(timedOutBeforeCommit)
   assert.equal(result.commit?.status, "failed")
   assert.equal(result.commit.reason, "timeout")
   assertRoute(result.commit.route_around)
   assert.deepEqual(pushes, [], "nothing landed, so nothing is pushed")
-  assert.equal(commits(), 1, "exactly one commit dispatch: the failure is never retried")
+  assert.equal(commits(), 2, "the commit is run once more with room, never a third time")
   assert.equal(git(root, ["rev-parse", "HEAD"]).trim(), base)
   assert.match(git(root, ["diff", "--cached", "--name-only"]), /^other\.md$/m, "the unrelated staged entry is still staged")
 })
