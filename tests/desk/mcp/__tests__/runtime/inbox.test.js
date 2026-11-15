@@ -1,4 +1,4 @@
-// Teammate notes on disk: the note file note_leave writes, how it is read back, and the open notes session start lists.
+// Teammate notes on disk: the note file the note tool writes, how it is read back, and the open notes session start lists.
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { promises as fs } from "node:fs"
@@ -31,7 +31,7 @@ test("renderNote writes the frontmatter, the sender's text, the links and who to
     "- https://example.com/plan",
     "- _shared/tracks/customer-engagement/track.md",
     "",
-    "ari left this note with note_leave. Ask ari if anything here is unclear.",
+    "ari left this note with Desk's note tool. Ask ari if anything here is unclear.",
     "",
   ].join("\n"))
   const parsed = parseNote(text)

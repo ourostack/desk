@@ -6,6 +6,7 @@ import { personPrefix } from "../util/paths.js"
 import { legacyLedgerPartitions, legacyLedgerSummary } from "../protected/legacy-ledger.js"
 import { factoryStatus, factorySummary } from "./factory-context.js"
 import { recentFailures } from "../runtime/desk-failure.js"
+import { searchRouter } from "../search/files-router.js"
 
 // Every code `organizationFindings` can return — printed in this fixed
 // order regardless of which codes actually fired, so the section's shape is
@@ -76,7 +77,9 @@ function collectOrganization({ deskRoot, person }) {
   return findings
 }
 
-export function doctorRuntime({ input, statusContext = {}, deskRoot, person = null, env = process.env } = {}) {
+export function doctorRuntime({ input, statusContext = {}, deskRoot, person = null, env = process.env, signal } = {}) {
+  // `reindex` re-reads the desk into the session's search engine and answers once exact-word search is current.
+  if (input?.reindex === true) return searchRouter(statusContext.search).reindex({ deskRoot, signal })
   if (diagnosticFormat(input) === "preview") {
     return previewRuntimeSnapshot("ready")
   }

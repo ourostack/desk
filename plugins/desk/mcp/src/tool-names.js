@@ -19,14 +19,10 @@ export const TOOL_NAMES = [
   "lesson_add",
   "desk_save",
   // Teammate notes (Crew)
-  "note_leave",
-  "note_ack",
+  "note",
   // Search
   "desk_search",
   "desk_recall",
-  "desk_timeline",
-  // Index management
-  "desk_reindex",
   // Health/status
   "desk_status",
   "desk_doctor",
@@ -61,26 +57,20 @@ export const TOOL_DESCRIPTIONS = {
     "Use when something got in your way and should be recorded: append a friction entry to _meta/friction.md, or under <track>/_friction/ when `track` is given. `about` is \"setup\" (default, kept on the desk) or \"system\" (Desk, its skills or the factory); system friction needs a one-line `title` and opens an improvement card. Read `improvement` in the result: opened, duplicate or reopened means the card exists. `error_code` reports a Desk failure with its evidence (friction-management has the rest).",
   lesson_add:
     "Record a correction where something loads it, and read `in_effect` and `message` in the reply before you tell anyone the lesson is kept. `scope` \"personal\" adds a one-line rule to this person's AGENTS.md; \"desk\" is for how Desk's tools or a plugin's skills behave: it needs `owner` and opens an improvement card; \"team\" adds a line to a shared repository's AGENTS.md through a pull request: it needs `source`.",
-  note_leave:
-    "In a Crew shared workspace, leave another member a dated note that their session start lists until they acknowledge it. `to` is their alias on the roster (_meta/desks.md). `body` is your own explanation in your own voice: relay what someone else thinks as your understanding of it, never in their words. Everyone in the workspace can read it, so put nothing private in it. The note is left only when the reply says `merged`.",
-  note_ack:
-    "Use when the operator has seen a note a teammate left you: mark it acknowledged. `note` is the path session start listed or its file name; only a note in your own inbox.",
+  note:
+    "In a Crew shared workspace, leave another member a dated note that their session start lists until they acknowledge it (`to`, `subject`, `body`), or acknowledge one a teammate left you (`ack`). `body` is your own explanation in your own voice: relay what someone else thinks as your understanding of it, never in their words. Everyone in the workspace can read it, so put nothing private in it. A note is left only when the reply says `merged`.",
   desk_save:
     "After you write a file with Write or Edit (a planning doc, a spec, a report), call this with its path to commit it. `paths` are relative to the desk root, inside this session's write prefix (desks/<alias>/ in a shared workspace). Stages and commits exactly `paths` with `message`. A task card is refused: use the task tools. `tidy: true` commits a desk tidy or its undo. A client with no filesystem passes `files` ({ path, content } text) with or instead of `paths`.",
   desk_search:
-    "Use when you cannot tell which file holds something. Hybrid lexical+semantic search across the desk. Filters: track, status, kind, since, until. `scope`: 'active' (default), 'archived' or 'all'.",
+    "Use when you cannot tell which file holds something, or what changed in a time window. Exact-word search across the desk. Filters: track, status, kind, since, until. `scope`: 'active' (default), 'archived' or 'all'. With no `query`, or `newest: true`, it lists documents by when they were updated, newest first, inside the since/until window (`scope` then defaults to 'all').",
   desk_recall:
     "Use for loose recall, as in `do I remember anything about X`. Ranks every desk Markdown file by meaning and exact words together. `scope`: 'active', 'archived' or 'all' (default; this is the historical lookback).",
-  desk_timeline:
-    "Use when you need what changed in a time window: list documents whose updated_at falls in it, chronologically; with `query`, hybrid-ranked inside the window, newest first. `scope`: 'active', 'archived' or 'all' (default).",
-  desk_reindex:
-    "Use when search misses what you just wrote: re-read the desk into this session's search engine and wait until exact-word search is current.",
   desk_skill:
     "Use when your client cannot load Desk's skills itself (claude.ai, ChatGPT): read one of Desk's skills, the working procedures its instructions point to. With no `name`, lists every skill with its description; with `name`, returns that skill's text to follow. Read-only and needs no desk.",
   desk_status:
     "Session-start health check for the resolved desk root. The compact answer has `state` (ready, degraded, admitting or setup_required), `degraded` (why), `fix` (what to do in this session), `search`, `notes` and where the desk is. Retries admission when Desk is not ready. `detail: true` returns the full payload. A hosted Desk (claude.ai, ChatGPT) also returns its instructions, unless `has_instructions: true`; follow them and read the skills they name with desk_skill.",
   desk_doctor:
-    "Use when Desk misbehaves or its runtime needs checking: report whether Desk MCP started in healthy runtime mode and describe the active runtime target; in diagnostic mode, the precise startup failure and offline remediation. `format: \"preview\"` returns only the local package/process snapshot. `repair: \"switch_state_branch\"` switches the desk checkout back to its state branch when that is safe. `factory_consent` or `factory_told` records the operator's factory contribution answer and returns only that record.",
+    "Use when Desk misbehaves or its runtime needs checking: report whether Desk MCP started in healthy runtime mode; in diagnostic mode, the precise startup failure and offline remediation. `format: \"preview\"` returns only the local package/process snapshot. `repair: \"switch_state_branch\"` switches the desk checkout back to its state branch when that is safe. `reindex: true` re-reads the desk into the search engine when search misses what you just wrote. `factory_consent` or `factory_told` records the operator's factory contribution answer and returns only that record.",
   improvement_open:
     "Use when a case needs an improvement card: open one on the desk, find it already open, or reopen a closed one. `source` and `id` name the case (the card key is <source>:<id>). `title` is never accepted: Desk builds every title.",
   improvement_next:

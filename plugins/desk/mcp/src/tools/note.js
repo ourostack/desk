@@ -1,13 +1,13 @@
-// note_leave and note_ack: one Crew member's agent leaves another member a dated, attributed note, which that member's
+// The note tool: one Crew member's agent leaves another member a dated, attributed note, which that member's
 // session start lists until they acknowledge it.
 //
-// note_leave writes one new file, `desks/<recipient>/_inbox/<date>-<sender>-<slug>-<unique>.md`, and nothing else. The
+// Leaving (`to`, `subject`, `body`) writes one new file, `desks/<recipient>/_inbox/<date>-<sender>-<slug>-<unique>.md`, and nothing else. The
 // sender is the session's person, never a value the caller supplies, and the recipient must be on the workspace's roster
 // (`_meta/desks.md`), checked here and again on the default branch. The write goes through Crew's shared-write protocol
 // (shared-write.js): a pull request the tool opens and merges at once, so it never touches another member's desk in this
 // checkout. An exact duplicate of a note already in the recipient's inbox, open or acknowledged, is refused.
 //
-// note_ack is the recipient's own write: it marks the note acknowledged on their desk and commits it. The file stays.
+// Acknowledging (`ack`) is the recipient's own write: it marks the note acknowledged on their desk and commits it. The file stays.
 // The file format and the session-start read live in runtime/inbox.js.
 
 import { promises as fs, readdirSync, readFileSync } from "node:fs"
@@ -27,9 +27,8 @@ import { stageAndCommitFiles } from "./_card-commit.js"
 import { commitFailureWords, pullRequestRoute, retryRoute, UNFINISHED, withNext } from "../util/route-around.js"
 import { Failed, githubStore, pause, runGit, sharedWrite } from "./shared-write.js"
 
-// Every field each tool reads off `input`; __tests__/tool_schema_parity.test.js checks these against tool-schemas.js.
-export const NOTE_LEAVE_FIELDS = ["to", "subject", "body", "related"]
-export const NOTE_ACK_FIELDS = ["note"]
+// Every field the note tool reads off `input`; __tests__/tool_schema_parity.test.js checks these against tool-schemas.js.
+export const NOTE_FIELDS = ["to", "subject", "body", "related", "ack"]
 
 const ALIAS = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/u
 const SUBJECT_MAX = 120
@@ -61,14 +60,14 @@ function workspaceOf(deskRoot, tool) {
 // The session's person, who sends or receives: never a value the caller supplies.
 function personOf(person, tool) {
   const alias = typeof person === "string" ? person.trim() : ""
-  if (!ALIAS.test(alias)) throw Object.assign(new Error(`${tool}: Call desk_status to see why this session has no person: this session has no person, so the note would have no ${tool === "note_leave" ? "sender" : "recipient"}; call desk_status to see why`), { code: "note_call_desk_status_to_see" })
+  if (!ALIAS.test(alias)) throw Object.assign(new Error(`note: Call desk_status to see why this session has no person: this session has no person, so the note would have no ${tool === "leave" ? "sender" : "recipient"}; call desk_status to see why`), { code: "note_call_desk_status_to_see" })
   return alias
 }
 
 function textOf(value, name, max, rule) {
-  if (typeof value !== "string" || value.trim() === "") throw Object.assign(new Error(`note_leave: Pass the missing argument as a string: \`${name}\` is required (string)`), { code: "note_leave_is_required_string" })
+  if (typeof value !== "string" || value.trim() === "") throw Object.assign(new Error(`note: Pass the missing argument as a string: \`${name}\` is required (string)`), { code: "note_is_required_string" })
   const text = value.trim()
-  if (text.length > max || (rule === "one line" && /[\r\n]/u.test(text))) throw Object.assign(new Error(`note_leave: Pass \`${name}\` within its limit: \`${name}\` must be ${rule === "one line" ? "one line of " : ""}at most ${max} characters`), { code: "note_leave_must_be_at_most_characters" })
+  if (text.length > max || (rule === "one line" && /[\r\n]/u.test(text))) throw Object.assign(new Error(`note: Pass \`${name}\` within its limit: \`${name}\` must be ${rule === "one line" ? "one line of " : ""}at most ${max} characters`), { code: "note_must_be_at_most_characters" })
   return text
 }
 
@@ -92,11 +91,11 @@ function relatedEntry(entry) {
 
 function relatedOf(value) {
   if (value === undefined) return []
-  if (!Array.isArray(value)) throw Object.assign(new Error("note_leave: Pass `related` as a list of links: `related` must be a list of links"), { code: "note_leave_related_must_be_a_list" })
-  if (value.length > RELATED_MAX) throw Object.assign(new Error(`note_leave: Pass fewer \`related\` links: \`related\` takes at most ${RELATED_MAX} links`), { code: "note_leave_related_takes_at_most_links" })
+  if (!Array.isArray(value)) throw Object.assign(new Error("note: Pass `related` as a list of links: `related` must be a list of links"), { code: "note_related_must_be_a_list" })
+  if (value.length > RELATED_MAX) throw Object.assign(new Error(`note: Pass fewer \`related\` links: \`related\` takes at most ${RELATED_MAX} links`), { code: "note_related_takes_at_most_links" })
   return value.map((entry) => {
     const link = relatedEntry(entry)
-    if (link === null) throw Object.assign(new Error("note_leave: Give each `related` entry as an https URL or a repository path: each `related` entry must be an https URL or a path in this repository (relative, with no .. or .)"), { code: "note_leave_each_related_entry_must_be" })
+    if (link === null) throw Object.assign(new Error("note: Give each `related` entry as an https URL or a repository path: each `related` entry must be an https URL or a path in this repository (relative, with no .. or .)"), { code: "note_each_related_entry_must_be" })
     return link
   })
 }
@@ -118,7 +117,7 @@ const notesIn = (dir) => {
 }
 
 /**
- * note_leave
+ * Leave a note (no `ack`)
  *
  * Input: { to, subject, body, related? }. `to` is a member's alias; `subject` one line of at most 120 characters; `body`
  * the sender agent's own explanation, at most 8000 characters; `related` up to 10 https URLs or paths in the workspace.
@@ -129,21 +128,21 @@ const notesIn = (dir) => {
  * `stage` as the shared write reports them. The note is left only when `status` is "merged". A "failed" or "pr_open" answer
  * carries `route_around`, which finishes it by hand (the pull request is merged, or the same note is left again).
  */
-export async function note_leave({ deskRoot, input, person = null, spawnGit = spawnSync, gh = withAmbientToken(ghRunner(), process.env), chooseAccount = chooseAccountDefault, tmpRoot = os.tmpdir(), wait = pause, now = () => new Date() }) {
+export async function leaveNote({ deskRoot, input, person = null, spawnGit = spawnSync, gh = withAmbientToken(ghRunner(), process.env), chooseAccount = chooseAccountDefault, tmpRoot = os.tmpdir(), wait = pause, now = () => new Date() }) {
   const created = localIso(now())
-  const roster = workspaceOf(deskRoot, "note_leave").roster
-  const from = personOf(person, "note_leave")
+  const roster = workspaceOf(deskRoot, "note").roster
+  const from = personOf(person, "leave")
   const { to: rawTo, subject: rawSubject, body: rawBody, related: rawRelated } = input
-  if (typeof rawTo !== "string" || rawTo.trim() === "") throw Object.assign(new Error("note_leave: Pass `to`: `to` is required: the alias of the member the note is for"), { code: "note_leave_to_is_required_the_alias" })
+  if (typeof rawTo !== "string" || rawTo.trim() === "") throw Object.assign(new Error("note: Pass `to`: `to` is required: the alias of the member the note is for"), { code: "note_to_is_required_the_alias" })
   const to = rawTo.trim()
-  if (!ALIAS.test(to)) throw Object.assign(new Error("note_leave: Pass `to` as a member's alias: `to` must be a member's alias, as in _meta/desks.md"), { code: "note_leave_to_must_be_a_member" })
-  if (!roster.some((row) => row.alias === to)) throw Object.assign(new Error(`note_leave: Pass the alias of a member who has joined: ${to} has not joined this workspace (no row in _meta/desks.md), so no session of theirs would see the note`), { code: "note_leave_has_not_joined_this_workspace" })
-  if (to === from) throw Object.assign(new Error("note_leave: Save a note to yourself on your own desk instead: `to` is you; a note to yourself belongs on your own desk (a task, or a file you save with desk_save)"), { code: "note_leave_to_is_you_a_note" })
+  if (!ALIAS.test(to)) throw Object.assign(new Error("note: Pass `to` as a member's alias: `to` must be a member's alias, as in _meta/desks.md"), { code: "note_to_must_be_a_member" })
+  if (!roster.some((row) => row.alias === to)) throw Object.assign(new Error(`note: Pass the alias of a member who has joined: ${to} has not joined this workspace (no row in _meta/desks.md), so no session of theirs would see the note`), { code: "note_has_not_joined_this_workspace" })
+  if (to === from) throw Object.assign(new Error("note: Save a note to yourself on your own desk instead: `to` is you; a note to yourself belongs on your own desk (a task, or a file you save with desk_save)"), { code: "note_to_is_you_a_note" })
   const subject = textOf(rawSubject, "subject", SUBJECT_MAX, "one line")
   const body = textOf(rawBody, "body", BODY_MAX, "text")
   const related = relatedOf(rawRelated)
   const origin = githubStore(deskRoot, spawnGit)
-  if (origin === null) throw Object.assign(new Error("note_leave: Give the workspace a GitHub origin: a note is delivered through a GitHub pull request, and this workspace's origin is not on GitHub"), { code: "note_leave_a_note_is_delivered_through" })
+  if (origin === null) throw Object.assign(new Error("note: Give the workspace a GitHub origin: a note is delivered through a GitHub pull request, and this workspace's origin is not on GitHub"), { code: "note_a_note_is_delivered_through" })
   const name = noteFileName({ date: created.slice(0, 10), from, subject, unique: randomBytes(3).toString("hex") })
   const inbox = `desks/${to}/${INBOX}`
   const text = renderNote({ from, to, created, subject, related, body })
@@ -179,7 +178,7 @@ export async function note_leave({ deskRoot, input, person = null, spawnGit = sp
       branch: `note/${to}-${slugify(subject).slice(0, 30)}-${Date.now().toString(36)}`,
       title: `Note for ${to}: ${subject}`,
       commitMessage: `Note for ${to}: ${subject}`,
-      prBody: () => `Leaves ${to} a note from ${from}, written by Desk's note_leave: ${result.note}`,
+      prBody: () => `Leaves ${to} a note from ${from}, written by Desk's note tool: ${result.note}`,
       closeComment: `${to}'s inbox already holds this note.`,
     })
   } catch (error) {
@@ -192,7 +191,7 @@ export async function note_leave({ deskRoot, input, person = null, spawnGit = sp
       : retryRoute({
         summary: `The note to ${to} did not reach the default branch of ${result.repo}, so ${to} does not see it yet.`,
         landed: { argv: ["gh", "api", `repos/${result.repo}/contents/${result.note}`, "--jq", ".path"], expect: `exits 0 and prints ${result.note}` },
-        tool: "note_leave",
+        tool: "note",
         arguments: { to, subject, body, related },
       })
     return withNext({ ...result, status: "failed", stage: error.stage, reason: error.message, route_around: route, message: `Fix what the parentheses name, then call it again: Not left: the note stopped at ${error.stage} (${error.message}).${open}` }, result.pr ? UNFINISHED.PULL_REQUEST : UNFINISHED.UNPUBLISHED)
@@ -203,50 +202,50 @@ export async function note_leave({ deskRoot, input, person = null, spawnGit = sp
   if (outcome.status === "pr_open") {
     return withNext({ ...result, status: "pr_open", reason: outcome.reason, route_around: outcome.route_around, message: `Wait for the pull request to merge, or merge it yourself: Not delivered yet: the pull request ${result.pr} is open on branch ${result.branch} and has not merged (${outcome.reason}). ${to} sees the note once it merges.` }, UNFINISHED.PULL_REQUEST)
   }
-  return { ...result, status: "merged", commit: outcome.commit, message: `Left for ${to}: merged in ${result.pr}. ${to}'s session start lists it until they acknowledge it with note_ack. Everyone in the workspace can read it.` }
+  return { ...result, status: "merged", commit: outcome.commit, message: `Left for ${to}: merged in ${result.pr}. ${to}'s session start lists it until they acknowledge it with the note tool's ack. Everyone in the workspace can read it.` }
 }
 
 /**
- * note_ack
+ * Acknowledge a note (`ack`)
  *
- * Input: { note }: the path session start listed (`desks/<you>/_inbox/<file>.md`) or the file name. Only a note in the
+ * Input: { ack }: the path session start listed (`desks/<you>/_inbox/<file>.md`) or the file name. Only a note in the
  * session person's own inbox. Marks it acknowledged, with the time, and commits it when the file held no uncommitted
  * changes; the file stays.
  *
  * Returns { status: "acknowledged" | "unchanged", note, from, subject, committed, message, commit? }: `commit` is
  * `{ status: "failed", reason }` when the commit failed. The sender sees the acknowledgement once the desk syncs.
  */
-export async function note_ack({ deskRoot, input, person = null, spawnGit = spawnSync, schedulePush = schedulePushDefault, search, now = () => new Date() }) {
+export async function ackNote({ deskRoot, input, person = null, spawnGit = spawnSync, schedulePush = schedulePushDefault, search, now = () => new Date() }) {
   const at = localIso(now())
-  workspaceOf(deskRoot, "note_ack")
-  const alias = personOf(person, "note_ack")
+  workspaceOf(deskRoot, "note")
+  const alias = personOf(person, "ack")
   const own = `desks/${alias}/${INBOX}`
-  const { note } = input
-  if (typeof note !== "string" || note.trim() === "") throw Object.assign(new Error("note_ack: Pass `note`: `note` is required: the path session start listed, or the note's file name"), { code: "note_ack_note_is_required_the_path" })
+  const note = input.ack
+  if (typeof note !== "string" || note.trim() === "") throw Object.assign(new Error("note: Pass `ack`: `ack` is required: the path session start listed, or the note's file name"), { code: "note_note_is_required_the_path" })
   const value = note.trim().replace(/\\/gu, "/")
   const name = value.includes("/") ? (path.posix.dirname(value) === own ? path.posix.basename(value) : "") : value
-  if (!/^[^/.][^/]*\.md$/u.test(name)) throw Object.assign(new Error(`note_ack: Pass the path session start listed: you can acknowledge only a note in your own inbox, ${own}/: pass the path session start listed`), { code: "note_ack_you_can_acknowledge_only_a" })
+  if (!/^[^/.][^/]*\.md$/u.test(name)) throw Object.assign(new Error(`note: Pass the path session start listed: you can acknowledge only a note in your own inbox, ${own}/: pass the path session start listed`), { code: "note_you_can_acknowledge_only_a" })
   const rel = `${own}/${name}`
   const file = await resolveWriteTarget({ deskRoot, person: alias, segments: [INBOX, name], createPersonRoot: false })
   let text
   try {
     text = await fs.readFile(file, "utf8")
   } catch {
-    throw Object.assign(new Error(`note_ack: Check the track and slug, then try again: there is no note ${rel}`), { code: "note_ack_there_is_no_note" })
+    throw Object.assign(new Error(`note: Check the track and slug, then try again: there is no note ${rel}`), { code: "note_there_is_no_note" })
   }
   const parsed = parseNote(text)
   const next = acknowledgeNote(text, at)
   const dir = path.dirname(file)
   const isGit = isGitRepository(dir, spawnGit)
   if (next === null) {
-    if (parsed?.status !== "acknowledged") throw Object.assign(new Error(`note_ack: Pass a note from your inbox: ${rel} is not a note (no open or acknowledged status in its frontmatter)`), { code: "note_ack_is_not_a_note_no" })
+    if (parsed?.status !== "acknowledged") throw Object.assign(new Error(`note: Pass a note from your inbox: ${rel} is not a note (no open or acknowledged status in its frontmatter)`), { code: "note_is_not_a_note_no" })
     return { status: "unchanged", note: rel, from: parsed.from, subject: parsed.subject, committed: isGit && !hasUnstagedWork(dir, [name], spawnGit), message: `Leave it as it is: ${rel} is already acknowledged.` }
   }
   // Checked before this call's own write, so a change someone else left in the file is never committed as this call's.
   const stage = isGit && !hasUnstagedWork(dir, [name], spawnGit)
   await fs.writeFile(file, next, "utf8")
   search?.noteChange(rel)
-  const commit = stage ? stageAndCommitFiles(dir, [name], `note_ack: ${name}`, spawnGit, deskRoot) : undefined
+  const commit = stage ? stageAndCommitFiles(dir, [name], `note ack: ${name}`, spawnGit, deskRoot) : undefined
   const committed = stage && commit === undefined
   if (committed) schedulePush({ root: deskRoot })
   // A commit Desk cannot read back is unknown (R5): `committed` is null, never a false that claims the note is not committed.
@@ -260,4 +259,9 @@ export async function note_ack({ deskRoot, input, person = null, spawnGit = spaw
       ? `Acknowledged ${rel} from ${parsed.from} on this machine; ${why}, so ${parsed.from} may not see it yet.`
       : `Acknowledged ${rel} from ${parsed.from} on this machine, but not committed (${why}), so ${parsed.from} does not see it yet.`
   return withNext(result)
+}
+
+/** The `note` tool: `ack` acknowledges a note in the session person's own inbox; otherwise it leaves one for `to`. */
+export async function note(args) {
+  return args.input?.ack !== undefined ? ackNote(args) : leaveNote(args)
 }

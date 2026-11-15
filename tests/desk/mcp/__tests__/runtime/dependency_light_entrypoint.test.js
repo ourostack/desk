@@ -953,7 +953,7 @@ test("MCP entrypoint restores runtime dependencies offline and serves list-tools
     const firstMirrors = listSourceMirrors(fixture.runtimeCacheDir)
     assert.equal(firstMirrors.length, 1, "runtime cache must contain one source mirror after first start")
 
-    const marker = "Hybrid lexical+semantic search across the desk."
+    const marker = "Exact-word search across the desk."
     assert.ok(beforeSource.includes(marker), "the mutation marker must still be in tool-names.js")
     writeFileSync(
       path.join(fixture.mcpRoot, "src", "tool-names.js"),

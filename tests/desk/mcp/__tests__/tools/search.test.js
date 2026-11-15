@@ -5,7 +5,7 @@ import { strict as assert } from "node:assert"
 import { promises as fs } from "node:fs"
 import * as path from "node:path"
 
-import { __searchInternalsForTests, desk_search as routedSearch, desk_timeline as routedTimeline, indexedSearch, indexedTimeline as indexedTimelineOn } from "../../../../../plugins/desk/mcp/src/tools/search.js"
+import { __searchInternalsForTests, desk_search as routedSearch, newestDocuments as routedTimeline, indexedSearch, indexedTimeline as indexedTimelineOn } from "../../../../../plugins/desk/mcp/src/tools/search.js"
 import { createSearchEngine, SEARCH_WORDING } from "../../../../../plugins/desk/mcp/src/search/engine.js"
 import {
   buildFixtureIndex,
@@ -38,7 +38,7 @@ test("before the search engine starts, search and timeline read the files and ca
 })
 
 test("routed timeline reads the session search engine, with and without a query", async (t) => {
-  const { desk_timeline } = await import("../../../../../plugins/desk/mcp/src/tools/search.js")
+  const { newestDocuments: desk_timeline } = await import("../../../../../plugins/desk/mcp/src/tools/search.js")
   const root = await mkTempDeskRoot()
   await writeFile(root, "track/old/task.md", "---\nupdated: 2025-01-01\n---\nquartz old")
   await writeFile(root, "track/new/task.md", "---\nupdated: 2026-09-19\n---\nquartz current")
@@ -49,6 +49,22 @@ test("routed timeline reads the session search engine, with and without a query"
   assert.equal(temporal.search_mode, "temporal")
   assert.deepEqual(query.results.map((r) => r.path), [path.posix.join("track", "new", "task.md")])
   assert.equal(query.search_mode, "lexical")
+})
+
+test("desk_search lists newest first without a query or with newest: true, inside the since/until window and the track filter", async (t) => {
+  const root = await mkTempDeskRoot()
+  await writeFile(root, "track/old/task.md", "---\nupdated: 2025-01-01\n---\nquartz old")
+  await writeFile(root, "track/new/task.md", "---\nupdated: 2026-09-19\n---\nquartz current")
+  await writeFile(root, "other/new/task.md", "---\nupdated: 2026-09-20\n---\nquartz elsewhere")
+  const search = engineFor(t, root)
+  const listed = await routedSearch({ deskRoot: root, search, input: { filters: { since: "2026-01-01" } } })
+  assert.deepEqual(listed.results.map((r) => r.path), ["other/new/task.md", "track/new/task.md"])
+  assert.equal(listed.search_mode, "temporal")
+  const narrowed = await routedSearch({ deskRoot: root, search, input: { filters: { since: "2026-01-01", track: "track" } } })
+  assert.deepEqual(narrowed.results.map((r) => r.path), ["track/new/task.md"])
+  const ranked = await routedSearch({ deskRoot: root, search, input: { query: "quartz", newest: true, filters: { until: "2026-09-19" } } })
+  assert.deepEqual(ranked.results.map((r) => r.path), ["track/new/task.md", "track/old/task.md"])
+  assert.equal(ranked.search_mode, "lexical")
 })
 
 test("search and timeline keep the strongest section per document", async () => {

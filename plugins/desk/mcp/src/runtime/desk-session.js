@@ -4,8 +4,8 @@
 //
 // Each tool needs part of that context:
 // - desk_status and desk_doctor always answer, and each desk_status retries admission when Desk is not ready;
-// - reads (search, recall, timeline) need the runtime and a root; before the search engine has started, exact-word search and timeline read the files directly;
-// - desk_reindex also needs the search engine;
+// - reads (search, recall) need the runtime and a root; before the search engine has started, exact-word search and the newest-first listing read the files directly;
+// - desk_doctor with `reindex` also needs the search engine;
 // - writes (task_*, track_*, friction_add, lesson_add) need admitted authority and the checkout on its state branch, checked again right before each write. They never wait for the search engine: a write tells it which files changed when it has started, and its file watcher or first read picks the change up otherwise.
 // A tool whose needs are not met answers `{ status: "degraded", code, fix }` with a fix the agent can act on in this session, and a tool that throws answers the same way instead of failing the call.
 //
@@ -35,7 +35,7 @@ import { removeReadinessLeftovers } from "../readiness/leftovers.js"
 import { TOOL_NAMES } from "../tool-names.js"
 import { EXACT } from "../util/file-identity.js"
 
-const READ_TOOLS = new Set(["desk_search", "desk_recall", "desk_timeline"])
+const READ_TOOLS = new Set(["desk_search", "desk_recall"])
 // Resolver sources, weakest first, in the shared resolver's order (util/paths.js). The host's project folder, when it is a desk,
 // outranks the saved binding and $DESK; a bare launch folder (`hint`, reported as "host-project" too) stays below them, so losing an
 // association never reselects it. Neither kind of folder replaces another of its kind.
@@ -53,7 +53,7 @@ const rootRank = (root) => ROOT_SOURCE_PRIORITY.indexOf(root.hint === true ? "la
 // reads is a field added here in the same diff.
 // __tests__/tool_schema_parity.test.js checks this against the tool's
 // declared schema in tool-schemas.js.
-export const DESK_DOCTOR_FIELDS = ["format", "repair", "factory_consent", "factory_told"]
+export const DESK_DOCTOR_FIELDS = ["format", "repair", "reindex", "factory_consent", "factory_told"]
 const STATUS_WAIT_MS = 50
 const STATUS_DETAIL_MS = 120
 // The most desk_status spends on its own waits (a new admission attempt, then the runtime status), well inside the 200 ms it must answer in.
@@ -105,7 +105,6 @@ export function toolRequirement(name) {
   // Focus is held in this session and read from the card on disk: it needs the desk and the runtime, never write authority.
   if (name === "task_focus") return "focus"
   if (READ_TOOLS.has(name)) return "read"
-  if (name === "desk_reindex") return "search"
   return "write"
 }
 
@@ -1090,6 +1089,10 @@ export function createDeskSession(deps) {
     if (input.repair !== undefined && !DOCTOR_REPAIRS.includes(input.repair)) {
       return { content: [{ type: "text", text: `unsupported repair; use one of: ${DOCTOR_REPAIRS.join(", ")}` }], isError: true }
     }
+    if (input.reindex === true) {
+      if (!requirementMet("search", context)) return refusal("desk_doctor", "search")
+      return runtimeCall("desk_doctor", { reindex: true }, signal)
+    }
     if (input.factory_consent !== undefined || input.factory_told !== undefined) {
       if (input.factory_told !== undefined && input.factory_told !== true) return { content: [{ type: "text", text: "Pass factory_told as true: factory_told records that the operator was told." }], isError: true }
       // The answer touches no desk file, so the next call need not wait for it; asking GitHub for the account can take a while.
@@ -1258,7 +1261,7 @@ const REQUIREMENT_TEXT = {
   search: "the session's search engine",
   write: "admitted write authority and the checkout on its state branch",
 }
-const SEARCH_FIX = "Desk serves reads and writes without its search engine (exact-word search and timeline read the files directly) and starts it again in the background after 1, 2, 5, 10 and 30 s, then every 60 s. Call desk_status to retry now; only desk_reindex waits for the search engine, and recall answers with exact-word matches until it starts."
+const SEARCH_FIX = "Desk serves reads and writes without its search engine (exact-word search and the newest-first listing read the files directly) and starts it again in the background after 1, 2, 5, 10 and 30 s, then every 60 s. Call desk_status to retry now; only desk_doctor with `reindex: true` waits for the search engine, and recall answers with exact-word matches until it starts."
 function degradedResult(name, fields, needs) {
   return {
     content: [{

@@ -20,15 +20,14 @@ const MAX_LIMIT = 50
 const SNIPPET_MAX_CHARS = 280
 
 // Every field each search tool reads off `input` — not in the exported
-// `desk_search`/`desk_recall`/`desk_timeline` themselves
+// `desk_search`/`desk_recall` themselves
 // (they spread `...input` into the query router unread) but in the paired
 // `indexed*` function below that actually destructures it. Kept next to
 // this module so a field added to one of those reads is a field added here
 // in the same diff. __tests__/tool_schema_parity.test.js checks these
 // against each tool's declared schema in tool-schemas.js.
-export const DESK_SEARCH_FIELDS = ["query", "limit", "filters", "scope"]
+export const DESK_SEARCH_FIELDS = ["query", "limit", "filters", "scope", "newest"]
 export const DESK_RECALL_FIELDS = ["topic", "limit", "scope"]
-export const DESK_TIMELINE_FIELDS = ["from", "to", "query", "limit", "scope"]
 /**
  * Read `<deskRoot>/_meta/featured.md` and return the first track slug listed
  * (one per line). Returns null when absent or empty.
@@ -185,7 +184,7 @@ function buildFtsQuery(query) {
  * `scope` values:
  *   "active"   — is_archived = 0 (default for desk_search)
  *   "archived" — is_archived = 1
- *   "all"      — no filter (default for desk_recall, desk_timeline)
+ *   "all"      — no filter (default for desk_recall and the newest-first listing)
  *
  * If the caller passes an unrecognized value, falls back to the toolDefault.
  *
@@ -369,6 +368,12 @@ export async function desk_search({ deskRoot, input, opts, search, queryRouter, 
     effect: "nothing was searched",
     example: '{"track": "desk-plugin", "status": ["implementing", "blocked"]}',
   })
+  // No query, or `newest: true`, lists documents by the time they were last updated instead of ranking them; the window is `filters.since` to `filters.until`.
+  if (request.newest === true || !String(request.query ?? "").trim()) {
+    return newestDocuments({
+      deskRoot, input: { ...request, from: request.filters?.since, to: request.filters?.until }, opts, search, queryRouter, signal,
+    })
+  }
   return (queryRouter ?? searchRouter(search)).lexical({
     ...request, deskRoot, now: opts?.now, opts, signal, kind: "lexical",
   })
@@ -471,18 +476,18 @@ export async function desk_recall({ deskRoot, input, opts, search, queryRouter, 
 }
 
 // ---------------------------------------------------------------------------
-// Tool: desk_timeline
+// The newest-first listing
 // ---------------------------------------------------------------------------
 
 /**
- * desk_timeline — temporal slice. With `query`: exact-word search within the
+ * The listing behind desk_search's `newest` mode and its empty-query answer. With `query`: exact-word search within the
  * window. Without `query`: bare chronological listing of docs touched in
  * the window.
  *
- * Input: { from: ISO, to: ISO, query?: string, limit?: number }
+ * Input: { from: ISO, to: ISO, query?: string, filters?: { track, status, kind }, limit?: number }
  * Returns: { results, search_mode, latency_ms }
  */
-export async function desk_timeline({ deskRoot, input, opts, search, queryRouter, signal }) {
+export async function newestDocuments({ deskRoot, input, opts, search, queryRouter, signal }) {
   return (queryRouter ?? searchRouter(search)).lexical({
     ...input, deskRoot, now: opts?.now, opts, signal, kind: "timeline",
   })
@@ -498,7 +503,7 @@ export async function indexedTimeline({ input, opts, db }) {
   const now = opts?.now ?? Date.now()
 
   // Window filter clauses for the docs table + scope filter.
-  // desk_timeline default: "all" — timeline is already temporally bounded;
+  // The listing defaults to "all" — timeline is already temporally bounded;
   // archive items in the window are legitimate timeline entries.
   const params = []
   const clauses = []
@@ -511,8 +516,10 @@ export async function indexedTimeline({ input, opts, db }) {
     params.push(to)
   }
   const scopeFilter = resolveScopeFilter(scope, "all")
-  const windowSql = (clauses.length ? " AND " + clauses.join(" AND ") : "") + scopeFilter.sql
-  params.push(...scopeFilter.params)
+  // The window is `from` and `to`; filters narrow by track, status and kind only.
+  const narrowed = buildDocsFilter(input?.filters ? { ...input.filters, since: undefined, until: undefined } : null)
+  const windowSql = (clauses.length ? " AND " + clauses.join(" AND ") : "") + narrowed.sql + scopeFilter.sql
+  params.push(...narrowed.params, ...scopeFilter.params)
 
   let candidateChunks = []
   if (query) {

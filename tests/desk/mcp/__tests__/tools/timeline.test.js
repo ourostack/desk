@@ -1,9 +1,9 @@
-// timeline.test.js — public desk_timeline wrapper + indexedTimeline coverage.
+// timeline.test.js — newest-first listing wrapper + indexedTimeline coverage.
 
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
 
-import { desk_timeline, indexedTimeline as indexedTimelineOn } from "../../../../../plugins/desk/mcp/src/tools/search.js"
+import { newestDocuments as desk_timeline, indexedTimeline as indexedTimelineOn } from "../../../../../plugins/desk/mcp/src/tools/search.js"
 import {
   buildFixtureIndex,
   fixtureDb,
@@ -34,7 +34,7 @@ async function buildTimelineDesk() {
   return root
 }
 
-test("desk_timeline routes timeline requests through the public query router", async () => {
+test("the newest-first listing routes timeline requests through the public query router", async () => {
   const queryRouter = {
     async lexical(request) {
       return { routed: true, request }
