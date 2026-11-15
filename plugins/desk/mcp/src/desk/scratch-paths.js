@@ -18,7 +18,7 @@ const PLACES = [
 const SCRATCH = new RegExp(`${START}(?:${PLACES.join("|")})${BODY}`, "gu")
 
 /** The scratch paths named in `text`, each once, in the order they first appear. */
-export function scratchPaths(text) {
+function scratchPaths(text) {
   if (typeof text !== "string" || text === "") return []
   return [...new Set((text.match(SCRATCH) ?? []).map((found) => found.replace(/[.:]+$/u, "")))]
 }

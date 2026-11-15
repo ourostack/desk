@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
-import { promises as fs } from "node:fs"
+import { promises as fs, writeFileSync } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 import { spawnSync } from "node:child_process"
@@ -54,7 +54,7 @@ async function fixture(t) {
 function upstreamMoves(root, files) {
   const base = git(root, ["rev-parse", "HEAD"])
   for (const [name, text] of Object.entries(files)) {
-    spawnSync("sh", ["-c", `printf '%s' "$1" > "$2"`, "sh", text, path.join(root, name)])
+    writeFileSync(path.join(root, name), text)
     git(root, ["add", "--", name])
   }
   git(root, ["commit", "-qm", "Merged elsewhere"])

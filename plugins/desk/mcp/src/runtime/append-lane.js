@@ -16,8 +16,8 @@ import { assertPublishedContentBase } from "../desk/content-home.js"
 import { commitPaths, hasUnstagedWork, stagePaths, stagedChanges } from "../util/git-stage.js"
 import { schedulePush as schedulePushDefault } from "./sync-worker.js"
 
-export const APPEND_QUIET_MS = 5000
-export const APPEND_MAX_WAIT_MS = 30_000
+const APPEND_QUIET_MS = 5000
+const APPEND_MAX_WAIT_MS = 30_000
 
 const lanes = new Map()
 let exitHook = false

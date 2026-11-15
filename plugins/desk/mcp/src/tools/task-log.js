@@ -11,7 +11,7 @@ import { deskRelativePath, resolveWriteTarget } from "../util/paths.js"
 import { pathExists } from "../util/fm.js"
 import { scratchPathWarning } from "../desk/scratch-paths.js"
 
-export const LOG_FILE = "log.md"
+const LOG_FILE = "log.md"
 
 const pad = (value) => String(value).padStart(2, "0")
 const stamp = (date) => `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`
