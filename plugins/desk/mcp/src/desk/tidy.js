@@ -468,7 +468,7 @@ function taskTrackField(taskMd) {
 }
 
 // Every `task.md`, live or archived, under `trackDirAbs` — the same reach
-// `track_rename` itself has: `findTaskCards` in `tools/move.js` walks every
+// `track_update` itself has: `findTaskCards` in `tools/move.js` walks every
 // subdirectory looking for `task.md`, `_archive/` included, and
 // unconditionally rewrites `track:` on each one it finds. A directory this
 // can't list contributes nothing rather than throwing.
@@ -509,7 +509,7 @@ function parseNameStatus(stdout) {
 // directory actually changed, `_archive/` destinations excepted — the
 // procedure's one permitted raw move, steps 5 and 6 filing an emptied or
 // stale track there. A rename that stays inside one track (a task moved by
-// `task_move`, a loose file filed by hand) never shows a top-level change,
+// `task_update`, a loose file filed by hand) never shows a top-level change,
 // so only an actual track-folder move is a candidate here, and a track this
 // run never renamed is never one, however stale its own `track:` data is.
 // Both sides of an `R` record are always under `subtree` already: run with
@@ -532,10 +532,10 @@ function stagedTrackRenameTargets(root, subtree, relSubtree, spawnGit) {
 
 // Among the tracks this run's staged renames moved a folder into, the ones
 // that now hold a task card — live or archived — whose `track:` field
-// doesn't name the track exactly. Only `track_rename` writes that field,
+// doesn't name the track exactly. Only `track_update` writes that field,
 // unconditionally, on every card it finds under the destination, so a
 // missing field is exactly as telling as a wrong one: either way, a genuine
-// `track_rename` would have left `track: <the new name>` behind, and a raw
+// `track_update` would have left `track: <the new name>` behind, and a raw
 // `git mv` leaves whatever the card already had, or nothing.
 function renamedTracksWithoutTrackRename(root, subtree, relSubtree, spawnGit) {
   const mismatched = []
@@ -561,7 +561,7 @@ function renamedTracksWithoutTrackRename(root, subtree, relSubtree, spawnGit) {
  *     is someone else's, left alone as step 7 says to;
  *   - a track this run's own staged renames moved a folder into, now holding
  *     a task card whose `track:` field doesn't name it — a raw `git mv` of a
- *     track folder instead of `track_rename`.
+ *     track folder instead of `track_update`.
  */
 export function writeRecordProblem(root, subtree, { spawnGit = spawnSync } = {}) {
   const relSubtree = relSubtreeArg(root, subtree)
@@ -575,7 +575,7 @@ export function writeRecordProblem(root, subtree, { spawnGit = spawnSync } = {})
   const bypassed = renamedTracksWithoutTrackRename(root, subtree, relSubtree, spawnGit)
   if (bypassed.length > 0) {
     const plural = bypassed.length === 1
-    return `the tidy's own step 7 checks did not pass: ${bypassed.join(", ")} ${plural ? "has" : "have"} a task card whose track: field doesn't name it — only track_rename keeps that in sync, so this looks like a track folder moved by a raw git mv. Fix the field (or redo the move with track_rename) and run --write-record again.`
+    return `the tidy's own step 7 checks did not pass: ${bypassed.join(", ")} ${plural ? "has" : "have"} a task card whose track: field doesn't name it — only track_update keeps that in sync, so this looks like a track folder moved by a raw git mv. Fix the field (or redo the move with track_update) and run --write-record again.`
   }
   return null
 }

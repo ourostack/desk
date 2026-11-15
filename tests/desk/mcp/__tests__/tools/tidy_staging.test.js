@@ -1,6 +1,6 @@
 // The one-time tidy's own work versus another session's (M4-5 fix round 4).
 //
-// The tidy makes several task_move / track_rename / track_update /
+// The tidy makes several task_update / track_update /
 // track_create calls per track, without ever passing allow_dirty. Every one
 // of those tools stages what it writes and commits exactly that (M4-6 Part
 // 2), so each step lands as its own commit as the tidy goes, rather than
@@ -16,7 +16,7 @@ import { strict as assert } from "node:assert"
 import * as path from "node:path"
 import { promises as fs } from "node:fs"
 import { spawnSync } from "node:child_process"
-import { task_move, track_rename } from "../../../../../plugins/desk/mcp/src/tools/move.js"
+import { moveTask, renameTrack } from "../../../../../plugins/desk/mcp/src/tools/move.js"
 import { task_create } from "../../../../../plugins/desk/mcp/src/tools/task.js"
 import { track_create, track_update } from "../../../../../plugins/desk/mcp/src/tools/track.js"
 import { mkTempDeskRoot, exists } from "./_helpers.js"
@@ -72,15 +72,15 @@ test("a scope-line write, then a rename in the same track, both go through", asy
   await track_update({ deskRoot: root, input: { slug: "track-a", frontmatter: { scope: "billing work; not payroll" } } })
   assert.equal(unstaged(root), "", "track_update staged its own write")
 
-  const result = await task_move({ deskRoot: root, input: { track: "track-a", slug: "fix-it-now", to_slug: "invoice-retry-fix" } })
+  const result = await moveTask({ deskRoot: root, input: { track: "track-a", slug: "fix-it-now", to_slug: "invoice-retry-fix" } })
   assert.equal(result.to, path.posix.join("track-a", "invoice-retry-fix"))
-  assert.equal(unstaged(root), "", "task_move staged the moved card and the edited track.md")
+  assert.equal(unstaged(root), "", "task_update staged the moved card and the edited track.md")
 })
 
 test("two renames in the same track, back to back, both go through", async () => {
   const root = await committedDesk({ "track-a": ["task-one", "task-two"] })
-  await task_move({ deskRoot: root, input: { track: "track-a", slug: "task-one", to_slug: "first-outcome" } })
-  const second = await task_move({ deskRoot: root, input: { track: "track-a", slug: "task-two", to_slug: "second-outcome" } })
+  await moveTask({ deskRoot: root, input: { track: "track-a", slug: "task-one", to_slug: "first-outcome" } })
+  const second = await moveTask({ deskRoot: root, input: { track: "track-a", slug: "task-two", to_slug: "second-outcome" } })
   assert.equal(second.to, path.posix.join("track-a", "second-outcome"))
   const table = await fs.readFile(path.join(root, "track-a", "track.md"), "utf8")
   assert.match(table, /`first-outcome`[\s\S]*`second-outcome`/)
@@ -89,8 +89,8 @@ test("two renames in the same track, back to back, both go through", async () =>
 
 test("a rename, then a merge into the renamed task, both go through", async () => {
   const root = await committedDesk({ "track-a": ["keeper-task", "dupe-task"] })
-  await task_move({ deskRoot: root, input: { track: "track-a", slug: "keeper-task", to_slug: "kept-outcome" } })
-  const merged = await task_move({ deskRoot: root, input: { track: "track-a", slug: "dupe-task", into_task: "kept-outcome" } })
+  await moveTask({ deskRoot: root, input: { track: "track-a", slug: "keeper-task", to_slug: "kept-outcome" } })
+  const merged = await moveTask({ deskRoot: root, input: { track: "track-a", slug: "dupe-task", into_task: "kept-outcome" } })
   assert.match(merged.to, /^track-a\/kept-outcome\/_iterations\/\d{4}-\d{2}-\d{2}-dupe-task$/)
   assert.equal(unstaged(root), "")
 })
@@ -99,39 +99,39 @@ test("a new track, then a re-file into it, then a track rename, all go through",
   const root = await committedDesk({ "old-bucket": ["loose-job"], "track-a": ["kept-task"] })
   await track_create({ deskRoot: root, input: { slug: "billing-work", title: "Billing", scope: SCOPE, body: tasksBody([]) } })
   assert.equal(unstaged(root), "", "track_create staged the new track.md")
-  const moved = await task_move({ deskRoot: root, input: { track: "old-bucket", slug: "loose-job", to_track: "billing-work" } })
+  const moved = await moveTask({ deskRoot: root, input: { track: "old-bucket", slug: "loose-job", to_track: "billing-work" } })
   assert.equal(moved.to, path.posix.join("billing-work", "loose-job"))
-  await task_move({ deskRoot: root, input: { track: "track-a", slug: "kept-task", to_slug: "kept-outcome" } })
-  const renamed = await track_rename({ deskRoot: root, input: { track: "track-a", to: "invoice-work" } })
+  await moveTask({ deskRoot: root, input: { track: "track-a", slug: "kept-task", to_slug: "kept-outcome" } })
+  const renamed = await renameTrack({ deskRoot: root, input: { track: "track-a", to: "invoice-work" } })
   assert.equal(renamed.to, "invoice-work")
-  assert.equal(unstaged(root), "", "track_rename staged the rewritten task cards")
+  assert.equal(unstaged(root), "", "track_update staged the rewritten task cards")
 })
 
 // ── Another session's work is still refused ─────────────────────────────────
 
 test("another session's unstaged edit to a track.md is still refused, even after the tidy staged its own edit there", async () => {
   const root = await committedDesk({ "track-a": ["task-one", "task-two"] })
-  await task_move({ deskRoot: root, input: { track: "track-a", slug: "task-one", to_slug: "first-outcome" } })
+  await moveTask({ deskRoot: root, input: { track: "track-a", slug: "task-one", to_slug: "first-outcome" } })
   await fs.appendFile(path.join(root, "track-a", "track.md"), "\nA line another session is writing.\n")
 
-  const error = await task_move({ deskRoot: root, input: { track: "track-a", slug: "task-two", to_slug: "second-outcome" } }).catch((e) => e)
+  const error = await moveTask({ deskRoot: root, input: { track: "track-a", slug: "task-two", to_slug: "second-outcome" } }).catch((e) => e)
   assert.equal(
     error.message,
-    "task_move: Commit or finish that work first, or pass allow_dirty: true: a track.md this move would edit has unstaged changes or untracked files, so another session may be working there; commit or finish that work first, or pass allow_dirty: true to move it anyway",
+    "task_update: Commit or finish that work first, or pass allow_dirty: true: a track.md this move would edit has unstaged changes or untracked files, so another session may be working there; commit or finish that work first, or pass allow_dirty: true to move it anyway",
   )
   assert.ok(await exists(path.join(root, "track-a", "task-two", "task.md")), "nothing moved")
 })
 
 test("another session's untracked file in a task folder is still refused, even in a track the tidy is working in", async () => {
   const root = await committedDesk({ "track-a": ["task-one", "busy-task"] })
-  await task_move({ deskRoot: root, input: { track: "track-a", slug: "task-one", to_slug: "first-outcome" } })
+  await moveTask({ deskRoot: root, input: { track: "track-a", slug: "task-one", to_slug: "first-outcome" } })
   await fs.writeFile(path.join(root, "track-a", "busy-task", "doing.md"), "another session is writing this\n")
 
   await assert.rejects(
-    task_move({ deskRoot: root, input: { track: "track-a", slug: "busy-task", to_slug: "busy-outcome" } }),
-    /^Error: task_move: Commit or finish that work first, or pass allow_dirty: true: the source has unstaged changes or untracked files, so another session may be working there/,
+    moveTask({ deskRoot: root, input: { track: "track-a", slug: "busy-task", to_slug: "busy-outcome" } }),
+    /^Error: task_update: Commit or finish that work first, or pass allow_dirty: true: the source has unstaged changes or untracked files, so another session may be working there/,
   )
-  await assert.rejects(track_rename({ deskRoot: root, input: { track: "track-a", to: "invoice-work" } }), OTHER_SESSION)
+  await assert.rejects(renameTrack({ deskRoot: root, input: { track: "track-a", to: "invoice-work" } }), OTHER_SESSION)
 })
 
 test("track_update never stages another session's unstaged edit, so the move tools still refuse that track", async () => {
@@ -140,7 +140,7 @@ test("track_update never stages another session's unstaged edit, so the move too
   await track_update({ deskRoot: root, input: { slug: "track-a", frontmatter: { scope: "billing work; not payroll" } } })
   assert.deepEqual(lines(git(root, ["diff", "--name-only"])), ["track-a/track.md"], "left unstaged")
   assert.equal(git(root, ["diff", "--cached", "--name-only"]), "", "nothing staged")
-  await assert.rejects(task_move({ deskRoot: root, input: { track: "track-a", slug: "task-one", to_slug: "first-outcome" } }), OTHER_SESSION)
+  await assert.rejects(moveTask({ deskRoot: root, input: { track: "track-a", slug: "task-one", to_slug: "first-outcome" } }), OTHER_SESSION)
 })
 
 test("track_update leaves an untracked track.md unstaged", async () => {
@@ -163,12 +163,12 @@ test("the track tools write anyway when git add fails, and leave the file unstag
   assert.equal(git(root, ["diff", "--cached", "--name-only"]), "")
 })
 
-test("task_move surfaces a git add failure while staging its edits", async () => {
+test("task_update surfaces a git add failure while staging its edits", async () => {
   const root = await committedDesk({ "track-a": ["task-one"] })
   const spawnGit = (cmd, args, opts) =>
     args.includes("add") && !args.includes("-A") ? { status: 1, stdout: "", stderr: "boom" } : spawnSync(cmd, args, opts)
   await assert.rejects(
-    task_move({ deskRoot: root, input: { track: "track-a", slug: "task-one", to_slug: "first-outcome" }, spawnGit }),
+    moveTask({ deskRoot: root, input: { track: "track-a", slug: "task-one", to_slug: "first-outcome" }, spawnGit }),
     /^Error: desk-mcp: git add failed staging the move's edits: boom$/,
   )
 })
@@ -191,12 +191,12 @@ test("each Desk-tool step in a tidy commits its own paths as it goes, and a manu
   // stages and commits exactly the paths it wrote (M4-6 Part 2), so nothing
   // from these steps is left for a later, separate commit.
   await track_update({ deskRoot: root, input: { slug: "track-a", frontmatter: { scope: "billing work; not payroll" } } })
-  await task_move({ deskRoot: root, input: { track: "track-a", slug: "fix-it-now", to_slug: "invoice-retry-fix" } })
-  await task_move({ deskRoot: root, input: { track: "track-a", slug: "keeper-task", to_slug: "kept-outcome" } })
-  await task_move({ deskRoot: root, input: { track: "track-a", slug: "dupe-task", into_task: "kept-outcome" } })
+  await moveTask({ deskRoot: root, input: { track: "track-a", slug: "fix-it-now", to_slug: "invoice-retry-fix" } })
+  await moveTask({ deskRoot: root, input: { track: "track-a", slug: "keeper-task", to_slug: "kept-outcome" } })
+  await moveTask({ deskRoot: root, input: { track: "track-a", slug: "dupe-task", into_task: "kept-outcome" } })
   await track_create({ deskRoot: root, input: { slug: "billing-work", title: "Billing", scope: SCOPE, body: tasksBody([]) } })
-  await task_move({ deskRoot: root, input: { track: "old-bucket", slug: "loose-job", to_track: "billing-work" } })
-  await track_rename({ deskRoot: root, input: { track: "track-a", to: "invoice-work" } })
+  await moveTask({ deskRoot: root, input: { track: "old-bucket", slug: "loose-job", to_track: "billing-work" } })
+  await renameTrack({ deskRoot: root, input: { track: "track-a", to: "invoice-work" } })
 
   // Every Desk-tool path is already fully committed: nothing unstaged,
   // untracked, or even staged-but-uncommitted remains under any of them.

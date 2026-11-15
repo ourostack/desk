@@ -307,7 +307,7 @@ function processTaskDir({ taskDirAbs, deskRoot, archived, findings, liveTaskCard
         deskRoot,
         absPath: taskDirAbs,
         kind: "task",
-        moveHint: "rename with task_move (handle, to_slug)",
+        moveHint: "rename with task_update (handle, to_slug)",
       }),
     )
   }
@@ -425,7 +425,7 @@ function processTrackDir({ trackDirAbs, deskRoot, operatorNames, findings, liveT
         deskRoot,
         absPath: trackDirAbs,
         kind: "track",
-        moveHint: "rename with track_rename (handle, to)",
+        moveHint: "rename with track_update (handle, rename_to)",
       }),
     )
   }

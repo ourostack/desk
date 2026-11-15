@@ -16,7 +16,7 @@ import { task_create, task_update, stageAndCommitCard } from "../../../../../plu
 import { track_create } from "../../../../../plugins/desk/mcp/src/tools/track.js"
 import { friction_add } from "../../../../../plugins/desk/mcp/src/tools/friction.js"
 import { desk_save } from "../../../../../plugins/desk/mcp/src/tools/desk-save.js"
-import { task_move } from "../../../../../plugins/desk/mcp/src/tools/move.js"
+import { moveTask } from "../../../../../plugins/desk/mcp/src/tools/move.js"
 import { writeCardCommitted } from "../../../../../plugins/desk/mcp/src/tools/_card-commit.js"
 import { commitRoute } from "../../../../../plugins/desk/mcp/src/util/route-around.js"
 import { resolveDeskStateDir } from "../../../../../plugins/desk/mcp/src/runtime/last-start.js"
@@ -53,7 +53,7 @@ const landedThenTimedOut = (cmd, args, opts) => {
 
 // The call times out before the commit lands: what a slow pre-commit hook (the card guard) does.
 const timedOutBeforeCommit = (cmd, args, opts) => (isCommit(args) ? { status: null, signal: "SIGTERM", stdout: "", stderr: "", error: timeout() } : spawnSync(cmd, args, opts))
-// task_move and track_rename commit through a private index (commit-tree), not `git commit`.
+// task_update and track_update commit through a private index (commit-tree), not `git commit`.
 const timedOutBeforeCommitTree = (cmd, args, opts) => (args.includes("commit-tree") ? { status: null, signal: "SIGTERM", stdout: "", stderr: "", error: timeout() } : spawnSync(cmd, args, opts))
 
 // Desk cannot read back: the commit times out and every read of HEAD after it fails.
@@ -395,7 +395,7 @@ test("the route of a task move that did not land, run by hand, commits the move 
   await fs.writeFile(path.join(root, "trip", "old-name", "notes.md"), "notes\n", "utf8")
   git(root, ["add", "-A"])
   git(root, ["commit", "-q", "-m", "fixture"])
-  const result = await task_move({ deskRoot: root, input: { track: "trip", slug: "old-name", to_slug: "new-name" }, spawnGit: timedOutBeforeCommitTree, schedulePush: () => assert.fail("no push") })
+  const result = await moveTask({ deskRoot: root, input: { track: "trip", slug: "old-name", to_slug: "new-name" }, spawnGit: timedOutBeforeCommitTree, schedulePush: () => assert.fail("no push") })
   const route = result.commit.route_around
   assertRoute(route)
   const { code, first } = await followRoute(route)

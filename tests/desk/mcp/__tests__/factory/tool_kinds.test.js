@@ -48,7 +48,7 @@ const COPILOT_CASES = [
   ["desk-track_create", "desk"], ["desk-track_update", "desk"],
   ["desk-friction_add", "desk"], ["desk-lesson_add", "desk"],
   ["desk-desk_status", "desk"], ["desk-desk_search", "desk"], ["desk-desk_recall", "desk"],
-  ["desk-task_focus", "desk"], ["desk-task_signoff", "desk"], ["desk-desk_save", "desk"], ["desk-task_move", "desk"],
+  ["desk-task_focus", "desk"], ["desk-task_signoff", "desk"], ["desk-desk_save", "desk"],
   ["desk-note", "desk"],
   ["skill", "skill"],
   ["some-server-tool", "mcp"],

@@ -1,5 +1,5 @@
 // task_focus — a session's main agent declares the task it is working on — plus the focus held for the session, the
-// `focus` field on task_create and the hints task_update, task_archive and task_move add. Hints never gate a call.
+// `focus` field on task_create and the hints task_update and task_archive add. Hints never gate a call.
 
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
@@ -16,7 +16,7 @@ import {
 } from "../../../../../plugins/desk/mcp/src/tools/task-focus.js"
 import { recentProgress } from "../../../../../plugins/desk/mcp/src/tools/task-body.js"
 import { task_create, task_update, task_archive } from "../../../../../plugins/desk/mcp/src/tools/task.js"
-import { task_move } from "../../../../../plugins/desk/mcp/src/tools/move.js"
+import { moveTask } from "../../../../../plugins/desk/mcp/src/tools/move.js"
 import { createFocusHolder, toolRequirement, requirementMet } from "../../../../../plugins/desk/mcp/src/runtime/desk-session.js"
 import { callTool } from "../../../../../plugins/desk/mcp/src/server.js"
 import { mkTempDeskRoot } from "./_helpers.js"
@@ -271,11 +271,11 @@ test("no-focus hint repeats on every task tool result until the session sets a f
   assert.equal(after.focus_note, undefined, "the hint stops once a focus is set")
 })
 
-test("no-focus hint also rides task_move and task_create, stops after a deliberate clear, and task_focus itself never carries it", async () => {
+test("no-focus hint also rides task_update and task_create, stops after a deliberate clear, and task_focus itself never carries it", async () => {
   const root = await mkTempDeskRoot()
   await card(root, "tr", "alpha-work")
   const moved = ctx()
-  const result = await task_move({ deskRoot: root, statusContext: moved.statusContext, input: { track: "tr", slug: "alpha-work", to_slug: "alpha-renamed" } })
+  const result = await moveTask({ deskRoot: root, statusContext: moved.statusContext, input: { track: "tr", slug: "alpha-work", to_slug: "alpha-renamed" } })
   assert.equal(result.focus_note, MAIN_NONE)
   const created = ctx()
   assert.equal((await task_create({ deskRoot: root, statusContext: created.statusContext, input: { track: "tr", slug: "beta-work", title: "T" } })).focus_note, MAIN_NONE)
@@ -331,22 +331,22 @@ test("moving the focused card carries the focus; moving another leaves it", asyn
   await fs.writeFile(path.join(root, "tr", "track.md"), "---\ntitle: o\n---\n")
   const { focus, statusContext } = ctx()
   await taskFocus({ deskRoot: root, input: { track: "tr", slug: "alpha-work" }, statusContext })
-  const unrelated = await task_move({ deskRoot: root, statusContext, input: { track: "tr", slug: "beta-work", to_slug: "beta-renamed" } })
+  const unrelated = await moveTask({ deskRoot: root, statusContext, input: { track: "tr", slug: "beta-work", to_slug: "beta-renamed" } })
   assert.equal(unrelated.focus_note, undefined)
   assert.deepEqual(focus.get(), { track: "tr", slug: "alpha-work" })
-  const followed = await task_move({ deskRoot: root, statusContext, input: { track: "tr", slug: "alpha-work", to_slug: "alpha-renamed" } })
+  const followed = await moveTask({ deskRoot: root, statusContext, input: { track: "tr", slug: "alpha-work", to_slug: "alpha-renamed" } })
   assert.equal(followed.focus_note, undefined)
   assert.deepEqual(focus.get(), { track: "tr", slug: "alpha-renamed" })
-  await task_move({ deskRoot: root, statusContext, input: { track: "tr", slug: "alpha-renamed", to_track: "elsewhere-track" } })
+  await moveTask({ deskRoot: root, statusContext, input: { track: "tr", slug: "alpha-renamed", to_track: "elsewhere-track" } })
   assert.deepEqual(focus.get(), { track: "elsewhere-track", slug: "alpha-renamed" })
-  await task_move({ deskRoot: root, statusContext, input: { track: "elsewhere-track", slug: "alpha-renamed", to_track: "tr", into_task: "gamma-work" } })
+  await moveTask({ deskRoot: root, statusContext, input: { track: "elsewhere-track", slug: "alpha-renamed", to_track: "tr", into_task: "gamma-work" } })
   assert.deepEqual(focus.get(), { track: "tr", slug: "gamma-work" }, "a merge follows into the card that keeps the job")
 })
 
-test("task_move works with no session holder", async () => {
+test("task_update works with no session holder", async () => {
   const root = await mkTempDeskRoot()
   await card(root, "tr", "alpha-work")
-  const result = await task_move({ deskRoot: root, input: { track: "tr", slug: "alpha-work", to_slug: "alpha-renamed" } })
+  const result = await moveTask({ deskRoot: root, input: { track: "tr", slug: "alpha-work", to_slug: "alpha-renamed" } })
   assert.equal(result.focus_note, undefined)
 })
 

@@ -764,7 +764,7 @@ export async function task_create({ deskRoot, input, person = null, search, stat
   }
   // A delivered task sits in the archive under its own slug; creating over it would start the job again with a clean record.
   if (await pathExists(await resolveWriteTarget({ deskRoot, person, segments: [track, "_archive", slug] }))) {
-    throw Object.assign(new Error(`task_create: Use task_move (unarchive: true) to bring it back, or choose another slug: ${track}/${slug} already exists in the archive. To work on it again, bring it back with task_move (unarchive: true), then task_update with return_reason. To start different work, choose another slug.`), { code: "task_create_true_to_bring_it_back" })
+    throw Object.assign(new Error(`task_create: Use task_update (unarchive: true) to bring it back, or choose another slug: ${track}/${slug} already exists in the archive. To work on it again, bring it back with task_update (unarchive: true), then task_update with return_reason. To start different work, choose another slug.`), { code: "task_create_true_to_bring_it_back" })
   }
 
   const ts = nowIso()

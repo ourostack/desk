@@ -9,12 +9,10 @@ export const TOOL_NAMES = [
   "task_create",
   "task_update",
   "task_archive",
-  "task_move",
   "task_focus",
   "task_signoff",
   "track_create",
   "track_update",
-  "track_rename",
   "friction_add",
   "lesson_add",
   "desk_save",
@@ -38,11 +36,9 @@ export const TOOL_DESCRIPTIONS = {
   task_create:
     "Use when new work needs its own card: create a task card at <track>/<slug>/task.md. `slug` must be an outcome name: 2-6 lowercase kebab-case words, not prompt-like or credential-like; a rejection says what to fix.",
   task_update:
-    "The only way to change an existing task card (direct edits are denied). Merge `frontmatter`, record progress with `note` and `next_step`, `body_append`, or change `step`, `resource` or a `replace_section`. A move to `done` needs `evidence`. A live done/cancelled result carries archive_due: the owning main agent calls task_archive before final delivery. The cue archives nothing itself.",
+    "The only way to change an existing task card (direct edits are denied). Merge `frontmatter`, record progress with `note` and `next_step`, `body_append`, or change `step`, `resource` or a `replace_section`. A move to `done` needs `evidence`. A live done/cancelled result carries archive_due: the owning main agent calls task_archive before final delivery. The cue archives nothing itself. To move or rename a task (live or archived), pass `to_track` and/or `to_slug` (an outcome name; `to_track` an existing track; the target must not exist) and nothing else; `handle` (from active_tasks, desk_status `detail: true` or a desk_doctor finding) replaces track and slug for a name shown as <redacted segment>. On a Git desk a folder with unstaged or untracked changes is refused unless `allow_dirty: true`. `unarchive: true` reopens an archived task; `into_task: \"<keeper>\"` merges a duplicate into the keeper, refused for a live task into a done or cancelled one; nothing is deleted.",
   task_archive:
     "Use when a task's work is finished or cancelled: move <track>/<slug>/ to <track>/_archive/<slug>/. A task not yet done or cancelled needs `evidence` or `outcome: \"cancelled\"`. Returns archive_pending with the retained path and next_action when publication is unproven; that is not completed publication. Repeating an archived task is safe.",
-  task_move:
-    "Use when a task belongs in another track or needs a new name: move or rename it (live or archived; archived stays archived). `to_slug` must be an outcome name and `to_track` an existing track; the target must not exist. On a Git desk it refuses a folder with unstaged or untracked changes unless `allow_dirty: true`. `unarchive: true` reopens an archived task; `into_task: \"<keeper>\"` merges a duplicate into the keeper, refused for a live task into a done or cancelled one; nothing is deleted.",
   task_signoff:
     "Record the operator's answer to a delivered task: accepted or refused. Call it only after the operator has answered, in a turn after the one that delivered the work. A refusal needs `reason` (theirs) and `return_reason` (your own reading) and puts the task back to processing. A subagent never calls this.",
   task_focus:
@@ -50,9 +46,7 @@ export const TOOL_DESCRIPTIONS = {
   track_create:
     "Use when new work needs its own track: create a track at <slug>/track.md. `slug` must be an outcome name (2-6 lowercase kebab-case words) and `scope` is required: one line, at most 240 characters, \"<what belongs>; not <what doesn't>\". A rejection says what to fix. On a Git desk it stages and commits the new track.md; a commit failure never loses the write, reported via a `commit` field.",
   track_update:
-    "Merge frontmatter or append to the body of an existing track.md. `frontmatter.scope`, if set, is validated as track_create validates it. On a Git desk it stages and commits the track.md when that file held no unstaged changes before the write, so it never adopts another session's edit; a commit failure never loses the write, reported via a `commit` field.",
-  track_rename:
-    "Use when a track needs a new name: `to` must be a valid track name (as in track_create) and must not already exist. Rewrites `track:` in every task.md under the moved tree, live and archived, and commits the moved directory. On a Git desk it refuses a track with unstaged changes or untracked, non-ignored files, because another session may be working there, unless `allow_dirty: true`; the refusal never quotes names. It stages the task cards it rewrites.",
+    "Merge frontmatter or append to the body of an existing track.md. `frontmatter.scope`, if set, is validated as track_create validates it. On a Git desk it stages and commits the track.md when that file held no unstaged changes before the write, so it never adopts another session's edit; a commit failure never loses the write, reported via a `commit` field. To rename the track instead, pass `rename_to` (a valid track name that doesn't exist yet) and nothing else: it rewrites `track:` in every task.md under the moved tree, live and archived, and commits the moved directory. A `handle` replaces `slug` for a name shown as <redacted segment>. On a Git desk it refuses a track with unstaged changes or untracked, non-ignored files, because another session may be working there, unless `allow_dirty: true`; the refusal never quotes names. It stages the task cards it rewrites.",
   friction_add:
     "Use when something got in your way and should be recorded: append a friction entry to _meta/friction.md, or under <track>/_friction/ when `track` is given. `about` is \"setup\" (default, kept on the desk) or \"system\" (Desk, its skills or the factory); system friction needs a one-line `title` and opens an improvement card. Read `improvement` in the result: opened, duplicate or reopened means the card exists. `error_code` reports a Desk failure with its evidence (friction-management has the rest).",
   lesson_add:

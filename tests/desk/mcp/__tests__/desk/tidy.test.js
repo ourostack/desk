@@ -780,8 +780,8 @@ test("--report lists this session's own findings, and gives one line for a desk 
   const result = cli(["--report", "--root", root], { env: { DESK: root } })
   assert.equal(result.code, 0)
   assert.match(result.stdout, new RegExp(`^Desk tools: ${reEscape(root)}\\nThis script: ${reEscape(root)}\\nThis session's own desk: ${reEscape(root)}\\nOrganization findings in it: \\d+\\n`))
-  assert.match(result.stdout, /^ {2}track_catch_all: inbox \(handle track-[0-9a-f]{10}\) — .*rename with track_rename \(handle, to\)/m)
-  assert.match(result.stdout, /^ {2}name_prompt_like: inbox\/hi-please-fix-this \(handle task-[0-9a-f]{10}\) — .*rename with task_move \(handle, to_slug\)/m)
+  assert.match(result.stdout, /^ {2}track_catch_all: inbox \(handle track-[0-9a-f]{10}\) — .*rename with track_update \(handle, rename_to\)/m)
+  assert.match(result.stdout, /^ {2}name_prompt_like: inbox\/hi-please-fix-this \(handle task-[0-9a-f]{10}\) — .*rename with task_update \(handle, to_slug\)/m)
   assert.match(result.stdout, /^ {2}loose_file: scratch-notes.txt — /m, "a loose entry has no handle")
 
   const plain = soloDesk({ git: false })
@@ -917,7 +917,7 @@ test("--write-record succeeds once everything the tidy changed under the touched
   assert.ok(readOrganizationRecord(root) !== null)
 })
 
-test("--write-record refuses a track folder moved by a raw git mv instead of track_rename", () => {
+test("--write-record refuses a track folder moved by a raw git mv instead of track_update", () => {
   const root = tempDir()
   cleanTrack(root)
   write(
@@ -928,12 +928,12 @@ test("--write-record refuses a track folder moved by a raw git mv instead of tra
   initGit(root)
   git(root, "add", "-A")
   git(root, "commit", "-q", "-m", "initial")
-  // track_rename would rewrite `track:` on every card it moves; a raw `git
+  // track_update would rewrite `track:` on every card it moves; a raw `git
   // mv` of the folder carries the old value forward unchanged.
   git(root, "mv", "billing-disputes", "billing-issues")
   const refused = cli(["--write-record"], { env: { DESK: root } })
   assert.equal(refused.code, 1)
-  assert.match(refused.stdout, /track_rename/)
+  assert.match(refused.stdout, /track_update/)
   assert.equal(readOrganizationRecord(root), null)
 })
 
@@ -954,17 +954,17 @@ test("--write-record refuses a raw git mv whose only card sits under _archive", 
   git(root, "mv", "old-track", "new-track")
   const refused = cli(["--write-record"], { env: { DESK: root } })
   assert.equal(refused.code, 1)
-  assert.match(refused.stdout, /track_rename/)
+  assert.match(refused.stdout, /track_update/)
   assert.equal(readOrganizationRecord(root), null)
 })
 
 // Review fix round, 2026-09-28b (finding 3): a card with no `track:` field
-// at all used to count as no evidence of a mismatch, but `track_rename`
+// at all used to count as no evidence of a mismatch, but `track_update`
 // writes that field unconditionally on every card it finds, so its absence
 // after a purported rename is exactly as telling as a wrong value.
-test("--write-record refuses a raw git mv whose card has no track: field, since track_rename would have written one", () => {
+test("--write-record refuses a raw git mv whose card has no track: field, since track_update would have written one", () => {
   const root = tempDir()
-  write(root, "old-track/track.md", "---\ntitle: old-track\nscope: an outcome track_rename never touched; not anything else\n---\n")
+  write(root, "old-track/track.md", "---\ntitle: old-track\nscope: an outcome track_update never touched; not anything else\n---\n")
   write(root, "old-track/some-task/task.md", `---\ntitle: some-task\nstatus: processing\nupdated: '${RECENT}'\n---\n`)
   initGit(root)
   git(root, "add", "-A")
@@ -972,7 +972,7 @@ test("--write-record refuses a raw git mv whose card has no track: field, since 
   git(root, "mv", "old-track", "new-track")
   const refused = cli(["--write-record"], { env: { DESK: root } })
   assert.equal(refused.code, 1)
-  assert.match(refused.stdout, /track_rename/)
+  assert.match(refused.stdout, /track_update/)
   assert.equal(readOrganizationRecord(root), null)
 })
 
@@ -987,7 +987,7 @@ test("--write-record does not flag a genuinely renamed track whose task cards al
   initGit(root)
   git(root, "add", "-A")
   git(root, "commit", "-q", "-m", "initial")
-  // What a genuine track_rename leaves behind: the folder moved, and every
+  // What a genuine track_update leaves behind: the folder moved, and every
   // card's track: field rewritten to the new name.
   git(root, "mv", "billing-disputes", "billing-issues")
   write(
@@ -1087,7 +1087,7 @@ test("--write-record refuses when a candidate track's task card can't be read, s
   try {
     const refused = cli(["--write-record"], { env: { DESK: root } })
     assert.equal(refused.code, 1)
-    assert.match(refused.stdout, /track_rename/)
+    assert.match(refused.stdout, /track_update/)
     assert.equal(readOrganizationRecord(root), null)
   } finally {
     chmodSync(taskMd, 0o644)

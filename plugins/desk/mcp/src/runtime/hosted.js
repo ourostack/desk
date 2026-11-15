@@ -46,8 +46,8 @@ export function hostedRefusal(name, input, env) {
 }
 
 const READ_ONLY = new Set(["desk_search", "desk_recall", "desk_status", "desk_skill"])
-// Tools that can remove or overwrite what was there: archive and move relocate a task, rename a track rewrites its path, and desk_save replaces files.
-const DESTRUCTIVE = new Set(["task_archive", "task_move", "track_rename", "desk_save"])
+// Tools that can remove or overwrite what was there: archive relocates a task and desk_save replaces files.
+const DESTRUCTIVE = new Set(["task_archive", "desk_save"])
 
 // desk_doctor is not read-only even though a read-only session may call it: its repairs change state.
 export const TOOL_ANNOTATIONS = Object.freeze(Object.fromEntries(TOOL_NAMES.map((name) => [

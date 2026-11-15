@@ -372,8 +372,8 @@ async function scanDesk(deskRoot, scanRoot, desk, counts) {
  * where `next_step` is the card's `**Next step:**` paragraph on one line, in full, or null, `blocker` is why the card says the task is blocked (a `## Blocker` section or a `Blocker:` line) on one line, or null,
  * where `repos` is `[{ name?, local_path?, mode? }]`, and `steps` (only on a card with a readable `## Steps` table) is `{ total, delivered, ready: [id], blocked: [{ id, reason }] }`, dropped steps not counted, and `cleanup_due_count` (only when some) is how many of its `## Resources` rows are due for cleanup.
  * `cleanup` (only when some rows are due): `{ items, cards, finished: [{ card, due }], more }` (`finished` lists the first 20; `more` counts the rest), over the unfinished cards above and the finished or archived cards this machine's cleanup index lists (./cleanup-index.js); `finished` names the latter.
- * `handle`: the folder's stable handle (./handles.js), which task_move and
- * track_rename take in place of a name, so a redacted folder can be renamed.
+ * `handle`: the folder's stable handle (./handles.js), which task_update and
+ * track_update take in place of a name, so a redacted folder can be renamed.
  * `redacted`: `{ names, titles }`, how many names and titles were hidden.
  */
 export async function activeTasks(deskRoot, { env = process.env } = {}) {

@@ -5,7 +5,7 @@
 // that held a password, M4-7-F4). The listing desk_status serves, the doctor's
 // organization findings and the tidy report show such a name as
 // `<redacted segment>`, and give every task and track a handle next to it.
-// task_move takes `handle` in place of `track` + `slug`, and track_rename takes
+// task_update takes `handle` in place of `track` + `slug`, and track_update takes
 // `handle` in place of `track`, so the folder gets an outcome name without the
 // caller ever handling the old one.
 //
