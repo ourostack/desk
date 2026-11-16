@@ -16,7 +16,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 /** The generator's version, written into every generated file; it is core's version. */
-export const ACTIONS_VERSION = "0.17.2";
+export const ACTIONS_VERSION = "0.17.3";
 const GENERATOR = `ouro-actions ${ACTIONS_VERSION}`;
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -929,11 +929,12 @@ export function renderActions(set: ActionSet): Map<string, string> {
   return files;
 }
 
-/** Every way `found` differs from what the set generates: a missing, extra or different file, at its first differing line. */
-export function checkGenerated(set: ActionSet, found: ReadonlyMap<string, string>): string[] {
+/** Every way `found` differs from what the set generates: a missing, extra or different file, at its first differing line. `only` checks just those files. */
+export function checkGenerated(set: ActionSet, found: ReadonlyMap<string, string>, only?: ReadonlySet<string>): string[] {
   const expected = renderActions(set);
   const problems: string[] = [];
   for (const [path, text] of expected) {
+    if (only && !only.has(path)) continue;
     const have = found.get(path);
     if (have === undefined) {
       problems.push(`${path}: missing. Fix: run generate.`);
@@ -1118,9 +1119,29 @@ async function readDir(dir: string): Promise<Map<string, string>> {
   return found;
 }
 
-const USAGE = "usage: node ouro-actions.mts generate <actions.mts> <dir> | check <actions.mts> <dir> [--report <report.json> [--claims <actions.claims.json>] [--app <name>] [--commit <sha>]] | compare-mcp <actions.mts> <tools.json> [--undeclared <names.json>]";
+const USAGE = "usage: node ouro-actions.mts generate <actions.mts> <dir> [--targets <names>] | check <actions.mts> <dir> [--targets <names>] [--report <report.json> [--claims <actions.claims.json>] [--app <name>] [--commit <sha>]] | compare-mcp <actions.mts> <tools.json> [--undeclared <names.json>]";
 
-const REPORT_FLAGS = ["--report", "--claims", "--app", "--commit"];
+const REPORT_FLAGS = ["--report", "--claims", "--app", "--commit", "--targets"];
+
+/** The projections `--targets` names, by the short name a person types (`mcp,actions`), and the file each writes. */
+export const PROJECTIONS: Readonly<Record<string, string>> = Object.freeze({
+  actions: "actions.json",
+  commands: "commands.json",
+  mcp: "mcp.json",
+  webmcp: "webmcp.json",
+  web: "web.ts",
+  swift: "OuroActions.swift",
+  reins: "OuroActionsReins.swift",
+});
+
+/** The files a `--targets` list names, or every file when it is absent. Unknown names fail with the list of names. */
+export function targetFiles(targets: string | undefined): Set<string> | undefined {
+  if (targets === undefined) return undefined;
+  const names = targets.split(",");
+  const unknown = names.filter((n) => !(n in PROJECTIONS));
+  if (unknown.length || names.length === 0) throw new Error(`--targets: ${unknown.length ? unknown.join(", ") : "is empty"} is not a projection. Fix: use any of ${Object.keys(PROJECTIONS).join(", ")}.`);
+  return new Set(names.map((n) => PROJECTIONS[n]!));
+}
 
 /** check's options after its two arguments: each of --report, --claims, --app and --commit at most once with a value; null when they are not. */
 function reportOptions(rest: readonly string[]): Record<string, string> | null {
@@ -1130,29 +1151,37 @@ function reportOptions(rest: readonly string[]): Record<string, string> | null {
     if (!REPORT_FLAGS.includes(flag) || value === undefined || flag in options) return null;
     options[flag] = value;
   }
-  return Object.keys(options).length && !("--report" in options) ? null : options;
+  const keys = Object.keys(options);
+  return keys.length && !("--report" in options) && keys.some((k) => k !== "--targets") ? null : options;
 }
 
 /** Runs the CLI; returns the exit code: 0 clean, 1 drift, 2 usage. */
 export async function main(argv: readonly string[], io: { out(s: string): void; err(s: string): void }): Promise<number> {
   const [cmd, declarations, target, flag, flagValue, ...rest] = argv;
   const report = cmd === "check" ? reportOptions(argv.slice(3)) : null;
-  const flagOk = flag === undefined || (cmd === "compare-mcp" && flag === "--undeclared" && flagValue !== undefined && rest.length === 0) || report !== null;
+  const flagOk = flag === undefined || (cmd === "compare-mcp" && flag === "--undeclared" && flagValue !== undefined && rest.length === 0) || (cmd === "generate" && flag === "--targets" && flagValue !== undefined && rest.length === 0) || report !== null;
   if (!cmd || !declarations || !target || !["generate", "check", "compare-mcp"].includes(cmd) || !flagOk) {
     io.err(`${USAGE}\n`);
     return 2;
   }
   const set = await loadSet(declarations);
+  let only: Set<string> | undefined;
+  try {
+    only = cmd === "generate" ? targetFiles(flag === "--targets" ? flagValue : undefined) : targetFiles(report?.["--targets"]);
+  } catch (e) {
+    io.err(`ouro-actions: ${(e as Error).message}\n`);
+    return 2;
+  }
   if (cmd === "generate") {
     await mkdir(target, { recursive: true });
     const files = renderActions(set);
-    for (const [path, text] of files) await writeFile(join(target, path), text);
-    io.out(`ouro-actions: wrote ${files.size} files for ${count(set.actions.length, "action")} into ${target}.\n`);
+    for (const [path, text] of files) if (!only || only.has(path)) await writeFile(join(target, path), text);
+    io.out(`ouro-actions: wrote ${only ? only.size : files.size} files for ${count(set.actions.length, "action")} into ${target}.\n`);
     return 0;
   }
   if (cmd === "check") {
     const found = await readDir(target);
-    const problems = checkGenerated(set, found);
+    const problems = checkGenerated(set, found, only);
     for (const p of problems) io.err(`ouro-actions: ${p}\n`);
     if (report?.["--report"]) {
       const claimsPath = report["--claims"] ?? fileURLToPath(new URL("./actions.claims.json", import.meta.url));

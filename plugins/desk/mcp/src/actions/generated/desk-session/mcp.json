@@ -1,5 +1,5 @@
 {
-  "generator": "ouro-actions 0.17.2",
+  "generator": "ouro-actions 0.17.3",
   "set": "desk-session",
   "tools": [
     {
