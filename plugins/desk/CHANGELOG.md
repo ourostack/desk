@@ -1,5 +1,13 @@
 # desk plugin — changelog
 
+## 3.2.186 — 2026-11-16
+
+### Ouro AX kit pinned to v1.3.209
+
+The vendored AX kit now records Ouro UI v1.3.209 as its source commit. Its files are byte-identical to the v1.3.205 copies, so only the pin moves.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.185 — 2026-11-16
 
 ### Generated action output is only what Desk serves
