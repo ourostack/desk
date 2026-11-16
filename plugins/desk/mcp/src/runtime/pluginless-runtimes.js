@@ -18,7 +18,9 @@ export function findPluginlessRuntimes(psText) {
   return found
 }
 
-export function listProcesses() {
+/** Windows has no `ps`; the check reports nothing there rather than failing. */
+export function listProcesses(platform = process.platform) {
+  if (platform === "win32") return ""
   return execFileSync("ps", ["-axo", "pid=,command="], { encoding: "utf8", maxBuffer: 16 * 1024 * 1024, windowsHide: true })
 }
 

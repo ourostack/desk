@@ -25,7 +25,8 @@ test("the status lines name the runtimes and how to recover, or say all is well"
 })
 
 test("listProcesses reads this host's process table", () => {
-  assert.match(listProcesses(), new RegExp(`\\b${process.pid}\\b`, "u"))
+  assert.equal(listProcesses("win32"), "")
+  if (process.platform !== "win32") assert.match(listProcesses(), new RegExp(`\\b${process.pid}\\b`, "u"))
 })
 
 test("drains.js runtimes status prints the findings, and needs the status word", async () => {
