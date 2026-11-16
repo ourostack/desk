@@ -38,6 +38,7 @@ import { argvSafeReason } from "./argv-safe-reason.js"
 import { remoteIdentityEnv } from "./remote-identity.js"
 import { shouldLaunchFiler } from "./filer-throttle.js"
 import { applyPublicationMode } from "./publication-mode.js"
+import { commitWaitingLogs } from "./append-lane.js"
 
 const GIT_TIMEOUT_MS = 10_000
 const MAX_QUARANTINE_SUFFIX = 1000
@@ -479,6 +480,9 @@ function unresolved({ root, env, fileProblem, reason, conflicted, quarantinedPat
  * itself did.
  */
 export async function syncWorkspace(options) {
+  // Task log entries a server wrote and never committed (one that ended before its push worker committed them, or an older
+  // Desk that committed them in-process) are committed first, so the pull carries them and the delivery below pushes them.
+  commitWaitingLogs(options.root)
   const result = await runSync(options)
   // `desk_status` reads this back, so its health word carries a failed sync the way boot's does.
   recordPullOutcome({ root: options.root, env: options.env, result })

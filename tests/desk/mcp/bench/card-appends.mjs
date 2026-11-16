@@ -79,7 +79,10 @@ let drained = 0
 const lanePath = path.join(src, "runtime", "append-lane.js")
 if (fs.existsSync(lanePath)) {
   const started = performance.now()
-  await (await import(pathToFileURL(lanePath).href)).drainAppendLanes()
+  const lane = await import(pathToFileURL(lanePath).href)
+  // The push worker commits waiting logs; before that, the server's own lane did.
+  if (lane.commitWaitingLogs) lane.commitWaitingLogs(root)
+  else await lane.drainAppendLanes()
   drained = performance.now() - started
 }
 const gitProcesses = callsBefore() - setup

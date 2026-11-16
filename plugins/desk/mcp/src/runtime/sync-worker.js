@@ -24,7 +24,8 @@
 //
 // The push, once the lock is held: sleep `debounceMs` (letting a burst of
 // near-simultaneous commits land before the one push this coalesces them
-// into), then deliver (`runtime/deliver.js`) in a loop until nothing local is
+// into), commit the task log entries waiting for a commit once they are
+// quiet (`runtime/append-lane.js`), then deliver (`runtime/deliver.js`) in a loop until nothing local is
 // left undelivered. Delivery never touches the shared checkout's working tree:
 // a fast-forward is pushed as it is, and anything else is replayed onto the
 // remote in a private worktree, with conflicts on Desk's own cards and logs
@@ -67,6 +68,7 @@ import { publicationRecovery } from "./pr-publication.js"
 import { publicationDeferred } from "./publication-mode.js"
 import { deliveryIsPublication } from "../util/main-publish.js"
 import { NOT_A_DESK_DEFECT, blockedWords, deliver, gitEnv, undeliveredCommits } from "./deliver.js"
+import { commitWaitingLogs, settleLogs, waitingLogs } from "./append-lane.js"
 
 const GIT_TIMEOUT_MS = 10_000
 export const DEFAULT_DEBOUNCE_MS = 2000
@@ -629,22 +631,25 @@ function recordBlocked({ root, env, spawnGit, fileProblem, pushedAt, reason, pat
 
 /**
  * Runs the whole worker cycle for `root`: acquire the lock (exit quietly on
- * contention), skip entirely when there is no remote or no upstream (never
- * an error — controller ruling 2), otherwise debounce, then deliver in a loop
+ * contention), debounce, commit the task logs waiting for a commit once they
+ * are quiet (`runtime/append-lane.js`), skip the push when there is no remote
+ * or no upstream (never an error — controller ruling 2), otherwise deliver in a loop
  * that keeps re-checking what is undelivered until nothing is, so the lock
  * holder never releases while a commit is left unpushed.
  * Never throws — including when the lock is refused under a node:test run
  * (`result: "test_isolation_refused"`, logged to `stderr` rather than left
  * silent), which `runSyncPushCli`/`sync-push.js` still resolve to exit code
  * 0 for, the same as `"busy"` or `"skipped"`. `clock`, `spawnGit`,
- * `fileProblem` and `stderr` are test seams.
+ * `fileProblem`, `stderr`, `quietMs` and `maxWaitMs` are test seams.
  */
 export async function runPushWorker(options) {
   for (let round = 0; ; round += 1) {
     // Only the first round waits out the debounce.
-    const result = await pushRound(round === 0 ? options : { ...options, debounceMs: 0 })
-    // A commit made after the holder's last check finds the lock still held and its own worker exits, so the holder
-    // looks once more after releasing the lock and goes round again for anything left.
+    const { result, logs } = await pushRound(round === 0 ? options : { ...options, debounceMs: 0 })
+    // A commit or a log entry made after the holder's last check finds the lock still held and its own worker exits, so the
+    // holder looks once more after releasing the lock and goes round again for anything left. Logs Git would not commit, a
+    // round that never held the lock, and a long run of entries leave the rest to the next worker (every entry starts one) or the holder.
+    if (["committed", "empty"].includes(logs) && round < MAX_ROUNDS && waitingLogs(options.root, options.spawnGit).length > 0) continue
     if (result.result !== "ok") return result
     const left = undeliveredCommits({ root: options.root, spawnGit: options.spawnGit, delivered: deliveredSoFar(options.root, options.env ?? process.env) })
     if (!(left?.length > 0)) return result
@@ -653,7 +658,7 @@ export async function runPushWorker(options) {
 
 async function pushRound({
   root, env = process.env, debounceMs = DEFAULT_DEBOUNCE_MS, spawnGit = spawnSync, clock = REAL_CLOCK, fileProblem = queueDeskProblemFiling,
-  stderr = process.stderr,
+  stderr = process.stderr, quietMs, maxWaitMs,
 }) {
   const lock = await acquireSyncLock({ root, env })
   if (lock?.refused) {
@@ -663,13 +668,18 @@ async function pushRound({
     // shape of "this desk root is a node:test child process", not a defect -- treated as "could not run this
     // cycle", never a crash (Review Focus, `sync_worker.test.js`).
     stderr.write(`Desk sync worker: refused the real state folder under what looks like a node:test run (${DESK_TEST_REAL_STATE}); not pushing this cycle.\n`)
-    return { result: "test_isolation_refused" }
+    return { result: { result: "test_isolation_refused" } }
   }
-  if (lock === null) return { result: "busy" }
+  if (lock === null) return { result: { result: "busy" } }
   try {
-    if (!canPush(root, spawnGit)) return { result: "skipped" }
+    // A checkout on a feature branch publishes each commit, a log's included, to the default branch as it makes it.
+    const pushable = canPush(root, spawnGit) && !deliveryIsPublication(root, spawnGit)
     await clock.sleep(debounceMs)
-    return await deliverUntilDone({ root, env, spawnGit, fileProblem, clock })
+    // Task log entries are committed here, once they have been quiet a moment, so rapid entries are one commit and the server that wrote them may end.
+    await settleLogs(root, { sleep: clock.sleep, spawnGit, quietMs, maxWaitMs })
+    const logs = commitWaitingLogs(root, spawnGit)
+    if (!pushable) return { result: { result: "skipped" }, logs }
+    return { result: await deliverUntilDone({ root, env, spawnGit, fileProblem, clock }), logs }
   } finally {
     lock.release()
   }
@@ -707,10 +717,10 @@ export function defaultSpawnWorker({ root, env, debounceMs, spawnImpl = spawn })
  * call's own process exiting before the debounce window elapses (Review
  * Focus, pinned by `sync_worker.test.js`). `spawnWorker` is a test seam.
  */
-export function schedulePush({ root, env = process.env, debounceMs = DEFAULT_DEBOUNCE_MS, spawnWorker = defaultSpawnWorker }) {
+export function schedulePush({ root, env = process.env, debounceMs = DEFAULT_DEBOUNCE_MS, logs = false, spawnWorker = defaultSpawnWorker }) {
   if (publicationDeferred(env)) return
-  // Card commits from a checkout on a feature branch were already published to the default branch when they were written.
-  if (deliveryIsPublication(root)) return
+  // Card commits from a checkout on a feature branch were already published to the default branch when they were written; a log entry's commit is the worker's to make.
+  if (!logs && deliveryIsPublication(root)) return
   try {
     spawnWorker({ root, env, debounceMs })
   } catch {

@@ -6,7 +6,7 @@ import * as path from "node:path"
 import { spawnSync } from "node:child_process"
 import { createHash } from "node:crypto"
 import { task_update } from "../../../../../plugins/desk/mcp/src/tools/task.js"
-import { drainAppendLanes, flushAppends } from "../../../../../plugins/desk/mcp/src/runtime/append-lane.js"
+import { commitWaitingLogs } from "../../../../../plugins/desk/mcp/src/runtime/append-lane.js"
 import { assertPublishedContentBase, gitSeam } from "../../../../../plugins/desk/mcp/src/desk/content-home.js"
 import { catchUpBehind } from "../../../../../plugins/desk/mcp/src/runtime/deliver.js"
 
@@ -31,7 +31,6 @@ async function fixture(t) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "desk-append-recovery-"))
   t.after(async () => {
     gitSeam.spawn = spawnSync
-    await drainAppendLanes()
     await fs.rm(root, { recursive: true, force: true })
   })
   git(root, ["init", "-q", "-b", "main"])
@@ -72,7 +71,7 @@ test("1: a checkout that is only behind its upstream is fast-forwarded and the w
   assert.equal(answer.status, "logged")
   assert.equal(git(root, ["rev-parse", "HEAD"]), tip)
   assert.equal(await fs.readFile(path.join(root, "incoming.md"), "utf8"), "from elsewhere\n")
-  flushAppends(root)
+  commitWaitingLogs(root)
   assert.equal(git(root, ["rev-parse", "HEAD^"]), tip)
   assert.equal(git(root, ["status", "--porcelain"]), "")
 })
@@ -142,7 +141,7 @@ test("3: a commit the clock cut off is read back and run once more, not handed b
   }
   const answer = await call(root, { log: "Ruling: go." }, { spawnGit })
   assert.equal(answer.status, "logged")
-  assert.equal(flushAppends(root), "committed")
+  assert.equal(commitWaitingLogs(root, spawnGit), "committed")
   assert.equal(timeouts.length, 2)
   assert.ok(timeouts[1] > timeouts[0])
   assert.match(git(root, ["log", "-1", "--format=%s"]), /task_update: log track\/work/u)
@@ -167,7 +166,7 @@ test("5: a call that logs a small entry starts a bounded number of Git processes
   assert.equal(git(root, ["rev-list", "--count", "HEAD"]), "1", "nothing was committed inside the call")
 })
 
-test("3: a commit that landed and was reported cut off is not made twice, and the lane counts it committed", async (t) => {
+test("3: a commit that landed and was reported cut off is not made twice, and the worker counts it committed", async (t) => {
   const root = await fixture(t)
   const spawnGit = (command, args, options) => {
     if (args[2] === "commit" && args.includes("-m")) {
@@ -177,9 +176,9 @@ test("3: a commit that landed and was reported cut off is not made twice, and th
     return spawnSync(command, args, options)
   }
   await call(root, { log: "Ruling: go." }, { spawnGit })
-  assert.equal(flushAppends(root), "committed")
+  assert.equal(commitWaitingLogs(root, spawnGit), "committed")
   assert.equal(git(root, ["rev-list", "--count", "HEAD"]), "2")
-  assert.equal(flushAppends(root), "empty")
+  assert.equal(commitWaitingLogs(root, spawnGit), "empty")
 })
 
 test("2: a branch no setting can map to an upstream ref leaves the published policy unresolved, and the write is refused", async (t) => {

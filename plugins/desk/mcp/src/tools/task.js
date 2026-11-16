@@ -977,7 +977,7 @@ function refuseBodyOnlyKeys(frontmatter) {
   }
 }
 
-export async function task_update({ deskRoot, input, person = null, search, statusContext = {}, env = process.env, spawnGit = spawnSync, schedulePush = schedulePushDefault, finalize = requestTaskFinalize, fetchFn, appendLane = {} }) {
+export async function task_update({ deskRoot, input, person = null, search, statusContext = {}, env = process.env, spawnGit = spawnSync, schedulePush = schedulePushDefault, finalize = requestTaskFinalize, fetchFn }) {
   const values = input ?? {}
   // A field this tool does not read would otherwise be dropped in silence, and the agent would believe the card changed.
   const unknown = Object.keys(values).filter((key) => !TASK_UPDATE_FIELDS.includes(key))
@@ -1003,7 +1003,7 @@ export async function task_update({ deskRoot, input, person = null, search, stat
   // `log` goes to log.md beside the card by the cheap append path. Alone, it is the whole call; with other fields, the rest of the call follows it.
   let logged = null
   if (values.log !== undefined) {
-    logged = await appendCardLog({ deskRoot, person, track, slug, text: requiredText(values.log, "log"), admission: contentAdmission, search, lane: { spawnGit, schedulePush, ...appendLane } })
+    logged = await appendCardLog({ deskRoot, person, track, slug, text: requiredText(values.log, "log"), admission: contentAdmission, search, schedulePush })
     if (Object.keys(values).every((key) => ["track", "slug", "display_label", "content_home", "log"].includes(key))) {
       if (contentAdmission !== null) logged.content_admission = contentAdmission
       return logged

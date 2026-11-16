@@ -680,6 +680,43 @@ test("the loop re-checks for new commits before releasing the lock, so a commit 
   assert.equal(originCommitCount(origin), 3, "seed + first + second all reached origin in one worker run")
 })
 
+// A clone whose task card is pushed, with an entry in its log that no commit holds yet.
+async function cloneWithWaitingLog() {
+  const { origin, cloneA } = await mkOriginWithClone()
+  mkdirSync(path.join(cloneA, "track", "work"), { recursive: true })
+  await writeAndCommit(cloneA, "track/work/task.md", "card\n", "card")
+  git(cloneA, ["push", "-q", "origin", "main"])
+  writeFileSync(path.join(cloneA, "track", "work", "log.md"), "## first\n")
+  return { origin, cloneA }
+}
+
+test("the worker commits a task's waiting log entries and pushes them, and goes round again for an entry written while it held the lock", async () => {
+  const { origin, cloneA } = await cloneWithWaitingLog()
+  let pushes = 0
+  const spawnGit = (cmd, args, opts) => {
+    const result = spawnSync(cmd, args, opts)
+    if (args.includes("push") && result.status === 0 && ++pushes === 1) writeFileSync(path.join(cloneA, "track", "work", "log.md"), "## first\n## second\n")
+    return result
+  }
+  const result = await runPushWorker({ root: cloneA, env: process.env, clock: instantClock, spawnGit, quietMs: 0 })
+  assert.deepEqual(result, { result: "ok" })
+  assert.equal(git(origin, ["log", "-2", "--format=%s", "main"]), "task_update: log track/work\ntask_update: log track/work\n")
+  assert.equal(git(origin, ["show", "main:track/work/log.md"]), "## first\n## second\n")
+  assert.equal(git(cloneA, ["status", "--porcelain"]), "")
+})
+
+test("with no remote the worker still commits a waiting log, and a log Git will not commit waits for the next worker", async () => {
+  const root = await mkPlainRepo()
+  mkdirSync(path.join(root, "track", "work"), { recursive: true })
+  await writeAndCommit(root, "track/work/task.md", "card\n", "card")
+  writeFileSync(path.join(root, "track", "work", "log.md"), "## first\n")
+  const refused = (cmd, args, opts) => (args.includes("commit") ? { status: 1, stdout: "", stderr: "hook refused" } : spawnSync(cmd, args, opts))
+  assert.deepEqual(await runPushWorker({ root, env: process.env, clock: instantClock, spawnGit: refused, quietMs: 0 }), { result: "skipped" })
+  assert.match(git(root, ["status", "--porcelain"]), /track\/work\/log\.md/u)
+  assert.deepEqual(await runPushWorker({ root, env: process.env, clock: instantClock, quietMs: 0 }), { result: "skipped" })
+  assert.equal(git(root, ["log", "-1", "--format=%s"]).trim(), "task_update: log track/work")
+})
+
 // A clock that records each wait and runs `onWait` with its index first, so a test can change the checkout between steps.
 function recordingClock(onWait) {
   const waits = []

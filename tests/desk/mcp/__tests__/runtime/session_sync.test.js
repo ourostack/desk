@@ -502,6 +502,21 @@ function checkpointClock({ exhaustedAtCheckpoint, exhaustedFromFirstStep = false
   return { now, checkpoints: () => reached }
 }
 
+test("session start commits a task log entry an earlier server left uncommitted, and starts its delivery", async () => {
+  const { cloneA } = await mkOriginWithClone()
+  await fs.mkdir(path.join(cloneA, "track", "work"), { recursive: true })
+  await writeAndCommit(cloneA, "track/work/task.md", "card\n", "card")
+  git(cloneA, ["push", "-q", "origin", "main"])
+  // What an older Desk left when its server ended inside the quiet window: the entry written, its commit never made.
+  await fs.writeFile(path.join(cloneA, "track", "work", "log.md"), "## 2026-11-15 16:00\n\nRuling: keep it.\n")
+  const scheduled = []
+  const result = await syncWorkspace({ scheduleDelivery: (options) => scheduled.push(options), root: cloneA, env })
+  assert.equal(git(cloneA, ["log", "-1", "--format=%s"]).trim(), "task_update: log track/work")
+  assert.equal(git(cloneA, ["status", "--porcelain"]), "")
+  assert.equal(result.unpushed.count, 1)
+  assert.deepEqual(scheduled.map((options) => options.root), [cloneA])
+})
+
 test("syncWorkspace reports sync_deadline_exceeded and never attempts a pull when the budget is already exhausted", async () => {
   const { cloneA } = await mkOriginWithClone()
   const clock = checkpointClock({ exhaustedAtCheckpoint: 1 })
