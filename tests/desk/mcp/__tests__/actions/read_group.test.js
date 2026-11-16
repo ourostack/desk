@@ -10,7 +10,7 @@ import { TOOL_INPUT_SCHEMAS } from "../../../../../plugins/desk/mcp/src/tool-sch
 
 const repoRoot = path.resolve(fileURLToPath(new URL("../../../../..", import.meta.url)))
 const mcp = path.join(repoRoot, "plugins", "desk", "mcp")
-const ACTIONS = ["desk_recall", "desk_skill", "improvement_next"]
+const ACTIONS = ["desk_recall", "desk_skill", "desk_search", "improvement_next"]
 
 for (const group of ["desk-read", "desk-session"]) {
   test(`the generated output of ${group} is what its declarations produce`, () => {

@@ -1,8 +1,141 @@
 {
-  "generator": "ouro-actions 0.16.0",
+  "generator": "ouro-actions 0.17.2",
   "set": "desk-read",
   "tool": "desk",
   "actions": [
+    {
+      "id": "desk_search",
+      "consent": "read",
+      "label": "Search the desk",
+      "description": "Find documents on the desk by their exact words.",
+      "agent": "Use when you cannot tell which file holds something, or what changed in a time window. Exact-word search across the desk. Filters: track, status, kind, since, until. `scope`: 'active' (default), 'archived' or 'all'. With no `query`, or `newest: true`, it lists documents by when they were updated, newest first, inside the since/until window (`scope` then defaults to 'all').",
+      "input": {
+        "query": {
+          "label": "Query",
+          "description": "The search query. Omit it to list documents by update time.",
+          "optional": true,
+          "kind": "string"
+        },
+        "newest": {
+          "label": "Newest first",
+          "description": "Pass true to order by update time, newest first, instead of by match.",
+          "optional": true,
+          "kind": "boolean"
+        },
+        "limit": {
+          "label": "Limit",
+          "description": "Maximum number of results.",
+          "optional": true,
+          "min": 1,
+          "kind": "integer"
+        },
+        "scope": {
+          "label": "Scope",
+          "description": "Which documents to search: live work, archived work, or both.",
+          "values": [
+            "active",
+            "archived",
+            "all"
+          ],
+          "optional": true,
+          "kind": "enum"
+        },
+        "filters": {
+          "label": "Filters",
+          "description": "Filters, as a JSON object (not a string).",
+          "optional": true,
+          "protocolOnly": true,
+          "fields": {
+            "track": {
+              "label": "Track",
+              "description": "Track name or names.",
+              "combinator": "anyOf",
+              "optional": true,
+              "options": [
+                {
+                  "label": "Track",
+                  "description": "Track name or names.",
+                  "kind": "string"
+                },
+                {
+                  "label": "Track",
+                  "description": "Track name or names.",
+                  "of": {
+                    "label": "Track",
+                    "description": "Track name or names.",
+                    "kind": "string"
+                  },
+                  "kind": "list"
+                }
+              ],
+              "kind": "one-of"
+            },
+            "status": {
+              "label": "Status",
+              "description": "Task status or statuses.",
+              "combinator": "anyOf",
+              "optional": true,
+              "options": [
+                {
+                  "label": "Status",
+                  "description": "Task status or statuses.",
+                  "kind": "string"
+                },
+                {
+                  "label": "Status",
+                  "description": "Task status or statuses.",
+                  "of": {
+                    "label": "Status",
+                    "description": "Task status or statuses.",
+                    "kind": "string"
+                  },
+                  "kind": "list"
+                }
+              ],
+              "kind": "one-of"
+            },
+            "kind": {
+              "label": "Kind",
+              "description": "Document kind or kinds.",
+              "combinator": "anyOf",
+              "optional": true,
+              "options": [
+                {
+                  "label": "Kind",
+                  "description": "Document kind or kinds.",
+                  "kind": "string"
+                },
+                {
+                  "label": "Kind",
+                  "description": "Document kind or kinds.",
+                  "of": {
+                    "label": "Kind",
+                    "description": "Document kind or kinds.",
+                    "kind": "string"
+                  },
+                  "kind": "list"
+                }
+              ],
+              "kind": "one-of"
+            },
+            "since": {
+              "label": "Since",
+              "description": "Only documents updated at or after this time (ISO 8601).",
+              "optional": true,
+              "kind": "string"
+            },
+            "until": {
+              "label": "Until",
+              "description": "Only documents updated at or before this time (ISO 8601).",
+              "optional": true,
+              "kind": "string"
+            }
+          },
+          "kind": "group"
+        }
+      },
+      "output": {}
+    },
     {
       "id": "desk_recall",
       "consent": "read",

@@ -1,7 +1,102 @@
 {
-  "generator": "ouro-actions 0.16.0",
+  "generator": "ouro-actions 0.17.2",
   "set": "desk-read",
   "tools": [
+    {
+      "name": "desk_search",
+      "description": "Use when you cannot tell which file holds something, or what changed in a time window. Exact-word search across the desk. Filters: track, status, kind, since, until. `scope`: 'active' (default), 'archived' or 'all'. With no `query`, or `newest: true`, it lists documents by when they were updated, newest first, inside the since/until window (`scope` then defaults to 'all').",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "The search query. Omit it to list documents by update time."
+          },
+          "newest": {
+            "type": "boolean",
+            "description": "Pass true to order by update time, newest first, instead of by match."
+          },
+          "limit": {
+            "type": "integer",
+            "description": "Maximum number of results.",
+            "minimum": 1
+          },
+          "scope": {
+            "type": "string",
+            "description": "Which documents to search: live work, archived work, or both.",
+            "enum": [
+              "active",
+              "archived",
+              "all"
+            ]
+          },
+          "filters": {
+            "type": "object",
+            "description": "Filters, as a JSON object (not a string).",
+            "properties": {
+              "track": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                ],
+                "description": "Track name or names."
+              },
+              "status": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                ],
+                "description": "Task status or statuses."
+              },
+              "kind": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                ],
+                "description": "Document kind or kinds."
+              },
+              "since": {
+                "type": "string",
+                "description": "Only documents updated at or after this time (ISO 8601)."
+              },
+              "until": {
+                "type": "string",
+                "description": "Only documents updated at or before this time (ISO 8601)."
+              }
+            },
+            "required": [],
+            "additionalProperties": false
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "consequentialHint": false
+      }
+    },
     {
       "name": "desk_recall",
       "description": "Use for loose recall, as in `do I remember anything about X`. Ranks every desk Markdown file by meaning and exact words together. `scope`: 'active', 'archived' or 'all' (default; this is the historical lookback).",

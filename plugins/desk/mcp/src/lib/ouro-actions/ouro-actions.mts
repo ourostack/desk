@@ -16,7 +16,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 /** The generator's version, written into every generated file; it is core's version. */
-export const ACTIONS_VERSION = "0.16.0";
+export const ACTIONS_VERSION = "0.17.2";
 const GENERATOR = `ouro-actions ${ACTIONS_VERSION}`;
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -63,6 +63,12 @@ interface FieldBase {
   flag?: string;
   /** Input only, and optional: the value may also be null, which a program sends to clear it (JSON Schema's `null`). */
   nullable?: boolean;
+  /**
+   * Input only, and optional: the property name the field has on the JSON wire (MCP, WebMCP), when the existing tool's
+   * input is named differently from the declaration's camelCase name, such as `wire: "has_instructions"` for
+   * `hasInstructions`. Only the JSON property changes; the other projections keep the declaration's name.
+   */
+  wire?: string;
 }
 /** A JSON Schema `format` a string can name; MCP and WebMCP carry it, and the CLI and Swift take the string as it is. */
 export const STRING_FORMATS = Object.freeze(["date-time", "date", "uri", "email"] as const);
@@ -103,11 +109,17 @@ export interface EnumField<V extends string = string> extends FieldBase { kind: 
 /**
  * The structured fields, for an existing MCP tool's inputs that a person's door can't carry: a list of values, a group
  * of named fields, or one of several shapes. They are protocol-only input fields: MCP and WebMCP carry their JSON
- * Schema and the CLI takes them as JSON; the App Intent, Reins and the Swift input leave them out.
+ * Schema and the CLI takes them as JSON; the App Intent, Reins and the Swift input leave them out. A list without `of`, or a
+ * group without `fields`, is free-form: any JSON array, or any JSON object, for an existing MCP tool's input that takes one
+ * without a shape.
  */
-export interface ListField extends FieldBase { kind: "list"; of: Field }
-export interface GroupField extends FieldBase { kind: "group"; fields: Fields }
-export interface OneOfField extends FieldBase { kind: "one-of"; options: readonly Field[] }
+export interface ListField extends FieldBase { kind: "list"; of?: Field }
+export interface GroupField extends FieldBase { kind: "group"; fields?: Fields }
+/**
+ * `combinator` is JSON Schema's `oneOf` (the default: exactly one option matches) or `anyOf` (one or more match; the
+ * options take the field's description, and their own are left out).
+ */
+export interface OneOfField extends FieldBase { kind: "one-of"; options: readonly Field[]; combinator?: "oneOf" | "anyOf" }
 export type Field = StringField | NumberField | BooleanField | EnumField | ListField | GroupField | OneOfField;
 export type Fields = Readonly<Record<string, Field>>;
 
@@ -136,7 +148,9 @@ type ValueOf<F> = Nullable<F, F extends { kind: "string" } ? string
   : F extends { kind: "boolean" } ? boolean
   : F extends { kind: "enum"; values: readonly (infer V)[] } ? V
   : F extends { kind: "list"; of: infer I } ? ValueOf<I>[]
+  : F extends { kind: "list" } ? unknown[]
   : F extends { kind: "group"; fields: infer G } ? ValuesOf<G>
+  : F extends { kind: "group" } ? Record<string, unknown>
   : F extends { kind: "one-of"; options: readonly (infer U)[] } ? ValueOf<U>
   : never>;
 type OptionalKeys<F> = { [K in keyof F]: F[K] extends Opt & { optional: true } ? K : never }[keyof F];
@@ -181,6 +195,12 @@ export interface ActionDef<I extends Fields = Fields, O extends Fields = Fields>
   destructive?: true;
   /** Calling it again with the same input changes nothing more: MCP's `idempotentHint`, so a client may retry it. */
   idempotent?: true;
+  /**
+   * The input takes keys it doesn't name, and a schema with no required input has no `required` list: the input schema
+   * an MCP server already serves for a tool moved onto the model. Declare it only to keep an existing tool's input exactly;
+   * a new action keeps the closed schema, which rejects a key it doesn't name.
+   */
+  openInput?: true;
 }
 
 export interface Action<I extends Fields = Fields, O extends Fields = Fields> extends Readonly<ActionDef<I, O>> {
@@ -204,6 +224,7 @@ export interface Names {
 
 const ID = /^[a-z][a-z0-9]*(_[a-z0-9]+)*$/;
 const FIELD_NAME = /^[a-z][a-zA-Z0-9]*$/;
+const WIRE_NAME = /^[a-zA-Z][a-zA-Z0-9_]*$/;
 /**
  * What an input field may not take: web's kit's own flags (`--json`, `--help`, `--why`, `--why-file`, `--dry-run`,
  * `--agent`, `--quiet`), which the field's flag would shadow (a field keeps its name and takes another with `flag`), and
@@ -212,8 +233,8 @@ const FIELD_NAME = /^[a-z][a-zA-Z0-9]*$/;
  */
 const KIT_FLAGS = Object.freeze(["json", "help", "why", "why-file", "dry-run", "agent", "quiet"]);
 const INTENT_MEMBERS = Object.freeze(["input", "perform"]);
-/** An enum value: lowercase words and digits, joined by -, _, / or . (`shopping-list`, `image/jpeg`). */
-const ENUM_VALUE = /^[a-z][a-z0-9]*([-_/.][a-z0-9]+)*$/;
+/** An enum value: lowercase words and digits, joined by -, _, /, . or : (`shopping-list`, `image/jpeg`, `notes:safe`). */
+const ENUM_VALUE = /^[a-z][a-z0-9]*([-_/.:][a-z0-9]+)*$/;
 /**
  * Ids web's `defineComponentAx` reserves for the person (its `RESERVED_PERSON_ONLY`), which only a person-only action may
  * take. Web also reads an id's meaning (`share-screen`, `mic-on`); its defineComponentAx and X-ray still apply that.
@@ -235,6 +256,7 @@ function checkField(at: string, f: Field, input: boolean, top: boolean): void {
   if (!KINDS.includes(f?.kind)) throw new Error(`${at}: has no kind. Fix: build it with field.string, field.number, field.integer, field.boolean, field.enum, field.list, field.group or field.oneOf.`);
   if (!oneLine(f.label)) throw new Error(`${at}: label is empty or more than one line. Fix: the person's word for it, such as "Quantity".`);
   if (!oneLine(f.description)) throw new Error(`${at}: description is empty or more than one line. Fix: one sentence for the agent.`);
+  if (f.wire !== undefined && !WIRE_NAME.test(f.wire)) throw new Error(`${at}: wire is not a JSON property name. Fix: letters, digits and underscores, starting with a letter, such as "has_instructions".`);
   if (!top) {
     for (const key of ["ask", "protocolOnly", "returned", "flag", "arg", "entity", "multiline", "shownAs"] as const) {
       if (key in f && (f as unknown as Record<string, unknown>)[key] !== undefined) throw new Error(`${at}: ${key} is for an action's own input or output field, not one inside a list, group or one-of. Fix: drop ${key}.`);
@@ -275,7 +297,7 @@ function checkField(at: string, f: Field, input: boolean, top: boolean): void {
   if (f.kind === "boolean" && f.const !== undefined && f.nullable) throw new Error(`${at}: a const field can't be nullable, since const: true takes only true. Fix: drop nullable.`);
   if (f.kind === "enum") {
     if (!Array.isArray(f.values) || f.values.length === 0 || !f.values.every((v) => ENUM_VALUE.test(v))) {
-      throw new Error(`${at}: values is empty or not lowercase words. Fix: values: ["all", "unchecked"]; words may be joined by -, _, / or ., as in "image/jpeg".`);
+      throw new Error(`${at}: values is empty or not lowercase words. Fix: values: ["all", "unchecked"]; words may be joined by -, _, /, . or :, as in "image/jpeg" or "notes:safe".`);
     }
     // Only an action's own enum fields become Swift enums, so only they must keep their cases apart.
     const cases = new Map<string, string>();
@@ -285,12 +307,13 @@ function checkField(at: string, f: Field, input: boolean, top: boolean): void {
       cases.set(caseName(v), v);
     }
   }
-  if (f.kind === "list") {
+  if (f.kind === "list" && f.of !== undefined) {
     if (f.of?.optional) throw new Error(`${at} item: an item can't be optional. Fix: drop optional from of.`);
     checkField(`${at} item`, f.of, input, false);
   }
-  if (f.kind === "group") checkFields(`${at}`, f.fields, input, false);
+  if (f.kind === "group" && f.fields !== undefined) checkFields(`${at}`, f.fields, input, false);
   if (f.kind === "one-of") {
+    if (f.combinator !== undefined && f.combinator !== "oneOf" && f.combinator !== "anyOf") throw new Error(`${at}: combinator is not "oneOf" or "anyOf". Fix: combinator: "anyOf" when a value may match more than one option, else leave it out.`);
     if (!Array.isArray(f.options) || f.options.length < 2) throw new Error(`${at}: options needs two shapes or more. Fix: options: [field.integer({ ... }), field.enum({ ... })], or use the one field.`);
     // JSON Schema's oneOf takes a value that matches exactly one option, so no two options may take the same value.
     const shapes = new Map<string, number>();
@@ -327,6 +350,12 @@ function checkFields(where: string, fields: unknown, input: boolean, top = true)
       if ("shownAs" in sibling && sibling.shownAs !== undefined) throw new Error(`${at}: shownAs ${JSON.stringify(to)} is itself shown as another field, and a name has no name. Fix: drop shownAs from "${to}".`);
     }
     checkField(at, f, input, top);
+  }
+  const wires = new Map<string, string>();
+  for (const [name, f] of Object.entries(fields as Record<string, Field>)) {
+    const wire = f.wire ?? name;
+    if (wires.has(wire)) throw new Error(`${where}: "${wires.get(wire)}" and "${name}" are both named "${wire}" on the wire. Fix: give one a different wire name.`);
+    wires.set(wire, name);
   }
   if (top && !input) {
     const returned = Object.entries(fields as Record<string, Field>).filter(([, f]) => f.returned);
@@ -370,6 +399,7 @@ export function defineAction<const I extends Fields, const O extends Fields>(def
   if (def.idempotent !== undefined && (def.idempotent !== true || (def.consent !== "write" && def.consent !== "consequential"))) {
     throw new Error(`${at}: idempotent is for a write or consequential action that changes nothing more when called again with the same input; a read is idempotent already. Fix: idempotent: true, or drop it.`);
   }
+  if (def.openInput !== undefined && def.openInput !== true) throw new Error(`${at}: openInput is ${JSON.stringify(def.openInput)}. Fix: true, or drop it.`);
   checkFields(`${at} input`, def.input, true);
   checkFields(`${at} output`, def.output, false);
   const n = names(id);
@@ -480,9 +510,10 @@ const describe = (f: Field) => (f.kind === "string" && f.multiline ? `${f.descri
 
 function fieldSchema(f: Field): Record<string, Json> {
   if (f.kind === "one-of") {
-    const options: Json[] = f.options.map((o) => fieldSchema(o));
+    const anyOf = f.combinator === "anyOf";
+    const options: Json[] = f.options.map((o) => (anyOf ? withoutDescriptions(fieldSchema(o)) : fieldSchema(o)));
     if (f.nullable) options.push({ type: "null" });
-    return { oneOf: options, description: describe(f) };
+    return anyOf ? { anyOf: options, description: describe(f) } : { oneOf: options, description: describe(f) };
   }
   const type = f.kind === "enum" ? "string" : f.kind === "list" ? "array" : f.kind === "group" ? "object" : f.kind;
   const s: Record<string, Json> = { type: f.nullable ? [type, "null"] : type, description: describe(f) };
@@ -492,23 +523,36 @@ function fieldSchema(f: Field): Record<string, Json> {
   if (f.kind === "string" && f.maxLength !== undefined) s["maxLength"] = f.maxLength;
   if (f.kind === "string" && f.format !== undefined) s["format"] = f.format;
   if (f.kind === "boolean" && f.const !== undefined) s["const"] = f.const;
-  if (f.kind === "list") s["items"] = fieldSchema(f.of);
-  if (f.kind === "group") Object.assign(s, objectSchema(f.fields));
+  if (f.kind === "list" && f.of !== undefined) s["items"] = fieldSchema(f.of);
+  if (f.kind === "group" && f.fields !== undefined) Object.assign(s, objectSchema(f.fields));
   return s;
 }
 
-function objectSchema(fields: Fields): { type: "object"; properties: Record<string, Json>; required: string[]; additionalProperties: false } {
+/** The JSON property a field has on the wire: its `wire` name, or its declaration name. */
+const wireOf = (name: string, f: Field) => f.wire ?? name;
+
+/** An anyOf option takes the one-of field's description, so its own (and its items') descriptions are left out. */
+function withoutDescriptions(s: Json): Json {
+  if (Array.isArray(s)) return s.map(withoutDescriptions);
+  if (s === null || typeof s !== "object") return s;
+  return Object.fromEntries(Object.entries(s).filter(([k, v]) => k !== "description" || typeof v !== "string").map(([k, v]) => [k, withoutDescriptions(v)]));
+}
+
+/** An open object leaves out `additionalProperties` and an empty `required`, as an MCP server already serves them. */
+function objectSchema(fields: Fields, open = false): { type: "object"; properties: Record<string, Json>; required?: string[]; additionalProperties?: false } {
   const entries = Object.entries(fields);
+  const required = entries.filter(([, f]) => !f.optional).map(([k, f]) => wireOf(k, f));
   return {
     type: "object",
-    properties: Object.fromEntries(entries.map(([k, f]) => [k, fieldSchema(f)])),
-    required: entries.filter(([, f]) => !f.optional).map(([k]) => k),
-    additionalProperties: false,
+    properties: Object.fromEntries(entries.map(([k, f]) => [wireOf(k, f), fieldSchema(f)])),
+    ...(open && required.length === 0 ? {} : { required }),
+    ...(open ? {} : { additionalProperties: false }),
   };
 }
 
 /** The input's JSON Schema, shared by MCP, WebMCP and the CLI's `help --json`. */
-export const inputSchema = (a: Action) => objectSchema(a.input);
+export const inputSchema = (a: Action) => objectSchema(a.input, a.openInput === true);
+
 /** The output's JSON Schema. */
 export const outputSchema = (a: Action) => objectSchema(a.output);
 
@@ -657,7 +701,7 @@ function renderWeb(set: ActionSet): string {
 const swiftLit = (s: string) => `"${s.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
 const SWIFT_KEYWORDS = new Set(["as", "break", "case", "catch", "class", "continue", "default", "defer", "do", "else", "enum", "extension", "fallthrough", "false", "for", "func", "guard", "if", "import", "in", "init", "inout", "internal", "is", "let", "nil", "operator", "private", "protocol", "public", "repeat", "rethrows", "return", "self", "Self", "static", "struct", "subscript", "super", "switch", "throw", "throws", "true", "try", "typealias", "var", "where", "while"]);
 const swiftId = (name: string) => (SWIFT_KEYWORDS.has(name) ? `\`${name}\`` : name);
-const caseName = (v: string) => swiftId(names(v.replace(/[-/.]/g, "_").replace(/_+/g, "_")).camel);
+const caseName = (v: string) => swiftId(names(v.replace(/[-/.:]/g, "_").replace(/_+/g, "_")).camel);
 const enumType = (a: Action, field: string) => `${a.names.pascal}${field.charAt(0).toUpperCase()}${field.slice(1)}Value`;
 
 /** Optional in Swift: an optional field, or a protocol-only one, which the person's doors leave nil. */
