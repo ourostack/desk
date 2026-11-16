@@ -664,9 +664,15 @@ function recordResult(suiteFile, readInput, repoRoot, options = {}) {
   return { ...summary, receipt: path.relative(root, location).replaceAll(path.sep, "/") };
 }
 
-function recordReceipt(suiteFile, resultFile, repoRoot = process.cwd()) {
+async function readStdin() {
+  const chunks = [];
+  for await (const chunk of process.stdin) chunks.push(chunk);
+  return Buffer.concat(chunks).toString("utf8");
+}
+
+function recordReceipt(suiteFile, resultFile, repoRoot, stdinText) {
   const root = path.resolve(repoRoot);
-  return recordResult(suiteFile, () => (resultFile === "-" ? JSON.parse(fs.readFileSync(0, "utf8")) : readJson(path.resolve(root, resultFile))), root);
+  return recordResult(suiteFile, () => (resultFile === "-" ? JSON.parse(stdinText) : readJson(path.resolve(root, resultFile))), root);
 }
 
 // The run command's options (--case, --keep, --dry-run) are documented in evals/README.md and parsed in scripts/skill-evals-run.cjs.
@@ -687,7 +693,7 @@ async function main(args) {
   }
   if (command === "record") {
     if (!first || second !== "--result" || !extra || args.length !== 4) fail("usage: node scripts/skill-evals.cjs record <suite-file> --result <harness-result.json|->");
-    const result = recordReceipt(first, extra);
+    const result = recordReceipt(first, extra, process.cwd(), extra === "-" ? await readStdin() : undefined);
     console.log(`Recorded ${result.receipt}: ${result.cases} case(s), ${result.checks} check(s); commit it with the fingerprint change.`);
     return;
   }

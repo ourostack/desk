@@ -174,11 +174,10 @@ test("synthetic controller: default qualification does not open a candidate sess
 
 test("registration only: aggregate qualification is registered once at file scope, without invoking any test callbacks", async () => {
   const script = `
-import { readFileSync } from "node:fs";
 import { SourceTextModule, SyntheticModule, createContext } from "node:vm";
 const tests = [], hooks = [];
 const context = createContext({ process: Object.freeze({ platform: "darwin", env: Object.freeze({}) }) });
-const source = new SourceTextModule(readFileSync(0, "utf8"), { context });
+const source = new SourceTextModule(Buffer.concat(await Array.fromAsync(process.stdin)).toString("utf8"), { context });
 const cache = new Map();
 await source.link(specifier => {
   if (cache.has(specifier)) return cache.get(specifier);
