@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.196 — 2026-11-16
+
+The intake hook that runs on every prompt now reads its input asynchronously. A synchronous read of a pipe that delivers short reads overflows the heap on Node 24 and 26.8 and later (nodejs/node#66341); the hook's behavior, output and time limit are unchanged.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.195 — 2026-11-16
 
 ### A Desk save always reaches main, or says loudly that it has not
