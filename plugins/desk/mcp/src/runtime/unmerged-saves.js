@@ -73,9 +73,9 @@ export function allStuckSaves({ env = process.env, now = Date.now }) {
 /** One plain sentence per stuck save, naming its PR link. */
 export const stuckLine = (save) => `Desk save not on main after ${save.minutes} min: ${save.url} (the pull request is still open; Desk rebases it and the merge-when-green relay merges it once its checks are green)`
 
-/** `reply` with the stuck saves named, when there are any. A reply that is not an object is returned as it is. */
+/** `reply` with the stuck saves named, when there are any. A reply that is not an object, or a call with no desk, is returned as it is. */
 export function withStuckSaves(reply, { root, env = process.env, now = Date.now }) {
-  if (reply === null || typeof reply !== "object" || Array.isArray(reply)) return reply
+  if (typeof root !== "string" || reply === null || typeof reply !== "object" || Array.isArray(reply)) return reply
   const stuck = stuckSaves({ root, env, now })
   if (stuck.length === 0) return reply
   return {

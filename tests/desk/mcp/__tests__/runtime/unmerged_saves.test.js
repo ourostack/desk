@@ -353,6 +353,8 @@ test("a settle that throws, an unreadable state, a corrupt status file and a non
   track.clear(receipt)
   assert.deepEqual(stuckSaves({ root: desk, env: hostile }), [])
   for (const reply of [null, "text", ["a"]]) assert.equal(withStuckSaves(reply, { root: desk, env }), reply)
+  const noDesk = { status: "error" }
+  assert.equal(withStuckSaves(noDesk, { root: undefined, env }), noDesk, "a call with no desk root has no saves to name")
 })
 
 test("a conflict Desk cannot resolve leaves the save waiting", async () => {
