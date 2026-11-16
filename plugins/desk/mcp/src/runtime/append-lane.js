@@ -11,8 +11,8 @@ import { existsSync, statSync } from "node:fs"
 import * as path from "node:path"
 import { commitPaths, hasUnstagedWork, stagePaths, stagedChanges } from "../util/git-stage.js"
 
-export const APPEND_QUIET_MS = 5000
-export const APPEND_MAX_WAIT_MS = 30_000
+const APPEND_QUIET_MS = 5000
+const APPEND_MAX_WAIT_MS = 30_000
 
 /** The task logs under `root` that differ from HEAD or are untracked, relative to `root` and with `/`. Empty when Git cannot say. */
 export function waitingLogs(root, spawnGit = spawnSync) {
