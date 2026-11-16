@@ -457,6 +457,29 @@ test("waitingOnChecks: a skipped template next to the expanded matrix jobs is ig
   assert.deepEqual(waitingOnChecks(required, [check(TEMPLATE, "skipped"), check("npm test (ubuntu-latest, 1/2)", "failure"), check("npm test (ubuntu-latest, 2/2)")]), ["npm test (ubuntu-latest, *): 1 of 2 not green (npm test (ubuntu-latest, 1/2) failure)"])
 })
 
+test("waitingOnChecks: a matrix job cancelled before it expanded is ignored when its shards ran, and a real failure or a lone cancelled template still holds", () => {
+  const TEMPLATE = "site (${{ matrix.shard }})"
+  const shards = [check("site (1/2)"), check("site (2/2)")]
+  assert.deepEqual(waitingOnChecks([], [check(TEMPLATE, "cancelled"), ...shards]), [])
+  assert.deepEqual(waitingOnChecks(["site (*"], [check(TEMPLATE, "cancelled"), ...shards]), [])
+  assert.deepEqual(waitingOnChecks([], [check(TEMPLATE, "cancelled"), check("site (1/2)", "failure"), check("site (2/2)")]), ["1 other check on the head not green (site (1/2) failure)"])
+  assert.deepEqual(waitingOnChecks([], [check(TEMPLATE, "cancelled")]), [`1 other check on the head not green (${TEMPLATE} cancelled)`])
+  assert.deepEqual(waitingOnChecks([], [check(TEMPLATE, "failure"), ...shards]), [`1 other check on the head not green (${TEMPLATE} failure)`])
+  assert.deepEqual(waitingOnChecks([], [check("lint (${{ matrix.x }})", "cancelled"), ...shards]), ["1 other check on the head not green (lint (${{ matrix.x }}) cancelled)"], "another job's shards do not excuse it")
+})
+
+test("merge-when-green: main's cancelled runs are skipped and the latest completed run that was not cancelled is judged", async () => {
+  const w = await setup([MERGE])
+  mergeWorld(w.world, { main: [{ id: 11, conclusion: "cancelled" }, { id: 10, conclusion: "cancelled" }, { id: 9, conclusion: "success" }] })
+  assert.deepEqual((await w.poll()).errors, [])
+  assert.deepEqual(prWrites(w.world).map((write) => write.method), ["PUT"])
+  const red = await setup([MERGE])
+  mergeWorld(red.world, { main: [{ id: 11, conclusion: "cancelled" }, { id: 9, conclusion: "failure" }] })
+  await red.poll()
+  assert.deepEqual(prWrites(red.world), [])
+  assert.deepEqual(red.state("pages merge").prs["7"].waitingOn, ["main's latest completed ci.yml run 9 (https://github.test/runs/9) is failure"])
+})
+
 test("skippedPasses is true or false on a merge relay, and anything else is named", () => {
   const merge = (extra) => parseRelayConfig(JSON.stringify({ relays: [{ ...MERGE, ...extra }] }), "relays.json")[0]
   assert.equal(merge({ skippedPasses: true }).skippedPasses, true)
@@ -543,9 +566,9 @@ test("merge-when-green: a red or missing main run, a draft, a conflict and branc
     return fresh.state("pages merge").prs["7"].waitingOn.join("; ")
   }
   assert.equal(await why(NOW, { main: [{ id: 9, conclusion: "failure" }] }), "main's latest completed ci.yml run 9 (https://github.test/runs/9) is failure")
-  assert.equal(await why(NOW, { main: [{ id: 9, conclusion: "cancelled" }] }), "main's latest completed ci.yml run 9 (https://github.test/runs/9) is cancelled")
+  assert.equal(await why(NOW, { main: [{ id: 9, conclusion: "cancelled" }] }), "main has no completed ci.yml run that was not cancelled yet")
   assert.equal(await why(NOW, { main: [{ id: 9, conclusion: "failure" }], pr: { base: { ref: "stack", repo: { full_name: "o/pages" } } } }), "main's latest completed ci.yml run 9 (https://github.test/runs/9) is failure", "a pull request into another branch still waits on the default branch")
-  assert.equal(await why(NOW, { main: [] }), "main has no completed ci.yml run yet")
+  assert.equal(await why(NOW, { main: [] }), "main has no completed ci.yml run that was not cancelled yet")
   assert.equal(await why(NOW, { pr: { draft: true } }), "it is a draft")
   assert.equal(await why(NOW, { pr: { mergeable: false, mergeable_state: "dirty" } }), "it has merge conflicts")
   assert.equal(await why(NOW, { pr: { mergeable: null, mergeable_state: "unknown" } }), "GitHub has not yet worked out whether it merges cleanly")
