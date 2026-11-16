@@ -1,5 +1,13 @@
 # desk plugin — changelog
 
+## 3.2.177 — 2026-11-16
+
+### Drains: spot Copilot runtimes that came up without Desk
+
+After an app restart, a session can be served by a Copilot runtime started without Desk's plugin, so it has no `desk-*` tools, hooks or boot text and cannot warn anyone itself. `drains.js runtimes status` now lists those runtimes and says how to recover; see [schedules](docs/schedules.md#when-a-session-has-no-desk-tools).
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.176 — 2026-11-15
 
 ### What a session must not take with it stays on the desk
