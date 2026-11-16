@@ -3,7 +3,7 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { spawnSync } from "node:child_process"
-import { cpSync, mkdirSync, writeFileSync } from "node:fs"
+import { cpSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 import { mkTempRoot } from "../_temp_roots.js"
@@ -78,4 +78,34 @@ test("a hook the session registered at N runs N+1's script, and N's own when not
   const before = await session({ released: false })
   assert.equal(run(before, "copilot-boot-prompt.cjs", "{}").stdout.trim(), "{}", "nothing newer: N's own script runs")
   assert.equal(run(s, "copilot-session-start.cjs", "{}", { DESK_HOOK_DELEGATED: "1" }).status, 0, "a delegated run never delegates again")
+})
+
+test("no second process starts when the newest release on disk is the running one, and the check costs about nothing", async () => {
+  const s = await session({ released: false })
+  const marker = "process.stdout.write(JSON.stringify({ additionalContext: 're-run' }))\n"
+  // The same version in the cache, and thirty unrelated entries a hook must not open.
+  const index = path.join(s.plugins, "cache", "cache_index.json")
+  const entries = JSON.parse(readFileSync(index, "utf8")).entries
+  write(path.join(s.plugins, "cache", "entries", "same", "plugin.json"), JSON.stringify({ name: "desk", version: "3.2.100" }))
+  write(path.join(s.plugins, "cache", "entries", "same", "hooks", "copilot-boot-prompt.cjs"), marker)
+  entries["copilot:github:ourostack/desk:plugins/desk@release"] = { spec: "copilot:github:ourostack/desk:plugins/desk@release", dir_name: "same", fetched_at: 1 }
+  for (let i = 0; i < 30; i += 1) entries[`copilot:github:org/repo:plugins/other${i}@main`] = { spec: `copilot:github:org/repo:plugins/other${i}@main`, dir_name: `missing${i}`, fetched_at: 1 }
+  write(index, JSON.stringify({ entries }))
+  assert.equal(run(s, "copilot-boot-prompt.cjs", "{}").stdout.trim(), "{}", "an equal version is not re-run")
+
+  // Wall time of a hook that exits at once, without the delegation line, with it and nothing newer, and with it re-running a newer release.
+  const bare = path.join(s.desk, "hooks", "bare.cjs")
+  writeFileSync(bare, readFileSync(path.join(s.desk, "hooks", "copilot-boot-prompt.cjs"), "utf8").replace(/^if \(require.*delegate.*$/mu, ""))
+  const newer = await session()
+  const sample = (target, script) => {
+    const times = []
+    for (let i = 0; i < 12; i += 1) {
+      const start = performance.now()
+      run(target, script, "{}")
+      times.push(performance.now() - start)
+    }
+    times.sort((a, b) => a - b)
+    return `p50 ${times[6].toFixed(0)} ms p95 ${times[11].toFixed(0)} ms`
+  }
+  console.log(`hook wall time on ${process.platform}: before ${sample(s, "bare.cjs")}; newest is running ${sample(s, "copilot-boot-prompt.cjs")}; newer exists ${sample(newer, "copilot-boot-prompt.cjs")}`)
 })
