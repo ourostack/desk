@@ -1,5 +1,13 @@
 # desk plugin — changelog
 
+## 3.2.188 — 2026-11-16
+
+### Desk Browser's tools are declared as actions
+
+`browser_context` and `browser_command` are declared in `plugins/desk/mcp/src/actions/desk-web.actions.mts`, read from the catalog the server serves them from. Their inputs, descriptions and constraints are the same; the generated output is committed in `actions/generated/desk-web/`.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.187 — 2026-11-16
 
 ### One declaration set for Desk's actions
