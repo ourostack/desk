@@ -516,3 +516,14 @@ test("desk_save hashes the preserved link itself, not the target's bytes", { ski
   assert.equal(await fs.readlink(path.join(root, "original-link")), "original.log")
   assert.equal(git(root, ["show", "HEAD:original-link"]), "original.log")
 })
+
+test("desk_save paths receipt carries the real bytes and hash of a non-empty Markdown file", async (t) => {
+  const root = await fixture(t)
+  const body = "# Plan\n\n" + "Real content line.\n".repeat(300)
+  await fs.mkdir(path.join(root, "docs"))
+  await fs.writeFile(path.join(root, "docs/plan.md"), body)
+  const result = await save(root, { paths: ["docs/plan.md"], content_home: context() })
+  assert.equal(result.status, "committed")
+  assert.deepEqual(result.content_admission.subjects["paths/0"], { sha256: digest(body), bytes: Buffer.byteLength(body) })
+  assert.equal(git(root, ["show", "HEAD:docs/plan.md"]), body.trim())
+})
