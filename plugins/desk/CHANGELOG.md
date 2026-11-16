@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.179 — 2026-11-16
+
+Desk no longer removes its own Agency cache entry. When boot found the running Desk behind its channel, it ran `agency plugin cache remove -f` on Desk's spec to force a fresh download. That left Agency with no copy of Desk to fall back on. When GitHub then refused the next fetch, as it did with a rate limit (HTTP 403) when many sessions resumed after a reboot, Agency skipped Desk while every other plugin loaded from its cached copy, and those sessions started with no Desk tools, hooks or boot text. Agency already refreshes Desk in the background at each session start (the `--cache-ttl 0` install), so under Agency boot now starts nothing (`auto_refresh` is `unavailable`), and the stale-Desk line says to start a new session instead of naming the removal ([`mcp/src/runtime/stale-desk-refresh.js`](mcp/src/runtime/stale-desk-refresh.js), [`mcp/src/runtime/stale-desk.js`](mcp/src/runtime/stale-desk.js)). Copilot and Claude Code installs keep their own update commands.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.178 — 2026-11-16
 
 A `task_update` with `log` no longer loses its commit when the server ends within a few seconds of the entry. The detached push worker that already pushes card writes now commits waiting task logs too: each entry starts it, it waits until the logs have been quiet for 5 seconds (30 at most), commits them as one commit and pushes once. Session start commits any task log an earlier server left uncommitted and starts its delivery. Rapid entries are still one commit and one push, and still never refused.
