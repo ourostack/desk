@@ -953,7 +953,7 @@ test("MCP entrypoint restores runtime dependencies offline and serves list-tools
     const firstMirrors = listSourceMirrors(fixture.runtimeCacheDir)
     assert.equal(firstMirrors.length, 1, "runtime cache must contain one source mirror after first start")
 
-    const marker = "Exact-word search across the desk."
+    const marker = "In a Crew shared workspace, leave another member a dated note"
     assert.ok(beforeSource.includes(marker), "the mutation marker must still be in tool-names.js")
     writeFileSync(
       path.join(fixture.mcpRoot, "src", "tool-names.js"),
@@ -976,7 +976,7 @@ test("MCP entrypoint restores runtime dependencies offline and serves list-tools
     )
     assert.ok(
       second.tools.result.tools.some((tool) => (
-        tool.name === "desk_search" && tool.description.includes("Unit 7a source mirror sentinel.")
+        tool.name === "note" && tool.description.includes("Unit 7a source mirror sentinel.")
       )),
       "list-tools response must describe tools from the updated plugin source",
     )
