@@ -23,16 +23,6 @@ export const DOCTOR_REPAIRS = Object.freeze(["switch_state_branch"])
 // Tools that take no input at all. Only these may declare no properties.
 export const NO_INPUT_TOOLS = Object.freeze([])
 
-const SCOPE = {
-  type: "string",
-  enum: ["active", "archived", "all"],
-  description: "Which documents to search: live work, archived work, or both.",
-}
-const LIMIT = integer("Maximum number of results.")
-const oneOrMany = (description) => ({
-  anyOf: [{ type: "string" }, { type: "array", items: { type: "string" } }],
-  description,
-})
 
 
 const TASK_TARGET = {
@@ -308,24 +298,6 @@ const HAND_WRITTEN_INPUT_SCHEMAS = Object.freeze({
     message: text("The commit message."),
     tidy: flag("Pass true to commit a desk tidy or its undo: moved or renamed task cards already staged by task_update, track_update or git mv, plus _meta/organization.json."),
   }, ["message"]),
-  desk_search: schema({
-    query: text("The search query. Omit it to list documents by update time."),
-    newest: flag("Pass true to order by update time, newest first, instead of by match."),
-    limit: LIMIT,
-    scope: SCOPE,
-    filters: {
-      type: "object",
-      additionalProperties: false,
-      properties: {
-        track: oneOrMany("Track name or names."),
-        status: oneOrMany("Task status or statuses."),
-        kind: oneOrMany("Document kind or kinds."),
-        since: text("Only documents updated at or after this time (ISO 8601)."),
-        until: text("Only documents updated at or before this time (ISO 8601)."),
-      },
-      description: "Filters, as a JSON object (not a string).",
-    },
-  }),
   desk_status: schema({
     detail: flag("Pass true for the full payload (tens of KB). Omit it for the compact answer."),
     has_instructions: flag("Hosted Desk only: pass true when an earlier desk_status answer in this conversation already gave you Desk's instructions."),

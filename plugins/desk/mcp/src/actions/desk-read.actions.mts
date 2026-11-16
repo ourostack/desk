@@ -1,5 +1,51 @@
 import { defineAction, defineActions, field } from "../lib/ouro-actions/ouro-actions.mts";
 
+const SCOPE = field.enum({
+  label: "Scope",
+  description: "Which documents to search: live work, archived work, or both.",
+  values: ["active", "archived", "all"],
+  optional: true,
+});
+
+const oneOrMany = (label: string, description: string) => field.oneOf({
+  label,
+  description,
+  combinator: "anyOf",
+  optional: true,
+  options: [
+    field.string({ label, description }),
+    field.list({ label, description, of: field.string({ label, description }) }),
+  ],
+});
+
+export const deskSearch = defineAction({
+  id: "desk_search",
+  consent: "read",
+  label: "Search the desk",
+  description: "Find documents on the desk by their exact words.",
+  agent: "Use when you cannot tell which file holds something, or what changed in a time window. Exact-word search across the desk. Filters: track, status, kind, since, until. `scope`: 'active' (default), 'archived' or 'all'. With no `query`, or `newest: true`, it lists documents by when they were updated, newest first, inside the since/until window (`scope` then defaults to 'all').",
+  input: {
+    query: field.string({ label: "Query", description: "The search query. Omit it to list documents by update time.", optional: true }),
+    newest: field.boolean({ label: "Newest first", description: "Pass true to order by update time, newest first, instead of by match.", optional: true }),
+    limit: field.integer({ label: "Limit", description: "Maximum number of results.", optional: true, min: 1 }),
+    scope: SCOPE,
+    filters: field.group({
+      label: "Filters",
+      description: "Filters, as a JSON object (not a string).",
+      optional: true,
+      protocolOnly: true,
+      fields: {
+        track: oneOrMany("Track", "Track name or names."),
+        status: oneOrMany("Status", "Task status or statuses."),
+        kind: oneOrMany("Kind", "Document kind or kinds."),
+        since: field.string({ label: "Since", description: "Only documents updated at or after this time (ISO 8601).", optional: true }),
+        until: field.string({ label: "Until", description: "Only documents updated at or before this time (ISO 8601).", optional: true }),
+      },
+    }),
+  },
+  output: {},
+});
+
 export const deskRecall = defineAction({
   id: "desk_recall",
   consent: "read",
@@ -9,12 +55,7 @@ export const deskRecall = defineAction({
   input: {
     topic: field.string({ label: "Topic", description: "What to recall." }),
     limit: field.integer({ label: "Limit", description: "Maximum number of results.", optional: true, min: 1 }),
-    scope: field.enum({
-      label: "Scope",
-      description: "Which documents to search: live work, archived work, or both.",
-      values: ["active", "archived", "all"],
-      optional: true,
-    }),
+    scope: SCOPE,
   },
   output: {},
 });
@@ -31,4 +72,4 @@ export const deskSkill = defineAction({
   output: {},
 });
 
-export default defineActions("desk-read", [deskRecall, deskSkill], { tool: "desk" });
+export default defineActions("desk-read", [deskSearch, deskRecall, deskSkill], { tool: "desk" });
