@@ -388,7 +388,7 @@ const OVERWRITTEN_ONE = /^(?:error: )?Untracked working tree file '(.+)' would b
 
 /** The untracked files `git read-tree -m -u` named as in the way, from its own error text. */
 function namedUntrackedPaths(stderr) {
-  return String(stderr ?? "").split(/\r?\n/u).flatMap((line) => OVERWRITTEN_ONE.exec(line)?.[1] ?? [])
+  return stderr.split(/\r?\n/u).flatMap((line) => OVERWRITTEN_ONE.exec(line)?.[1] ?? [])
 }
 
 // An untracked file in the way whose bytes are exactly the incoming file's is removed: the checkout puts the same bytes back.
