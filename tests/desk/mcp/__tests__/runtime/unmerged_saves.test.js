@@ -339,9 +339,15 @@ test("a settle that throws, an unreadable state, a corrupt status file and a non
   const exploding = () => { throw new Error("spawn failed") }
   assert.deepEqual(settleSaves({ root: desk, env, spawnGit: exploding }), { closed: [], rebased: [], waiting: [] })
 
+  // With two waiting saves, the one waiting longest is named first.
+  savesFor({ root: desk, env, now: () => Date.now() - 30 * MINUTE }).record({ url: "https://github.example/team/workspace/pull/0", head, branch: "b", base: "main" })
+  const later = () => Date.now() + 60 * MINUTE
+  assert.deepEqual(stuckSaves({ root: desk, env, now: later }).map((save) => save.url.split("/").pop()), ["0", "1"])
+  assert.deepEqual(allStuckSaves({ env, now: later }).map((save) => save.url.split("/").pop()), ["0", "1"])
+
   const dir = path.join(resolveDeskStateDir({ env }), "sync")
   await fs.writeFile(path.join(dir, "corrupt.status.json"), "{")
-  assert.equal(allStuckSaves({ env, now: () => Date.now() + 60 * MINUTE }).length, 1, "the readable desk is still reported")
+  assert.equal(allStuckSaves({ env, now: later }).length, 2, "the readable desk is still reported")
   assert.deepEqual(allStuckSaves({ env: { ...env, XDG_STATE_HOME: path.join(env.XDG_STATE_HOME, "missing") }, now: Date.now }), [])
 
   const blocked = path.join(env.XDG_STATE_HOME, "blocked")
