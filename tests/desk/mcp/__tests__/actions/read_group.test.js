@@ -13,7 +13,7 @@ const mcp = path.join(repoRoot, "plugins", "desk", "mcp")
 const ACTIONS = ["desk_recall", "desk_skill", "desk_search", "desk_status", "desk_doctor", "improvement_next"]
 const WRITES = ["desk_status", "desk_doctor", "improvement_next"]
 
-for (const group of ["desk"]) {
+for (const group of ["desk", "desk-web"]) {
   test(`the generated output of ${group} is what its declarations produce`, () => {
     const result = spawnSync(process.execPath, [
       path.join(mcp, "src", "lib", "ouro-actions", "ouro-actions.mts"), "check",

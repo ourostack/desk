@@ -16,7 +16,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 /** The generator's version, written into every generated file; it is core's version. */
-export const ACTIONS_VERSION = "0.17.3";
+export const ACTIONS_VERSION = "0.17.4";
 const GENERATOR = `ouro-actions ${ACTIONS_VERSION}`;
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -77,6 +77,8 @@ export interface StringField extends FieldBase {
   arg?: boolean;
   /** The longest the string may be, in characters (JSON Schema's `maxLength`). */
   maxLength?: number;
+  /** A regular expression the string must match (JSON Schema's `pattern`), written as the source text, unanchored. */
+  pattern?: string;
   format?: (typeof STRING_FORMATS)[number];
   /**
    * Input only: the app's own App Entity type, such as `"MarkdownDocumentEntity"`. The App Intent's parameter takes it, so
@@ -113,7 +115,7 @@ export interface EnumField<V extends string = string> extends FieldBase { kind: 
  * group without `fields`, is free-form: any JSON array, or any JSON object, for an existing MCP tool's input that takes one
  * without a shape.
  */
-export interface ListField extends FieldBase { kind: "list"; of?: Field }
+export interface ListField extends FieldBase { kind: "list"; of?: Field; minItems?: number; maxItems?: number }
 export interface GroupField extends FieldBase { kind: "group"; fields?: Fields }
 /**
  * `combinator` is JSON Schema's `oneOf` (the default: exactly one option matches) or `anyOf` (one or more match; the
@@ -291,6 +293,13 @@ function checkField(at: string, f: Field, input: boolean, top: boolean): void {
   if ("arg" in f && f.arg && (f.kind !== "string" || f.optional || !input)) throw new Error(`${at}: arg is only for a required string input field, since web's CLI arguments are strings. Fix: drop arg, or make it a required string.`);
   if (f.kind === "string") {
     if (f.maxLength !== undefined && !(Number.isInteger(f.maxLength) && f.maxLength > 0)) throw new Error(`${at}: maxLength is ${JSON.stringify(f.maxLength)}. Fix: a whole number above 0.`);
+    if (f.pattern !== undefined) {
+      try {
+        new RegExp(f.pattern, "u");
+      } catch {
+        throw new Error(`${at}: pattern ${JSON.stringify(f.pattern)} is not a regular expression. Fix: write the expression's source, such as "^[a-z]+$".`);
+      }
+    }
     if (f.format !== undefined && !(STRING_FORMATS as readonly string[]).includes(f.format)) throw new Error(`${at}: format is ${JSON.stringify(f.format)}. Fix: one of ${STRING_FORMATS.join(", ")}, or leave it out.`);
   }
   if (f.kind === "boolean" && f.const !== undefined && f.const !== true) throw new Error(`${at}: const is ${JSON.stringify(f.const)}. Fix: const: true, for a confirmation a program must send, or leave it out.`);
@@ -309,6 +318,11 @@ function checkField(at: string, f: Field, input: boolean, top: boolean): void {
   }
   if (f.kind === "list" && f.of !== undefined) {
     if (f.of?.optional) throw new Error(`${at} item: an item can't be optional. Fix: drop optional from of.`);
+    for (const bound of ["minItems", "maxItems"] as const) {
+      const v = f[bound];
+      if (v !== undefined && !(Number.isInteger(v) && v >= 0)) throw new Error(`${at}: ${bound} is ${JSON.stringify(v)}. Fix: a whole number of 0 or more.`);
+    }
+    if (f.minItems !== undefined && f.maxItems !== undefined && f.minItems > f.maxItems) throw new Error(`${at}: minItems ${f.minItems} is above maxItems ${f.maxItems}. Fix: make minItems no larger than maxItems.`);
     checkField(`${at} item`, f.of, input, false);
   }
   if (f.kind === "group" && f.fields !== undefined) checkFields(`${at}`, f.fields, input, false);
@@ -521,9 +535,12 @@ function fieldSchema(f: Field): Record<string, Json> {
   if ((f.kind === "number" || f.kind === "integer") && f.min !== undefined) s["minimum"] = f.min;
   if ((f.kind === "number" || f.kind === "integer") && f.max !== undefined) s["maximum"] = f.max;
   if (f.kind === "string" && f.maxLength !== undefined) s["maxLength"] = f.maxLength;
+  if (f.kind === "string" && f.pattern !== undefined) s["pattern"] = f.pattern;
   if (f.kind === "string" && f.format !== undefined) s["format"] = f.format;
   if (f.kind === "boolean" && f.const !== undefined) s["const"] = f.const;
   if (f.kind === "list" && f.of !== undefined) s["items"] = fieldSchema(f.of);
+  if (f.kind === "list" && f.minItems !== undefined) s["minItems"] = f.minItems;
+  if (f.kind === "list" && f.maxItems !== undefined) s["maxItems"] = f.maxItems;
   if (f.kind === "group" && f.fields !== undefined) Object.assign(s, objectSchema(f.fields));
   return s;
 }

@@ -65,12 +65,27 @@ jobs:
       # above covers the two Desk commits.
       - name: Action claims over the declarations
         run: |
-          mkdir -p xray-actions
+          mkdir -p xray-actions xray-actions-desk-web
           node plugins/desk/mcp/src/lib/ouro-actions/ouro-actions.mts generate \
             plugins/desk/mcp/src/actions/desk.actions.mts "$RUNNER_TEMP/actions-all"
           node plugins/desk/mcp/src/lib/ouro-actions/ouro-actions.mts check \
             plugins/desk/mcp/src/actions/desk.actions.mts "$RUNNER_TEMP/actions-all" \
-            --report xray-actions/report.json --app "Desk" --commit "$GITHUB_SHA"
+            --report xray-actions/report.json --app "Desk MCP" --commit "$GITHUB_SHA"
+          node plugins/desk/mcp/src/lib/ouro-actions/ouro-actions.mts check \
+            plugins/desk/mcp/src/actions/desk-web.actions.mts plugins/desk/mcp/src/actions/generated/desk-web --targets mcp,actions
+          node plugins/desk/mcp/src/lib/ouro-actions/ouro-actions.mts generate \
+            plugins/desk/mcp/src/actions/desk-web.actions.mts "$RUNNER_TEMP/actions-web-all"
+          node plugins/desk/mcp/src/lib/ouro-actions/ouro-actions.mts check \
+            plugins/desk/mcp/src/actions/desk-web.actions.mts "$RUNNER_TEMP/actions-web-all" \
+            --report xray-actions-desk-web/report.json --app "Desk Browser" --commit "$GITHUB_SHA"
+
+      - name: Upload the desk-web action claims
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: actions-xray-desk-web
+          path: xray-actions-desk-web/
+          retention-days: 90
 
       - name: Upload the X-ray
         if: ${{ !cancelled() }}
