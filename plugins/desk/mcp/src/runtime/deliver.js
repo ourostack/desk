@@ -356,7 +356,7 @@ export function deliver({ root, env = process.env, spawnGit = spawnSync, deliver
     let pushed, publication, target = built.head
     if (policy !== null && built.head !== onto) {
       try {
-        const published = publishPullRequest({ git, spawnGit, root, upstream, head: built.head, onto, policy, clock: publicationClock, track: savesFor({ root, env }) })
+        const published = publishPullRequest({ git, spawnGit, root, upstream, head: built.head, onto, policy, clock: publicationClock, track: savesFor({ root, env, now: Date.now }) })
         target = published.head
         publication = published.receipt
         pushed = { status: 0 }

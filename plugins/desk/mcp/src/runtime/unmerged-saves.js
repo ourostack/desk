@@ -4,7 +4,6 @@
 // as superseded with the evidence, a PR that conflicts with main is rebuilt on the newest main and published again, and
 // anything else stays open and named.
 
-import { spawnSync } from "node:child_process"
 import { readdirSync, readFileSync } from "node:fs"
 import * as path from "node:path"
 
@@ -21,12 +20,12 @@ const NETWORK_TIMEOUT_MS = 60_000
 const entries = (record) => (Array.isArray(record?.[KEY]) ? record[KEY].filter((save) => typeof save?.url === "string" && typeof save.since === "string") : [])
 
 /** The registry callers hand to `publishPullRequest` for the desk at `root`. */
-export function savesFor({ root, env = process.env, now = Date.now }) {
+export function savesFor({ root, env, now }) {
   return { record: (receipt) => recordUnmerged({ root, env, receipt, at: now() }), clear: (receipt) => clearUnmerged({ root, env, url: receipt.url }) }
 }
 
 /** Notes a publication PR as waiting to merge; the first time it was noted stays its start. Never throws. */
-function recordUnmerged({ root, env = process.env, receipt, at = Date.now() }) {
+function recordUnmerged({ root, env, receipt, at }) {
   try {
     updateSyncStatus(root, env, (current) => {
       const list = entries(current)
@@ -39,7 +38,7 @@ function recordUnmerged({ root, env = process.env, receipt, at = Date.now() }) {
 }
 
 /** Forgets a PR that merged or was closed. Never throws. */
-function clearUnmerged({ root, env = process.env, url }) {
+function clearUnmerged({ root, env, url }) {
   try {
     updateSyncStatus(root, env, (current) => ({ [KEY]: entries(current).filter((save) => save.url !== url) }))
   } catch {
@@ -50,12 +49,12 @@ function clearUnmerged({ root, env = process.env, url }) {
 const stuckOf = (list, at) => list.map((save) => ({ ...save, minutes: Math.floor((at - Date.parse(save.since)) / 60_000) })).filter((save) => save.minutes * 60_000 >= STUCK_AFTER_MS)
 
 /** The desk's saves still unmerged after ten minutes, oldest first, each `{ url, head, branch, base, since, minutes }`. Local read. */
-export function stuckSaves({ root, env = process.env, now = Date.now }) {
+export function stuckSaves({ root, env, now }) {
   return stuckOf(entries(readSyncStatus({ root, env })), now()).sort((a, b) => Date.parse(a.since) - Date.parse(b.since))
 }
 
 /** The stuck saves of every desk on this machine, for `drains status`. Never throws. */
-export function allStuckSaves({ env = process.env, now = Date.now }) {
+export function allStuckSaves({ env, now }) {
   try {
     const dir = path.join(resolveDeskStateDir({ env }), "sync")
     const found = []
@@ -74,7 +73,7 @@ export function allStuckSaves({ env = process.env, now = Date.now }) {
 export const stuckLine = (save) => `Desk save not on main after ${save.minutes} min: ${save.url} (the pull request is still open; Desk rebases it and the merge-when-green relay merges it once its checks are green)`
 
 /** `reply` with the stuck saves named, when there are any. A reply that is not an object, or a call with no desk, is returned as it is. */
-export function withStuckSaves(reply, { root, env = process.env, now = Date.now }) {
+export function withStuckSaves(reply, { root, env, now }) {
   if (typeof root !== "string" || reply === null || typeof reply !== "object" || Array.isArray(reply)) return reply
   const stuck = stuckSaves({ root, env, now })
   if (stuck.length === 0) return reply
@@ -131,7 +130,7 @@ function ghRun(spawnGit, root, args) {
 }
 
 /** Closes a publication PR with the comment saying why, drops its branch and forgets it. Returns whether GitHub closed it. */
-export function closeSaved({ spawnGit = spawnSync, root, env = process.env, url, comment }) {
+export function closeSaved({ spawnGit, root, env, url, comment }) {
   const closed = ghRun(spawnGit, root, ["pr", "close", url, "--delete-branch", "--comment", comment]).status === 0
   if (closed) clearUnmerged({ root, env, url })
   return closed
@@ -157,7 +156,7 @@ export function settleSaves(options) {
   }
 }
 
-function settle({ root, env = process.env, spawnGit = spawnSync, clock }) {
+function settle({ root, env, spawnGit, clock }) {
   const outcome = { closed: [], rebased: [], waiting: [] }
   const list = entries(readSyncStatus({ root, env }))
   if (list.length === 0) return outcome
@@ -203,7 +202,7 @@ function rebaseSave({ git, spawnGit, root, env, upstream, save, main, clock }) {
   if (built.error !== undefined || built.skipped.length > 0 || !OBJECT_ID.test(built.head) || built.head === main) return "waiting"
   let receipt
   try {
-    receipt = publishPullRequest({ git, spawnGit, root, upstream, head: built.head, onto: main, policy, clock, track: savesFor({ root, env }) }).receipt
+    receipt = publishPullRequest({ git, spawnGit, root, upstream, head: built.head, onto: main, policy, clock, track: savesFor({ root, env, now: Date.now }) }).receipt
   } catch (error) {
     receipt = error.publication
   }

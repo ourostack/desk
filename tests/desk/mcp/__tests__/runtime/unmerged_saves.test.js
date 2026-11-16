@@ -111,7 +111,7 @@ function fakeGh(origin, options = {}) {
 const clockOf = () => { let now = 0; return { now: () => (now += 100_000), sleep: () => {} } }
 
 function publish({ desk, env, gh, head, onto, track = true, clock = clockOf() }) {
-  return publishPullRequest({ git: runner(gh, desk), spawnGit: gh, root: desk, upstream, head, onto, policy, clock, ...(track ? { track: savesFor({ root: desk, env }) } : {}) })
+  return publishPullRequest({ git: runner(gh, desk), spawnGit: gh, root: desk, upstream, head, onto, policy, clock, ...(track ? { track: savesFor({ root: desk, env, now: Date.now }) } : {}) })
 }
 
 test("a repository that refuses auto-merge still gets the relay's label and merges", async () => {
@@ -342,16 +342,16 @@ test("a settle that throws, an unreadable state, a corrupt status file and a non
   const dir = path.join(resolveDeskStateDir({ env }), "sync")
   await fs.writeFile(path.join(dir, "corrupt.status.json"), "{")
   assert.equal(allStuckSaves({ env, now: () => Date.now() + 60 * MINUTE }).length, 1, "the readable desk is still reported")
-  assert.deepEqual(allStuckSaves({ env: { ...env, XDG_STATE_HOME: path.join(env.XDG_STATE_HOME, "missing") } }), [])
+  assert.deepEqual(allStuckSaves({ env: { ...env, XDG_STATE_HOME: path.join(env.XDG_STATE_HOME, "missing") }, now: Date.now }), [])
 
   const blocked = path.join(env.XDG_STATE_HOME, "blocked")
   await fs.writeFile(blocked, "a file where the state directory should be")
   const hostile = { ...env, XDG_STATE_HOME: blocked }
   const receipt = { url: "https://github.example/team/workspace/pull/1", head, branch: "b", base: "main" }
-  const track = savesFor({ root: desk, env: hostile })
+  const track = savesFor({ root: desk, env: hostile, now: Date.now })
   track.record(receipt)
   track.clear(receipt)
-  assert.deepEqual(stuckSaves({ root: desk, env: hostile }), [])
+  assert.deepEqual(stuckSaves({ root: desk, env: hostile, now: Date.now }), [])
   for (const reply of [null, "text", ["a"]]) assert.equal(withStuckSaves(reply, { root: desk, env }), reply)
   const noDesk = { status: "error" }
   assert.equal(withStuckSaves(noDesk, { root: undefined, env }), noDesk, "a call with no desk root has no saves to name")

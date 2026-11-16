@@ -1571,7 +1571,7 @@ export async function bootOnce({
     other_sessions: otherWork,
     release_alert: releaseFinding?.release_alert ?? null,
     desk_problems: releaseFinding?.desk_problems ?? null,
-    unmerged_saves: headless ? [] : stuckSaves({ root: root.path, env }),
+    unmerged_saves: headless ? [] : stuckSaves({ root: root.path, env, now: Date.now }),
     needs_operator: needsOperator(instructionContext),
     // Only for the plain-text boot (`runBootCli` leaves it out of `--json`).
     text_instructions: buildTextInstructions(instructionContext),

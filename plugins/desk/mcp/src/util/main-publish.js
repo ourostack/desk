@@ -161,7 +161,7 @@ export function publishCardCommit({ root, relPaths, message, defaultBranch, spaw
       let target
       if (policy !== null) {
         try {
-          target = publishPullRequest({ git, spawnGit, root: top, upstream: { remote: REMOTE, merge: `refs/heads/${defaultBranch}`, tracking: remoteRef }, head: commit, onto, policy, clock, track: savesFor({ root, env }) }).head
+          target = publishPullRequest({ git, spawnGit, root: top, upstream: { remote: REMOTE, merge: `refs/heads/${defaultBranch}`, tracking: remoteRef }, head: commit, onto, policy, clock, track: savesFor({ root, env, now: Date.now }) }).head
         } catch (error) {
           // A PR that conflicts or fell behind stays recorded; the next write or the sync worker rebuilds it or closes it as superseded.
           // A call cut off after GitHub merged the pull request still published the card.

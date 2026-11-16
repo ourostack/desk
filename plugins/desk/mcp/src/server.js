@@ -311,7 +311,7 @@ export async function callTool({ deskRoot, name, input, person = null, statusCon
     if (name === "desk_skill" && Array.isArray(result?.content)) return result
     // A save that has waited past ten minutes in an unmerged publication PR is named in every reply of every session on this desk.
     return {
-      content: [{ type: "text", text: JSON.stringify(withStuckSaves(result, { root: deskRoot, env })) }],
+      content: [{ type: "text", text: JSON.stringify(withStuckSaves(result, { root: deskRoot, env, now: Date.now })) }],
     }
   } catch (err) {
     if (name === "task_archive" && nativeReceiptTraceEnabled(env)) emitNativeReceipt(err, traceRequestId, traceWrite)
