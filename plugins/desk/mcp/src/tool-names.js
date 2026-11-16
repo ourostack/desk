@@ -65,8 +65,6 @@ const HAND_WRITTEN_DESCRIPTIONS = {
     "Use when Desk misbehaves or its runtime needs checking: report whether Desk MCP started in healthy runtime mode; in diagnostic mode, the precise startup failure and offline remediation. `format: \"preview\"` returns only the local package/process snapshot. `repair: \"switch_state_branch\"` switches the desk checkout back to its state branch when that is safe. `reindex: true` re-reads the desk into the search engine when search misses what you just wrote. `factory_consent` records the operator's factory contribution answer and returns only that record.",
   improvement_open:
     "Use when a case needs an improvement card: open one on the desk, find it already open, or reopen a closed one. `source` and `id` name the case (the card key is <source>:<id>). `title` is never accepted: Desk builds every title.",
-  improvement_next:
-    "Use when you take on improvement work: take the next improvement card, the open card that waited longest. It claims the card for a limited time and returns it with the `claim_id` and the authority statement. A refusal comes back as `status` (claim_held, cap_reached, none_open, too_many_cards, machine_key_unavailable or noninteractive) with a one-line `meaning`. Optional `session` is the session's UUID.",
   improvement_update:
     "Use when you ship, release or close a card you hold the claim on, with its `key` and `claim_id`: ship it (`countermeasure` is the pull request URL; `state` \"shipped\" or omitted), release it (`state` \"open\") or close it (`state` \"closed_unverified\" with `close_reason`).",
 }
