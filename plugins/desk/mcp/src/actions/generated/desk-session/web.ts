@@ -6,12 +6,16 @@ export const generated = {"generator":"ouro-actions 0.17.2","set":"desk-session"
 
 export const componentAx = {
   actions: [
+    { id: "desk-status", summary: "Check that Desk is ready for this session.", effect: "private", agent: true },
+    { id: "desk-doctor", summary: "Check Desk's runtime, and repair or reindex it when asked.", effect: "private", agent: true },
     { id: "improvement-next", summary: "Take the next improvement card to work on.", effect: "private", agent: true },
   ],
 } as const;
 
 export const twins = {
   actions: {
+    "desk-status": "desk desk-status",
+    "desk-doctor": "desk desk-doctor",
     "improvement-next": "desk improvement-next",
   },
   refuseAs: {
@@ -19,12 +23,16 @@ export const twins = {
 } as const;
 
 export const controls = {
+  "desk-status": { label: "Desk status", description: "Check that Desk is ready for this session.", consent: "write", props: { "data-ax-action": "desk-status" } },
+  "desk-doctor": { label: "Desk doctor", description: "Check Desk's runtime, and repair or reindex it when asked.", consent: "write", props: { "data-ax-action": "desk-doctor" } },
   "improvement-next": { label: "Next improvement", description: "Take the next improvement card to work on.", consent: "write", props: { "data-ax-action": "improvement-next" } },
 } as const;
 
 // Web's CLI hands run() its flags by name, which are kebab-case (--can-edit); every other door uses the field's
 // name (canEdit). fromCli renames them, so a command's run() calls the same handler as MCP, WebMCP and Apple.
 export const cliInput: Readonly<Record<string, Readonly<Record<string, string>>>> = {
+  "desk-status": { "has-instructions": "hasInstructions" },
+  "desk-doctor": { "factory-consent": "factoryConsent" },
 };
 
 // A list, group or one-of field comes in on the CLI as one JSON string; fromCli parses it.

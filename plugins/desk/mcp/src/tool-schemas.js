@@ -298,16 +298,6 @@ const HAND_WRITTEN_INPUT_SCHEMAS = Object.freeze({
     message: text("The commit message."),
     tidy: flag("Pass true to commit a desk tidy or its undo: moved or renamed task cards already staged by task_update, track_update or git mv, plus _meta/organization.json."),
   }, ["message"]),
-  desk_status: schema({
-    detail: flag("Pass true for the full payload (tens of KB). Omit it for the compact answer."),
-    has_instructions: flag("Hosted Desk only: pass true when an earlier desk_status answer in this conversation already gave you Desk's instructions."),
-  }),
-  desk_doctor: schema({
-    format: { type: "string", enum: ["full", "preview"], description: "preview returns only the local package/process snapshot." },
-    repair: { type: "string", enum: [...DOCTOR_REPAIRS], description: "A named repair to run." },
-    reindex: flag("Pass true to re-read the desk into this session's search engine and wait until exact-word search is current."),
-    factory_consent: { type: "string", enum: ["yes", "no"], description: "The operator's answer to the factory contribution question; Desk resolves the store and, for yes, the GitHub account." },
-  }),
   improvement_open: schema({
     source: { type: "string", enum: ["andon", "friction_candidate", "reconcile_class", "desk_problem", "store_build", "evaluator", "loop_alarm", "flush_health"], description: "Where the card comes from; the card key is <source>:<id>." },
     id: text("The case's id: owner/repo#number for andon and store_build, ourostack/desk#number for desk_problem, 32 hex for friction_candidate, else a code from the source's closed list."),

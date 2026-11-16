@@ -10,7 +10,8 @@ import { TOOL_INPUT_SCHEMAS } from "../../../../../plugins/desk/mcp/src/tool-sch
 
 const repoRoot = path.resolve(fileURLToPath(new URL("../../../../..", import.meta.url)))
 const mcp = path.join(repoRoot, "plugins", "desk", "mcp")
-const ACTIONS = ["desk_recall", "desk_skill", "desk_search", "improvement_next"]
+const ACTIONS = ["desk_recall", "desk_skill", "desk_search", "desk_status", "desk_doctor", "improvement_next"]
+const WRITES = ["desk_status", "desk_doctor", "improvement_next"]
 
 for (const group of ["desk-read", "desk-session"]) {
   test(`the generated output of ${group} is what its declarations produce`, () => {
@@ -26,6 +27,6 @@ test("the action tools are served from the generated tools, with their consent h
   for (const name of ACTIONS) {
     assert.equal(TOOL_INPUT_SCHEMAS[name], ACTION_TOOLS[name].inputSchema, `${name} input is the generated one`)
     assert.equal(TOOL_DESCRIPTIONS[name], ACTION_TOOLS[name].description, `${name} description is the generated one`)
-    assert.equal(ACTION_TOOLS[name].annotations.readOnlyHint, name !== "improvement_next", `${name} read-only hint follows its consent`)
+    assert.equal(ACTION_TOOLS[name].annotations.readOnlyHint, !WRITES.includes(name), `${name} read-only hint follows its consent`)
   }
 })
