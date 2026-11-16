@@ -1,5 +1,13 @@
 # desk plugin — changelog
 
+## 3.2.194 — 2026-11-16
+
+### Merge-when-green no longer puts AI co-author trailers on the default branch
+
+GitHub copies the `Co-authored-by` trailers of a branch's commits into the squash commit it lands, and a cloud session's commit signer forces the AI trailer onto those commits. The repository's squash-message setting does not stop that. The `merge-when-green` relay now sends an explicit message with every squash or merge: the pull request title plus ` (#n)` and its body with AI and bot `Co-authored-by` lines removed. See [relays](docs/relays.md).
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.193 — 2026-11-16
 
 Session sync no longer runs `git pull --rebase --autostash` in the shared desk checkout. It fetches the remote and moves the checkout forward only when that is a plain catch-up that touches no file with a local edit; otherwise it leaves the checkout exactly as it was, names the files in the way, and lets the background delivery replay local commits from a clean copy. This removes the failure modes that stash, quarantine and repair logic existed for: unmerged paths, a leftover autostash, and files moved out of the desk. Boot and `desk_status` no longer print repair or quarantine notes, and their fix line is now `git -C <desk> fetch --no-tags origin`. A rejected push, a conflict or a failed fetch during delivery is still shown to the agent but no longer files a Desk problem, because none of them is a Desk defect. Refs #436, #557, #558, #572, #584, #890.
