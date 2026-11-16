@@ -1,0 +1,1 @@
+An unknown tool's refusal, from `desk` or Desk Browser (`desk-web`), now names that server's tools and the closest match, so an agent that misremembers a tool name, such as `desk_task_create` for `task_create`, can retry without listing the tools again.

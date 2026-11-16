@@ -8,6 +8,7 @@ import { promises as fs } from "node:fs"
 import * as path from "node:path"
 import { callTool, createMcpServer, createMcpTransport, startServer, TOOL_IMPLS } from "../../../../../plugins/desk/mcp/src/server.js"
 import { TOOL_INPUT_SCHEMAS } from "../../../../../plugins/desk/mcp/src/tool-schemas.js"
+import { TOOL_NAMES } from "../../../../../plugins/desk/mcp/src/tool-names.js"
 import { mkTempDeskRoot } from "./_helpers.js"
 import { cleanup, mkFeedbackFixture, useStateHome } from "../factory/_private_state_helpers.js"
 
@@ -180,6 +181,16 @@ test("server.callTool rejects unknown tool names", async () => {
   })
   assert.ok(res.isError)
   assert.match(res.content[0].text, /unknown tool/)
+})
+
+test("server.callTool's refusal names every served tool and the near match", async () => {
+  const root = await mkTempDeskRoot()
+  const refuse = name => callTool({ deskRoot: root, name, input: {} }).then(res => res.content[0].text)
+  const served = `Desk's tools: ${TOOL_NAMES.join(", ")}.`
+  assert.equal(await refuse("this_does_not_exist"), `unknown tool: this_does_not_exist. ${served}`)
+  assert.equal(await refuse("desk_task_create"), `unknown tool: desk_task_create. ${served} Did you mean task_create?`)
+  assert.equal(await refuse("browser_open"), `unknown tool: browser_open. ${served}`)
+  assert.equal(await refuse("track_updat"), `unknown tool: track_updat. ${served} Did you mean track_update?`)
 })
 
 // Unit 1.2c: the unknown-tool + error branches must still behave with a
@@ -471,7 +482,7 @@ test("calling desk_feedback is refused without opening or creating feedback stor
     ]) {
       const refused = await call({ params: { name: "desk_feedback", arguments: args } })
       assert.equal(refused.isError, true)
-      assert.equal(refused.content[0].text, "unknown tool: desk_feedback")
+      assert.equal(refused.content[0].text, `unknown tool: desk_feedback. Desk's tools: ${TOOL_NAMES.join(", ")}.`)
     }
 
     const afterPrivateFiles = await hashedTree(preserved.stateHome)
@@ -535,7 +546,7 @@ test("calling desk_work_ledger is refused without touching retained ledger parti
     for (const args of [{ action: "capabilities" }, { action: "report" }, { action: "delete", work_item_id: "x", confirm: true }]) {
       const refused = await call({ params: { name: "desk_work_ledger", arguments: args } })
       assert.equal(refused.isError, true)
-      assert.equal(refused.content[0].text, "unknown tool: desk_work_ledger")
+      assert.equal(refused.content[0].text, `unknown tool: desk_work_ledger. Desk's tools: ${TOOL_NAMES.join(", ")}.`)
     }
     assert.deepEqual(await hashedTree(preserved.stateHome), before)
     assert.equal(TOOL_IMPLS.desk_work_ledger, undefined)

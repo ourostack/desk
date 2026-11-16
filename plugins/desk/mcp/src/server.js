@@ -28,6 +28,7 @@ import {
 } from "@modelcontextprotocol/sdk/types.js"
 
 import { TOOL_NAMES, TOOL_DESCRIPTIONS } from "./tool-names.js"
+import { unknownToolMessage } from "./tool-refusal.cjs"
 import { TOOL_INPUT_SCHEMAS } from "./tool-schemas.js"
 import { ACTION_TOOLS } from "./actions/served.js"
 import { deskVersion } from "./package-metadata.js"
@@ -271,7 +272,7 @@ export async function callTool({ deskRoot, name, input, person = null, statusCon
   traceRequestId = null, traceWrite = line => process.stderr.write(line, () => {}) }) {
   if (!TOOL_NAMES.includes(name)) {
     return {
-      content: [{ type: "text", text: `unknown tool: ${name}` }],
+      content: [{ type: "text", text: unknownToolMessage(name, TOOL_NAMES, "Desk's") }],
       isError: true,
     }
   }
