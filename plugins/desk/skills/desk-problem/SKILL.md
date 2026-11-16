@@ -5,7 +5,7 @@ description: Use when a Desk mechanism itself (a hook, boot check, migration, MC
 
 # Desk problem
 
-A Desk mechanism just failed at its own job. This skill turns that into the standard block below, and — once fixed or not — a filed report, so the same failure never has to be silently rediscovered by another agent on another machine.
+A Desk mechanism just failed at its own job. A Desk tool missing from your tool list is not a failure until you have loaded it by name, as session-start's details say for hosts that defer tools: file it only if it is still absent after that. This skill turns that into the standard block below, and — once fixed or not — a filed report, so the same failure never has to be silently rediscovered by another agent on another machine.
 
 ## The block format
 
