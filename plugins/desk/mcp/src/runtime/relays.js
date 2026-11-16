@@ -282,7 +282,21 @@ const pullSummary = (body) => ({
   mergeable: body.mergeable ?? null,
   mergeableState: body.mergeable_state,
   labels: body.labels.map((label) => label.name),
+  title: body.title ?? "",
+  body: body.body ?? "",
 })
+
+const AI_TRAILER = /^[ \t]*Co-authored-by:[^\n]*(?:\[bot\]|copilot|claude|anthropic|openai|chatgpt|gemini)[^\n]*$/gimu
+
+/**
+ * The message a merge lands with. GitHub copies the branch commits' co-author trailers into a squash commit unless the
+ * message is given, and a cloud signer forces the AI trailer onto those commits, so the relay always gives the message.
+ */
+function mergeMessage(pr, number, method) {
+  if (method === "rebase") return {}
+  const body = pr.body.replace(/\r\n/gu, "\n").replace(AI_TRAILER, "").replace(/\n{3,}/gu, "\n\n").trim()
+  return { commit_title: method === "squash" ? `${pr.title} (#${number})` : `Merge pull request #${number} from ${pr.headRef}`, commit_message: body }
+}
 
 const checkSummary = (run) => ({ id: run.id, name: run.name, status: run.status, conclusion: run.conclusion ?? null, startedAt: run.started_at ?? null })
 
@@ -463,7 +477,7 @@ async function handlePull(relay, state, ctx, number) {
     return
   }
   // The head sha makes GitHub refuse the merge if a push landed after the checks were read.
-  const response = await ctx.api.send("PUT", `/repos/${relay.repo}/pulls/${number}/merge`, { merge_method: relay.method, sha: pr.headSha })
+  const response = await ctx.api.send("PUT", `/repos/${relay.repo}/pulls/${number}/merge`, { merge_method: relay.method, sha: pr.headSha, ...mergeMessage(pr, number, relay.method) })
   if (!response.ok) {
     const reason = response.body.message ?? `HTTP ${response.status}`
     record.refused = { sha: pr.headSha, at: new Date(ctx.now).toISOString(), reason }
