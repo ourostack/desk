@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.192 — 2026-11-16
+
+The merge-when-green relay is no longer held by something that is not real. A check run whose name still holds an unexpanded `${{ ... }}`, the placeholder GitHub posts for a matrix job cancelled before it expanded, is ignored once the same job's expanded shards are on the head; a real failure still holds. And the main-branch workflow's health is judged from its latest completed run that was not cancelled, because a run cancelled by a newer push says nothing about the branch. A pull request that was clean, labelled and green used to wait for an hour on both ([relays](docs/relays.md)).
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.191 — 2026-11-16
 
 The merge-when-green relay now edits its status comment at most every ten minutes while it waits, instead of every two. Each edit changed the pull request, so the next poll read it and the labelled list again in full rather than as a free 304: on a shared 5,000-an-hour account that was about 3 REST calls per edit. The merge result still replaces the comment at once ([relays](docs/relays.md)).
