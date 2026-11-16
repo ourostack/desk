@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.197 — 2026-11-16
+
+Crew's skills shrink from seven to four, and its always-on skill descriptions from 1568 to 898 bytes. `crew:perspective-query` and `crew:roster` are now sections of `crew:shared-desk-conventions`, and `crew:leave-note` is gone because the `note` tool's description already carries its guidance. `shared-desk-conventions`, `join-crew`, `start-crew` and `shared-initiative` are cut to what an agent needs on use (75 KB of skill text becomes 26 KB), and `join-crew` no longer carries the Epoch 1 migration steps. The measured table is in [Crew's footprint](../../docs/crew-footprint.md).
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.196 — 2026-11-16
 
 The intake hook that runs on every prompt now reads its input asynchronously. A synchronous read of a pipe that delivers short reads overflows the heap on Node 24 and 26.8 and later (nodejs/node#66341); the hook's behavior, output and time limit are unchanged.
