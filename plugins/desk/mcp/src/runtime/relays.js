@@ -22,8 +22,11 @@ const HISTORY = 50
 const MERGED_KEPT = 20
 /** A refused merge is tried again after this long, or at once when the head changes. */
 const REFUSED_MS = 5 * 60_000
-/** A status comment that only reports progress is edited at most this often; the merge always updates it. */
-const COMMENT_MS = 2 * 60_000
+/**
+ * A status comment that only reports progress is edited at most this often; the merge always updates it. Each edit also
+ * changes the pull request, so the next poll reads it and the labelled list again in full instead of as a free 304.
+ */
+const COMMENT_MS = 10 * 60_000
 const CHECKS_PAGE = 100
 const COMMENT_PAGES = 5
 const TYPES = ["dispatch", "merge-when-green"]
