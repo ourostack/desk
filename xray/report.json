@@ -1,0 +1,532 @@
+{
+  "tool": "ax-xray",
+  "checker": {
+    "version": "1.5.0"
+  },
+  "claimSet": {
+    "version": "1.5.0",
+    "hash": "dfcf73422b9f718d709d2210649ec1e3b98c5d19650cc1180b358368fb6b1feb"
+  },
+  "at": "2026-11-16T12:51:01.665Z",
+  "target": {
+    "commit": "abc",
+    "app": {
+      "name": "Desk MCP"
+    },
+    "mcp": {
+      "tools": 19
+    }
+  },
+  "safety": {
+    "ok": false,
+    "checks": [
+      {
+        "name": "loopback",
+        "ok": false,
+        "note": "no address to check: pass --mock \"<loopback url> <key>=<value>\", --env <NAME>=<loopback url>, or --env <NAME>=<stub executable>"
+      },
+      {
+        "name": "isolated home",
+        "ok": true,
+        "note": "HOME=/tmp/dxr/xray-home"
+      },
+      {
+        "name": "no credentials",
+        "ok": true,
+        "note": "only PATH, LANG, TMPDIR and the --env values are passed on"
+      },
+      {
+        "name": "mock identity",
+        "ok": false,
+        "note": "no proof the target is a mock: pass --mock \"<url> <key>=<value>\" or --guard \"<command>\""
+      }
+    ]
+  },
+  "inventory": {
+    "given": true,
+    "surfaces": [
+      "mcp"
+    ]
+  },
+  "effects": [],
+  "conformant": true,
+  "summary": {
+    "claims": 5,
+    "holding": 3,
+    "must": 2,
+    "mustHolding": 2,
+    "mustSkipped": 0,
+    "checks": {
+      "pass": 39,
+      "fail": 2,
+      "skip": 8
+    },
+    "score": 95.1
+  },
+  "claims": [
+    {
+      "id": "mcp.tools-list",
+      "surface": "mcp",
+      "tier": "should",
+      "applies": "tool",
+      "rule": "The server lists its tools, each with a description and an input schema.",
+      "why": "The tool list is the MCP surface's help.",
+      "evidence": {
+        "basis": "evaluation",
+        "source": "docs/decisions/2026-10-30-ouro-ax/evidence/kit-probe.md",
+        "finding": "The kit probe's MCP server passed every send (4 of 4) from tools/list alone."
+      },
+      "check": "initialize, then tools/list.",
+      "fix": "Give every tool a one-line description and a JSON Schema for its input.",
+      "pass": 19,
+      "fail": 0,
+      "skip": 0,
+      "holds": true,
+      "failing": [],
+      "skipped": []
+    },
+    {
+      "id": "mcp.effect-annotated",
+      "surface": "mcp",
+      "tier": "must",
+      "applies": "tool",
+      "rule": "Every tool says whether it only reads or changes something (`readOnlyHint` or `destructiveHint`).",
+      "why": "The MCP form of `effect`: who sees it.",
+      "evidence": {
+        "basis": "hazard",
+        "source": "",
+        "finding": "A tool that does not say whether it only reads lets a client run a write other people see as if it were a read."
+      },
+      "check": "Read `annotations` from tools/list.",
+      "fix": "Set `annotations.readOnlyHint` on reads and `destructiveHint` on what others see.",
+      "pass": 19,
+      "fail": 0,
+      "skip": 0,
+      "holds": true,
+      "failing": [],
+      "skipped": []
+    },
+    {
+      "id": "mcp.bad-call-teaches",
+      "surface": "mcp",
+      "tier": "should",
+      "applies": "tool-required",
+      "rule": "A call missing a required argument is refused, and the error names the argument.",
+      "why": "Schemas that reject bad calls with the fix.",
+      "evidence": {
+        "basis": "principle",
+        "source": "Ouro UI design record of 2026-10-11 (MCP kit)",
+        "finding": "No evaluation has shown agents failing without it yet."
+      },
+      "check": "Call each tool that has required arguments with none.",
+      "fix": "Validate input against the schema before running and name each missing field.",
+      "pass": 0,
+      "fail": 1,
+      "skip": 8,
+      "holds": false,
+      "failing": [
+        {
+          "claim": "mcp.bad-call-teaches",
+          "surface": "desk_recall",
+          "verdict": "fail",
+          "note": "refused: {\n  \"status\": \"degraded\",\n  \"mode\": \"setup\",\n  \"reason\": \"no_desk_root\",\n  \"summary\": \"desk_recall needs the desk root and the Desk runtime, which Desk has not admitted yet (no_desk_root).\",\n  \"onboarding_skill\": \"desk:…"
+        }
+      ],
+      "skipped": [
+        {
+          "claim": "mcp.bad-call-teaches",
+          "surface": "task_create",
+          "verdict": "skip",
+          "note": "not run: the target is not proven a mock (loopback: no address to check: pass --mock \"<loopback url> <key>=<value>\", --env <NAME>=<loopback url>, or --env <NAME>=<stub executable>; mock identity: no proof the target is a mock: pass --mock \"<url> <key>=<value>\" or --guard \"<command>\")"
+        },
+        {
+          "claim": "mcp.bad-call-teaches",
+          "surface": "task_archive",
+          "verdict": "skip",
+          "note": "not run: the target is not proven a mock (loopback: no address to check: pass --mock \"<loopback url> <key>=<value>\", --env <NAME>=<loopback url>, or --env <NAME>=<stub executable>; mock identity: no proof the target is a mock: pass --mock \"<url> <key>=<value>\" or --guard \"<command>\")"
+        },
+        {
+          "claim": "mcp.bad-call-teaches",
+          "surface": "task_signoff",
+          "verdict": "skip",
+          "note": "not run: the target is not proven a mock (loopback: no address to check: pass --mock \"<loopback url> <key>=<value>\", --env <NAME>=<loopback url>, or --env <NAME>=<stub executable>; mock identity: no proof the target is a mock: pass --mock \"<url> <key>=<value>\" or --guard \"<command>\")"
+        },
+        {
+          "claim": "mcp.bad-call-teaches",
+          "surface": "track_create",
+          "verdict": "skip",
+          "note": "not run: the target is not proven a mock (loopback: no address to check: pass --mock \"<loopback url> <key>=<value>\", --env <NAME>=<loopback url>, or --env <NAME>=<stub executable>; mock identity: no proof the target is a mock: pass --mock \"<url> <key>=<value>\" or --guard \"<command>\")"
+        },
+        {
+          "claim": "mcp.bad-call-teaches",
+          "surface": "lesson_add",
+          "verdict": "skip",
+          "note": "not run: the target is not proven a mock (loopback: no address to check: pass --mock \"<loopback url> <key>=<value>\", --env <NAME>=<loopback url>, or --env <NAME>=<stub executable>; mock identity: no proof the target is a mock: pass --mock \"<url> <key>=<value>\" or --guard \"<command>\")"
+        },
+        {
+          "claim": "mcp.bad-call-teaches",
+          "surface": "desk_save",
+          "verdict": "skip",
+          "note": "not run: the target is not proven a mock (loopback: no address to check: pass --mock \"<loopback url> <key>=<value>\", --env <NAME>=<loopback url>, or --env <NAME>=<stub executable>; mock identity: no proof the target is a mock: pass --mock \"<url> <key>=<value>\" or --guard \"<command>\")"
+        },
+        {
+          "claim": "mcp.bad-call-teaches",
+          "surface": "improvement_open",
+          "verdict": "skip",
+          "note": "not run: the target is not proven a mock (loopback: no address to check: pass --mock \"<loopback url> <key>=<value>\", --env <NAME>=<loopback url>, or --env <NAME>=<stub executable>; mock identity: no proof the target is a mock: pass --mock \"<url> <key>=<value>\" or --guard \"<command>\")"
+        },
+        {
+          "claim": "mcp.bad-call-teaches",
+          "surface": "improvement_update",
+          "verdict": "skip",
+          "note": "not run: the target is not proven a mock (loopback: no address to check: pass --mock \"<loopback url> <key>=<value>\", --env <NAME>=<loopback url>, or --env <NAME>=<stub executable>; mock identity: no proof the target is a mock: pass --mock \"<url> <key>=<value>\" or --guard \"<command>\")"
+        }
+      ]
+    },
+    {
+      "id": "mcp.unknown-tool",
+      "surface": "mcp",
+      "tier": "should",
+      "applies": "interface",
+      "rule": "An unknown tool is refused, and the error names the tools or tools/list.",
+      "why": "The error should be the menu.",
+      "evidence": {
+        "basis": "principle",
+        "source": "The first adopter's AX principles, P7",
+        "finding": "No evaluation has shown agents failing without it yet."
+      },
+      "check": "Call a tool that does not exist.",
+      "fix": "Answer with the tool names.",
+      "pass": 0,
+      "fail": 1,
+      "skip": 0,
+      "holds": false,
+      "failing": [
+        {
+          "claim": "mcp.unknown-tool",
+          "surface": "ax_xray_no_such_tool",
+          "verdict": "fail",
+          "note": "refused: unknown tool: ax_xray_no_such_tool"
+        }
+      ],
+      "skipped": []
+    },
+    {
+      "id": "mcp.inventory",
+      "surface": "mcp",
+      "tier": "must",
+      "applies": "interface",
+      "rule": "Every tool the server registers is in tools/list once and in the adopter's inventory.",
+      "why": "A tool nobody listed is never checked.",
+      "evidence": {
+        "basis": "hazard",
+        "source": "",
+        "finding": "A tool missing from the inventory is never checked, so an untested surface passes as conforming."
+      },
+      "check": "Compare tools/list with `--inventory <file>` (`{ \"mcp\": [names] }`). Fail on a name missing from either side or listed twice; skip without an inventory.",
+      "fix": "Serve the tools from the same definitions the inventory is generated from (`ax-mcp`).",
+      "pass": 1,
+      "fail": 0,
+      "skip": 0,
+      "holds": true,
+      "failing": [],
+      "skipped": []
+    }
+  ],
+  "results": [
+    {
+      "claim": "mcp.inventory",
+      "surface": "inventory",
+      "verdict": "pass",
+      "note": "19 match the inventory"
+    },
+    {
+      "claim": "mcp.tools-list",
+      "surface": "task_create",
+      "verdict": "pass",
+      "note": "Use when new work needs its own card: create a task card at <track>/<slug>/task.md. `slug` must be an outcome name: 2-6…"
+    },
+    {
+      "claim": "mcp.effect-annotated",
+      "surface": "task_create",
+      "verdict": "pass",
+      "note": "{\"readOnlyHint\":false,\"destructiveHint\":false}"
+    },
+    {
+      "claim": "mcp.bad-call-teaches",
+      "surface": "task_create",
+      "verdict": "skip",
+      "note": "not run: the target is not proven a mock (loopback: no address to check: pass --mock \"<loopback url> <key>=<value>\", --env <NAME>=<loopback url>, or --env <NAME>=<stub executable>; mock identity: no proof the target is a mock: pass --mock \"<url> <key>=<value>\" or --guard \"<command>\")"
+    },
+    {
+      "claim": "mcp.tools-list",
+      "surface": "task_update",
+      "verdict": "pass",
+      "note": "Use when an existing task card changes (direct edits are denied). Merge `frontmatter`, record progress with `note` and …"
+    },
+    {
+      "claim": "mcp.effect-annotated",
+      "surface": "task_update",
+      "verdict": "pass",
+      "note": "{\"readOnlyHint\":false,\"destructiveHint\":false}"
+    },
+    {
+      "claim": "mcp.tools-list",
+      "surface": "task_archive",
+      "verdict": "pass",
+      "note": "Use when a task's work is finished or cancelled: move <track>/<slug>/ to <track>/_archive/<slug>/. A task not yet done …"
+    },
+    {
+      "claim": "mcp.effect-annotated",
+      "surface": "task_archive",
+      "verdict": "pass",
+      "note": "{\"readOnlyHint\":false,\"destructiveHint\":true}"
+    },
+    {
+      "claim": "mcp.bad-call-teaches",
+      "surface": "task_archive",
+      "verdict": "skip",
+      "note": "not run: the target is not proven a mock (loopback: no address to check: pass --mock \"<loopback url> <key>=<value>\", --env <NAME>=<loopback url>, or --env <NAME>=<stub executable>; mock identity: no proof the target is a mock: pass --mock \"<url> <key>=<value>\" or --guard \"<command>\")"
+    },
+    {
+      "claim": "mcp.tools-list",
+      "surface": "task_focus",
+      "verdict": "pass",
+      "note": "Declare the task this session is working on, so its time is credited to it. Pass `track` and `slug` of an existing card…"
+    },
+    {
+      "claim": "mcp.effect-annotated",
+      "surface": "task_focus",
+      "verdict": "pass",
+      "note": "{\"readOnlyHint\":false,\"destructiveHint\":false}"
+    },
+    {
+      "claim": "mcp.tools-list",
+      "surface": "task_signoff",
+      "verdict": "pass",
+      "note": "Record the operator's answer to a delivered task: accepted or refused. Call it only after the operator has answered, in…"
+    },
+    {
+      "claim": "mcp.effect-annotated",
+      "surface": "task_signoff",
+      "verdict": "pass",
+      "note": "{\"readOnlyHint\":false,\"destructiveHint\":false}"
+    },
+    {
+      "claim": "mcp.bad-call-teaches",
+      "surface": "task_signoff",
+      "verdict": "skip",
+      "note": "not run: the target is not proven a mock (loopback: no address to check: pass --mock \"<loopback url> <key>=<value>\", --env <NAME>=<loopback url>, or --env <NAME>=<stub executable>; mock identity: no proof the target is a mock: pass --mock \"<url> <key>=<value>\" or --guard \"<command>\")"
+    },
+    {
+      "claim": "mcp.tools-list",
+      "surface": "track_create",
+      "verdict": "pass",
+      "note": "Use when new work needs its own track: create a track at <slug>/track.md. `slug` must be an outcome name (2-6 lowercase…"
+    },
+    {
+      "claim": "mcp.effect-annotated",
+      "surface": "track_create",
+      "verdict": "pass",
+      "note": "{\"readOnlyHint\":false,\"destructiveHint\":false}"
+    },
+    {
+      "claim": "mcp.bad-call-teaches",
+      "surface": "track_create",
+      "verdict": "skip",
+      "note": "not run: the target is not proven a mock (loopback: no address to check: pass --mock \"<loopback url> <key>=<value>\", --env <NAME>=<loopback url>, or --env <NAME>=<stub executable>; mock identity: no proof the target is a mock: pass --mock \"<url> <key>=<value>\" or --guard \"<command>\")"
+    },
+    {
+      "claim": "mcp.tools-list",
+      "surface": "track_update",
+      "verdict": "pass",
+      "note": "Merge frontmatter or append to the body of an existing track.md. `frontmatter.scope`, if set, is validated as track_cre…"
+    },
+    {
+      "claim": "mcp.effect-annotated",
+      "surface": "track_update",
+      "verdict": "pass",
+      "note": "{\"readOnlyHint\":false,\"destructiveHint\":false}"
+    },
+    {
+      "claim": "mcp.tools-list",
+      "surface": "friction_add",
+      "verdict": "pass",
+      "note": "Use when something got in your way and should be recorded: append a friction entry to _meta/friction.md, or under <trac…"
+    },
+    {
+      "claim": "mcp.effect-annotated",
+      "surface": "friction_add",
+      "verdict": "pass",
+      "note": "{\"readOnlyHint\":false,\"destructiveHint\":false}"
+    },
+    {
+      "claim": "mcp.tools-list",
+      "surface": "lesson_add",
+      "verdict": "pass",
+      "note": "Record a correction where something loads it, and read `in_effect` and `message` in the reply before you tell anyone th…"
+    },
+    {
+      "claim": "mcp.effect-annotated",
+      "surface": "lesson_add",
+      "verdict": "pass",
+      "note": "{\"readOnlyHint\":false,\"destructiveHint\":false}"
+    },
+    {
+      "claim": "mcp.bad-call-teaches",
+      "surface": "lesson_add",
+      "verdict": "skip",
+      "note": "not run: the target is not proven a mock (loopback: no address to check: pass --mock \"<loopback url> <key>=<value>\", --env <NAME>=<loopback url>, or --env <NAME>=<stub executable>; mock identity: no proof the target is a mock: pass --mock \"<url> <key>=<value>\" or --guard \"<command>\")"
+    },
+    {
+      "claim": "mcp.tools-list",
+      "surface": "desk_save",
+      "verdict": "pass",
+      "note": "After you write a file with Write or Edit (a planning doc, a spec, a report), call this with its path to commit it. `pa…"
+    },
+    {
+      "claim": "mcp.effect-annotated",
+      "surface": "desk_save",
+      "verdict": "pass",
+      "note": "{\"readOnlyHint\":false,\"destructiveHint\":true}"
+    },
+    {
+      "claim": "mcp.bad-call-teaches",
+      "surface": "desk_save",
+      "verdict": "skip",
+      "note": "not run: the target is not proven a mock (loopback: no address to check: pass --mock \"<loopback url> <key>=<value>\", --env <NAME>=<loopback url>, or --env <NAME>=<stub executable>; mock identity: no proof the target is a mock: pass --mock \"<url> <key>=<value>\" or --guard \"<command>\")"
+    },
+    {
+      "claim": "mcp.tools-list",
+      "surface": "note",
+      "verdict": "pass",
+      "note": "In a Crew shared workspace, leave another member a dated note that their session start lists until they acknowledge it …"
+    },
+    {
+      "claim": "mcp.effect-annotated",
+      "surface": "note",
+      "verdict": "pass",
+      "note": "{\"readOnlyHint\":false,\"destructiveHint\":false}"
+    },
+    {
+      "claim": "mcp.tools-list",
+      "surface": "desk_search",
+      "verdict": "pass",
+      "note": "Use when you cannot tell which file holds something, or what changed in a time window. Exact-word search across the des…"
+    },
+    {
+      "claim": "mcp.effect-annotated",
+      "surface": "desk_search",
+      "verdict": "pass",
+      "note": "{\"readOnlyHint\":true,\"destructiveHint\":false}"
+    },
+    {
+      "claim": "mcp.tools-list",
+      "surface": "desk_recall",
+      "verdict": "pass",
+      "note": "Use for loose recall, as in `do I remember anything about X`. Ranks every desk Markdown file by meaning and exact words…"
+    },
+    {
+      "claim": "mcp.effect-annotated",
+      "surface": "desk_recall",
+      "verdict": "pass",
+      "note": "{\"readOnlyHint\":true,\"destructiveHint\":false}"
+    },
+    {
+      "claim": "mcp.bad-call-teaches",
+      "surface": "desk_recall",
+      "verdict": "fail",
+      "note": "refused: {\n  \"status\": \"degraded\",\n  \"mode\": \"setup\",\n  \"reason\": \"no_desk_root\",\n  \"summary\": \"desk_recall needs the desk root and the Desk runtime, which Desk has not admitted yet (no_desk_root).\",\n  \"onboarding_skill\": \"desk:…"
+    },
+    {
+      "claim": "mcp.tools-list",
+      "surface": "desk_status",
+      "verdict": "pass",
+      "note": "Session-start health check for the resolved desk root. The compact answer has `state` (ready, degraded, admitting or se…"
+    },
+    {
+      "claim": "mcp.effect-annotated",
+      "surface": "desk_status",
+      "verdict": "pass",
+      "note": "{\"readOnlyHint\":true,\"destructiveHint\":false}"
+    },
+    {
+      "claim": "mcp.tools-list",
+      "surface": "desk_doctor",
+      "verdict": "pass",
+      "note": "Use when Desk misbehaves or its runtime needs checking: report whether Desk MCP started in healthy runtime mode; in dia…"
+    },
+    {
+      "claim": "mcp.effect-annotated",
+      "surface": "desk_doctor",
+      "verdict": "pass",
+      "note": "{\"readOnlyHint\":false,\"destructiveHint\":false}"
+    },
+    {
+      "claim": "mcp.tools-list",
+      "surface": "desk_skill",
+      "verdict": "pass",
+      "note": "Use when your client cannot load Desk's skills itself (claude.ai, ChatGPT): read one of Desk's skills, the working proc…"
+    },
+    {
+      "claim": "mcp.effect-annotated",
+      "surface": "desk_skill",
+      "verdict": "pass",
+      "note": "{\"readOnlyHint\":true,\"destructiveHint\":false}"
+    },
+    {
+      "claim": "mcp.tools-list",
+      "surface": "improvement_open",
+      "verdict": "pass",
+      "note": "Use when a case needs an improvement card: open one on the desk, find it already open, or reopen a closed one. `source`…"
+    },
+    {
+      "claim": "mcp.effect-annotated",
+      "surface": "improvement_open",
+      "verdict": "pass",
+      "note": "{\"readOnlyHint\":false,\"destructiveHint\":false}"
+    },
+    {
+      "claim": "mcp.bad-call-teaches",
+      "surface": "improvement_open",
+      "verdict": "skip",
+      "note": "not run: the target is not proven a mock (loopback: no address to check: pass --mock \"<loopback url> <key>=<value>\", --env <NAME>=<loopback url>, or --env <NAME>=<stub executable>; mock identity: no proof the target is a mock: pass --mock \"<url> <key>=<value>\" or --guard \"<command>\")"
+    },
+    {
+      "claim": "mcp.tools-list",
+      "surface": "improvement_next",
+      "verdict": "pass",
+      "note": "Use when you take on improvement work: take the next improvement card, the open card that waited longest. It claims the…"
+    },
+    {
+      "claim": "mcp.effect-annotated",
+      "surface": "improvement_next",
+      "verdict": "pass",
+      "note": "{\"readOnlyHint\":false,\"destructiveHint\":false}"
+    },
+    {
+      "claim": "mcp.tools-list",
+      "surface": "improvement_update",
+      "verdict": "pass",
+      "note": "Use when you ship, release or close a card you hold the claim on, with its `key` and `claim_id`: ship it (`countermeasu…"
+    },
+    {
+      "claim": "mcp.effect-annotated",
+      "surface": "improvement_update",
+      "verdict": "pass",
+      "note": "{\"readOnlyHint\":false,\"destructiveHint\":false}"
+    },
+    {
+      "claim": "mcp.bad-call-teaches",
+      "surface": "improvement_update",
+      "verdict": "skip",
+      "note": "not run: the target is not proven a mock (loopback: no address to check: pass --mock \"<loopback url> <key>=<value>\", --env <NAME>=<loopback url>, or --env <NAME>=<stub executable>; mock identity: no proof the target is a mock: pass --mock \"<url> <key>=<value>\" or --guard \"<command>\")"
+    },
+    {
+      "claim": "mcp.unknown-tool",
+      "surface": "ax_xray_no_such_tool",
+      "verdict": "fail",
+      "note": "refused: unknown tool: ax_xray_no_such_tool"
+    }
+  ]
+}

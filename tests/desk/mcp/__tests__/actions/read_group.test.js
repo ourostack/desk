@@ -30,3 +30,13 @@ test("the action tools are served from the generated tools, with their consent h
     assert.equal(ACTION_TOOLS[name].annotations.readOnlyHint, !WRITES.includes(name), `${name} read-only hint follows its consent`)
   }
 })
+
+test("desk-web's catalog carries the effect hints its declarations generate", async () => {
+  const { createRequire } = await import("node:module");
+  const require = createRequire(import.meta.url);
+  const catalog = require(path.join(mcp, "web-catalog.json"));
+  const generated = require(path.join(mcp, "src", "actions", "generated", "desk-web", "mcp.json"));
+  for (const tool of generated.tools) {
+    assert.deepEqual(catalog.tools.find((served) => served.name === tool.name).annotations, tool.annotations, `${tool.name} hints`);
+  }
+});
