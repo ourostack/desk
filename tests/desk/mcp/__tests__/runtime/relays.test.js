@@ -514,6 +514,17 @@ test("merge-when-green: with every check green and main green it squash-merges a
   assert.equal(JSON.stringify(w.world.writes).match(/admin|bypass|auto_merge/iu), null, "no bypass of any kind is ever sent")
 })
 
+test("merge-when-green: a merge commit gets a title and the body without AI trailers, and a rebase sends no message", async () => {
+  const merged = await setup([{ ...MERGE, method: "merge" }])
+  mergeWorld(merged.world)
+  await merged.poll()
+  assert.deepEqual(prWrites(merged.world)[0].body, { merge_method: "merge", sha: SHA, commit_title: "Merge pull request #7 from feature/x", commit_message: "Why.\n\nCo-authored-by: Ana <ana@example.com>" })
+  const rebased = await setup([{ ...MERGE, method: "rebase" }])
+  mergeWorld(rebased.world)
+  await rebased.poll()
+  assert.deepEqual(prWrites(rebased.world)[0].body, { merge_method: "rebase", sha: SHA })
+})
+
 test("merge-when-green: a matrix job skipped under its template name lets skippedPasses merge, and holds the merge without it", async () => {
   const TEMPLATE = "npm test (${{ matrix.os }}, ${{ matrix.shard }}/${{ strategy.job-total }})"
   const passing = await setup([{ ...MERGE, skippedPasses: true }])
