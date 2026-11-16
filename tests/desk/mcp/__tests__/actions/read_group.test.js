@@ -17,7 +17,7 @@ for (const group of ["desk-read", "desk-session"]) {
   test(`the generated output of ${group} is what its declarations produce`, () => {
     const result = spawnSync(process.execPath, [
       path.join(mcp, "src", "lib", "ouro-actions", "ouro-actions.mts"), "check",
-      path.join(mcp, "src", "actions", `${group}.actions.mts`), path.join(mcp, "src", "actions", "generated", group),
+      path.join(mcp, "src", "actions", `${group}.actions.mts`), path.join(mcp, "src", "actions", "generated", group), "--targets", "mcp,actions",
     ], { encoding: "utf8" })
     assert.equal(result.status, 0, result.stdout + result.stderr)
   })
