@@ -1,0 +1,243 @@
+{
+  "tool": "ax-xray",
+  "checker": {
+    "version": "1.5.0"
+  },
+  "claimSet": {
+    "version": "1.5.0",
+    "hash": "dfcf73422b9f718d709d2210649ec1e3b98c5d19650cc1180b358368fb6b1feb"
+  },
+  "at": "2026-11-16T12:51:28.476Z",
+  "target": {
+    "commit": "abc",
+    "app": {
+      "name": "Desk Browser"
+    },
+    "mcp": {
+      "tools": 2
+    }
+  },
+  "safety": {
+    "ok": false,
+    "checks": [
+      {
+        "name": "loopback",
+        "ok": false,
+        "note": "no address to check: pass --mock \"<loopback url> <key>=<value>\", --env <NAME>=<loopback url>, or --env <NAME>=<stub executable>"
+      },
+      {
+        "name": "isolated home",
+        "ok": true,
+        "note": "HOME=/tmp/dxr/xray-home-web"
+      },
+      {
+        "name": "no credentials",
+        "ok": true,
+        "note": "only PATH, LANG, TMPDIR and the --env values are passed on"
+      },
+      {
+        "name": "mock identity",
+        "ok": false,
+        "note": "no proof the target is a mock: pass --mock \"<url> <key>=<value>\" or --guard \"<command>\""
+      }
+    ]
+  },
+  "inventory": {
+    "given": true,
+    "surfaces": [
+      "mcp"
+    ]
+  },
+  "effects": [],
+  "conformant": true,
+  "summary": {
+    "claims": 5,
+    "holding": 3,
+    "must": 2,
+    "mustHolding": 2,
+    "mustSkipped": 0,
+    "checks": {
+      "pass": 5,
+      "fail": 1,
+      "skip": 2
+    },
+    "score": 83.3
+  },
+  "claims": [
+    {
+      "id": "mcp.tools-list",
+      "surface": "mcp",
+      "tier": "should",
+      "applies": "tool",
+      "rule": "The server lists its tools, each with a description and an input schema.",
+      "why": "The tool list is the MCP surface's help.",
+      "evidence": {
+        "basis": "evaluation",
+        "source": "docs/decisions/2026-10-30-ouro-ax/evidence/kit-probe.md",
+        "finding": "The kit probe's MCP server passed every send (4 of 4) from tools/list alone."
+      },
+      "check": "initialize, then tools/list.",
+      "fix": "Give every tool a one-line description and a JSON Schema for its input.",
+      "pass": 2,
+      "fail": 0,
+      "skip": 0,
+      "holds": true,
+      "failing": [],
+      "skipped": []
+    },
+    {
+      "id": "mcp.effect-annotated",
+      "surface": "mcp",
+      "tier": "must",
+      "applies": "tool",
+      "rule": "Every tool says whether it only reads or changes something (`readOnlyHint` or `destructiveHint`).",
+      "why": "The MCP form of `effect`: who sees it.",
+      "evidence": {
+        "basis": "hazard",
+        "source": "",
+        "finding": "A tool that does not say whether it only reads lets a client run a write other people see as if it were a read."
+      },
+      "check": "Read `annotations` from tools/list.",
+      "fix": "Set `annotations.readOnlyHint` on reads and `destructiveHint` on what others see.",
+      "pass": 2,
+      "fail": 0,
+      "skip": 0,
+      "holds": true,
+      "failing": [],
+      "skipped": []
+    },
+    {
+      "id": "mcp.bad-call-teaches",
+      "surface": "mcp",
+      "tier": "should",
+      "applies": "tool-required",
+      "rule": "A call missing a required argument is refused, and the error names the argument.",
+      "why": "Schemas that reject bad calls with the fix.",
+      "evidence": {
+        "basis": "principle",
+        "source": "Ouro UI design record of 2026-10-11 (MCP kit)",
+        "finding": "No evaluation has shown agents failing without it yet."
+      },
+      "check": "Call each tool that has required arguments with none.",
+      "fix": "Validate input against the schema before running and name each missing field.",
+      "pass": 0,
+      "fail": 0,
+      "skip": 2,
+      "holds": false,
+      "failing": [],
+      "skipped": [
+        {
+          "claim": "mcp.bad-call-teaches",
+          "surface": "browser_context",
+          "verdict": "skip",
+          "note": "not run: the target is not proven a mock (loopback: no address to check: pass --mock \"<loopback url> <key>=<value>\", --env <NAME>=<loopback url>, or --env <NAME>=<stub executable>; mock identity: no proof the target is a mock: pass --mock \"<url> <key>=<value>\" or --guard \"<command>\")"
+        },
+        {
+          "claim": "mcp.bad-call-teaches",
+          "surface": "browser_command",
+          "verdict": "skip",
+          "note": "not run: the target is not proven a mock (loopback: no address to check: pass --mock \"<loopback url> <key>=<value>\", --env <NAME>=<loopback url>, or --env <NAME>=<stub executable>; mock identity: no proof the target is a mock: pass --mock \"<url> <key>=<value>\" or --guard \"<command>\")"
+        }
+      ]
+    },
+    {
+      "id": "mcp.unknown-tool",
+      "surface": "mcp",
+      "tier": "should",
+      "applies": "interface",
+      "rule": "An unknown tool is refused, and the error names the tools or tools/list.",
+      "why": "The error should be the menu.",
+      "evidence": {
+        "basis": "principle",
+        "source": "The first adopter's AX principles, P7",
+        "finding": "No evaluation has shown agents failing without it yet."
+      },
+      "check": "Call a tool that does not exist.",
+      "fix": "Answer with the tool names.",
+      "pass": 0,
+      "fail": 1,
+      "skip": 0,
+      "holds": false,
+      "failing": [
+        {
+          "claim": "mcp.unknown-tool",
+          "surface": "ax_xray_no_such_tool",
+          "verdict": "fail",
+          "note": "refused: Unknown tool ax_xray_no_such_tool."
+        }
+      ],
+      "skipped": []
+    },
+    {
+      "id": "mcp.inventory",
+      "surface": "mcp",
+      "tier": "must",
+      "applies": "interface",
+      "rule": "Every tool the server registers is in tools/list once and in the adopter's inventory.",
+      "why": "A tool nobody listed is never checked.",
+      "evidence": {
+        "basis": "hazard",
+        "source": "",
+        "finding": "A tool missing from the inventory is never checked, so an untested surface passes as conforming."
+      },
+      "check": "Compare tools/list with `--inventory <file>` (`{ \"mcp\": [names] }`). Fail on a name missing from either side or listed twice; skip without an inventory.",
+      "fix": "Serve the tools from the same definitions the inventory is generated from (`ax-mcp`).",
+      "pass": 1,
+      "fail": 0,
+      "skip": 0,
+      "holds": true,
+      "failing": [],
+      "skipped": []
+    }
+  ],
+  "results": [
+    {
+      "claim": "mcp.inventory",
+      "surface": "inventory",
+      "verdict": "pass",
+      "note": "2 match the inventory"
+    },
+    {
+      "claim": "mcp.tools-list",
+      "surface": "browser_context",
+      "verdict": "pass",
+      "note": "Use when you need a browser: open or close one for this agent. \"fresh\" starts an empty throwaway profile; \"mine\" opens …"
+    },
+    {
+      "claim": "mcp.effect-annotated",
+      "surface": "browser_context",
+      "verdict": "pass",
+      "note": "{\"readOnlyHint\":false,\"destructiveHint\":false,\"openWorldHint\":false}"
+    },
+    {
+      "claim": "mcp.bad-call-teaches",
+      "surface": "browser_context",
+      "verdict": "skip",
+      "note": "not run: the target is not proven a mock (loopback: no address to check: pass --mock \"<loopback url> <key>=<value>\", --env <NAME>=<loopback url>, or --env <NAME>=<stub executable>; mock identity: no proof the target is a mock: pass --mock \"<url> <key>=<value>\" or --guard \"<command>\")"
+    },
+    {
+      "claim": "mcp.tools-list",
+      "surface": "browser_command",
+      "verdict": "pass",
+      "note": "Use when you drive an owned browser context: run one command with `args`, a list of literal strings, never shell. Start…"
+    },
+    {
+      "claim": "mcp.effect-annotated",
+      "surface": "browser_command",
+      "verdict": "pass",
+      "note": "{\"readOnlyHint\":false,\"destructiveHint\":false,\"openWorldHint\":false}"
+    },
+    {
+      "claim": "mcp.bad-call-teaches",
+      "surface": "browser_command",
+      "verdict": "skip",
+      "note": "not run: the target is not proven a mock (loopback: no address to check: pass --mock \"<loopback url> <key>=<value>\", --env <NAME>=<loopback url>, or --env <NAME>=<stub executable>; mock identity: no proof the target is a mock: pass --mock \"<url> <key>=<value>\" or --guard \"<command>\")"
+    },
+    {
+      "claim": "mcp.unknown-tool",
+      "surface": "ax_xray_no_such_tool",
+      "verdict": "fail",
+      "note": "refused: Unknown tool ax_xray_no_such_tool."
+    }
+  ]
+}

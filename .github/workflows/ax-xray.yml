@@ -59,7 +59,23 @@ jobs:
             --mcp "node $PWD/plugins/desk/mcp/index.js" \
             --inventory xray/inventory.json --conformance \
             --home "$RUNNER_TEMP/xray-home" --timeout 60000 \
-            --commit "$GITHUB_SHA" --json --md xray/xray.md > xray/report.json
+            --app "Desk MCP" --commit "$GITHUB_SHA" --json --md xray/xray.md > xray/report.json
+
+      # Desk Browser is its own server, so it gets its own inventory and report; the ledger reads each by its app name.
+      - name: Inventory from the live tools/list (desk-web)
+        run: |
+          mkdir -p xray-desk-web
+          node .github/scripts/ax-tools-list.mjs plugins/desk/mcp/web.cjs xray-desk-web
+
+      - name: Ouro AX X-ray (desk-web)
+        run: |
+          set -o pipefail
+          mkdir -p "$RUNNER_TEMP/xray-home-web"
+          node plugins/desk/mcp/src/lib/ouro-ui/registry/ouro/ax/xray.ts \
+            --mcp "node $PWD/plugins/desk/mcp/web.cjs" \
+            --inventory xray-desk-web/inventory.json --conformance \
+            --home "$RUNNER_TEMP/xray-home-web" --timeout 60000 \
+            --app "Desk Browser" --commit "$GITHUB_SHA" --json --md xray-desk-web/xray.md > xray-desk-web/report.json
 
       # The claims are proved on a fresh generation of all seven projections from the same declarations; the drift gate
       # above covers the two Desk commits.
@@ -93,6 +109,14 @@ jobs:
         with:
           name: xray
           path: xray/
+          retention-days: 90
+
+      - name: Upload the desk-web X-ray
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: xray-desk-web
+          path: xray-desk-web/
           retention-days: 90
 
       - name: Upload the action claims

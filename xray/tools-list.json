@@ -1,0 +1,1347 @@
+{
+  "tools": [
+    {
+      "name": "task_create",
+      "description": "Use when new work needs its own card: create a task card at <track>/<slug>/task.md. `slug` must be an outcome name: 2-6 lowercase kebab-case words, not prompt-like or credential-like; a rejection says what to fix.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "track": {
+            "type": "string",
+            "description": "The track folder the task lives in."
+          },
+          "slug": {
+            "type": "string",
+            "description": "The task folder name: an outcome name, 2-6 lowercase kebab-case words."
+          },
+          "title": {
+            "type": "string",
+            "description": "The task title."
+          },
+          "status": {
+            "type": "string",
+            "description": "Initial status; defaults to drafting. One of drafting, processing, validating, collaborating, paused, blocked, done, cancelled."
+          },
+          "body": {
+            "type": "string",
+            "description": "Markdown body, without frontmatter."
+          },
+          "focus": {
+            "type": "boolean",
+            "description": "Pass true to also declare this task as the session's focus (as task_focus does), for work that starts now. Main agent only."
+          },
+          "display_label": {
+            "type": "string",
+            "description": "Optional short description of the focused task, at most 72 characters; never paths, URLs, emails or credentials. Unsafe labels are ignored."
+          },
+          "intake_proposal": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "outcome": {
+                "type": "string",
+                "description": "The requested outcome and its purpose, reflecting the supplied scope."
+              },
+              "assumptions": {
+                "type": "string",
+                "description": "Your actual material assumptions and defaults, including runtime, input/data and error behavior for code."
+              },
+              "recommended_decisions": {
+                "type": "string",
+                "description": "Routine technical defaults you settled, and every remaining human decision together; say plainly when all are settled."
+              },
+              "completion_checks": {
+                "type": "string",
+                "description": "Concrete completion terms: usable output, usage/documentation and specific behavioral, edge and error verification as applicable."
+              }
+            },
+            "required": [
+              "outcome",
+              "assumptions",
+              "recommended_decisions",
+              "completion_checks"
+            ],
+            "description": "For a new, unapproved focused drafting outcome: your complete first-reply proposal, supplied before the card exists (start-task has the rules). Present all four contents together in normal chat, never ask_user or a form, before any confirmation. Omit for approved, resumed or parked work."
+          },
+          "category": {
+            "type": "string",
+            "description": "general | reminder | coordination | infrastructure | another category."
+          },
+          "cadence": {
+            "type": "string",
+            "description": "Recurring cadence, such as 30m."
+          },
+          "scheduledAt": {
+            "type": "string",
+            "description": "One-time scheduled time (ISO 8601)."
+          },
+          "requester": {
+            "type": "string",
+            "description": "Who asked for the task."
+          },
+          "validator": {
+            "type": "string",
+            "description": "Who validates completion."
+          },
+          "artifacts": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Outputs the task produced, such as PR URLs or file paths."
+          },
+          "active_bridge": {
+            "type": "string",
+            "description": "The bridge ID this task records."
+          },
+          "bridge_sessions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Session IDs the bridge coordinates."
+          },
+          "planning_complete": {
+            "type": "boolean",
+            "description": "Skip brainstorming and planning; resume at implementation."
+          },
+          "adopted_at": {
+            "type": "string",
+            "description": "When the task entered the workspace (ISO 8601)."
+          },
+          "repos": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "local_path": {
+                  "type": "string",
+                  "description": "Where it is cloned, as a tilde path; empty when not cloned."
+                },
+                "mode": {
+                  "type": "string",
+                  "enum": [
+                    "local",
+                    "remote"
+                  ]
+                },
+                "url": {
+                  "type": "string",
+                  "description": "Where to clone it from if the clone is missing; optional."
+                }
+              },
+              "required": [
+                "name"
+              ],
+              "additionalProperties": true
+            },
+            "description": "The code repositories the task works in (task-card-format has the shape); `mode` is local (cloned) or remote (read through the API)."
+          },
+          "iterations": {
+            "type": "object",
+            "properties": {
+              "active": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "history": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            },
+            "additionalProperties": true,
+            "description": "The task's iterations: `active` is the running iteration's relative path or null, `history` has one entry per iteration."
+          },
+          "predecessor": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "The task this one continues, such as { track, slug }."
+          },
+          "initiated_by": {
+            "type": "string",
+            "enum": [
+              "operator",
+              "agent"
+            ],
+            "description": "Who started the task: the operator asked, or the agent recognized the work."
+          },
+          "origin_note": {
+            "type": "string",
+            "description": "When the agent started the task: one line on what it noticed."
+          },
+          "steps": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "description": "The step's name: short kebab-case, unique on the card, never renamed. An unknown name adds a row."
+                },
+                "state": {
+                  "type": "string",
+                  "enum": [
+                    "pending",
+                    "in progress",
+                    "blocked",
+                    "dropped"
+                  ],
+                  "description": "A new step starts pending. `blocked` and `dropped` need `reason`. Desk sets `in review`, `merged` and `delivered` itself from the PR URL in `evidence`."
+                },
+                "depends_on": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "Steps that must be delivered or dropped first; empty for none. Needed for a new step; changes only while pending."
+                },
+                "repo": {
+                  "type": "string",
+                  "description": "One of the card's repos, or \"—\" for none. Needed for a new step; changes only while pending."
+                },
+                "evidence": {
+                  "type": "string",
+                  "description": "The PR URL that backs the step, `task:<track>/<slug>` for a step delegated to its own card, or a line on where it stands."
+                },
+                "reason": {
+                  "type": "string",
+                  "description": "Why the step is blocked or dropped."
+                },
+                "expect": {
+                  "type": "string",
+                  "description": "The state you last saw; if the step is in another state, nothing is written."
+                },
+                "dependents_ok": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "When dropping: dependent steps that are still valid; the others become blocked."
+                }
+              },
+              "required": [
+                "id"
+              ],
+              "additionalProperties": false,
+              "description": "One row of the card's `## Steps` table."
+            },
+            "description": "The outcome's steps, in order, written as the card's `## Steps` table. A new step needs `id`, `repo` and `depends_on`."
+          }
+        },
+        "required": [
+          "track",
+          "slug",
+          "title"
+        ],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false
+      }
+    },
+    {
+      "name": "task_update",
+      "description": "Use when an existing task card changes (direct edits are denied). Merge `frontmatter`, record progress with `note` and `next_step`, put rulings and evidence pointers in `log` (a dated entry in log.md beside the card; cheap, rapid entries share one commit), or change `step`, `resource` or a section. A move to `done` needs `evidence`; a done/cancelled result carries archive_due: the owning main agent calls task_archive. To move or rename, pass `to_track`, `to_slug`, `unarchive` or `into_task` alone.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "track": {
+            "type": "string",
+            "description": "The track folder the task lives in."
+          },
+          "slug": {
+            "type": "string",
+            "description": "The task folder name."
+          },
+          "status": {
+            "type": "string",
+            "description": "Shorthand for `frontmatter.status`: one of drafting, processing, validating, collaborating, paused, blocked, done, cancelled. Moving to `done` needs `evidence`."
+          },
+          "frontmatter": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "Fields to merge into the card's frontmatter, as a JSON object (not a string). A `status` must be one of drafting, processing, validating, collaborating, paused, blocked, done, cancelled."
+          },
+          "body_append": {
+            "type": "string",
+            "description": "Markdown to append to the card body, separated by a blank line."
+          },
+          "note": {
+            "type": "string",
+            "description": "One line of progress, appended as `- <date>: <note>` under `## Progress log`. Say only what happened; completion needs `status: done` with `evidence`."
+          },
+          "next_step": {
+            "type": "string",
+            "description": "Replaces the card's `**Next step:**` paragraph."
+          },
+          "evidence": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "pr",
+                  "commit",
+                  "ci_run",
+                  "non_code",
+                  "steps"
+                ],
+                "description": "What kind of reference this is. `steps` closes a card that has a `## Steps` table and needs no `ref`."
+              },
+              "ref": {
+                "type": "string",
+                "description": "Not needed for `steps`. A PR URL for pr; a 7-40 character hex commit sha (optionally with repo/branch) or commit URL for commit; the run's https URL for ci_run; an https URL or desk-relative path to the proof for non_code."
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "description": "Required when this call moves a task into `done` (task_update), or archives one not already `done` or `cancelled` without `outcome: \"cancelled\"` (task_archive). A card with `## Steps` finishes only with `{ kind: \"steps\" }`; one listing `repos` only with `pr` or a pushed `commit` (task-card-format has the rules). A refusal says what to supply."
+          },
+          "repos_removed_reason": {
+            "type": "string",
+            "description": "One line on why. Required to remove every repo from a card; not with `status: done`, and not needed with `status: cancelled`."
+          },
+          "return_reason": {
+            "type": "string",
+            "enum": [
+              "agent_error",
+              "changed_ask",
+              "new_information",
+              "external"
+            ],
+            "description": "Required when the task goes backwards (out of `done`, or below its furthest stage), refused otherwise: agent_error is your mistake, changed_ask the operator's new ask, new_information something nobody knew, external an outside break."
+          },
+          "step": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "description": "The step's name: short kebab-case, unique on the card, never renamed. An unknown name adds a row."
+              },
+              "state": {
+                "type": "string",
+                "enum": [
+                  "pending",
+                  "in progress",
+                  "blocked",
+                  "dropped"
+                ],
+                "description": "A new step starts pending. `blocked` and `dropped` need `reason`. Desk sets `in review`, `merged` and `delivered` itself from the PR URL in `evidence`."
+              },
+              "depends_on": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Steps that must be delivered or dropped first; empty for none. Needed for a new step; changes only while pending."
+              },
+              "repo": {
+                "type": "string",
+                "description": "One of the card's repos, or \"—\" for none. Needed for a new step; changes only while pending."
+              },
+              "evidence": {
+                "type": "string",
+                "description": "The PR URL that backs the step, `task:<track>/<slug>` for a step delegated to its own card, or a line on where it stands."
+              },
+              "reason": {
+                "type": "string",
+                "description": "Why the step is blocked or dropped."
+              },
+              "expect": {
+                "type": "string",
+                "description": "The state you last saw; if the step is in another state, nothing is written."
+              },
+              "dependents_ok": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "When dropping: dependent steps that are still valid; the others become blocked."
+              }
+            },
+            "required": [
+              "id"
+            ],
+            "additionalProperties": false,
+            "description": "One row of the card's `## Steps` table."
+          },
+          "resource": {
+            "type": "object",
+            "properties": {
+              "identity": {
+                "type": "string",
+                "description": "`worktree:<absolute path>` or `branch:<owner/repo>#<name>` (`<org/project/repo>` for Azure DevOps) that you created. A known identity updates its row."
+              },
+              "step": {
+                "type": "string",
+                "description": "The step in the card's `## Steps` table that owns it; cleanup is due when that step is delivered or dropped."
+              },
+              "intended": {
+                "type": "string",
+                "description": "What you intend to do with it, in a few words."
+              },
+              "disposition": {
+                "type": "string",
+                "enum": [
+                  "removed-and-absent",
+                  "named transfer",
+                  "retained-with-trigger"
+                ],
+                "description": "Record once the resource is dealt with; needs `details`. Desk removes nothing."
+              },
+              "details": {
+                "type": "string",
+                "description": "With `disposition`: the readback that it is gone; who took it and acknowledged; or why it stays, who owns it and what triggers its cleanup."
+              },
+              "migrate": {
+                "type": "object",
+                "additionalProperties": true,
+                "description": "Legacy Resources table recovery with this row write: map owner, writers, intended, evidence and terminal to existing column names (case-insensitive) or null; task-card-format has the rules. Live cards only."
+              }
+            },
+            "required": [
+              "identity"
+            ],
+            "additionalProperties": false,
+            "description": "One row of the card's `## Resources` table."
+          },
+          "display_label": {
+            "type": "string",
+            "description": "Optional short description of the focused task, at most 72 characters; never paths, URLs, emails or credentials. Unsafe labels are ignored."
+          },
+          "replace_section": {
+            "type": "object",
+            "properties": {
+              "heading": {
+                "type": "string",
+                "description": "The section's name without the `## `, such as `Progress log`; a missing section is appended."
+              },
+              "markdown": {
+                "type": "string",
+                "description": "The section's new text, without its heading. The only way to replace a section."
+              }
+            },
+            "required": [
+              "heading",
+              "markdown"
+            ],
+            "additionalProperties": false,
+            "description": "Replace the body of one `## ` section; the frontmatter is untouched."
+          },
+          "log": {
+            "type": "string",
+            "description": "A dated entry for the task's `log.md` beside its card, the place for rulings, decisions and where the evidence is. Cheap to repeat: entries written close together share one commit and one push, and a call never waits on a publication still running."
+          },
+          "content_home": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "purpose": {
+                "type": "string",
+                "description": "A purpose from the repository's .desk/content-home.json, or `mixed` (then `sections` is required)."
+              },
+              "lifecycle": {
+                "type": "string",
+                "enum": [
+                  "current",
+                  "historical"
+                ]
+              },
+              "product_repository": {
+                "type": "string"
+              },
+              "source_reference": {
+                "type": "string",
+                "description": "Original provenance and restrictions, or unknown."
+              },
+              "sections": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": true
+                },
+                "description": "For `mixed`: classify every subject's bytes once, in order, with no gaps or overlaps. Each item has `subject` (a task_update field such as `note` or `body_append`, or `files/<index>/content` or `paths/<index>` for desk_save), optional `start` and `end` UTF-8 byte offsets (omit both for the whole subject), and the same `purpose`, `lifecycle`, `product_repository` and `source_reference` as above."
+              }
+            },
+            "required": [
+              "purpose"
+            ],
+            "description": "Required only where the repository publishes .desk/content-home.json: `lifecycle` is current or historical, `product_repository` the owner/repository of current product material. A refusal says what to declare."
+          },
+          "handle": {
+            "type": "string",
+            "description": "Only with a move: the task's handle from active_tasks, desk_status `detail: true` or a desk_doctor finding, in place of track and slug; use it for a name shown as <redacted segment>."
+          },
+          "to_track": {
+            "type": "string",
+            "description": "Move the task to this track (live or archived; archived stays archived); its track.md must already exist. A move takes no other update field, and the target must not exist."
+          },
+          "to_slug": {
+            "type": "string",
+            "description": "Rename the task to this name, an outcome name."
+          },
+          "unarchive": {
+            "type": "boolean",
+            "description": "Reopen an archived task into a live folder."
+          },
+          "into_task": {
+            "type": "string",
+            "description": "Merge this duplicate task into the named keeper task, under the keeper's _iterations/ folder; nothing is deleted. A live task cannot merge into a done or cancelled one."
+          },
+          "allow_dirty": {
+            "type": "boolean",
+            "description": "With a move: move even though the folder has unstaged or untracked changes, which a Git desk otherwise refuses."
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false
+      }
+    },
+    {
+      "name": "task_archive",
+      "description": "Use when a task's work is finished or cancelled: move <track>/<slug>/ to <track>/_archive/<slug>/. A task not yet done or cancelled needs `evidence` or `outcome: \"cancelled\"`. Returns archive_pending with the retained path and next_action when publication is unproven; that is not completed publication. Repeating an archived task is safe.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "track": {
+            "type": "string",
+            "description": "The track folder the task lives in."
+          },
+          "slug": {
+            "type": "string",
+            "description": "The task folder name."
+          },
+          "evidence": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "pr",
+                  "commit",
+                  "ci_run",
+                  "non_code",
+                  "steps"
+                ],
+                "description": "What kind of reference this is. `steps` closes a card that has a `## Steps` table and needs no `ref`."
+              },
+              "ref": {
+                "type": "string",
+                "description": "Not needed for `steps`. A PR URL for pr; a 7-40 character hex commit sha (optionally with repo/branch) or commit URL for commit; the run's https URL for ci_run; an https URL or desk-relative path to the proof for non_code."
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "description": "Required when this call moves a task into `done` (task_update), or archives one not already `done` or `cancelled` without `outcome: \"cancelled\"` (task_archive). A card with `## Steps` finishes only with `{ kind: \"steps\" }`; one listing `repos` only with `pr` or a pushed `commit` (task-card-format has the rules). A refusal says what to supply."
+          },
+          "outcome": {
+            "type": "string",
+            "enum": [
+              "cancelled"
+            ],
+            "description": "Pass \"cancelled\" to archive a task not already `done` or `cancelled` as abandoned work, with no `evidence`. Omit otherwise."
+          }
+        },
+        "required": [
+          "track",
+          "slug"
+        ],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": true
+      }
+    },
+    {
+      "name": "task_focus",
+      "description": "Declare the task this session is working on, so its time is credited to it. Pass `track` and `slug` of an existing card (live or archived), or `clear: true` for a side conversation. Main agent only; a subagent never calls it. Writes nothing. Returns `task_status`, `recent_progress`, `next_step`, any `shelved_lessons` to read before you act, and `archive_due` for a done/cancelled card. `task_create` with `focus: true` does the same for a new task.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "track": {
+            "type": "string",
+            "description": "The track folder of the task you are working on; give it with `slug`."
+          },
+          "slug": {
+            "type": "string",
+            "description": "The task folder name; give it with `track`."
+          },
+          "clear": {
+            "type": "boolean",
+            "description": "Pass true, alone, to declare no task: for a side conversation that belongs to none."
+          },
+          "display_label": {
+            "type": "string",
+            "description": "Optional short description of the focused task, at most 72 characters; never paths, URLs, emails or credentials. Unsafe labels are ignored."
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false
+      }
+    },
+    {
+      "name": "task_signoff",
+      "description": "Record the operator's answer to a delivered task: accepted or refused. Call it only after the operator has answered, in a turn after the one that delivered the work. A refusal needs `reason` (theirs) and `return_reason` (your own reading) and puts the task back to processing. A subagent never calls this.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "track": {
+            "type": "string",
+            "description": "The track folder of the delivered task."
+          },
+          "slug": {
+            "type": "string",
+            "description": "The task folder name."
+          },
+          "outcome": {
+            "type": "string",
+            "enum": [
+              "accepted",
+              "refused"
+            ],
+            "description": "The operator's answer; refused sends the task back to processing."
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "not_what_was_asked",
+              "defect",
+              "changed_ask",
+              "incomplete",
+              "other"
+            ],
+            "description": "Required when refused, not allowed when accepted: the operator's reason, mapped from what they said."
+          },
+          "return_reason": {
+            "type": "string",
+            "enum": [
+              "agent_error",
+              "changed_ask",
+              "new_information",
+              "external"
+            ],
+            "description": "Required when refused, not allowed when accepted: your own reading of the cause. agent_error is your mistake, changed_ask the operator's new ask, new_information something nobody knew, external an outside break."
+          }
+        },
+        "required": [
+          "track",
+          "slug",
+          "outcome"
+        ],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false
+      }
+    },
+    {
+      "name": "track_create",
+      "description": "Use when new work needs its own track: create a track at <slug>/track.md. `slug` must be an outcome name (2-6 lowercase kebab-case words) and `scope` is required: one line, at most 240 characters, \"<what belongs>; not <what doesn't>\". A rejection says what to fix. On a Git desk it stages and commits the new track.md; a commit failure never loses the write, reported via a `commit` field.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "slug": {
+            "type": "string",
+            "description": "The track folder name: an outcome name, 2-6 lowercase kebab-case words."
+          },
+          "title": {
+            "type": "string",
+            "description": "The track title."
+          },
+          "scope": {
+            "type": "string",
+            "description": "One line, at most 240 characters: \"<what belongs>; not <what doesn't>\"."
+          },
+          "status": {
+            "type": "string",
+            "description": "Initial status; defaults to active."
+          },
+          "body": {
+            "type": "string",
+            "description": "Markdown body, without frontmatter."
+          },
+          "predecessor": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "The track this one continues: { slug, title, status }."
+          },
+          "adopted_from": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "Where the track was adopted from: { source_path, source_sha, adopted_at, adopted_by }."
+          },
+          "planning": {
+            "type": "string",
+            "description": "Path to the track's planning document."
+          }
+        },
+        "required": [
+          "slug",
+          "title",
+          "scope"
+        ],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false
+      }
+    },
+    {
+      "name": "track_update",
+      "description": "Merge frontmatter or append to the body of an existing track.md. `frontmatter.scope`, if set, is validated as track_create validates it. On a Git desk it stages and commits the track.md when that file held no unstaged changes before the write, so it never adopts another session's edit; a commit failure never loses the write, reported via a `commit` field. To rename the track, pass `rename_to` alone; the input schema has the rest.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "slug": {
+            "type": "string",
+            "description": "The track folder name."
+          },
+          "handle": {
+            "type": "string",
+            "description": "The track's handle from the boot result's active_tasks, desk_status with detail: true, or a desk_doctor finding, in place of slug; use it for a name shown as <redacted segment>. Only with rename_to."
+          },
+          "frontmatter": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "Fields to merge into the card's frontmatter, as a JSON object (not a string). A `status` must be one of drafting, processing, validating, collaborating, paused, blocked, done, cancelled."
+          },
+          "body_append": {
+            "type": "string",
+            "description": "Markdown to append to the card body, separated by a blank line."
+          },
+          "rename_to": {
+            "type": "string",
+            "description": "Rename the track to this name, a valid track name that doesn't exist yet, instead of updating it; give nothing else but slug or handle. Rewrites `track:` in every task.md under the moved tree, live and archived, stages those cards and commits the moved directory."
+          },
+          "allow_dirty": {
+            "type": "boolean",
+            "description": "With rename_to: rename even though the track has unstaged changes or untracked, non-ignored files, which a Git desk otherwise refuses because another session may be working there."
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false
+      }
+    },
+    {
+      "name": "friction_add",
+      "description": "Use when something got in your way and should be recorded: append a friction entry to _meta/friction.md, or under <track>/_friction/ when `track` is given. `about` is \"setup\" (default, kept on the desk) or \"system\" (Desk, its skills or the factory); system friction needs a one-line `title` and opens an improvement card. Read `improvement` in the result: opened, duplicate or reopened means the card exists. `error_code` reports a Desk failure with its evidence (friction-management has the rest).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "track": {
+            "type": "string",
+            "description": "Track for a track-local entry; omit for the cross-cutting log."
+          },
+          "theme": {
+            "type": "string",
+            "description": "Short slug for a track-local entry's filename; defaults to untitled."
+          },
+          "body": {
+            "type": "string",
+            "description": "The entry body, without surrounding --- separators."
+          },
+          "about": {
+            "type": "string",
+            "enum": [
+              "setup",
+              "system"
+            ],
+            "description": "\"setup\" (default): this desk's own setup, kept on the desk. \"system\": Desk itself (its skills, tools or the factory); an improvement card opens by itself, built from your `title` and never from your text."
+          },
+          "title": {
+            "type": "string",
+            "description": "Required when about is \"system\": the card's title, on one line."
+          },
+          "plugin": {
+            "type": "string",
+            "description": "For \"system\": the plugin the friction is in; defaults to \"desk\"."
+          },
+          "friction_class": {
+            "type": "string",
+            "enum": [
+              "guard",
+              "hook",
+              "mcp_tool",
+              "skill",
+              "factory",
+              "release",
+              "ci",
+              "docs",
+              "other"
+            ],
+            "description": "For \"system\": the kind of friction; defaults to \"other\"."
+          },
+          "signal": {
+            "type": "string",
+            "description": "For \"system\": the rollups measure the friction moves, when known."
+          },
+          "evidence_jobs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "For \"system\": factory job ids that show the friction."
+          },
+          "file_card": {
+            "type": "boolean",
+            "description": "For \"system\": also file the store's kaizen issue now, instead of leaving it to the loop."
+          },
+          "error_code": {
+            "type": "string",
+            "description": "Reports a Desk failure: the code its message gave, such as desk_push_blocked. Records the failure and the Desk version, host and sync status as system friction; `body` and `title` are then optional."
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false
+      }
+    },
+    {
+      "name": "lesson_add",
+      "description": "Record a correction where something loads it, and read `in_effect` and `message` in the reply before you tell anyone the lesson is kept. `scope` \"personal\" adds a one-line rule to this person's AGENTS.md; \"desk\" is for how Desk's tools or a plugin's skills behave: it needs `owner` and opens an improvement card; \"team\" adds a line to a shared repository's AGENTS.md through a pull request: it needs `source`.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "scope": {
+            "type": "string",
+            "enum": [
+              "personal",
+              "desk",
+              "team"
+            ],
+            "description": "Whose behaviour the lesson changes. \"personal\": this person's preference, in their AGENTS.md. \"desk\": how Desk's tools or an installed plugin's skills behave; needs `owner`. \"team\": every teammate's agents in a shared repository; needs `source`."
+          },
+          "topic": {
+            "type": "string",
+            "description": "The rule's short name, on one line; a later lesson with the same topic replaces it."
+          },
+          "body": {
+            "type": "string",
+            "description": "The rule, on one line."
+          },
+          "owner": {
+            "type": "string",
+            "description": "Required for \"desk\": skill:<plugin>:<skill>, tool:<Desk tool name>, brief (the brief every child agent gets) or foundation (the always-on using-desk text)."
+          },
+          "repo": {
+            "type": "string",
+            "description": "For \"team\": the path of your local clone of the team's repository. Defaults to the desk in a shared workspace."
+          },
+          "source": {
+            "type": "string",
+            "description": "Required for \"team\": where the lesson comes from, on one line: the decision record's path where the repository has _shared/decisions/, else who said it, where and when (YYYY-MM-DD)."
+          }
+        },
+        "required": [
+          "scope",
+          "topic",
+          "body"
+        ],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false
+      }
+    },
+    {
+      "name": "desk_save",
+      "description": "After you write a file with Write or Edit (a planning doc, a spec, a report), call this with its path to commit it. `paths` are relative to the desk root, inside this session's write prefix (desks/<alias>/ in a shared workspace). Stages and commits exactly `paths` with `message`. A task card is refused: use the task tools. `tidy: true` commits a desk tidy or its undo. A client with no filesystem passes `files` ({ path, content } text) with or instead of `paths`.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "content_home": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "purpose": {
+                "type": "string",
+                "description": "A purpose from the repository's .desk/content-home.json, or `mixed` (then `sections` is required)."
+              },
+              "lifecycle": {
+                "type": "string",
+                "enum": [
+                  "current",
+                  "historical"
+                ]
+              },
+              "product_repository": {
+                "type": "string"
+              },
+              "source_reference": {
+                "type": "string",
+                "description": "Original provenance and restrictions, or unknown."
+              },
+              "sections": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": true
+                },
+                "description": "For `mixed`: classify every subject's bytes once, in order, with no gaps or overlaps. Each item has `subject` (a task_update field such as `note` or `body_append`, or `files/<index>/content` or `paths/<index>` for desk_save), optional `start` and `end` UTF-8 byte offsets (omit both for the whole subject), and the same `purpose`, `lifecycle`, `product_repository` and `source_reference` as above."
+              }
+            },
+            "required": [
+              "purpose"
+            ],
+            "description": "Required only where the repository publishes .desk/content-home.json: `lifecycle` is current or historical, `product_repository` the owner/repository of current product material. A refusal says what to declare."
+          },
+          "paths": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The paths to commit, relative to the desk root. Required unless `files` is given."
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string",
+                  "description": "Where to write the file, relative to the desk root. To pass an artifact to another session, write it under the task's `handoffs/` folder: the reply gives the repository URL to hand over, never a path in a session or temp folder."
+                },
+                "content": {
+                  "type": "string",
+                  "description": "The file's full content, as UTF-8 text (at most 1 MiB)."
+                }
+              },
+              "required": [
+                "path",
+                "content"
+              ],
+              "additionalProperties": false
+            },
+            "description": "For a client with no filesystem: files to write, then commit with `paths`. A refused entry (outside the desk or write prefix, in .git, .state/ or .github/workflows/, a task card or link) refuses the call before anything is written. Not with `tidy: true`. Required unless `paths` is given."
+          },
+          "message": {
+            "type": "string",
+            "description": "The commit message."
+          },
+          "tidy": {
+            "type": "boolean",
+            "description": "Pass true to commit a desk tidy or its undo: moved or renamed task cards already staged by task_update, track_update or git mv, plus _meta/organization.json."
+          }
+        },
+        "required": [
+          "message"
+        ],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": true
+      }
+    },
+    {
+      "name": "note",
+      "description": "In a Crew shared workspace, leave another member a dated note that their session start lists until they acknowledge it (`to`, `subject`, `body`), or acknowledge one a teammate left you (`ack`). `body` is your own explanation in your own voice: relay what someone else thinks as your understanding of it, never in their words. Everyone in the workspace can read it, so put nothing private in it. A note is left only when the reply says `merged`.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "to": {
+            "type": "string",
+            "description": "The alias of the member the note is for, as in the roster (_meta/desks.md). Required unless `ack` is given."
+          },
+          "subject": {
+            "type": "string",
+            "description": "What the note is about, on one line of at most 120 characters. Required with `to`."
+          },
+          "body": {
+            "type": "string",
+            "description": "The note, in your own voice, at most 8000 characters. Relay someone else's thinking as your understanding of it, never in their words. Everyone in the workspace can read it. Required with `to`."
+          },
+          "related": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Up to 10 links: https URLs, or paths relative to the workspace root."
+          },
+          "ack": {
+            "type": "string",
+            "description": "To acknowledge a note instead of leaving one: its path as session start listed it, or its file name."
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false
+      }
+    },
+    {
+      "name": "desk_search",
+      "description": "Use when you cannot tell which file holds something, or what changed in a time window. Exact-word search across the desk. Filters: track, status, kind, since, until. `scope`: 'active' (default), 'archived' or 'all'. With no `query`, or `newest: true`, it lists documents by when they were updated, newest first, inside the since/until window (`scope` then defaults to 'all').",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "The search query. Omit it to list documents by update time."
+          },
+          "newest": {
+            "type": "boolean",
+            "description": "Pass true to order by update time, newest first, instead of by match."
+          },
+          "limit": {
+            "type": "integer",
+            "description": "Maximum number of results.",
+            "minimum": 1
+          },
+          "scope": {
+            "type": "string",
+            "description": "Which documents to search: live work, archived work, or both.",
+            "enum": [
+              "active",
+              "archived",
+              "all"
+            ]
+          },
+          "filters": {
+            "type": "object",
+            "description": "Filters, as a JSON object (not a string).",
+            "properties": {
+              "track": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                ],
+                "description": "Track name or names."
+              },
+              "status": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                ],
+                "description": "Task status or statuses."
+              },
+              "kind": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                ],
+                "description": "Document kind or kinds."
+              },
+              "since": {
+                "type": "string",
+                "description": "Only documents updated at or after this time (ISO 8601)."
+              },
+              "until": {
+                "type": "string",
+                "description": "Only documents updated at or before this time (ISO 8601)."
+              }
+            },
+            "required": [],
+            "additionalProperties": false
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false
+      }
+    },
+    {
+      "name": "desk_recall",
+      "description": "Use for loose recall, as in `do I remember anything about X`. Ranks every desk Markdown file by meaning and exact words together. `scope`: 'active', 'archived' or 'all' (default; this is the historical lookback).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "topic": {
+            "type": "string",
+            "description": "What to recall."
+          },
+          "limit": {
+            "type": "integer",
+            "description": "Maximum number of results.",
+            "minimum": 1
+          },
+          "scope": {
+            "type": "string",
+            "description": "Which documents to search: live work, archived work, or both.",
+            "enum": [
+              "active",
+              "archived",
+              "all"
+            ]
+          }
+        },
+        "required": [
+          "topic"
+        ],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false
+      }
+    },
+    {
+      "name": "desk_status",
+      "description": "Session-start health check for the resolved desk root. The compact answer has `state` (ready, degraded, admitting or setup_required), `degraded` (why), `fix` (what to do in this session), `search`, `notes` and where the desk is. Retries admission when Desk is not ready. `detail: true` returns the full payload. A hosted Desk (claude.ai, ChatGPT) also returns its instructions, unless `has_instructions: true`; follow them and read the skills they name with desk_skill.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "detail": {
+            "type": "boolean",
+            "description": "Pass true for the full payload (tens of KB). Omit it for the compact answer."
+          },
+          "has_instructions": {
+            "type": "boolean",
+            "description": "Hosted Desk only: pass true when an earlier desk_status answer in this conversation already gave you Desk's instructions."
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false
+      }
+    },
+    {
+      "name": "desk_doctor",
+      "description": "Use when Desk misbehaves or its runtime needs checking: report whether Desk MCP started in healthy runtime mode; in diagnostic mode, the precise startup failure and offline remediation. `format: \"preview\"` returns only the local package/process snapshot. `repair: \"switch_state_branch\"` switches the desk checkout back to its state branch when that is safe. `reindex: true` re-reads the desk into the search engine when search misses what you just wrote. `factory_consent` records the operator's factory contribution answer and returns only that record.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "format": {
+            "type": "string",
+            "description": "preview returns only the local package/process snapshot.",
+            "enum": [
+              "full",
+              "preview"
+            ]
+          },
+          "repair": {
+            "type": "string",
+            "description": "A named repair to run.",
+            "enum": [
+              "switch_state_branch"
+            ]
+          },
+          "reindex": {
+            "type": "boolean",
+            "description": "Pass true to re-read the desk into this session's search engine and wait until exact-word search is current."
+          },
+          "factory_consent": {
+            "type": "string",
+            "description": "The operator's answer to the factory contribution question; Desk resolves the store and, for yes, the GitHub account.",
+            "enum": [
+              "yes",
+              "no"
+            ]
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false
+      }
+    },
+    {
+      "name": "desk_skill",
+      "description": "Use when your client cannot load Desk's skills itself (claude.ai, ChatGPT): read one of Desk's skills, the working procedures its instructions point to. With no `name`, lists every skill with its description; with `name`, returns that skill's text to follow. Read-only and needs no desk.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "The skill to read, such as task-lifecycle; omit it to list every skill."
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false
+      }
+    },
+    {
+      "name": "improvement_open",
+      "description": "Use when a case needs an improvement card: open one on the desk, find it already open, or reopen a closed one. `source` and `id` name the case (the card key is <source>:<id>). `title` is never accepted: Desk builds every title.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "source": {
+            "type": "string",
+            "enum": [
+              "andon",
+              "friction_candidate",
+              "reconcile_class",
+              "desk_problem",
+              "store_build",
+              "evaluator",
+              "loop_alarm",
+              "flush_health"
+            ],
+            "description": "Where the card comes from; the card key is <source>:<id>."
+          },
+          "id": {
+            "type": "string",
+            "description": "The case's id: owner/repo#number for andon and store_build, ourostack/desk#number for desk_problem, 32 hex for friction_candidate, else a code from the source's closed list."
+          },
+          "title": {
+            "type": "string",
+            "description": "Never accepted: Desk builds every title (refused as title_not_allowed)."
+          },
+          "evidence": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Up to 10 pointers: job:<32 hex>, issue:<owner/repo>#<n>, pr:<owner/repo>#<n>, reconcile:<reason>@<count>, fingerprint:<hex>."
+          },
+          "plugin": {
+            "type": "string",
+            "description": "The plugin the improvement is in; defaults to \"desk\"."
+          },
+          "signal": {
+            "type": "string",
+            "description": "The rollups measure the improvement moves, when known."
+          }
+        },
+        "required": [
+          "source",
+          "id"
+        ],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false
+      }
+    },
+    {
+      "name": "improvement_next",
+      "description": "Use when you take on improvement work: take the next improvement card, the open card that waited longest. It claims the card for a limited time and returns it with the `claim_id` and the authority statement. A refusal comes back as `status` (claim_held, cap_reached, none_open, too_many_cards, machine_key_unavailable or noninteractive) with a one-line `meaning`. Optional `session` is the session's UUID.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "session": {
+            "type": "string",
+            "description": "The session's UUID, when known."
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false
+      }
+    },
+    {
+      "name": "improvement_update",
+      "description": "Use when you ship, release or close a card you hold the claim on, with its `key` and `claim_id`: ship it (`countermeasure` is the pull request URL; `state` \"shipped\" or omitted), release it (`state` \"open\") or close it (`state` \"closed_unverified\" with `close_reason`).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string",
+            "description": "The card's key, as improvement_next returned it."
+          },
+          "claim_id": {
+            "type": "string",
+            "description": "The claim_id improvement_next returned."
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "shipped",
+              "open",
+              "closed_unverified"
+            ],
+            "description": "shipped (with countermeasure; may be omitted then), open (release the claim) or closed_unverified (with close_reason)."
+          },
+          "countermeasure": {
+            "type": "string",
+            "description": "The pull request URL that ships the fix: https://github.com/<owner>/<repo>/pull/<n>."
+          },
+          "close_reason": {
+            "type": "string",
+            "enum": [
+              "wont_fix",
+              "duplicate",
+              "not_reproducible"
+            ],
+            "description": "Why you close the card; required with state closed_unverified."
+          }
+        },
+        "required": [
+          "key",
+          "claim_id"
+        ],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false
+      }
+    }
+  ]
+}

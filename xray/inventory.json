@@ -1,0 +1,23 @@
+{
+  "mcp": [
+    "task_create",
+    "task_update",
+    "task_archive",
+    "task_focus",
+    "task_signoff",
+    "track_create",
+    "track_update",
+    "friction_add",
+    "lesson_add",
+    "desk_save",
+    "note",
+    "desk_search",
+    "desk_recall",
+    "desk_status",
+    "desk_doctor",
+    "desk_skill",
+    "improvement_open",
+    "improvement_next",
+    "improvement_update"
+  ]
+}
