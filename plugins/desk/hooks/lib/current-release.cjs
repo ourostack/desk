@@ -157,4 +157,4 @@ function currentSkill({ pluginRoot, name, env = process.env, home = os.homedir()
   return null;
 }
 
-module.exports = { currentDesk, currentSkill, delegate, isNewer, loadedPlugins, sessionFolder };
+module.exports = { currentSkill, delegate };
