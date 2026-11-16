@@ -51,7 +51,7 @@ function github() {
     writes: [],
     notModified: 0,
     on: (method, pattern, answer) => handlers.unshift({ method, pattern, answer }),
-    pull: (number, extra = {}) => world.on("GET", new RegExp(`/pulls/${number}$`, "u"), () => ({ state: "open", draft: false, mergeable: true, mergeable_state: "clean", labels: [{ name: "merge-when-green" }], head: { sha: SHA, ref: "feature/x", repo: { full_name: "o/pages" } }, base: { ref: "main", repo: { full_name: "o/pages" } }, ...extra })),
+    pull: (number, extra = {}) => world.on("GET", new RegExp(`/pulls/${number}$`, "u"), () => ({ state: "open", draft: false, mergeable: true, mergeable_state: "clean", labels: [{ name: "merge-when-green" }], title: "Fix pages", body: "Why.\r\n\r\nCo-authored-by: copilot-swe-agent[bot] <198982749+Copilot@users.noreply.github.com>\nCo-authored-by: Ana <ana@example.com>", head: { sha: SHA, ref: "feature/x", repo: { full_name: "o/pages" } }, base: { ref: "main", repo: { full_name: "o/pages" } }, ...extra })),
     connect: async () => ({
       login: "relay-bot",
       get: async (route, { etag } = {}) => {
@@ -504,7 +504,7 @@ test("merge-when-green: with every check green and main green it squash-merges a
   mergeWorld(w.world)
   const polled = await w.poll()
   assert.deepEqual(polled.errors, [])
-  assert.deepEqual(prWrites(w.world), [{ method: "PUT", route: "/repos/o/pages/pulls/7/merge", body: { merge_method: "squash", sha: SHA } }])
+  assert.deepEqual(prWrites(w.world), [{ method: "PUT", route: "/repos/o/pages/pulls/7/merge", body: { merge_method: "squash", sha: SHA, commit_title: "Fix pages (#7)", commit_message: "Why.\n\nCo-authored-by: Ana <ana@example.com>" } }])
   assert.deepEqual(w.world.writes.filter((write) => write.method === "DELETE").map((write) => write.route), ["/repos/o/pages/git/refs/heads/feature/x"])
   assert.equal(comments(w.world).length, 1)
   assert.equal(comments(w.world)[0].method, "POST")
