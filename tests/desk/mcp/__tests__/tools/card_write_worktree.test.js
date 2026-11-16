@@ -10,7 +10,7 @@ import { friction_add } from "../../../../../plugins/desk/mcp/src/tools/friction
 import { commitPaths } from "../../../../../plugins/desk/mcp/src/util/git-stage.js"
 import { deliveryIsPublication } from "../../../../../plugins/desk/mcp/src/util/main-publish.js"
 import { deliver } from "../../../../../plugins/desk/mcp/src/runtime/deliver.js"
-import { schedulePush } from "../../../../../plugins/desk/mcp/src/runtime/sync-worker.js"
+import { runPushWorker, schedulePush } from "../../../../../plugins/desk/mcp/src/runtime/sync-worker.js"
 import { mkTempDeskRoot } from "./_helpers.js"
 
 function git(cwd, args) {
@@ -87,6 +87,19 @@ test("a card written from a worktree is published by Desk's own path, and its de
   assert.equal(delivered.state, "nothing")
   assert.equal(delivered.checkout.state, "other_branch")
   assert.equal(git(worktree, ["rev-parse", "HEAD"]), head)
+})
+
+test("a log entry written in a worktree starts the push worker, which publishes its commit to origin/main", async () => {
+  const { origin, worktree } = await mainAndWorktree()
+  const spawned = []
+  schedulePush({ root: worktree, env: {}, logs: true, spawnWorker: (options) => spawned.push(options) })
+  assert.deepEqual(spawned.map((options) => options.root), [worktree])
+  await fs.mkdir(path.join(worktree, "track", "work"), { recursive: true })
+  await fs.writeFile(path.join(worktree, "track", "work", "task.md"), "card\n", "utf8")
+  await fs.writeFile(path.join(worktree, "track", "work", "log.md"), "## entry\n", "utf8")
+  const result = await runPushWorker({ root: worktree, env: process.env, clock: { sleep: () => Promise.resolve() }, quietMs: 0 })
+  assert.deepEqual(result, { result: "skipped" })
+  assert.equal(remoteFile(origin, "track/work/log.md").stdout, "## entry\n")
 })
 
 test("a commit the remote cannot take is refused with what happened, its cause and the next step, and leaves the feature branch alone", async () => {

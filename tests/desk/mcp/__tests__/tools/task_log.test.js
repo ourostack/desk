@@ -3,11 +3,11 @@ import { strict as assert } from "node:assert"
 import { promises as fs } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
-import { spawnSync } from "node:child_process"
+import { spawn, spawnSync } from "node:child_process"
 import { task_update, task_create } from "../../../../../plugins/desk/mcp/src/tools/task.js"
 import { taskFocus } from "../../../../../plugins/desk/mcp/src/tools/task-focus.js"
 import { desk_save } from "../../../../../plugins/desk/mcp/src/tools/desk-save.js"
-import { drainAppendLanes, pendingCount, flushAppends } from "../../../../../plugins/desk/mcp/src/runtime/append-lane.js"
+import { commitWaitingLogs, waitingLogs } from "../../../../../plugins/desk/mcp/src/runtime/append-lane.js"
 import { logSummary } from "../../../../../plugins/desk/mcp/src/tools/task-log.js"
 import { activeTasks } from "../../../../../plugins/desk/mcp/src/desk/active-tasks.js"
 import { formatBootText } from "../../../../../plugins/desk/mcp/src/runtime/boot-text.js"
@@ -27,10 +27,7 @@ const git = (root, args) => {
 }
 async function fixture(t, { policy = false } = {}) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "desk-task-log-"))
-  t.after(async () => {
-    await drainAppendLanes()
-    await fs.rm(root, { recursive: true, force: true })
-  })
+  t.after(() => fs.rm(root, { recursive: true, force: true }))
   git(root, ["init", "-q", "-b", "main"])
   git(root, ["config", "user.name", "Test"])
   git(root, ["config", "user.email", "test@example.com"])
@@ -55,31 +52,45 @@ const call = (root, input, extra = {}) => task_update({ deskRoot: root, input: {
 test("ten rapid log entries are one commit and one push, and every reader sees each at once", async (t) => {
   const root = await fixture(t)
   const before = commits(root)
-  let pushes = 0
+  const pushes = []
   for (let i = 0; i < 10; i += 1) {
-    const answer = await call(root, { log: `Ruling ${i}: keep it cheap.` }, { schedulePush: () => { pushes += 1 }, appendLane: { quietMs: 600_000, maxWaitMs: 600_000 } })
+    const answer = await call(root, { log: `Ruling ${i}: keep it cheap.` }, { schedulePush: (options) => { pushes.push(options) } })
     assert.equal(answer.status, "logged")
     assert.equal(answer.path, "track/work/log.md")
     assert.match(await fs.readFile(path.join(root, "track/work/log.md"), "utf8"), new RegExp(`Ruling ${i}:`, "u"))
   }
   assert.equal(commits(root), before)
-  assert.equal(pendingCount(root), 1)
-  await drainAppendLanes()
+  assert.deepEqual(waitingLogs(root), ["track/work/log.md"])
+  // Each entry asks for the push worker, which commits whatever logs are waiting; the first to hold the lock takes them all.
+  assert.deepEqual(pushes[0], { root, logs: true })
+  assert.equal(commitWaitingLogs(root), "committed")
+  assert.equal(commitWaitingLogs(root), "empty")
   assert.equal(commits(root), before + 1)
-  assert.equal(pushes, 1)
   assert.equal(git(root, ["status", "--porcelain"]), "")
   const text = await fs.readFile(path.join(root, "track/work/log.md"), "utf8")
   assert.equal(text.match(/^# Log: track\/work$/gmu).length, 1)
   assert.equal(text.match(/^## \d{4}-\d\d-\d\d \d\d:\d\d$/gmu).length, 10)
 })
 
-test("a log entry waits no longer than the window for its commit", async (t) => {
+test("a log entry reaches a commit and the remote when the server is killed inside the quiet window", async (t) => {
   const root = await fixture(t)
-  const before = commits(root)
-  await call(root, { log: "One." }, { appendLane: { quietMs: 30, maxWaitMs: 100 } })
-  for (let waited = 0; commits(root) === before && waited < 60_000; waited += 50) await new Promise((resolve) => setTimeout(resolve, 50))
-  assert.equal(commits(root), before + 1)
-  assert.equal(pendingCount(root), 0)
+  const origin = await fs.mkdtemp(path.join(os.tmpdir(), "desk-task-log-origin-"))
+  t.after(() => fs.rm(origin, { recursive: true, force: true }))
+  git(origin, ["init", "-q", "--bare", "-b", "main"])
+  git(root, ["remote", "set-url", "origin", origin])
+  git(root, ["push", "-q", "-u", "origin", "main"])
+  // The server process: one task_update with `log` and its real push scheduling, then killed outright, well inside the quiet window.
+  const task = new URL("../../../../../plugins/desk/mcp/src/tools/task.js", import.meta.url).href
+  const server = spawn(process.execPath, ["--input-type=module", "-e", `
+    const { task_update } = await import(${JSON.stringify(task)})
+    await task_update({ deskRoot: ${JSON.stringify(root)}, input: { track: "track", slug: "work", log: "Ruling: keep it." } })
+    process.kill(process.pid, "SIGKILL")
+  `], { stdio: "inherit" })
+  await new Promise((resolve) => server.once("exit", resolve))
+  const landed = () => spawnSync("git", ["--git-dir", origin, "log", "-1", "--format=%s", "main"], { encoding: "utf8" }).stdout.trim()
+  for (let waited = 0; landed() !== "task_update: log track/work" && waited < 60_000; waited += 250) await new Promise((resolve) => setTimeout(resolve, 250))
+  assert.equal(landed(), "task_update: log track/work")
+  assert.equal(git(root, ["status", "--porcelain"]), "")
 })
 
 test("a log entry rides with the rest of the call and the card keeps its own commit", async (t) => {
@@ -88,7 +99,7 @@ test("a log entry rides with the rest of the call and the card keeps its own com
   assert.equal(answer.status, "updated")
   assert.deepEqual(answer.log, { path: "track/work/log.md", commit: "queued" })
   assert.match(git(root, ["log", "-1", "--format=%s"]), /task_update: track\/work/u)
-  await drainAppendLanes()
+  commitWaitingLogs(root)
   assert.match(git(root, ["log", "-1", "--format=%s"]), /task_update: log track\/work/u)
 })
 
@@ -96,7 +107,7 @@ test("a log entry needs a task and a non-empty entry", async (t) => {
   const root = await fixture(t)
   await assert.rejects(task_update({ deskRoot: root, input: { track: "track", slug: "absent", log: "x" }, schedulePush() {} }), /task does not exist/u)
   await assert.rejects(call(root, { log: "  " }), /non-empty string/u)
-  assert.equal(pendingCount(root), 0)
+  assert.deepEqual(waitingLogs(root), [])
 })
 
 test("under a purpose policy, entries queue behind Desk's own unpublished commit instead of being refused", async (t) => {
@@ -106,7 +117,7 @@ test("under a purpose policy, entries queue behind Desk's own unpublished commit
   assert.notEqual(held, git(root, ["rev-parse", "@{upstream}"]))
   for (let i = 0; i < 3; i += 1) assert.equal((await call(root, { log: `Entry ${i}.`, content_home })).status, "logged")
   await call(root, { note: "Another write.", content_home })
-  await drainAppendLanes()
+  commitWaitingLogs(root)
   assert.equal(git(root, ["status", "--porcelain"]), "")
   assert.match(await fs.readFile(path.join(root, "track/work/log.md"), "utf8"), /Entry 2\./u)
 })
@@ -119,7 +130,7 @@ test("a commit made by hand still blocks a policy write, and a hand edit of the 
   await assert.rejects(call(root, { log: "x", content_home }), /content_home_unpublished_base/u)
   git(root, ["reset", "-q", "--hard", "@{upstream}"])
   await call(root, { log: "Mine.", content_home })
-  await drainAppendLanes()
+  commitWaitingLogs(root)
   await fs.appendFile(path.join(root, "track/work/log.md"), "\nHand edit.\n")
   await assert.rejects(call(root, { log: "Next.", content_home }), /content_home_dirty_target/u)
 })
@@ -160,7 +171,7 @@ test("task_focus points at the log's newest entry", async (t) => {
   assert.equal((await taskFocus({ deskRoot: root, input: { track: "track", slug: "work" } })).log, undefined)
   await call(root, { log: "Ruling: first." })
   await call(root, { log: "Ruling: second." })
-  flushAppends(root)
+  commitWaitingLogs(root)
   const { log } = await taskFocus({ deskRoot: root, input: { track: "track", slug: "work" } })
   assert.equal(log.path, "track/work/log.md")
   assert.equal(log.entries, 2)

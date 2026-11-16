@@ -161,7 +161,7 @@ export function assertPublishedContentBase(root, admission, tool) {
   }))
 }
 
-// `ownedDigest` is the digest of bytes Desk itself wrote to the target and has not committed yet (the append lane's): a target holding exactly those is Desk's own work in flight, not a held draft.
+// `ownedDigest` is the digest of bytes Desk itself wrote to the target and has not committed yet (a task log entry waiting for the push worker's commit): a target holding exactly those is Desk's own work in flight, not a held draft.
 export function assertCleanContentTarget(root, relativePath, admission, tool, ownedDigest = null) {
   if (admission === null) return
   const status = git(root, ["status", "--porcelain", "--untracked-files=normal", "--", relativePath])

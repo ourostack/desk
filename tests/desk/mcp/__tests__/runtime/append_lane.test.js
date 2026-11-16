@@ -4,9 +4,9 @@ import { promises as fs } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 import { spawnSync } from "node:child_process"
-import { drainAppendLanes, flushAppends, pendingCount, pendingDigest, queueAppend } from "../../../../../plugins/desk/mcp/src/runtime/append-lane.js"
+import { commitWaitingLogs, settleLogs, waitingLogs } from "../../../../../plugins/desk/mcp/src/runtime/append-lane.js"
 
-// What the append lane does when its commit cannot be made yet: the entry stays written and waiting, and the next flush tries again.
+// Which task logs wait for a commit, how the push worker waits for them to go quiet, and what it does when Git will not commit them yet.
 
 const git = (root, args) => {
   const result = spawnSync("git", ["-C", root, ...args], { encoding: "utf8", windowsHide: true })
@@ -16,100 +16,68 @@ const git = (root, args) => {
 
 async function fixture(t) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "desk-append-lane-"))
-  t.after(async () => {
-    await drainAppendLanes()
-    await fs.rm(root, { recursive: true, force: true })
-  })
+  t.after(() => fs.rm(root, { recursive: true, force: true }))
   git(root, ["init", "-q", "-b", "main"])
   git(root, ["config", "user.name", "Test"])
   git(root, ["config", "user.email", "test@example.com"])
-  await fs.writeFile(path.join(root, "seed.md"), "seed\n")
+  for (const dir of ["a", "b", "gone"]) {
+    await fs.mkdir(path.join(root, dir))
+    await fs.writeFile(path.join(root, dir, "task.md"), "card\n")
+  }
+  await fs.writeFile(path.join(root, "gone/log.md"), "old\n")
   git(root, ["add", "."])
   git(root, ["commit", "-qm", "Seed"])
   return root
 }
 
-const lane = (root, extra = {}) => {
-  const pushes = []
-  return { pushes, queue: (rels) => queueAppend({ root, rels, schedulePush: () => pushes.push(1), quietMs: 600_000, maxWaitMs: 900_000, ...extra }) }
-}
-
-test("an entry whose file vanished before its commit is dropped, not retried forever", async (t) => {
+test("a waiting log is a task's changed or untracked log.md; a log with no card, or one removed, is not", async (t) => {
   const root = await fixture(t)
-  await fs.writeFile(path.join(root, "log.md"), "one\n")
-  const { queue, pushes } = lane(root)
-  assert.equal(queue(["log.md"]), 1)
-  assert.equal(typeof pendingDigest(root, "log.md"), "string")
-  await fs.rm(path.join(root, "log.md"))
-  assert.equal(flushAppends(root), "empty")
-  assert.equal(pendingCount(root), 0)
-  assert.equal(pendingDigest(root, "log.md"), null)
-  assert.deepEqual(pushes, [])
-  assert.equal(flushAppends(path.join(root, "never-queued")), "empty")
-})
-
-test("a file that cannot be staged stays waiting, and the next flush commits it", async (t) => {
-  const root = await fixture(t)
-  await fs.writeFile(path.join(root, "log.md"), "one\n")
-  let failing = true
-  const spawnGit = (command, args, options) => (failing && args.includes("add") ? { status: 1, stdout: "", stderr: "index busy" } : spawnSync(command, args, options))
-  const { queue, pushes } = lane(root, { spawnGit })
-  queue(["log.md"])
-  assert.equal(flushAppends(root), "stage_failed")
-  assert.equal(pendingCount(root), 1)
-  failing = false
-  assert.equal(flushAppends(root), "committed")
-  assert.equal(pendingCount(root), 0)
-  assert.equal(pushes.length, 1)
-  assert.match(git(root, ["log", "-1", "--format=%s"]), /^task_update: log /u)
-})
-
-test("a commit Git refuses leaves the entry staged and waiting", async (t) => {
-  const root = await fixture(t)
-  await fs.writeFile(path.join(root, "log.md"), "one\n")
-  const spawnGit = (command, args, options) => (args.includes("commit") ? { status: 1, stdout: "", stderr: "hook refused" } : spawnSync(command, args, options))
-  const { queue, pushes } = lane(root, { spawnGit })
-  queue(["log.md"])
-  assert.equal(flushAppends(root), "commit_failed")
-  assert.equal(pendingCount(root), 1)
-  assert.deepEqual(pushes, [])
-})
-
-test("a commit that could not be made is tried again on its own once the wait runs out", async (t) => {
-  const root = await fixture(t)
-  await fs.writeFile(path.join(root, "log.md"), "one\n")
-  let failing = true
-  const spawnGit = (command, args, options) => (failing && args.includes("commit") ? { status: 1, stdout: "", stderr: "hook refused" } : spawnSync(command, args, options))
-  const { queue, pushes } = lane(root, { spawnGit, maxWaitMs: 40 })
-  queue(["log.md"])
-  assert.equal(flushAppends(root), "commit_failed")
-  assert.equal(pendingCount(root), 1)
-  failing = false
-  for (let waited = 0; pendingCount(root) > 0 && waited < 100; waited += 1) await new Promise((resolve) => setTimeout(resolve, 50))
-  assert.equal(pendingCount(root), 0)
-  assert.equal(pushes.length, 1)
-})
-
-test("a base the write may not build on keeps the entry waiting", async (t) => {
-  const root = await fixture(t)
-  await fs.writeFile(path.join(root, "log.md"), "one\n")
-  const { queue } = lane(root, { admission: { policy_commit: "0".repeat(40) } })
-  queue(["log.md"])
-  assert.equal(flushAppends(root), "waiting")
-  assert.equal(pendingCount(root), 1)
-  assert.equal(git(root, ["status", "--porcelain"]), "?? log.md")
-})
-
-test("entries for two files share one commit named for their count", async (t) => {
-  const root = await fixture(t)
-  await fs.mkdir(path.join(root, "a"))
-  await fs.mkdir(path.join(root, "b"))
+  assert.deepEqual(waitingLogs(root), [])
   await fs.writeFile(path.join(root, "a/log.md"), "one\n")
-  await fs.writeFile(path.join(root, "b/log.md"), "two\n")
-  const { queue, pushes } = lane(root)
-  queue(["a/log.md"])
-  assert.equal(queue(["b/log.md"]), 2)
-  assert.equal(flushAppends(root), "committed")
+  await fs.writeFile(path.join(root, "log.md"), "no card here\n")
+  await fs.rm(path.join(root, "gone/log.md"))
+  assert.deepEqual(waitingLogs(root), ["a/log.md"])
+  await fs.writeFile(path.join(root, "gone/log.md"), "old\nnew\n")
+  assert.deepEqual(waitingLogs(root).sort(), ["a/log.md", "gone/log.md"])
+  assert.deepEqual(waitingLogs(root, () => ({ status: 128, stdout: "" })), [])
+})
+
+test("waiting logs are committed together, named for the card or their count, and nothing is left to commit after", async (t) => {
+  const root = await fixture(t)
+  assert.equal(commitWaitingLogs(root), "empty")
+  await fs.writeFile(path.join(root, "a/log.md"), "one\n")
+  assert.equal(commitWaitingLogs(root), "committed")
+  assert.equal(git(root, ["log", "-1", "--format=%s"]), "task_update: log a")
+  await fs.appendFile(path.join(root, "a/log.md"), "two\n")
+  await fs.writeFile(path.join(root, "b/log.md"), "three\n")
+  assert.equal(commitWaitingLogs(root), "committed")
   assert.equal(git(root, ["log", "-1", "--format=%s"]), "task_update: log 2 cards")
-  assert.equal(pushes.length, 1)
+  assert.equal(git(root, ["status", "--porcelain"]), "")
+})
+
+test("a log Git will not stage or commit yet stays written and waiting, and a Git that cannot run never throws", async (t) => {
+  const root = await fixture(t)
+  await fs.writeFile(path.join(root, "a/log.md"), "one\n")
+  const refusing = (verb) => (command, args, options) => (args.includes(verb) ? { status: 1, stdout: "", stderr: "refused" } : spawnSync(command, args, options))
+  assert.equal(commitWaitingLogs(root, refusing("add")), "stage_failed")
+  assert.equal(commitWaitingLogs(root, refusing("commit")), "commit_failed")
+  assert.deepEqual(waitingLogs(root), ["a/log.md"])
+  assert.equal(commitWaitingLogs(root, () => { throw new Error("spawn failed") }), "commit_failed")
+  assert.equal(commitWaitingLogs(root), "committed")
+})
+
+test("the worker waits until the newest waiting log has been quiet, but never longer than the cap", async (t) => {
+  const root = await fixture(t)
+  assert.equal(await settleLogs(root, { sleep: () => assert.fail("nothing waits, so nothing to wait for") }), undefined)
+  await fs.writeFile(path.join(root, "a/log.md"), "one\n")
+  const written = (await fs.stat(path.join(root, "a/log.md"))).mtimeMs
+  let clock = written
+  const waits = []
+  const sleep = async (ms) => { waits.push(ms); clock += ms }
+  await settleLogs(root, { sleep, now: () => clock, quietMs: 100, maxWaitMs: 1000 })
+  assert.deepEqual(waits, [100])
+  clock = written
+  waits.length = 0
+  await settleLogs(root, { sleep, now: () => clock, quietMs: 5000, maxWaitMs: 300 })
+  assert.deepEqual(waits, [300])
 })
