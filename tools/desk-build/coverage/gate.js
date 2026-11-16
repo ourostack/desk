@@ -14,7 +14,7 @@ const REQUIRED_ROOT_VALIDATION_SCRIPTS = new Set([
 // The maintained offline evaluation implementation the root gate must exercise: its top-level ESM leaves, the source-pinned vendor TypeScript beneath them, and the root CommonJS bridge that routes the CLI into them.
 const OFFLINE_EVALUATION_ROOT = "evals/offline"
 const OFFLINE_PINNED_VENDOR_ROOT = "evals/offline/vendor/gauntlet"
-const OFFLINE_EVALUATION_BRIDGE = "scripts/skill-evals.cjs"
+const OFFLINE_EVALUATION_BRIDGES = new Set(["scripts/skill-evals.cjs", "scripts/skill-evals-run.cjs"])
 const DEFAULT_THRESHOLDS = {
   lines: 100,
   branches: 100,
@@ -149,7 +149,7 @@ export function collectCoverageRequiredFiles({ repoRoot }) {
 
 export function isOfflineEvaluationScope(file) {
   const normalized = normalizePath(file)
-  return normalized.startsWith(`${OFFLINE_EVALUATION_ROOT}/`) || normalized === OFFLINE_EVALUATION_BRIDGE
+  return normalized.startsWith(`${OFFLINE_EVALUATION_ROOT}/`) || OFFLINE_EVALUATION_BRIDGES.has(normalized)
 }
 
 function normalizePathList(files) {
