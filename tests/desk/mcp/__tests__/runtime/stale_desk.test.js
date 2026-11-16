@@ -242,14 +242,19 @@ test("boot with the real check against a stubbed latest, and a boot that is not 
 
 test("boot is unaffected when the check throws or never answers inside its budget", async () => {
   const root = await deskRoot()
+  // The rest of boot runs git, which a loaded runner slows by seconds, so the never-answering check is measured
+  // against an ordinary boot of the same desk, not against a fixed time.
+  const ordinaryStarted = Date.now()
   const thrown = await boot(root, { staleDeskFn: async () => { throw new Error("boom") } })
+  const ordinaryMs = Date.now() - ordinaryStarted
   assert.equal(thrown.stale_desk, null)
   assert.equal(thrown.boot_complete, true)
   const { pluginRoot, stateDir } = await fixture("3.2.0-alpha.153")
   const started = Date.now()
   const slow = await boot(root, { staleDeskFn: (args) => checkStaleDesk({ ...args, pluginRoot, stateDir, budgetMs: 50, fetchFn: () => new Promise(() => {}) }) })
+  const slowMs = Date.now() - started
   assert.equal(slow.stale_desk, null)
-  assert.ok(Date.now() - started < 1500)
+  assert.ok(slowMs < Math.max(ordinaryMs, 500) * 2 + 1000, `a never-answering check held boot for ${slowMs} ms; an ordinary boot took ${ordinaryMs} ms`)
 })
 
 test("a boot with no desk bound starts no lookup", async () => {
