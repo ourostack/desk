@@ -596,7 +596,7 @@ async function upstreamBack({ root, spawnGit, clock }) {
 async function deliverUntilDone({ root, env, spawnGit, fileProblem, clock }) {
   let pushedAt = null
   // Publication PRs still waiting from earlier saves are settled first: closed when superseded, rebuilt when they conflict with main.
-  try { settleSaves({ root, env, spawnGit }) } catch { /* a settle that fails leaves the saves recorded, and named */ }
+  settleSaves({ root, env, spawnGit })
   for (let round = 0; round < MAX_ROUNDS; round += 1) {
     const delivered = deliveredSoFar(root, env)
     const pending = undeliveredCommits({ root, spawnGit, delivered })

@@ -11,7 +11,8 @@ import { spawnSync } from "node:child_process"
 import { mkTempRoot } from "../_temp_roots.js"
 import { runner } from "../../../../../plugins/desk/mcp/src/runtime/deliver.js"
 import { publishPullRequest } from "../../../../../plugins/desk/mcp/src/runtime/pr-publication.js"
-import { allStuckSaves, savesFor, settleSaves, stuckSaves, withStuckSaves } from "../../../../../plugins/desk/mcp/src/runtime/unmerged-saves.js"
+import { abandonedComment, allStuckSaves, savesFor, settleSaves, stuckSaves, withStuckSaves } from "../../../../../plugins/desk/mcp/src/runtime/unmerged-saves.js"
+import { resolveDeskStateDir } from "../../../../../plugins/desk/mcp/src/runtime/last-start.js"
 import { formatBootText } from "../../../../../plugins/desk/mcp/src/runtime/boot-text.js"
 import { runDrainsCli } from "../../../../../plugins/desk/mcp/src/runtime/drains-cli.js"
 
@@ -194,4 +195,182 @@ test("a save unmerged past ten minutes is named in tool replies, boot and drains
   const code = await runDrainsCli({ argv: ["status"], script: path.resolve("plugins/desk/mcp/scripts/drains.js"), env, now: at(11), io: { stdout: { write: (text) => out.push(text) }, stderr: { write: () => {} } } })
   assert.equal(code, 0)
   assert.ok(JSON.parse(out.join("")).status.some((line) => line.startsWith("unmerged save: ") && line.includes(url)))
+})
+
+// Saves that cannot be settled stay recorded and named; each way out is exercised here.
+test("settling leaves a save it cannot settle recorded, and forgets one that is gone", async () => {
+  const { origin, seed, desk, env } = await world("waiting")
+  const onto = git(desk, ["rev-parse", "HEAD"])
+  const gh = fakeGh(origin, { pending: true })
+  const head = await appendTo(desk, "- unique", "save")
+  assert.throws(() => publish({ desk, env, gh, head, onto }), /checks still missing or pending/u)
+  const url = "https://github.example/team/workspace/pull/1"
+  const settle = (spawn, extra = {}) => settleSaves({ root: desk, env, spawnGit: spawn, clock: clockOf(), ...extra })
+  const failing = (match) => (command, args, options) => (match(command, args) ? { status: 1 } : gh(command, args, options))
+
+  // No fetch, no unreadable PR, nothing superseded and nothing conflicting: waiting each time.
+  assert.deepEqual(settle(failing((command, args) => command === "git" && args.includes("fetch"))).waiting, [url])
+  assert.deepEqual(settle(failing((command, args) => command === "gh" && args[1] === "view")).waiting, [url])
+  assert.deepEqual(settle(gh).waiting, [url])
+  const garbled = (command, args, options) => (command === "gh" && args[1] === "view" ? { status: 0, stdout: "not json" } : gh(command, args, options))
+  assert.deepEqual(settle(garbled).waiting, [url])
+
+  // The save's head is fetched from its branch when this clone lacks it.
+  git(desk, ["reset", "-q", "--hard", onto])
+  for (const ref of git(desk, ["for-each-ref", "--format=%(refname)", "refs/heads/desk", "refs/remotes/origin/desk"]).split("\n").filter(Boolean)) git(desk, ["update-ref", "-d", ref])
+  git(desk, ["reflog", "expire", "--expire=now", "--all"])
+  git(desk, ["gc", "-q", "--prune=now"])
+  assert.deepEqual(settle(gh).waiting, [url])
+
+  // A PR that closed on its own is forgotten.
+  gh.prs.get(1).state = "CLOSED"
+  assert.deepEqual(settle(gh), { closed: [], rebased: [], waiting: [] })
+  assert.deepEqual(stuckSaves({ root: desk, env, now: () => Date.now() + 60 * MINUTE }), [])
+  assert.deepEqual(settle(gh), { closed: [], rebased: [], waiting: [] })
+})
+
+test("a save that main already contains is forgotten, and a failed close keeps it recorded", async () => {
+  const { origin, seed, desk, env } = await world("merged")
+  const onto = git(desk, ["rev-parse", "HEAD"])
+  const gh = fakeGh(origin, { pending: true })
+  const head = await appendTo(desk, "- landed", "save")
+  assert.throws(() => publish({ desk, env, gh, head, onto }), /checks still missing or pending/u)
+  const url = "https://github.example/team/workspace/pull/1"
+  await appendTo(seed, "- landed", "another save said it first")
+  git(seed, ["push", "-q", "origin", "HEAD:main"])
+  const refusing = (command, args, options) => (command === "gh" && args[1] === "close" ? { status: 1, stdout: "", stderr: "" } : gh(command, args, options))
+  assert.deepEqual(settleSaves({ root: desk, env, spawnGit: refusing, clock: clockOf() }).waiting, [url])
+  git(origin, ["update-ref", "refs/heads/main", head])
+  assert.deepEqual(settleSaves({ root: desk, env, spawnGit: gh, clock: clockOf() }), { closed: [], rebased: [], waiting: [] })
+  assert.deepEqual(stuckSaves({ root: desk, env, now: () => Date.now() + 60 * MINUTE }), [])
+})
+
+test("a deleted file and re-set frontmatter count as superseded only when main agrees", async () => {
+  const { origin, seed, desk, env } = await world("kinds")
+  // Main's later commits carry a later date than the save's.
+  const later = new Date(Date.now() + 3600_000).toISOString()
+  const write = async (root, file, text) => {
+    await fs.writeFile(path.join(root, file), text)
+    git(root, ["add", file])
+    process.env.GIT_COMMITTER_DATE = later
+    try { git(root, ["commit", "-q", "-m", `write ${file}`]) } finally { delete process.env.GIT_COMMITTER_DATE }
+  }
+  await write(seed, "gone.md", "x\n")
+  await write(seed, "card.md", "---\nstatus: open\n---\nbody\n")
+  git(seed, ["push", "-q", "origin", "HEAD:main"])
+  git(desk, ["pull", "-q", "--ff-only"])
+  const onto = git(desk, ["rev-parse", "HEAD"])
+  const gh = fakeGh(origin, { pending: true })
+  git(desk, ["rm", "-q", "gone.md"])
+  await fs.writeFile(path.join(desk, "card.md"), "---\nstatus: done\n---\nbody\n")
+  git(desk, ["add", "card.md"])
+  git(desk, ["commit", "-q", "-m", "save"])
+  const head = git(desk, ["rev-parse", "HEAD"])
+  assert.throws(() => publish({ desk, env, gh, head, onto }), /checks still missing or pending/u)
+  const url = "https://github.example/team/workspace/pull/1"
+
+  // Main still has gone.md: not superseded.
+  await write(seed, "card.md", "---\nstatus: cancelled\n---\nbody\n")
+  git(seed, ["push", "-q", "origin", "HEAD:main"])
+  assert.deepEqual(settleSaves({ root: desk, env, spawnGit: gh, clock: clockOf() }).waiting, [url])
+  // Main deleted it too, and set the field again after the save: superseded.
+  git(seed, ["rm", "-q", "gone.md"])
+  git(seed, ["commit", "-q", "-m", "gone"])
+  git(seed, ["push", "-q", "origin", "HEAD:main"])
+  const outcome = settleSaves({ root: desk, env, spawnGit: gh, clock: clockOf() })
+  assert.deepEqual(outcome.closed, [url])
+  assert.match(gh.prs.get(1).closedWith, /gone\.md is absent on main/u)
+})
+
+test("a conflicting save that cannot be rebuilt waits, and one whose new PR is still open is still replaced", async () => {
+  const { origin, seed, desk, env } = await world("rebuild")
+  const onto = git(desk, ["rev-parse", "HEAD"])
+  const gh = fakeGh(origin, { pending: true, conflicting: true })
+  const head = await appendTo(desk, "- mine", "save")
+  assert.throws(() => publish({ desk, env, gh, head, onto }), /checks still missing or pending/u)
+  const url = "https://github.example/team/workspace/pull/1"
+  await appendTo(seed, "- theirs", "another save")
+  git(seed, ["push", "-q", "origin", "HEAD:main"])
+  // Rebuilding the new PR fails before GitHub makes it: the old one stays.
+  const noCreate = (command, args, options) => (command === "gh" && args[1] === "create" ? { status: 1, stdout: "", stderr: "" } : gh(command, args, options))
+  assert.deepEqual(settleSaves({ root: desk, env, spawnGit: noCreate, clock: clockOf() }).waiting, [url])
+  // A close that GitHub refuses leaves the old one waiting, though its replacement is made and recorded.
+  const refusing = (command, args, options) => (command === "gh" && args[1] === "close" ? { status: 1, stdout: "", stderr: "" } : gh(command, args, options))
+  assert.deepEqual(settleSaves({ root: desk, env, spawnGit: refusing, clock: clockOf() }).waiting, [url])
+  assert.equal(gh.prs.get(2).state, "OPEN")
+  // The close goes through on the next settle; the replacement's checks are still pending, so it stays recorded.
+  const outcome = settleSaves({ root: desk, env, spawnGit: gh, clock: clockOf() })
+  assert.deepEqual(outcome.rebased, [url])
+  assert.equal(gh.prs.get(1).state, "CLOSED")
+  assert.ok(stuckSaves({ root: desk, env, now: () => Date.now() + 60 * MINUTE }).length > 0)
+})
+
+test("a policy-less or unreadable-policy repository leaves a conflicting save waiting", async () => {
+  const { origin, seed, desk, env } = await world("nopolicy")
+  const onto = git(desk, ["rev-parse", "HEAD"])
+  const gh = fakeGh(origin, { pending: true, conflicting: true })
+  const head = await appendTo(desk, "- mine", "save")
+  assert.throws(() => publish({ desk, env, gh, head, onto }), /checks still missing or pending/u)
+  git(seed, ["pull", "-q", "origin", "main"])
+  git(seed, ["rm", "-q", "-r", ".desk"])
+  await appendTo(seed, "- theirs", "another save and no policy")
+  git(seed, ["push", "-q", "origin", "HEAD:main"])
+  assert.equal(settleSaves({ root: desk, env, spawnGit: gh, clock: clockOf() }).waiting.length, 1)
+  await fs.writeFile(path.join(seed, ".desk-x"), "")
+  await fs.mkdir(path.join(seed, ".desk"))
+  await fs.writeFile(path.join(seed, ".desk", "publication.json"), "{")
+  git(seed, ["add", "."])
+  git(seed, ["commit", "-q", "-m", "broken policy"])
+  git(seed, ["push", "-q", "origin", "HEAD:main"])
+  assert.equal(settleSaves({ root: desk, env, spawnGit: gh, clock: clockOf() }).waiting.length, 1)
+})
+
+test("a PR a rebuild replaced is closed as superseded or as rebuilt", () => {
+  assert.match(abandonedComment({ target: "a".repeat(40), branch: "main" }), /Superseded: .* landed it directly or left nothing to add/u)
+  assert.match(abandonedComment({ target: "a".repeat(40), branch: "main", publication: { url: "https://github.example/x/y/pull/9" } }), /Rebuilt on the newest main as https:\/\/github\.example\/x\/y\/pull\/9/u)
+})
+
+test("a settle that throws, an unreadable state, a corrupt status file and a non-object reply never break the caller", async () => {
+  const { origin, desk, env } = await world("hostile")
+  const onto = git(desk, ["rev-parse", "HEAD"])
+  const gh = fakeGh(origin, { pending: true })
+  const head = await appendTo(desk, "- unique", "save")
+  assert.throws(() => publish({ desk, env, gh, head, onto }), /checks still missing or pending/u)
+  const exploding = () => { throw new Error("spawn failed") }
+  assert.deepEqual(settleSaves({ root: desk, env, spawnGit: exploding }), { closed: [], rebased: [], waiting: [] })
+
+  const dir = path.join(resolveDeskStateDir({ env }), "sync")
+  await fs.writeFile(path.join(dir, "corrupt.status.json"), "{")
+  assert.equal(allStuckSaves({ env, now: () => Date.now() + 60 * MINUTE }).length, 1, "the readable desk is still reported")
+  assert.deepEqual(allStuckSaves({ env: { ...env, XDG_STATE_HOME: path.join(env.XDG_STATE_HOME, "missing") } }), [])
+
+  const blocked = path.join(env.XDG_STATE_HOME, "blocked")
+  await fs.writeFile(blocked, "a file where the state directory should be")
+  const hostile = { ...env, XDG_STATE_HOME: blocked }
+  const receipt = { url: "https://github.example/team/workspace/pull/1", head, branch: "b", base: "main" }
+  const track = savesFor({ root: desk, env: hostile })
+  track.record(receipt)
+  track.clear(receipt)
+  assert.deepEqual(stuckSaves({ root: desk, env: hostile }), [])
+  for (const reply of [null, "text", ["a"]]) assert.equal(withStuckSaves(reply, { root: desk, env }), reply)
+})
+
+test("a conflict Desk cannot resolve leaves the save waiting", async () => {
+  const { origin, seed, desk, env } = await world("truecon")
+  const gh = fakeGh(origin, { pending: true, conflicting: true })
+  await fs.writeFile(path.join(seed, "app.json"), "{}\n")
+  git(seed, ["add", "."])
+  git(seed, ["commit", "-q", "-m", "app"])
+  git(seed, ["push", "-q", "origin", "HEAD:main"])
+  git(desk, ["pull", "-q", "--ff-only"])
+  await fs.writeFile(path.join(desk, "app.json"), "{\"a\":1}\n")
+  git(desk, ["commit", "-q", "-am", "save"])
+  const head = git(desk, ["rev-parse", "HEAD"])
+  const onto = git(desk, ["rev-parse", "HEAD^"])
+  assert.throws(() => publish({ desk, env, gh, head, onto }), /checks still missing or pending/u)
+  await fs.writeFile(path.join(seed, "app.json"), "{\"b\":2}\n")
+  git(seed, ["commit", "-q", "-am", "same line, different words"])
+  git(seed, ["push", "-q", "origin", "HEAD:main"])
+  assert.deepEqual(settleSaves({ root: desk, env, spawnGit: gh, clock: clockOf() }).waiting, ["https://github.example/team/workspace/pull/1"])
+  assert.equal(gh.prs.size, 1, "no second pull request is opened for a save that cannot be rebuilt")
 })

@@ -27,7 +27,7 @@ import * as path from "node:path"
 import { lastStartRootKey, resolveDeskStateDir } from "./last-start.js"
 import { remoteIdentityEnv } from "./remote-identity.js"
 import { publicationPolicy, publicationRecovery, publishPullRequest } from "./pr-publication.js"
-import { closeSaved, savesFor, supersededComment } from "./unmerged-saves.js"
+import { abandonedComment, closeSaved, savesFor } from "./unmerged-saves.js"
 
 const GIT_TIMEOUT_MS = 10_000
 const NETWORK_TIMEOUT_MS = 60_000
@@ -375,9 +375,7 @@ export function deliver({ root, env = process.env, spawnGit = spawnSync, deliver
     if (pushed.status === 0) {
       git(["update-ref", upstream.tracking, target])
       for (const url of abandoned) {
-        const comment = publication === undefined || built.head === onto
-          ? supersededComment(target, [`rebuilding the save on the newest ${upstream.branch} ${built.head === onto ? "left nothing to add" : "landed it directly"}`])
-          : `Rebuilt on the newest ${upstream.branch} as ${publication.url} because ${upstream.branch} moved or this pull request conflicted; this pull request is closed in its favour.`
+        const comment = abandonedComment({ target, branch: upstream.branch, publication })
         closeSaved({ spawnGit, root, env, url, comment })
       }
       const checkout = built.skipped.length === 0 ? followsUpstream({ git, upstream, head, target }) : { state: "behind", reason: "skipped_commits" }

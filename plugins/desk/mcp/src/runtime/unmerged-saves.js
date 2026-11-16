@@ -41,7 +41,6 @@ function recordUnmerged({ root, env = process.env, receipt, at = Date.now() }) {
 /** Forgets a PR that merged or was closed. Never throws. */
 function clearUnmerged({ root, env = process.env, url }) {
   try {
-    if (!entries(readSyncStatus({ root, env })).some((save) => save.url === url)) return
     updateSyncStatus(root, env, (current) => ({ [KEY]: entries(current).filter((save) => save.url !== url) }))
   } catch {
     // See recordUnmerged.
@@ -50,13 +49,9 @@ function clearUnmerged({ root, env = process.env, url }) {
 
 const stuckOf = (list, at) => list.map((save) => ({ ...save, minutes: Math.floor((at - Date.parse(save.since)) / 60_000) })).filter((save) => save.minutes * 60_000 >= STUCK_AFTER_MS)
 
-/** The desk's saves still unmerged after ten minutes, oldest first, each `{ url, head, branch, base, since, minutes }`. Local read, never throws. */
+/** The desk's saves still unmerged after ten minutes, oldest first, each `{ url, head, branch, base, since, minutes }`. Local read. */
 export function stuckSaves({ root, env = process.env, now = Date.now }) {
-  try {
-    return stuckOf(entries(readSyncStatus({ root, env })), now()).sort((a, b) => Date.parse(a.since) - Date.parse(b.since))
-  } catch {
-    return []
-  }
+  return stuckOf(entries(readSyncStatus({ root, env })), now()).sort((a, b) => Date.parse(a.since) - Date.parse(b.since))
 }
 
 /** The stuck saves of every desk on this machine, for `drains status`. Never throws. */
@@ -99,10 +94,8 @@ const FRONTMATTER_KEY = /^([A-Za-z][\w-]*):(?:\s|$)/u
  * main has since set differently.
  */
 function supersession(git, head, main) {
-  const parent = git(["rev-parse", "--verify", "--quiet", `${head}^`]).stdout.trim()
-  if (parent === "") return null
-  const files = git(["diff", "--name-only", "--no-renames", "-z", parent, head]).stdout.split("\0").filter(Boolean)
-  if (files.length === 0) return null
+  const parent = `${head}^`
+  const files = git(["diff-tree", "--root", "-r", "--name-only", "--no-renames", "--no-commit-id", "-z", head]).stdout.split("\0").filter(Boolean)
   const headTime = Number(git(["log", "-1", "--format=%ct", head]).stdout.trim())
   const evidence = []
   for (const file of files) {
@@ -144,13 +137,27 @@ export function closeSaved({ spawnGit = spawnSync, root, env = process.env, url,
   return closed
 }
 
-export const supersededComment = (main, evidence) => `Superseded: this save is already on main (${short(main)}), so this pull request is closed without merging. Evidence: ${evidence.join("; ")}.`
+const supersededComment = (main, evidence) => `Superseded: this save is already on main (${short(main)}), so this pull request is closed without merging. Evidence: ${evidence.join("; ")}.`
+
+/** Why a publication PR that a rebuild replaced is closed: superseded when its content is on main without it, else rebuilt as `publication`. */
+export const abandonedComment = ({ target, branch, publication }) => publication === undefined
+  ? supersededComment(target, [`rebuilding the save on the newest ${branch} landed it directly or left nothing to add`])
+  : `Rebuilt on the newest ${branch} as ${publication.url} because ${branch} moved or this pull request conflicted; this pull request is closed in its favour.`
 
 /**
  * Settles every recorded save of the desk at `root` against the newest main (a network step; call it where a fetch is
- * expected). Returns `{ closed, rebased, waiting }` (PR urls).
+ * expected). Returns `{ closed, rebased, waiting }` (PR urls); never throws.
  */
-export function settleSaves({ root, env = process.env, spawnGit = spawnSync, clock }) {
+export function settleSaves(options) {
+  try {
+    return settle(options)
+  } catch {
+    // A settle that fails leaves the saves recorded, and named.
+    return { closed: [], rebased: [], waiting: [] }
+  }
+}
+
+function settle({ root, env = process.env, spawnGit = spawnSync, clock }) {
   const outcome = { closed: [], rebased: [], waiting: [] }
   const list = entries(readSyncStatus({ root, env }))
   if (list.length === 0) return outcome
@@ -177,15 +184,14 @@ export function settleSaves({ root, env = process.env, spawnGit = spawnSync, clo
     }
     if (view.mergeable !== "CONFLICTING") { outcome.waiting.push(save.url); continue }
     const rebased = rebaseSave({ git, spawnGit, root, env, upstream, save, main, clock })
-    if (rebased === "superseded") outcome.closed.push(save.url)
-    else if (rebased === "rebased") outcome.rebased.push(save.url)
+    if (rebased === "rebased") outcome.rebased.push(save.url)
     else outcome.waiting.push(save.url)
   }
   return outcome
 }
 
 // Builds the save on the newest main (Desk's card and log conflict rules apply) and publishes it again; the old PR is closed
-// once the new one exists, or as superseded when nothing is left to add.
+// once the new one exists.
 function rebaseSave({ git, spawnGit, root, env, upstream, save, main, clock }) {
   let policy
   try { policy = publicationPolicy(git, main) } catch { return "waiting" }
@@ -194,11 +200,7 @@ function rebaseSave({ git, spawnGit, root, env, upstream, save, main, clock }) {
   const prefix = git(["rev-parse", "--show-prefix"]).stdout.trim()
   const built = replay({ git, spawnGit, paths, onto: main, commits: [save.head], prefix })
   removeWorktree(git, paths)
-  if (built.error !== undefined || built.skipped.length > 0 || !OBJECT_ID.test(built.head)) return "waiting"
-  if (built.head === main) {
-    const comment = supersededComment(main, ["rebuilding the save on the newest main leaves nothing to add"])
-    return closeSaved({ spawnGit, root, env, url: save.url, comment }) ? "superseded" : "waiting"
-  }
+  if (built.error !== undefined || built.skipped.length > 0 || !OBJECT_ID.test(built.head) || built.head === main) return "waiting"
   let receipt
   try {
     receipt = publishPullRequest({ git, spawnGit, root, upstream, head: built.head, onto: main, policy, clock, track: savesFor({ root, env }) }).receipt

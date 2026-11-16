@@ -162,7 +162,7 @@ export function publishPullRequest({ git, spawnGit, root, upstream, head, onto, 
   const receipt = { url: pr.url, head, branch, base }
   // Merging must not depend on one repository setting: the relay's label goes on every publication PR, and auto-merge is asked for where the repository allows it. Both are best effort; the checks below still gate Desk's own merge.
   if (pr.state !== "MERGED") {
-    const label = typeof policy.merge_label === "string" && policy.merge_label.trim() !== "" ? policy.merge_label.trim() : MERGE_LABEL
+    const label = MERGE_LABEL
     const attempt = (args) => { try { gh(args, false); return true } catch { return false } }
     attempt(["label", "create", label, "--repo", repo.full, "--force", "--description", "Merge when the required checks are green"])
     receipt.labelled = attempt(["pr", "edit", String(pr.number), "--repo", repo.full, "--add-label", label])
@@ -185,7 +185,7 @@ export function publishPullRequest({ git, spawnGit, root, upstream, head, onto, 
       pr = view()
       verify(pr)
       if (pr.state === "MERGED") break
-      if (pr.baseRefOid !== onto || pr.mergeable === "CONFLICTING") throw Object.assign(new Error(`Run it again: The publication ${pr.mergeable === "CONFLICTING" ? "conflicts with" : "base advanced past"} ${base}; retry to rebuild it on the newest ${base}`), { code: "pr_publication_run_it_again_the_publication", requalify: true })
+      if (pr.baseRefOid !== onto || pr.mergeable === "CONFLICTING") throw Object.assign(new Error(`Run it again: The publication conflicts with or is behind ${base}; retry to rebuild it on the newest ${base}`), { code: "pr_publication_run_it_again_the_publication", requalify: true })
       const reported = loadChecks()
       const waiting = checkState(reported, policy.required_checks, observed, ruled)
       if (waiting.length === 0) {
