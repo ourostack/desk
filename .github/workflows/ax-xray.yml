@@ -1,0 +1,89 @@
+name: AX X-ray
+
+# Ouro AX's X-ray against Desk's stdio MCP server, and the action claims over its ouro-actions declarations, on every
+# pull request and on main. Each report is uploaded as an artifact whose name contains "xray", for the adoption ledger.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ax-xray-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  ax-xray:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: plugins/desk/mcp/package-lock.json
+
+      - name: Install the MCP server's dependencies
+        working-directory: plugins/desk/mcp
+        run: npm ci --ignore-scripts --no-audit --no-fund
+
+      # The committed projections (mcp.json and actions.json) must match the declarations, and only those two are
+      # committed: the drift gate for the files Desk serves.
+      - name: Committed projections match the declarations
+        run: |
+          node plugins/desk/mcp/src/lib/ouro-actions/ouro-actions.mts check \
+            plugins/desk/mcp/src/actions/desk.actions.mts plugins/desk/mcp/src/actions/generated/desk --targets mcp,actions
+
+      # The inventory is the server's own tools/list, so a tool it serves without a declaration, or a declaration it
+      # doesn't serve, fails the X-ray's inventory claim.
+      - name: Inventory from the live tools/list
+        run: |
+          mkdir -p xray
+          node .github/scripts/ax-tools-list.mjs plugins/desk/mcp/index.js xray
+
+      # An empty isolated home: the X-ray's calls (initialize, tools/list, a call with no arguments, an unknown name)
+      # write nothing, and the server runs against this folder only.
+      - name: Ouro AX X-ray
+        run: |
+          set -o pipefail
+          mkdir -p "$RUNNER_TEMP/xray-home"
+          node plugins/desk/mcp/src/lib/ouro-ui/registry/ouro/ax/xray.ts \
+            --mcp "node $PWD/plugins/desk/mcp/index.js" \
+            --inventory xray/inventory.json --conformance \
+            --home "$RUNNER_TEMP/xray-home" --timeout 60000 \
+            --commit "$GITHUB_SHA" --json --md xray/xray.md > xray/report.json
+
+      # The claims are proved on a fresh generation of all seven projections from the same declarations; the drift gate
+      # above covers the two Desk commits.
+      - name: Action claims over the declarations
+        run: |
+          mkdir -p xray-actions
+          node plugins/desk/mcp/src/lib/ouro-actions/ouro-actions.mts generate \
+            plugins/desk/mcp/src/actions/desk.actions.mts "$RUNNER_TEMP/actions-all"
+          node plugins/desk/mcp/src/lib/ouro-actions/ouro-actions.mts check \
+            plugins/desk/mcp/src/actions/desk.actions.mts "$RUNNER_TEMP/actions-all" \
+            --report xray-actions/report.json --app "Desk" --commit "$GITHUB_SHA"
+
+      - name: Upload the X-ray
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: xray
+          path: xray/
+          retention-days: 90
+
+      - name: Upload the action claims
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: actions-xray
+          path: xray-actions/
+          retention-days: 90
