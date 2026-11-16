@@ -570,8 +570,7 @@ test("a conflict on a file Desk cannot merge leaves that commit local, names it,
   await writeAndCommit(cloneA, "state.json", "{\"from\":\"a\"}\n", "a state")
   await writeAndCommit(cloneA, "card.md", "card\n", "a card")
 
-  let filed = null
-  const result = await runPushWorker({ root: cloneA, env: process.env, clock: instantClock, fileProblem: (args) => { filed = args } })
+  const result = await runPushWorker({ root: cloneA, env: process.env, clock: instantClock, fileProblem: () => assert.fail("not a Desk defect") })
   assert.deepEqual(result, { result: "blocked", reason: "conflict", unpushed: 1 })
   assert.equal(git(origin, ["log", "-1", "--format=%s", "main"]).trim(), "a card", "the commit that could be delivered was")
   assert.equal(git(origin, ["show", "main:state.json"]), "{\"from\":\"b\"}\n", "the remote's side of the real conflict is untouched")
@@ -581,7 +580,6 @@ test("a conflict on a file Desk cannot merge leaves that commit local, names it,
   assert.deepEqual(status.paths, ["state.json"])
   assert.equal(status.unpushed, 1, "only the conflicting commit is still local; the other is recorded as delivered")
   assert.equal(status.checkout.state, "behind")
-  assert.equal(filed.reason, "conflict")
   assert.equal(git(cloneA, ["log", "-1", "--format=%s"]).trim(), "a card", "the shared checkout's branch is not moved past an undelivered commit")
 })
 
@@ -637,14 +635,12 @@ test("a push the remote keeps rejecting is retried a bounded number of times, th
     }
     return spawnSync(cmd, args, opts)
   }
-  let filed = null
-  const result = await runPushWorker({ root: cloneA, env: process.env, clock: instantClock, spawnGit, fileProblem: (args) => { filed = args } })
+  const result = await runPushWorker({ root: cloneA, env: process.env, clock: instantClock, spawnGit, fileProblem: () => assert.fail("not a Desk defect") })
   assert.deepEqual(result, { result: "blocked", reason: "push_rejected", unpushed: 1 })
   assert.equal(pushCalls, 3)
   const status = readSyncStatus({ root: cloneA, env: process.env })
   assert.equal(status.reason, "push_rejected")
   assert.equal(status.unpushed, 1)
-  assert.equal(filed.reason, "push_rejected")
 })
 
 test("refused credentials are reported blocked with the unpushed count, and are not filed as a Desk problem", async () => {
