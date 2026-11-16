@@ -4,11 +4,11 @@
 export const escapeHtml = (text) =>
   String(text).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 
-const document = (body) =>
-  `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Desk sign-in</title><link rel="icon" type="image/svg+xml" href="/favicon.svg"><link rel="stylesheet" href="/assets/desk.css"></head><body><header class="brand"><img src="/assets/desk-logo.png" width="80" height="80" alt=""><h1>Hosted Desk</h1></header><main>${body}</main></body></html>`;
+const document = (title, body) =>
+  `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${escapeHtml(title)}</title><link rel="icon" type="image/svg+xml" href="/favicon.svg"><link rel="stylesheet" href="/assets/desk.css"></head><body><header class="brand"><img src="/assets/desk-logo.png" width="80" height="80" alt=""><h1>Hosted Desk</h1></header><main>${body}</main></body></html>`;
 
-// A page holding one message.
-export const page = (status, message) => ({ status, html: document(`<p>${escapeHtml(message)}</p>`) });
+// A page holding one message, under its own `title`.
+export const page = (status, message, title) => ({ status, html: document(title, `<p>${escapeHtml(message)}</p>`) });
 
 // Asks the person whether this client may sign in. Approve posts the sealed
 // request back to the gateway, which only then sends the browser on to sign in.
@@ -25,10 +25,12 @@ export function consentPage({ clientName, clientHost, redirectUri, consent, sign
   const host = new URL(redirectUri).host;
   const from = clientHost ? `<p>From <strong>${escapeHtml(clientHost)}</strong></p>` : "";
   const field = `<input type="hidden" name="consent" value="${escapeHtml(consent)}">`;
+  const title = "Approve connection · Hosted Desk";
   if (!signIn?.entra) {
     return {
       status: 200,
       html: document(
+        title,
         from +
           `<p>Connect ${escapeHtml(name)} to Hosted Desk? After you sign in with GitHub, it will be sent to ${escapeHtml(host)}.</p>` +
           `<form method="post" action="/oauth/consent">${field}<button type="submit">Approve</button></form>`,
@@ -39,6 +41,7 @@ export function consentPage({ clientName, clientHost, redirectUri, consent, sign
   return {
     status: 200,
     html: document(
+      title,
       from +
         `<p>Connect ${escapeHtml(name)} to Hosted Desk? After you sign in, it will be sent to ${escapeHtml(host)}.</p>` +
         `<form method="post" action="/oauth/consent">${field}<button type="submit" name="method" value="entra">Continue with Apple or email</button>${github}</form>`,
@@ -47,17 +50,24 @@ export function consentPage({ clientName, clientHost, redirectUri, consent, sign
 }
 
 // Pages for sign-in through the Ouro tenant and for invites.
-export const startingUpPage = () => page(503, "Sign-in is starting up. Please try again shortly.");
-export const signInUnavailablePage = () => page(503, "Sign-in can't be completed right now. Please try again shortly, starting again from Claude.");
-export const startAgainPage = () => page(400, "This sign-in link has expired, or it was started in another browser. Start again from Claude.");
-export const inviteOnlyPage = () => page(403, "Hosted Desk is invite-only. Open your invite link in this browser first, then start again from Claude.");
-export const inviteRefusedPage = () => page(403, "This invite has already been used or has expired. Ask for a new invite.");
-export const accessOffPage = () => page(403, "Desk access is turned off for this account.");
-export const noDeskPage = () => page(403, "There is no desk for this account yet on this Hosted Desk.");
-export const inviteInvalidPage = () => page(404, "This invite link isn't valid: it may have expired or already been used. Ask for a new invite.");
+export const startingUpPage = () => page(503, "Sign-in is starting up. Please try again shortly.", "Sign-in is starting up · Hosted Desk");
+export const signInUnavailablePage = () =>
+  page(503, "Sign-in can't be completed right now. Please try again shortly, starting again from Claude.", "Sign-in unavailable · Hosted Desk");
+export const startAgainPage = () =>
+  page(400, "This sign-in link has expired, or it was started in another browser. Start again from Claude.", "Sign-in link expired · Hosted Desk");
+export const inviteOnlyPage = () =>
+  page(403, "Hosted Desk is invite-only. Open your invite link in this browser first, then start again from Claude.", "Invite required · Hosted Desk");
+export const inviteRefusedPage = () =>
+  page(403, "This invite has already been used or has expired. Ask for a new invite.", "Invite already used or expired · Hosted Desk");
+export const accessOffPage = () => page(403, "Desk access is turned off for this account.", "Desk access is off · Hosted Desk");
+export const noDeskPage = () =>
+  page(403, "There is no desk for this account yet on this Hosted Desk.", "No desk yet · Hosted Desk");
+export const inviteInvalidPage = () =>
+  page(404, "This invite link isn't valid: it may have expired or already been used. Ask for a new invite.", "Invite link not valid · Hosted Desk");
 export const invitePage = ({ issuer } = {}) => ({
   status: 200,
   html: document(
+    "You're invited to Hosted Desk",
     "<p>You're invited to Hosted Desk.</p>" +
       `<p>In Claude, add a custom connector${issuer ? ` with the URL <strong>${escapeHtml(new URL("/mcp", issuer).href)}</strong>` : ""}, then connect it and sign in with Apple or email in this browser. Your invite is used the first time you sign in.</p>`,
   ),

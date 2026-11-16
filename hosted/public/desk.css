@@ -1,3 +1,7 @@
+:root {
+  color-scheme: light dark;
+}
+
 body {
   max-width: 42rem;
   margin: 3rem auto;
@@ -34,4 +38,17 @@ button {
   color: #fff;
   background: #69462f;
   cursor: pointer;
+}
+
+@media (prefers-color-scheme: dark) {
+  body {
+    color: #ece4da;
+    background: #1c1916;
+  }
+
+  button {
+    border-color: #d8b08c;
+    color: #1c1916;
+    background: #d8b08c;
+  }
 }
