@@ -30,9 +30,9 @@ With no row, derive a candidate alias through the overlay, run `join` and read t
 
 - `joined`: install the team's tooling (below), give the short interview (below), then the completion check. With `confirmed: false` this clone could not fetch the result: run `git pull` and `status` yourself once the network is back.
 - `member`: the row already exists (perhaps from another machine); use the alias it names, and give the interview if the roster has no entry for them.
-- `pr_open`: the desk is pushed and the row waits in an open pull request. Tell the person the reason. Running `join --apply` again later, as the same account, reuses that pull request and tries to merge it.
-- `refused`: nothing was written. Reconcile a conflicting alias with its owner; choose another alias only when the intended one really belongs to someone else. An unregistered folder with existing work is adopted (below).
-- `failed`: it stopped at the named `stage`. A rerun adds the missing row; an adoption needs a fresh reviewed inventory first. At `push` with `GH006` ("Protected branch update failed") the default branch does not take members' direct desk pushes: someone who administers the repository allows them (see `crew:start-crew`, "What the repository must allow"). At `verify`, read the result and `status`, and keep onboarding open until the named check passes.
+- `pr_open`: the desk is pushed and the row waits in an open pull request. Tell the person the reason; never write `_meta/desks.md` by hand instead. Running `join --apply` again later, as the same account, reuses that pull request and tries to merge it.
+- `refused`: nothing was written, and `_meta/desks.md` stays unwritten by hand. Reconcile a conflicting alias with its owner; choose another alias only when the intended one really belongs to someone else. An unregistered folder with existing work is adopted (below).
+- `failed`: it stopped at the named `stage`. A failed adoption or join is never worked around by writing `_meta/desks.md`. A rerun adds the missing row; an adoption needs a fresh reviewed inventory first. At `push` with `GH006` ("Protected branch update failed") the default branch does not take members' direct desk pushes: someone who administers the repository allows them (see `crew:start-crew`, "What the repository must allow"). At `verify`, read the result and `status`, and keep onboarding open until the named check passes.
 
 ### Adopt an existing unregistered folder
 
