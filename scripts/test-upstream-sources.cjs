@@ -674,11 +674,14 @@ assert.throws(
 
 {
   // The formatter reproduces the checked-in lock byte for byte, so a refresh diff shows only changed entries.
+  // Each source keeps the entry format its file already has, compact or expanded: an update that rewrites
+  // every entry expanded (Ouro Current's did) is a format change, not drift, and must still round-trip.
   const text = fs.readFileSync(path.join(repoRoot, "upstream-sources.lock.json"), "utf8");
   const lock = JSON.parse(text);
-  const compact = compactSources(text, lock);
-  assert.deepEqual([...compact], ["obra-superpowers"]);
-  assert.equal(formatLock(lock, compact), text);
+  assert.equal(formatLock(lock, compactSources(text, lock)), text);
+  const expanded = formatLock(lock, new Set());
+  const expandedLock = JSON.parse(expanded);
+  assert.equal(formatLock(expandedLock, compactSources(expanded, expandedLock)), expanded);
   assert.equal(compactSources("{}", { sources: [{ id: "empty", files: [] }] }).size, 0);
 }
 
