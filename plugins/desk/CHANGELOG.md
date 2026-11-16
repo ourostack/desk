@@ -1,5 +1,13 @@
 # desk plugin — changelog
 
+## 3.2.187 — 2026-11-16
+
+### One declaration set for Desk's actions
+
+Desk's six actions are declared as one set in `plugins/desk/mcp/src/actions/desk.actions.mts`, generated into `actions/generated/desk/` (`mcp.json` and `actions.json`). The served tools, their names and inputs, are unchanged.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.186 — 2026-11-16
 
 ### Ouro AX kit pinned to v1.3.209
