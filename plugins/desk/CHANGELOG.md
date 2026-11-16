@@ -1,5 +1,13 @@
 # desk plugin — changelog
 
+## 3.2.182 — 2026-11-16
+
+### Next improvement card is declared as an action
+
+The `improvement_next` tool is declared as an action in `plugins/desk/mcp/src/actions/desk-session.actions.mts` and served from its generated `mcp.json`: the same name, description and `session` input, with the write consent hint. Its hand-written entries are gone.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.181 — 2026-11-16
 
 ### Read tools come from declarations
