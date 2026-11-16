@@ -114,17 +114,46 @@ function contentOf(file, rel) {
   }
 }
 
-/** Does the newer release differ, in a file a process fixes at its start, from the copy a session loaded? (A manifest is compared without its version.) */
-export function changesPerProcess(loadedDir, newDir, name) {
-  const paths = name === "desk" ? [...FIXED_PER_PROCESS, ...DESK_SESSION_LAYER] : FIXED_PER_PROCESS
+// What a skill's loaded entry is the host's own record of: its name and description, which end at the closing `---`.
+function frontmatter(file) {
+  try {
+    return Buffer.from(/^---\r?\n[\s\S]*?\r?\n---/u.exec(readFileSync(file, "utf8"))?.[0] ?? "")
+  } catch {
+    return null
+  }
+}
+
+function skillHeads(root) {
+  const heads = new Map()
+  for (const skill of list(path.join(root, "skills"))) {
+    const head = frontmatter(path.join(root, "skills", skill, "SKILL.md"))
+    if (head !== null) heads.set(`skills/${skill}`, head)
+  }
+  return heads
+}
+
+const differs = (a, b) => a === undefined || b === undefined || a === null || b === null || !a.equals(b)
+
+/**
+ * Does the newer release differ, in a file a process fixes at its start, from the copy a session loaded? (A manifest is compared
+ * without its version.) `live` says what the loaded Desk already follows on its own: `skills` (the hook that hands the agent a skill's
+ * current text, so only the list of skills and their descriptions are fixed) and `hooks` (scripts run from the newest release, so only the
+ * hook registration is fixed).
+ */
+export function changesPerProcess(loadedDir, newDir, name, live = {}) {
+  const paths = (name === "desk" ? [...FIXED_PER_PROCESS, ...DESK_SESSION_LAYER] : FIXED_PER_PROCESS).flatMap((rel) => {
+    if (live.skills && rel === "skills/") return []
+    return live.hooks && name === "desk" && rel === "hooks/" ? ["hooks/copilot-hooks.json", "hooks/hooks.json"] : [rel]
+  })
   const before = collect(loadedDir, paths)
   const after = collect(newDir, paths)
   for (const rel of new Set([...before.keys(), ...after.keys()])) {
-    const a = before.has(rel) ? contentOf(before.get(rel), rel) : null
-    const b = after.has(rel) ? contentOf(after.get(rel), rel) : null
-    if (a === null || b === null || !a.equals(b)) return true
+    if (differs(before.has(rel) ? contentOf(before.get(rel), rel) : null, after.has(rel) ? contentOf(after.get(rel), rel) : null)) return true
   }
-  return false
+  if (!live.skills) return false
+  const oldHeads = skillHeads(loadedDir)
+  const newHeads = skillHeads(newDir)
+  return [...new Set([...oldHeads.keys(), ...newHeads.keys()])].some((rel) => differs(oldHeads.get(rel), newHeads.get(rel)))
 }
 
 /** Is Housesitter's auto-restart job installed on this Mac? (Its launchd agent file exists; no other OS has the folder.) */
@@ -157,10 +186,15 @@ export function pluginUpdateFinding({ env, pluginRoot, agentHost, homeDir, skip 
     if (cache === null) return null
     const newest = newestReleases(cache.cacheDir, cache.engine)
     const behind = new Map()
-    for (const loaded of loadedPlugins(SESSION_ROOT.exec(root)[1])) {
+    const here = loadedPlugins(SESSION_ROOT.exec(root)[1])
+    const desk = here.find((p) => p.name === "desk")
+    // A Desk that carries the hook helper follows skill text and hook scripts by itself (hooks/lib/current-release.cjs).
+    const follows = desk !== undefined && existsSync(path.join(desk.dir, "hooks", "lib", "current-release.cjs"))
+    const live = { skills: follows && existsSync(path.join(desk.dir, "hooks", "copilot-skill-current.cjs")), hooks: follows }
+    for (const loaded of here) {
       const release = newest.get(loaded.name)
       if (release === undefined || skip.includes(loaded.name) || compareVersions(loaded.version, release.version) >= 0) continue
-      if (!changesPerProcess(loaded.dir, release.dir, loaded.name)) continue
+      if (!changesPerProcess(loaded.dir, release.dir, loaded.name, live)) continue
       behind.set(loaded.name, { name: loaded.name, from: loaded.version, to: release.version })
     }
     if (behind.size === 0) return null

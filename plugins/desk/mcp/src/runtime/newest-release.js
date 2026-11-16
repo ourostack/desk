@@ -2,7 +2,8 @@
 // in the background, so the first session after a release runs the release before it. Desk's own tools do not have to: when the
 // `release` branch holds a newer Desk than the copy that launched this server, the server loads the newer `plugins/desk/mcp` from
 // a copy it keeps under its cache folder, and the runtime pack, source mirror and everything else restore from there as usual.
-// Hooks, skills and agents are read from Agency's copy and cannot change under a running host, so those stay on the older release.
+// A session's hooks run the newer release's scripts and a skill the agent loads is followed by its current text (`hooks/lib/current-release.cjs`);
+// the host fixes the list of skills, their descriptions, agents and the tool descriptions at its start, so those stay as they were.
 //
 // The whole step has a time budget (`BUDGET_MS`). A check or download that cannot finish in it, an offline machine, a copy that
 // fails to load: the server keeps running the cached copy and says which version that is and why (`newest_release` in
@@ -30,8 +31,9 @@ const MAX_EXTRACTED_BYTES = 60 * 1024 * 1024
 const KEEP_COPIES = 3
 const COMPLETE_FILE = ".complete.json"
 const SWITCH = "DESK_NEWEST_RELEASE"
-// What a copy keeps from the release: the plugin manifest and the MCP server with its runtime packs.
-const WANTED = /^(?:plugin\.json|mcp\/.+)$/u
+// What a copy keeps from the release: the plugin manifest, the MCP server with its runtime packs, and the skills, docs, hooks and
+// activation files that hooks and skills read on demand (`hooks/lib/current-release.cjs`).
+const WANTED = /^(?:plugin\.json|(?:mcp|skills|docs|hooks|activation|agents)\/.+)$/u
 
 /** Where the copies live: next to the runtime caches, `<cache>/ouroboros-skills/desk/release-copies`. */
 function releaseCopiesDir({ env, homeDir }) {
@@ -189,7 +191,7 @@ export async function ensureNewestRelease({ env, pluginRoot, running, agentHost,
 
 /** One plain sentence about the outcome, for the agent: which version Desk's tools run and why. Empty when there is nothing to say. */
 export function newestReleaseLine(result) {
-  if (result.state === "loaded") return `Desk's tools run ${result.latest}, the newest release; this session's hooks and skills come from the ${result.running} copy Agency cached, and refresh when the Copilot app restarts.`
+  if (result.state === "loaded") return `Desk's tools run ${result.latest}, the newest release; this session's skill list, skill descriptions, agents and tool descriptions come from the ${result.running} copy Agency cached, and refresh when the Copilot app restarts.`
   if (result.state === "fell_back") return `Desk's tools run ${result.running} from the cached copy${result.latest === undefined ? "" : `, though the newest release is ${result.latest}`}: ${result.reason}. The next session start tries again.`
   return ""
 }
