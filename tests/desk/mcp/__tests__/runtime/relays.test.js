@@ -516,19 +516,19 @@ test("merge-when-green: it never merges while a required check is missing, pendi
   assert.match(relayStatusLines([MERGE], { "pages merge": w.state("pages merge") }, NOW)[0], /#7 waiting on typecheck: typecheck in_progress/u)
 
   checks = [check("typecheck", "failure"), check("npm test (ubuntu-latest, 1/2)")]
-  await w.poll(NOW + MIN)
-  assert.equal(comments(w.world).length, 1, "a progress edit waits two minutes")
-  checks = [check("typecheck"), check("npm test (ubuntu-latest, 1/2)"), check("npm test (ubuntu-latest, 2/2)", null, "queued")]
   await w.poll(NOW + 3 * MIN)
+  assert.equal(comments(w.world).length, 1, "a progress edit waits ten minutes")
+  checks = [check("typecheck"), check("npm test (ubuntu-latest, 1/2)"), check("npm test (ubuntu-latest, 2/2)", null, "queued")]
+  await w.poll(NOW + 11 * MIN)
   assert.deepEqual(comments(w.world).map((write) => write.method), ["POST", "PATCH"], "it edits the same comment")
   assert.equal(comments(w.world)[1].route, "/repos/o/pages/issues/comments/55")
   assert.deepEqual(prWrites(w.world), [])
 
   checks = []
-  await w.poll(NOW + 6 * MIN)
+  await w.poll(NOW + 14 * MIN)
   assert.deepEqual(prWrites(w.world), [], "checks that have not started are missing, not green")
   checks = GREEN
-  await w.poll(NOW + 9 * MIN)
+  await w.poll(NOW + 17 * MIN)
   assert.equal(prWrites(w.world).length, 1)
   assert.equal(comments(w.world).at(-1).method, "PATCH", "the merge result replaces the waiting text")
   assert.equal(w.world.writes.filter((write) => write.method === "POST").length, 1)
@@ -781,11 +781,11 @@ test("merge-when-green: the status comment recovers when its comment is gone and
   await w.poll(NOW)
   checks = [check("typecheck", null, "in_progress")]
   w.world.on("PATCH", /comments\/55$/u, () => ({ ok: false, status: 404, body: {} }))
-  await w.poll(NOW + 3 * MIN)
+  await w.poll(NOW + 11 * MIN)
   assert.deepEqual(comments(w.world).map((write) => write.method), ["POST", "PATCH", "POST"], "a deleted comment is written again")
   checks = [check("typecheck", null, "pending")]
   w.world.on("PATCH", /comments\/55$/u, () => ({ ok: false, status: 500, body: { message: "boom" } }))
-  assert.match((await w.poll(NOW + 6 * MIN)).errors[0].error, /#7: Check that the relay's account can edit its status comment in o\/pages, then try again: GitHub answered HTTP 500 \(boom\)/u)
+  assert.match((await w.poll(NOW + 22 * MIN)).errors[0].error, /#7: Check that the relay's account can edit its status comment in o\/pages, then try again: GitHub answered HTTP 500 \(boom\)/u)
   const fresh = await setup([MERGE])
   mergeWorld(fresh.world, { checks: [] })
   fresh.world.on("POST", /\/comments$/u, () => ({ ok: false, status: 403, body: {} }))

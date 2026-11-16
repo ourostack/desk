@@ -49,7 +49,7 @@ The first poll only records the runs that already succeeded. After that the rela
 
 A labelled open pull request merges only when it is not a draft, GitHub reports it clean (not conflicted, behind, blocked or still being computed), every check and status on its head is green (the required ones also have to exist), and the main-branch run is green. The merge names the head it checked, so GitHub refuses it if a push landed since. The relay never passes `--admin` or any bypass: it uses GitHub's ordinary merge, and GitHub's own branch rules still apply. A merge GitHub refuses is reported and tried again after five minutes, or at once for a new head. The branch is deleted after the merge when it lives in the same repository.
 
-The relay keeps one comment per pull request, marked `<!-- desk-relay-status:<name> -->`, and edits it: what it waits on (at most every two minutes), then that it merged. A restart finds the comment again by its marker.
+The relay keeps one comment per pull request, marked `<!-- desk-relay-status:<name> -->`, and edits it: what it waits on (at most every ten minutes, because each edit makes the next poll read the pull request again in full), then that it merged. A restart finds the comment again by its marker.
 
 Only check runs are read, so a check that reports as a commit status never counts and the pull request waits.
 
