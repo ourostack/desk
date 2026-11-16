@@ -1,208 +1,73 @@
 ---
 name: shared-desk-conventions
-description: Use when working in a shared Crew repo with `desks/` and `_shared/`, deciding where content belongs, writing outside your own `desks/<alias>/`, or before saying work is saved, done or ready.
+description: Use in a shared Crew repo (`desks/`, `_shared/`) to decide where content belongs, answer what a teammate thinks or works on, whether something is agreed, or who someone is (roster), write outside your own `desks/<alias>/`, or before saying work is saved, done or ready.
 ---
 
 # Shared-desk conventions
 
-`desk:directory-structure` is the floor plan of one operator's room -- one operator, one `$DESK/`, synced across that operator's machines, private, the operator owns every write. This skill is the **multi-person overlay** on that floor plan: the same room, but now N operators share one git repo, each with their own desk in it, plus a common area for team-neutral facts, agreed decisions and attributed coordination.
-
-Read `desk:directory-structure` first for the single-operator layout (tracks, tasks, iterations, reserved `_` directories, where planning/doing docs go); come here for what changes when the room is shared.
-
-## The shift -- single-operator → shared workspace
-
-A shared workspace generalizes the single-`$DESK` model along five axes at once:
-
-| Axis | Single-operator desk | Shared workspace |
-|------|----------------------|------------------|
-| **Tenancy** | 1 operator | N operators in one repo |
-| **Visibility** | private | team-visible by default |
-| **Desks per operator** | 1 (`$DESK`) | personal + one-or-more shared |
-| **Content** | all "the operator's" | facts vs perspectives vs decisions, attributed |
-| **Worker** | one worker | a generalist (all-up) + specialists (scoped) |
-
-The most important non-obvious consequence: per-person scoping is **concurrency safety, not tidiness.** A shared repo where N agents all write one tree is a collision machine -- concurrent agents `git add`-sweep each other's uncommitted edits into the wrong commit. Git merges non-overlapping paths cleanly, so if each agent writes only its own `desks/<alias>/`, conflicts go to ~zero **without any locking.** Scoping *is* the mechanism (see "the write protocol" below).
-
-## The floor plan
-
-The shared repo is one git repository. It holds everyone's desks side by side, plus a shared common area, plus (when the crew bundles its own tooling) a `plugins/` source tree.
+A shared workspace is `desk:directory-structure` with several people in one Git repository: each has a desk, and a common area holds team facts, agreed decisions and shared efforts. Plain Markdown first: someone who never runs an agent can read all of it.
 
 ```
-<crew-repo>/                            # one git repo, N operators
-  README.md                             # plain-markdown front page (graceful degradation)
-  AGENTS.md                             # crew conventions and team lessons; Desk's session start prints it
-  _meta/
-    desks.md                            # the desk registry (one row per desk) -- see desk:session-start
-    crew.json                           # Crew's settings: where the team's plugin lives (see "Two setups")
-  _shared/                              # common area; authority depends on content, not location
-    landscape/                          # FACTS: externally true, team-neutral (read by everyone)
-      <topic>.md
-    decisions/                          # DECISIONS: what the team ACTUALLY agreed, attributed
-      README.md                         # the discipline note; near-empty until kickoff
-      <decision>.md
-    tracks/                             # (optional) shared initiatives -- existing shared tracks
-      <track>/
-        README.md                       # new coordination card; retain existing entry names
-  desks/                                # one subtree per person -- the unit of ownership AND safety
-    _template/                          # clean clonable skeleton a new teammate copies in (read desk:first-run-bootstrap shape)
-    <alias>/                            # ONE PERSON'S FULL DESK -- identical shape to a single-operator $DESK
-      AGENTS.md                         # this person's preferences and lessons; session start prints it for them
-      _inbox/                           # notes teammates left this person (note); session start lists the open ones
-      _meta/
-        friction.md
-        featured.md                     # this person's pins (per-person, not repo-wide)
-      <track-name>/                     # exactly desk:directory-structure layout, rooted here
-        track.md
-        _planning/
-        <task-name>/
-          task.md
-          <repo-name>/
-            <YYYY-MM-DD>-<slug>/
-    <other-alias>/                      # attributed peer desk; contributions need authority
-  plugins/                              # (optional) the crew's bundled tooling source -- a shared path
+<crew-repo>/
+  README.md                   front page
+  AGENTS.md                   team conventions and lessons; Desk's session start prints it
+  _meta/desks.md              the desk list: one row per member (identity -> alias)
+  _meta/crew.json             where the team's plugin lives (below)
+  _shared/landscape/          FACTS: externally true, team-neutral, with a source
+  _shared/decisions/          DECISIONS: what the team agreed, with who and when
+  _shared/tracks/<slug>/      shared initiatives (`crew:shared-initiative`)
+  desks/_template/            the skeleton a new member copies
+  desks/<alias>/              one person's whole desk, laid out as `desk:directory-structure`
+    AGENTS.md                 their own preferences and lessons
+    _inbox/                   notes teammates left them (`note`)
 ```
 
-## Two setups: where the team's plugin lives
+The team's plugin is in a separate tooling repository (dual-repo: `_meta/crew.json` has `tooling.repo`) or in this repository's `plugins/<name>/` (monorepo: no `crew.json`, or none with `tooling.repo`). `crew.js status` reports which, and the install command. The plugin holds only the team's own process, written as skills; `desk:content-routing` "When a team shares a workspace" owns the rest of the rule.
 
-Every Crew workspace has the floor plan above. The two setups differ only in where the team's own plugin lives:
+## Read across, write your own
 
-- **Dual-repo** (preferred for new teams): this repository holds the team's context, and a separate tooling repository holds the plugin. `_meta/crew.json` names it: `{"tooling": {"repo": "<owner>/<name>", "path": "<dir>", "plugin": "<name>"}}`. No `plugins/` folder here.
-- **Monorepo**: the plugin lives in this repository's `plugins/<name>/`. A workspace with no `_meta/crew.json`, or one without `tooling.repo`, is a monorepo.
+Read all of `desks/*/` and `_shared/`. Routine writes go to your own `desks/<alias>/`, committed and pushed straight to `main`: nobody else writes there, so nothing can conflict. Desk takes your person from the desk-list row whose `identity` is the GitHub login you act as (`DESK_PERSON` wins), and its own writes land under that desk. `desk_status` `write_scope` and `crew.js status --identity <login>` say who a session is.
 
-`crew:start-crew` writes `_meta/crew.json`; `node <Desk plugin folder>/mcp/scripts/crew.js status --repo <clone>` reports the setup and the install command, and `crew:join-crew` installs the plugin from wherever it lives.
+A path anyone may write (`_shared/`, `plugins/`, the roster, `_meta/`, the root `AGENTS.md`) goes through a short pull request: fetch the latest `main`, branch, write, open the pull request and merge it at once, retrying if `main` moved. The pull request only serializes writers; it is not a review.
 
-**What goes in the team's plugin.** Only the team's own process, written as skills. General agent-work tooling goes to Desk or Crew, employer-specific tooling that isn't team-specific goes to the employer's overlay, and shared context and evidence stay in this workspace. A change to another team's or project's repository goes through a pull request there, with a heads-up to its owner. `desk:content-routing` "When a team shares a workspace" owns the full rule.
-
-The key identity: **`desks/<alias>/` is one person's full desk** -- everything `desk:directory-structure` describes (tracks, tasks, iterations, `_planning/`, `_friction/`, `_meta/`, `_archive/`) lives *under* that prefix, unchanged. The `desks/<alias>/` prefix just re-roots the same floor plan one person at a time. A person's agent treats `desks/<alias>/` as its effective `$DESK`.
-
-## Read-across / write-own
-
-The single discipline that makes a shared workspace both powerful and safe:
-
-- **Read across everything.** Every agent READS all of `desks/*/` and all of `_shared/`. This is the superpower -- the shared brain that every agent reads, so the team gets smarter automatically and a new desk orients in minutes.
-- **Write your own by default.** Routine state belongs in the operator's `desks/<alias>/`. When a member explicitly asks you to change another member's desk, do it: their request is the authorization, and the owner's consent is not a precondition. It uses the conflict-safe contribution path below, and it does not become that owner's endorsement.
-
-Reads span the whole repo; writes scope to one subtree. Desk enforces the write side mechanically, on Claude Code and Copilot alike, with no launch setting: a session started anywhere in the clone takes its person from the desk-list row (`_meta/desks.md`) whose `identity` is the GitHub login it acts as (or from `DESK_PERSON`, which wins), and every Desk write lands under that person's `desks/<alias>/`. With several desk-list accounts signed in to gh, gh's active account is the person, as it is for `crew.js` pushes. An account that is not on the roster, or one on two rows, can read but not write. `desk_status` reports the person as `write_scope.person` and where it came from as `write_scope.source`; `crew.js status --identity <login>` reports the same for a session not yet started there (`session`). Reads and search stay repo-wide because the indexer walks the tree recursively by filename; see `desk:session-start` for the registry-awareness side.
-
-The home desk is an organizational default, not a prohibition on attributed collaboration. Never refuse a requested cross-desk change because the file is on someone else's desk, or because a Desk tool such as `desk_save` writes only your own desk: Git records who made the change and the pull request is visible to the owner. Say whose desk you touched and who asked for the change in the commit and pull request, not as a note inside the owner's file. Make only the requested change, preserve the owner's existing meaning and unrelated changes, and use the repository's established contribution path in an isolated worktree. Reconcile conflicting live writers before editing, and never overwrite concurrent work. Do not impersonate the owner, replace their perspective, or treat a contribution as agreement. A tool's actual protected-write refusal remains binding: do not change the session's person (`--person`, `DESK_PERSON`, the gh account), broaden permissions or silently switch transports to defeat it. Establish a permitted contribution route before dispatch; if none exists, preserve the proposed contribution without applying the refused mutation.
-
-## The content taxonomy -- facts vs perspectives vs decisions
-
-The core failure mode of a team knowledge base is conflating "one person's opinion" with "team fact." The shared workspace keeps three things distinct and **attributes relentlessly**:
-
-| Kind | Lives in | What it is | Who can rely on it |
-|------|----------|------------|--------------------|
-| **Facts** | `_shared/landscape/` | Externally true, team-neutral. *"Service X's control flow is a model-driven loop"* (verified from code). | Anyone. |
-| **Perspectives** | `desks/<alias>/` | What a person thinks / is doing / decided, **attributed to them**. *"Alex's posture is frontier-or-bust; here's the reasoning."* | Only as **that person's view**, labeled as theirs. |
-| **Decisions** | `_shared/decisions/` | What the team **actually agreed**, attributed to the meeting/date. | Anyone -- but only once genuinely agreed. |
-
-Three rules fall out of this:
-
-1. **A fact is not an opinion.** Before a claim goes into `_shared/landscape/`, it must be externally true and team-neutral -- verifiable independent of who holds it. If it carries a stance ("we should…", "the right move is…", "I think…"), it is a **perspective**: preserve the person's own view in `desks/<alias>/`, attributed. Shared initiative cards may also hold attributed deliberation and links to those views; sharing a location never makes a view a fact or consensus. Apply the same provenance discipline `desk:directory-structure` requires for promoted facts: inline source pointer
-   + date at write time (*"verified from Service X code-read, 2026-06-04"*).
-
-2. **Every perspective is attributed.** A perspective in `desks/alex/` is *Alex's* -- never reframe it as team gospel. This is what makes "what would Alex think about X" a clean, honest query (see `perspective-query`): the agent reads `desks/alex/` and answers **as Alex's view, labeled as his**, not as the team's position.
-
-3. **A decision is only a decision once it's agreed.** `_shared/decisions/` is **near-empty until kickoff** -- and that is correct. Recording a thing there means the team genuinely agreed it, attributed to the meeting/date that agreed it. Saying *"no team decision yet"* **is the honest answer** and is always preferable to promoting one person's preference into a fake consensus.
-
-The substrate is a **map of whose-view-is-what** -- more useful AND more honest than a false monolith. It also propagates a founder's thinking *better* than baking it in, because it travels as reasoning-with-attribution that invites the kickoff conversation rather than pre-empting it.
-
-> **False-consensus is the cardinal sin here.** The taxonomy exists precisely so "Alex's opinion" never reads as "the team's." When in doubt about whether something is a fact, a perspective, or a decision, the safe default is the **more attributed, less authoritative** bucket: perspective over fact, "not-yet-agreed" over decision.
-
-## The write protocol -- invisible conflict-safety, NOT human review
-
-This is the load-bearing behavior. The "gate" on shared paths exists purely to **serialize concurrent writes** so agents don't clobber each other -- it is **invisible to humans, and there is no review step, ever.** Path determines behavior:
-
-### Your own desk → direct push
-
-When an agent writes its own `desks/<you>/`, it is the **sole writer** of that subtree. There is no one to conflict with. The agent just **commits and pushes directly** -- no branch, no PR, no ceremony. This is the common case (notes, planning, doing docs, friction, per-person tracks/tasks).
-
-### A shared path → auto pull-`main` → branch → write → PR → merge-now
-
-A **shared path** is anything outside your own desk that multiple agents may write: `_shared/` (facts + decisions), `plugins/` (the bundled tooling source), `_shared/tracks/` (shared-track coordination cards), the team roster (`crew:roster`, for example `team/roster.md`), `_meta/desks.md` (the desk list), `_meta/crew.json` (Crew's settings), and the root `AGENTS.md` (conventions and team lessons). When an agent recognizes "this isn't my desk," it **automatically**:
-
-1. **pulls latest `main`** (so it's writing on top of everyone else's work),
-2. **branches** off that latest `main`,
-3. **writes** its change,
-4. **opens a PR**, and
-5. **merges it onto latest `main` right now** -- **retrying** the whole cycle if `main` moved under it (pull again, rebase, re-merge).
-
-There is **NO human review step.** The PR is a serialization primitive, not an approval gate. The human never sees it. This is the mechanism that prevents the commingle/clobber bug (concurrent agents sweeping each other's writes). A decision's *legitimacy* is not a review step -- it's the **attribution discipline** above (the agent records only genuinely-agreed decisions, attributed to the meeting/date). Conflict-safety ≠ correctness-review.
-
-| Path | Writer model | Write behavior |
-|------|--------------|----------------|
-| `desks/<you>/...` | sole writer | **direct commit + push** |
-| `_shared/...` | multiple writers | auto pull-`main` → branch → write → PR → merge-now (retry if main moved) |
-| `plugins/...` | multiple writers | same conflict-safe protocol |
-| `_shared/tracks/<track>/` | multiple writers | same conflict-safe protocol |
-| `AGENTS.md` (root) | multiple writers | same conflict-safe protocol |
-| `desks/<someone-else>/...` | attributed contribution only when authorized | conflict-safe contribution path; preserve owner meaning, never bypass protected scope |
-
-> **The test before any write:** *"is this path inside my own `desks/<alias>/`?"* Yes → direct push. No → establish authority and use the conflict-safe contribution protocol. Another desk requires an authorized, attributed contribution, not a home-organization veto or silent permission expansion. The agent runs this test silently.
+When a member asks you to change another member's desk, do it: their request is the authorization. Use the same path in an isolated worktree, change only what was asked, keep the owner's other work and any concurrent edit, and say in the commit and pull request whose desk it is and who asked. It is not the owner's endorsement.
 
 ### Saved means on the remote `main`
 
-Work is saved only when the workspace's remote `main` has it. A local commit, a branch in an app worktree or an unmerged pull request is not saved: teammates can't see it, and it disappears with the laptop or the worktree.
+Work is saved only when the remote `main` has it; a local commit, a branch in a worktree or an unmerged pull request is not. Land each durable write as you go: push, or push the branch and merge its pull request straight away. Before saying "saved", "done" or "ready", and before ending a turn that wrote files, run `git fetch origin main`, `git status --short --branch` and `git branch --no-merged origin/main` in the workspace checkout and your worktree, and finish whatever they show. `git merge-base --is-ancestor <your-commit> origin/main` proves a commit landed. If a push or merge fails, name the error and what is still at risk. Never call it saved.
 
-1. **Land every durable write on `main` as you go.** Commit and push right after the write, using the protocol above. If the session runs in a worktree or on a branch (a Copilot app "New worktree" session does), push the branch, open a pull request and merge it straight away, even for your own desk.
-2. **Verify the remote has it.** Run `git fetch origin main`, then `git merge-base --is-ancestor <your-commit> origin/main`; success means it is on `main`. Pushed but unmerged is not saved.
-3. **Check before you say "saved", "done" or "ready", and before ending any turn that wrote files.** In the workspace checkout and in this session's worktree, run `git status --short --branch` and `git branch --no-merged origin/main`. An uncommitted change, a commit ahead of the remote, or a branch of yours not merged into `main` means step 1 isn't finished: finish it, then answer.
-4. **If a push or merge fails, say so.** Name the error and the commit, branch or path still at risk. Never call it saved.
+## Facts, perspectives, decisions
 
-## Team lessons -- a correction taught once reaches every teammate's agents
+Attribute everything, so one person's view never reads as the team's.
 
-When someone corrects an agent and the correction holds for the whole team's work, it goes in the root `AGENTS.md` of the repository the team works in, in its `## Lessons` section, one rule per line, attributed and sourced: `- **<rule>.** <detail> (<alias>, <date>; <source>)`. That repository may be this shared workspace or a team code repository that is not a desk at all; the root `AGENTS.md` is the file the team's agents load there, so nobody has to teach the same thing to their own agents, or a teammate's, again.
-
-Who loads that file:
-
-- **Desk's session start** prints the shared workspace's root `AGENTS.md`, then the person's own `desks/<alias>/AGENTS.md`, on every host.
-- **Copilot CLI and Codex** load a repository's `AGENTS.md` by themselves when they work in it.
-- **Claude Code** loads `CLAUDE.md`, not `AGENTS.md`. It reads `AGENTS.md` only when `CLAUDE.md` imports it (a line `@AGENTS.md`) or is a link to it, so a team repository used from Claude Code without Desk needs that line.
-
-Which home a correction gets follows the taxonomy above:
-
-| The correction is | Home | Who it reaches |
+| Kind | Lives in | Say it as |
 |---|---|---|
-| One person's preference ("I want shorter replies") | that person's `desks/<alias>/AGENTS.md` | that person's agents |
-| True of the team's work and backed by a source: an agreed decision in `_shared/decisions/`, or, where the repository keeps no decision records, a team statement with who said it, where and when | root `AGENTS.md`, `## Lessons` | every teammate's agents |
-| How Desk or Crew itself behaves | an improvement card against the skill or tool that owns it | everyone who installs the plugin, once it ships |
+| Fact | `_shared/landscape/` | a team fact, citing its source and date |
+| Perspective | `desks/<alias>/` | that person's view, from the first word |
+| Deliberation | `_shared/tracks/<slug>/` | each view attributed; location is not agreement |
+| Decision | `_shared/decisions/` | what the team agreed, with who and when |
 
-A team lesson binds every teammate's agents, so one person cannot make one up: it cites where it comes from. Where the repository keeps `_shared/decisions/`, the source is the decision record the team agreed, so record the decision there first (the attribution discipline above); elsewhere it is who said it, where and when, with the date. When in doubt, keep it personal: one person's preference recorded as a team lesson is a false consensus.
+A claim with a stance ("we should", "I think") is a perspective, not a fact. A decision exists only once the team agreed it; "no team decision recorded" is the honest answer and invites the conversation. When unsure, pick the more attributed, less authoritative home.
 
-`lesson_add` does the routing and the writing. `scope: "personal"` writes the person's own `AGENTS.md` directly, because it is inside their desk. `scope: "team"` takes `repo` (the local clone; this workspace by default) and `source`, and runs the shared-path protocol above itself: it fetches the default branch, writes the line in a temporary worktree, pushes a branch, opens the pull request and merges it, rebuilding on top of a teammate's change when the merge conflicts. Its reply says `merged` (with the pull request and merge commit), `pr_open` (and why it could not merge) or `failed` (and the step it stopped at), and whether Claude Code loads the file. `scope: "desk"` opens the improvement card. Tell the person what the reply says; a team lesson is in effect only when it is merged.
+## Questions about people and agreement
 
-## Notes for a teammate
+These read only; reading grants no write authority.
 
-To tell one teammate something they should see at their next session, leave them a note with `note` (`crew:leave-note`). It is the one write into another person's desk that needs no further authority: it adds a single new, attributed file to their `desks/<alias>/_inbox/` through the shared-path protocol above, and never touches anything else there. The note relays your understanding in your own voice, never in anyone else's, and the whole workspace can read it. Their session start lists it until they call `note` with `ack`, which marks it acknowledged in their own desk.
+- **"What would Alex think about X?"** Read `desks/alex/` and initiative cards for contributions attributed to them, and follow their links. Answer as Alex's view, labeled so. If neither records a view, say the workspace doesn't, and don't attribute a fact or an unlabeled contribution to them. Report conflicting views separately: "Alex thinks A; Sam thinks B".
+- **"What is Sam working on?"** Read their desk now (tracks, tasks, recent work) rather than a cached summary, and report what it shows. Work that moved to another clone is read there, live.
+- **"Is X agreed?"** In `_shared/decisions/`: agreed, as of its date. In `_shared/landscape/`: a fact, not a decision. Only on a desk: that person's take. Only proposed in `_shared/tracks/`: deliberation, not agreed unless a linked decision says so. A view in the repo with no holder is reported as unattributed.
+- **"Who is X?" or "who knows Y?"** Answer from the roster, then members' desks, and say which. The roster is the team's people file (the team and everyone it works with), found where the root `AGENTS.md` or README names it, else an existing `roster.md` or `team/roster*`, else `_shared/landscape/roster.md`. It is not `_meta/desks.md`. Add or change one entry in the file's own format through a pull request: facts only, each with its source, nothing a person asked to keep out, and no opinions about people (those are perspectives, on the holder's desk). A member's own entry is theirs to correct.
 
-## Shared tracks (when several people work one effort)
+## Team lessons
 
-Shared tracks recur, so handle them lightly: the shared track's coordination card/index lives in `_shared/tracks/<track>/` (a shared path → conflict-safe writes), while **each person's actual work on it stays in their own `desks/<alias>/` subtree and links to the shared card.** Shared card = coordination; the work itself = scoped. The default stays read-across / write-own; only the small coordination surface is shared.
+A correction that holds for the whole team goes into the root `AGENTS.md` of the repository the team works in, under `## Lessons`, one line each: `- **<rule>.** <detail> (<alias>, <date>; <source>)`. A personal preference goes into that person's `desks/<alias>/AGENTS.md`; how Desk or Crew itself behaves becomes an improvement card. A team lesson cites an agreed decision or who said it, where and when; when unsure, keep it personal. `lesson_add` routes and writes all three (`scope: "team"` merges its own pull request, and its reply says whether it merged). Copilot CLI and Codex load a repository's `AGENTS.md` themselves; Claude Code needs `@AGENTS.md` in `CLAUDE.md`.
 
-Call these shared efforts **initiatives**. When a request starts a task, track or effort that involves or seeks collaborators, or an existing personal task starts to, suggest an initiative (`crew:shared-initiative`) before keeping it on one desk. Use `crew:shared-initiative` to discover, reuse, create, update or query them. New cards use `_shared/tracks/<track>/README.md`; existing entries keep their names and content. The card holds outcome, dated focus, sourced contributions, work links, open questions, attributed proposals, decision links and evidence. Shared deliberation is not consensus, and task discovery assigns nobody work.
+## Notes and shared efforts
 
-## Preparing for a meeting together
+- `note` tells one teammate something at their next session start: a handoff, a change that affects them, a question. Write it in your own voice and relay what someone else thinks as your understanding of it. Everyone in the workspace can read it, so put nothing private in it. Its reply says whether it merged. Acknowledge notes left for you with `note` and `ack` once the operator has seen them.
+- Work that involves or seeks other collaborators belongs in a shared initiative: suggest one before keeping it on one desk (`crew:shared-initiative`).
+- Two or more members preparing for one meeting keep the prep in one shared folder, reusing an existing one for that date and subject, else where the workspace already keeps meeting records, else `_shared/meetings/<YYYY-MM-DD>-<slug>/`. Its README says when, who organizes and the goal with a link to where they said it; drafts live under `prep/`, edited by everyone through their agents, and the capture lands there afterward. Each member's desk links to it and keeps their own view there.
 
-When two or more members prepare for the same meeting, their agents keep that prep in one shared folder for the meeting, never in anyone's desk. Prep split across desks turns into parallel drafts that nobody reconciles, and the meeting's capture then has no obvious home.
+## Setting up
 
-1. **Reuse or create the folder.** First search the workspace for a folder for this meeting (same date and subject) and reuse it. Otherwise create it where the workspace already keeps meeting records: the location its root `AGENTS.md` or README names, or an existing meetings collection. If the workspace has neither, use `_shared/meetings/<YYYY-MM-DD>-<slug>/`, dated by the meeting day.
-2. **Give it a README a person can read cold:** when the meeting is, who organizes it, its goal in the organizer's own words with a link to where they said it, the pre-read, a `## Prep` section and a `## Capture` section.
-3. **Keep prep under `prep/`:** agenda, notes, questions and one working draft of each artifact, such as a deck outline. Everyone edits that draft through their agent; nobody starts a parallel copy in their desk or beside it.
-4. **Point each participant's desk at it.** Each participant's agent adds a one-line link to the folder from that person's own task card or desk README instead of copying its content. A participant's own view on the meeting stays in their desk, attributed; outcomes go to `_shared/decisions/` only once agreed.
-5. **Land the capture in the same folder** after the meeting: the transcript, chat and source records, following the workspace's capture procedure, with the meeting added to its collection's index if there is one.
-
-The folder is a shared path, so every write to it uses the conflict-safe write protocol above.
-
-## Graceful degradation -- plain markdown first
-
-The shared repo must be useful as **plain markdown** to a teammate who never runs an agent, and superpowered for those who do -- never gate participation on agent fluency. `desks/<alias>/` and `_shared/` are just folders of markdown; the README is a plain front page. Author every file so a human reading it cold, with no agent, can navigate and understand it. The agent layer is additive.
-
-## Cross-references
-
-- `desk:directory-structure` -- the single-operator floor plan this skill overlays. The `desks/<alias>/` subtree is exactly that layout, re-rooted.
-- `perspective-query` -- operationalizes this taxonomy: "what would `<person>` think / what's `<person>` doing / what's agreed vs just fact," with the attribution discipline this skill defines.
-- `desk:session-start` -- reads `_meta/desks.md` and surfaces the desk-set + "which desk am I."
-- `crew:start-crew` -- gives a new or existing repository this floor plan, monorepo or dual-repo.
-- `crew:leave-note` -- leaving a teammate a note, and acknowledging the ones left for you.
-- `desk:git-hygiene` -- the underlying push / branch / merge mechanics the write protocol drives.
-- Your overlay's identity skill -- the identity your writes push under. The generic crew layer is identity-neutral; a corporate overlay supplies the concrete account model.
+`crew:start-crew` makes a repository a Crew workspace; `crew:join-crew` adds a member.

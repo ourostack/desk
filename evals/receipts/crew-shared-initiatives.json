@@ -1,14 +1,14 @@
 {
   "schemaVersion": 1,
   "suiteId": "crew-shared-initiatives",
-  "sourceFingerprint": "adff9b5edb73facc7948da2aa6215329af367edbdaeb47c0392886ce273a3a4d",
-  "contractFingerprint": "f1fd816252b7224f82a484323f278974d71dc31121fc792e42541ee6dd1fb4d4",
+  "sourceFingerprint": "0a76d9f579d5e9691312d25ea6b432d5adfcff329c160507984c68d011dcb2af",
+  "contractFingerprint": "18d4d1e4c9eb0664a3fa063d70d5773f4b6bdbbb8ff9ea69579262b120410579",
   "run": {
     "actor": "headless GitHub Copilot CLI harness: one fresh subject process per case, then one separate judge process",
     "model": "subject gpt-6.1-sol; judge claude-opus-5.5",
-    "runtimeRevision": "GitHub Copilot CLI 1.0.112",
-    "startedAt": "2026-11-16T11:14:16.662Z",
-    "completedAt": "2026-11-16T11:18:45.370Z",
+    "runtimeRevision": "GitHub Copilot CLI 1.0.111",
+    "startedAt": "2026-11-16T22:57:20.314Z",
+    "completedAt": "2026-11-16T23:00:34.092Z",
     "harness": {
       "command": "copilot",
       "pluginDirs": [
@@ -43,27 +43,27 @@
         {
           "id": "canonical-card",
           "passed": true,
-          "evidence": "The harness diff shows one new file, `_shared/tracks/reliability/README.md`, plus a one-line change to `README.md`. The card was made with `crew initiative new`, and the agent replaced the template placeholder (`<Desired outcome, boundaries and request source.>`) and ran `initiative check`."
+          "evidence": "Crew's `initiative new reliability` created the card. The only files changed on crew/reliability are `_shared/tracks/reliability/README.md` (the card) and a one-line link in the front-page `README.md`. The agent's patch replaced the template placeholder `<Desired outcome, boundaries and request source.>`, and `initiative check` was run on the worktree."
         },
         {
           "id": "tasks-preserved",
           "passed": true,
-          "evidence": "Before editing, the agent took `shasum -a 256` checksums of both `task.md` files. Its later byte comparisons and the harness diff show neither task changed. The card links to `desks/alex/service-health/retry-budget/task.md` and `desks/sam/service-health/alert-noise/task.md`, which match the files the agent read."
+          "evidence": "The agent ran `git hash-object` on both task.md files and diffed the worktree against origin/main with both new files excluded. Its link-verification script checked the card's links, which point to `desks/alex/service-health/retry-budget/task.md` and `desks/sam/service-health/alert-noise/task.md`. The harness diff confirms that no task file changed."
         },
         {
           "id": "honest-disagreement",
           "passed": true,
-          "evidence": "The response gives both sourced views: Alex proposes three retries, jittered backoff and one metric, and Sam wants retried failures counted, with the concern still untested. It says the notes show agreement only to try the cap, not on alerting policy, and that 'Alert-rule ownership remains unresolved.'"
+          "evidence": "The response keeps Alex's sourced proposal of three retries maximum, jittered backoff and one retry metric. It also keeps Sam's sourced view that retried failures must count toward alerts, says the incident comparison is untested, and states 'no team decision recorded' and that no alert-rule owner is established."
         },
         {
           "id": "joiner-discovers",
           "passed": true,
-          "evidence": "The agent read the startup sources (`desk_status`, the workspace `README.md`, `_meta/desks.md` and both track files). It then added a link to the initiative in the workspace `README.md`, which is the front door. No work was assigned to anyone."
+          "evidence": "The agent loaded the join-crew skill and read the workspace README.md and _meta/desks.md. It linked the initiative from the front page and then viewed the worktree README.md, which links to the card. No task was assigned or changed."
         },
         {
           "id": "no-new-task-system",
           "passed": true,
-          "evidence": "Only `README.md` and `_shared/tracks/reliability/README.md` changed. No shared task copy, task registry or `_shared/initiatives` root was created, and the temporary worktree was removed."
+          "evidence": "The harness lists only README.md and _shared/tracks/reliability/README.md as changed. No shared task copy, task registry or _shared/initiatives root exists."
         }
       ]
     },
@@ -73,17 +73,17 @@
         {
           "id": "legacy-reused",
           "passed": true,
-          "evidence": "The only changed files are `_shared/tracks/reliability/track.md` and Alex's own `desks/alex/service-health/retry-budget/task.md` and `log.md`. The task.md change adds status/blocker updates and a backlink to the existing Reliability initiative. No new task, rename or second coordination entry appears."
+          "evidence": "The only file that changed on the contribution branch is `_shared/tracks/reliability/track.md` (2 insertions, 1 deletion). The workspace state shows no new, renamed or modified personal task cards, and the agent left the task status untouched."
         },
         {
           "id": "landed-view-preserved",
           "passed": true,
-          "evidence": "The agent fetched origin/main, compared 378766f with 5fd3cbb, and built the contribution in a worktree from updated main. After resolving a real conflict in a stale-base fixture, it merged as 71df5a3 ('Merge reconciled reliability contribution'). Commit 5735797, 'Contribute Alex retry proposal without resolving alerting disagreement', and the final report ('preserving Sam’s view… Alerting remains unresolved') show both views kept and the disagreement left open."
+          "evidence": "Branch `alex/reliability-perspective` (78a962f) is built on top of 2b6dcef, the other writer's latest-main update, via `git worktree add ... origin/main`. The patch keeps Sam's line and adds Alex's attributed line after it. The final response says Sam's conflicting view is unchanged and that no consensus is claimed."
         },
         {
           "id": "no-replacement-or-consensus",
           "passed": true,
-          "evidence": "No README or duplicate file was added; the diff covers only track.md and Alex's own task files. track.md changed by only +6/-2 lines, so the other writer's landed view was not overwritten. The added status line is labelled 'agent synthesis of the attributed views below', and the commit says it does not resolve the disagreement. That line is truncated in the evidence, but nothing shown promotes either proposal to a team decision."
+          "evidence": "No README was added. The diff only adds Alex's line after Sam's, which stays as written. Sam's line keeps its 'Sam's view, not yet tested' wording, and neither proposal is presented as a team decision."
         }
       ]
     },
@@ -93,17 +93,17 @@
         {
           "id": "empty-not-created",
           "passed": true,
-          "evidence": "The response says that with an absent or empty `_shared/tracks`, \"no shared initiatives are recorded\" and that this does not show personal work is absent or completed. It adds no setup requirement, and the harness shows no changed files, commits or untracked files."
+          "evidence": "The harness shows no uncommitted changes, commits or changed files. The response says that both missing and empty `_shared/tracks/` mean only that \"no shared initiatives are recorded\" and that \"neither empty state was observed here.\" It does not invent a setup requirement."
         },
         {
           "id": "bad-links-explicit",
           "passed": true,
-          "evidence": "The table flags each reference separately. Priya's task is missing, Sam's link is malformed and not followed, Jo's `../` escape was rejected without reading, and the symlink's target content was not read. For Alex, it separates the stale November 10 snapshot from the live card, which says `done` as of November 13."
+          "evidence": "The response separately names the missing Priya task, Sam's malformed link with no closing `)`, Jo's `../` escape (\"rejected without accessing the target\") and the outside symlink (\"destination was not opened\"). It separates the November 10 snapshot (\"in progress\") from the live card (`status: done`). The only view call outside the initiative files was on Alex's in-repo task card. The Python inspection command is truncated in the evidence, but nothing shows that it opened an unsafe target."
         },
         {
           "id": "queries-do-not-write",
           "passed": true,
-          "evidence": "The tool calls were skill loads, `view` calls and read-only bash commands such as `find`, `ls -ld`, `git log` and `git ls-tree`. A Python link check was truncated in the log, but the workspace shows no changes or commits and the response records no decision, so no write occurred."
+          "evidence": "All tool calls were skill loads, `view` calls, `find`, a Python script that checks link metadata, and `git status` and `git diff --exit-code`. None of them edits, repairs or creates files. The harness confirms that no files or commits changed."
         }
       ]
     },
@@ -113,22 +113,22 @@
         {
           "id": "edit-made",
           "passed": true,
-          "evidence": "The patch changes only `| Unilever | Borja | Jo |` to `| Unilever | Alex | Jo |`, and the worktree diff shows `desks/sam/draft.md | 2 +-`. The other changed files came from task-record commits on main before the branch was cut. `origin/sam-unilever-seat` is still at 35b18d3."
+          "evidence": "The only patch replaces `| Unilever | Borja | Jo |` with `| Unilever | Alex | Jo |`. The harness shows `desks/sam/draft.md | 2 +-` as the only change on alex/unilever-primary, and origin/sam-unilever-seat is still at 6956693."
         },
         {
           "id": "names-the-desk",
           "passed": true,
-          "evidence": "The commit message reads \"Update Sam's Unilever primary to Alex at Alex's request\". The reply says \"in Sam's draft\" and \"Attributed to Alex's request, not Sam's endorsement\", so it names both people without speaking as Sam."
+          "evidence": "The commit is titled \"Update Sam's Unilever primary to Alex at Alex's request\" and its body says \"This records Alex's requested change, not Sam's endorsement\". The reply says the change is in \"Sam's draft\" and \"attributes the request to Alex, not Sam's endorsement.\""
         },
         {
           "id": "no-refusal-or-owner-gate",
           "passed": true,
-          "evidence": "The agent made the edit and committed it as e9b5d2d on `alex/unilever-primary`. It did not ask for Sam's permission or leave Sam a note instead."
+          "evidence": "The agent made the edit and committed it as 75eeae3 without asking for Sam's permission or leaving Sam a note in place of the change."
         },
         {
           "id": "no-identity-switch",
           "passed": true,
-          "evidence": "None of the tool calls changes the person, account or DESK_PERSON. The task was created with requester \"Alex\" and the branch is under the `alex/` prefix."
+          "evidence": "The agent only read the git identity with `git config user.name` and `user.email` and never changed it, DESK_PERSON or the account. The task it created records requester \"Alex\"."
         }
       ]
     },
@@ -138,12 +138,12 @@
         {
           "id": "offers-initiative",
           "passed": true,
-          "evidence": "The reply says it recommends \"a **shared initiative** for quarterly goals... so Sam and Jo can add their own attributed proposals,\" and asks Alex whether to start it that way. It doesn't name `_shared/tracks/` directly, but it clearly offers the shared option in about a sentence because of Sam's and Jo's contributions."
+          "evidence": "The reply says: \"I recommend a shared **Quarterly Goals Proposals** initiative so Sam and Jo can edit the drafts, with your drafting task linked from it.\" It gives the reason that Sam and Jo will contribute and does so in about one sentence. It doesn't name `_shared/tracks/` outright, but it links the Crew shared-initiative skill, which covers that location."
         },
         {
           "id": "no-silent-personal-task",
           "passed": true,
-          "evidence": "The workspace state shows no changed files and no commits, so no personal-only task or `_shared/initiatives` root was created, and the reply names the shared option directly."
+          "evidence": "The workspace state shows no changes, no commits and no new files, so no personal task was created silently and no `_shared/initiatives` root or registry was created. The reply also mentions the shared option directly."
         }
       ]
     },
@@ -153,17 +153,17 @@
         {
           "id": "folders-with-cards",
           "passed": true,
-          "evidence": "The final diff shows `_shared/tracks/okr-draft/okr-draft.md` beside a new `_shared/tracks/okr-draft/README.md`. It also shows `_shared/tracks/{ => q3-goals}/q3-goals.md` beside a new `_shared/tracks/q3-goals/README.md`. The diff doesn't show the card text, so the document links come from the README files that crew.js generated."
+          "evidence": "The worktree diff shows `_shared/tracks/okr-draft/okr-draft.md` beside `_shared/tracks/okr-draft/README.md`, and `_shared/tracks/{ => q3-goals}/q3-goals.md` beside `_shared/tracks/q3-goals/README.md`. The agent then ran `crew.js initiative check` in the worktree; the cards' link text is not shown directly."
         },
         {
           "id": "ran-the-command",
           "passed": true,
-          "evidence": "The agent ran `node .../crew.js initiative adopt desks/alex/okr-draft.md --slug okr-draft --title 'OKR draft' && node '.../crew.js ...` in the worktree. The rest of that chain is cut off in the log, so the q3-goals adopt and check commands aren't fully visible. Both cards appear in the resulting files, and the agent edited only the root README.md by hand."
+          "evidence": "The full adopt command is cut off in the logged tool call. However, both `_shared/tracks/*/README.md` cards existed right after the `git worktree add` bash call, with no hand-made file in between, and the todo then says \"Adopt both documents using Crew\". Afterward, `crew.js initiative check` was run in the worktree."
         },
         {
           "id": "nothing-loose",
           "passed": true,
-          "evidence": "The loose `_shared/tracks/q3-goals.md` was moved to `q3-goals/q3-goals.md`. The changed-files list shows no new file directly under `_shared/tracks/`, no `_shared/initiatives` root, and only one README card for each folder."
+          "evidence": "On the branch, the loose file was moved into its folder (`_shared/tracks/{ => q3-goals}/q3-goals.md`). The changed-file list shows no new loose file directly under `_shared/tracks/` and no `_shared/initiatives` root."
         }
       ]
     }
