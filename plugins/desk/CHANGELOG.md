@@ -1,5 +1,15 @@
 # desk plugin — changelog
 
+## 3.2.198 — 2026-11-16
+
+### Running sessions follow the newest release
+
+A Copilot session no longer has to restart to get what a release changed in Desk's hooks and skills. The hooks a session registered now run the newest release's scripts when Agency's cache or Desk's own release copies hold one, and when the agent loads a skill whose text changed in a newer release (Desk's or another Agency plugin's), a new `postToolUse` hook hands the agent the current text and says where that release's docs are. Desk's release copies now keep the skills, docs, hooks and activation files beside the server. Desk's tools already swapped in between calls. The plugin-update line is said only for what the host fixes at its start: the list of skills and their descriptions, agents, tool descriptions and the hook registration. `DESK_HOOKS_CURRENT=0` turns the hook delegation off.
+
+An unknown tool's refusal, from `desk` or Desk Browser (`desk-web`), now names that server's tools and the closest match, so an agent that misremembers a tool name, such as `desk_task_create` for `task_create`, can retry without listing the tools again.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.197 — 2026-11-16
 
 Crew's skills shrink from seven to four, and its always-on skill descriptions from 1568 to 898 bytes. `crew:perspective-query` and `crew:roster` are now sections of `crew:shared-desk-conventions`, and `crew:leave-note` is gone because the `note` tool's description already carries its guidance. `shared-desk-conventions`, `join-crew`, `start-crew` and `shared-initiative` are cut to what an agent needs on use (75 KB of skill text becomes 26 KB), and `join-crew` no longer carries the Epoch 1 migration steps. The measured table is in [Crew's footprint](../../docs/crew-footprint.md).
