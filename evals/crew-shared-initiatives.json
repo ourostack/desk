@@ -6,7 +6,6 @@
     "plugins/crew/skills/shared-initiative/SKILL.md",
     "plugins/crew/skills/shared-initiative/template.md",
     "plugins/crew/skills/shared-desk-conventions/SKILL.md",
-    "plugins/crew/skills/perspective-query/SKILL.md",
     "plugins/crew/skills/join-crew/SKILL.md",
     "plugins/desk/skills/session-start/details.md",
     "evals/worlds/crew-shared-initiatives/cold-create-discover-update-query/desk/AGENTS.md",
@@ -49,7 +48,7 @@
     "evals/worlds/crew-shared-initiatives/empty-and-unsafe-read-only/desk/desks/alex/service-health/track.md",
     "evals/worlds/crew-shared-initiatives/empty-and-unsafe-read-only/desk/desks/sam/README.md"
   ],
-  "reviewedSourceFingerprint": "adff9b5edb73facc7948da2aa6215329af367edbdaeb47c0392886ce273a3a4d",
+  "reviewedSourceFingerprint": "0a76d9f579d5e9691312d25ea6b432d5adfcff329c160507984c68d011dcb2af",
   "requirements": [
     { "id": "single-home", "description": "Reuse existing shared tracks; new initiatives use a README in the same home." },
     { "id": "preserve-work", "description": "Keep personal tasks, ownership and state unchanged unless separately authorized." },

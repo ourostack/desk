@@ -27,10 +27,9 @@ the identity skin (how a teammate's writes authenticate); this plugin is the sub
 
 ## Skills
 
-- `shared-initiative` -- discover, reuse, create, adopt, contribute to and query shared efforts under `_shared/tracks/`; `crew.js initiative new|adopt|check` lays each out as `<slug>/README.md`, and `check` names the fix for anything that isn't; keep personal tasks in place and shared deliberation attributed.
-- `shared-desk-conventions` -- the layout, the taxonomy, the write protocol and what "saved" means (merged on the remote `main`), team lessons, preparing for a meeting together in one shared folder, and what belongs in the team's own plugin.
-- `perspective-query` -- the read side: answer perspective- and status-shaped questions honestly.
+- `shared-desk-conventions` -- the layout, the taxonomy, the write protocol, what "saved" means (merged on the remote `main`), answering "what does `<person>` think", "what are they working on", "is it agreed" and "who is X" (the roster), team lessons, notes and meeting prep.
+- `shared-initiative` -- discover, reuse, create, adopt, contribute to and query shared efforts under `_shared/tracks/`; `crew.js initiative new|adopt|check` lays each out as `<slug>/README.md`.
 - `join-crew` -- vendor-neutral onboarding; an overlay supplies identity, transport, and private tooling.
 - `start-crew` -- start a workspace in a new or existing repository, monorepo or dual-repo.
-- `roster` -- the team's people file: the team and everyone it works with; joining ends with a short interview that adds the newcomer.
-- `leave-note` -- leave a teammate a dated, attributed note (`note`) that their session start lists until they acknowledge it (`note` with `ack`); relay someone's thinking as your understanding, never in their voice; the whole workspace can read it.
+
+Notes between teammates are the `note` tool; its description carries the guidance.

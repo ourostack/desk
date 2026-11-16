@@ -12,8 +12,8 @@ test("shared-desk-conventions defines saved as merged on the remote main", () =>
   assert.match(frontmatter, /before saying work is saved, done or ready/u)
 
   const section = skill.split("### Saved means on the remote `main`")[1]?.split("\n## ")[0] ?? ""
-  assert.match(section, /worktree or on a branch[\s\S]+open a pull request and merge it straight away/u)
+  assert.match(section, /branch in a worktree[\s\S]+merge its pull request straight away/u)
   assert.match(section, /git merge-base --is-ancestor <your-commit> origin\/main/u)
-  assert.match(section, /before ending any turn that wrote files[\s\S]+git status --short --branch[\s\S]+git branch --no-merged origin\/main/u)
+  assert.match(section, /before ending a turn that wrote files[\s\S]+git status --short --branch[\s\S]+git branch --no-merged origin\/main/u)
   assert.match(section, /Never call it saved/u)
 })
