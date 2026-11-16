@@ -207,7 +207,7 @@ async function runSync({
 
   const moved = catchUpBehind({ root, spawnGit })
   if (moved.state === "behind" && moved.reason === "local_changes") {
-    return unresolved({ root, reason: "local_changes_in_the_way", cause: "local_changes", paths: moved.paths ?? [], spawnGit, timeoutMs: GIT_TIMEOUT_MS })
+    return unresolved({ root, reason: "local_changes_in_the_way", cause: "local_changes", paths: moved.paths, spawnGit, timeoutMs: GIT_TIMEOUT_MS })
   }
   return { state: "synced" }
 }

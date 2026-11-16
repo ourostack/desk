@@ -384,20 +384,11 @@ export function deliver({ root, env = process.env, spawnGit = spawnSync, deliver
 // Moving the shared checkout to what was delivered, without overwriting anyone's work.
 // ---------------------------------------------------------------------------
 
-const OVERWRITTEN_LIST = /^(?:error: )?The following untracked working tree files would be overwritten by (?:merge|checkout):\s*$/u
 const OVERWRITTEN_ONE = /^(?:error: )?Untracked working tree file '(.+)' would be overwritten by (?:merge|checkout)\.?\s*$/u
 
-/** The untracked files Git named as in the way of a merge or checkout, from its own error text, in either of its two forms. */
+/** The untracked files `git read-tree -m -u` named as in the way, from its own error text. */
 function namedUntrackedPaths(stderr) {
-  const found = []
-  const text = String(stderr ?? "").split(/\r?\n/u)
-  for (let index = 0; index < text.length; index += 1) {
-    const one = OVERWRITTEN_ONE.exec(text[index])
-    if (one !== null) found.push(one[1])
-    if (!OVERWRITTEN_LIST.test(text[index])) continue
-    while (index + 1 < text.length && text[index + 1].startsWith("\t")) found.push(text[(index += 1)].slice(1))
-  }
-  return found
+  return String(stderr ?? "").split(/\r?\n/u).flatMap((line) => OVERWRITTEN_ONE.exec(line)?.[1] ?? [])
 }
 
 // An untracked file in the way whose bytes are exactly the incoming file's is removed: the checkout puts the same bytes back.
