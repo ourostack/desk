@@ -126,7 +126,7 @@ test("a newer release that changes only what updates in place is not announced; 
 })
 
 test("a Desk that follows skill text and hook scripts announces only what the host fixes: the skill list, descriptions and hook registration", async () => {
-  const helpers = { "hooks/lib/current-release.cjs": "//", "hooks/copilot-skill-current.cjs": "//", "hooks/copilot-hooks.json": "{}", "skills/s/SKILL.md": "---\nname: s\ndescription: one\n---\nold body" }
+  const helpers = { "hooks/lib/current-release.cjs": "//", "hooks/copilot-skill-current.cjs": "//", "hooks/copilot-hooks.json": "{}", "skills/s/SKILL.md": "---\nname: s\ndescription: one\n---\nold body", "skills/plain/SKILL.md": "no frontmatter", "skills/bare/notes.md": "a folder with no SKILL.md" }
   const loadedFiles = (a) => Object.entries(helpers).forEach(([rel, text]) => { mkdirSync(path.dirname(path.join(a.pluginRoot, rel)), { recursive: true }); writeFileSync(path.join(a.pluginRoot, rel), text) })
   const release = (files) => [{ spec: spec("desk", "release"), name: "desk", version: "3.2.168", files: { ...helpers, ...files } }]
   const body = await agency({ loaded: { desk: "3.2.154" }, fetched: release({ "skills/s/SKILL.md": "---\nname: s\ndescription: one\n---\nnew body", "hooks/copilot-session-start.cjs": "new" }) })
