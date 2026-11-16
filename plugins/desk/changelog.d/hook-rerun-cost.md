@@ -1,0 +1,1 @@
+A hook that checks for a newer release now opens only the cache entries of its own plugin, so the check stays a few small file reads however many plugins Agency has cached. A test shows that nothing re-runs when the newest release on disk is the running one, and records a hook's wall time with and without the check.

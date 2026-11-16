@@ -70,8 +70,10 @@ function releasesOf({ name, session, env, home }) {
   const found = [];
   const cache = path.join(path.dirname(path.dirname(session)), "cache");
   const entries = readJson(path.join(cache, "cache_index.json"))?.entries;
+  // Only this plugin's entries are worth a manifest read: a hook runs on every event.
+  const wanted = new RegExp(`[:/]${name.replace(/[^\w-]/gu, "\\$&")}@`, "u");
   for (const entry of Object.values(entries && typeof entries === "object" ? entries : {})) {
-    if (typeof entry?.spec !== "string" || PINNED.test(entry.spec) || typeof entry.dir_name !== "string" || !/^[\w.-]+$/u.test(entry.dir_name)) continue;
+    if (typeof entry?.spec !== "string" || !wanted.test(entry.spec) || PINNED.test(entry.spec) || typeof entry.dir_name !== "string" || !/^[\w.-]+$/u.test(entry.dir_name)) continue;
     const dir = path.join(cache, "entries", entry.dir_name);
     const there = manifest(dir);
     if (there !== null && there.name === name) found.push({ ...there, dir });
