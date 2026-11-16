@@ -388,7 +388,7 @@ const OVERWRITTEN_LIST = /^(?:error: )?The following untracked working tree file
 const OVERWRITTEN_ONE = /^(?:error: )?Untracked working tree file '(.+)' would be overwritten by (?:merge|checkout)\.?\s*$/u
 
 /** The untracked files Git named as in the way of a merge or checkout, from its own error text, in either of its two forms. */
-export function namedUntrackedPaths(stderr) {
+function namedUntrackedPaths(stderr) {
   const found = []
   const text = String(stderr ?? "").split(/\r?\n/u)
   for (let index = 0; index < text.length; index += 1) {
