@@ -10,20 +10,22 @@ import { TOOL_INPUT_SCHEMAS } from "../../../../../plugins/desk/mcp/src/tool-sch
 
 const repoRoot = path.resolve(fileURLToPath(new URL("../../../../..", import.meta.url)))
 const mcp = path.join(repoRoot, "plugins", "desk", "mcp")
-const ACTIONS = ["desk_recall", "desk_skill"]
+const ACTIONS = ["desk_recall", "desk_skill", "improvement_next"]
 
-test("the generated action output is what its declarations produce", () => {
-  const result = spawnSync(process.execPath, [
-    path.join(mcp, "src", "lib", "ouro-actions", "ouro-actions.mts"), "check",
-    path.join(mcp, "src", "actions", "desk-read.actions.mts"), path.join(mcp, "src", "actions", "generated"),
-  ], { encoding: "utf8" })
-  assert.equal(result.status, 0, result.stdout + result.stderr)
-})
+for (const group of ["desk-read", "desk-session"]) {
+  test(`the generated output of ${group} is what its declarations produce`, () => {
+    const result = spawnSync(process.execPath, [
+      path.join(mcp, "src", "lib", "ouro-actions", "ouro-actions.mts"), "check",
+      path.join(mcp, "src", "actions", `${group}.actions.mts`), path.join(mcp, "src", "actions", "generated", group),
+    ], { encoding: "utf8" })
+    assert.equal(result.status, 0, result.stdout + result.stderr)
+  })
+}
 
-test("the read tools are served from the generated tools, with their read-only hints", () => {
+test("the action tools are served from the generated tools, with their consent hints", () => {
   for (const name of ACTIONS) {
     assert.equal(TOOL_INPUT_SCHEMAS[name], ACTION_TOOLS[name].inputSchema, `${name} input is the generated one`)
     assert.equal(TOOL_DESCRIPTIONS[name], ACTION_TOOLS[name].description, `${name} description is the generated one`)
-    assert.equal(ACTION_TOOLS[name].annotations.readOnlyHint, true)
+    assert.equal(ACTION_TOOLS[name].annotations.readOnlyHint, name !== "improvement_next", `${name} read-only hint follows its consent`)
   }
 })

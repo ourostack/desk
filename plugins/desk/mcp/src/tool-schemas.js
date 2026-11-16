@@ -344,7 +344,6 @@ const HAND_WRITTEN_INPUT_SCHEMAS = Object.freeze({
     plugin: text("The plugin the improvement is in; defaults to \"desk\"."),
     signal: text("The rollups measure the improvement moves, when known."),
   }, ["source", "id"]),
-  improvement_next: schema({ session: text("The session's UUID, when known.") }),
   improvement_update: schema({
     key: text("The card's key, as improvement_next returned it."),
     claim_id: text("The claim_id improvement_next returned."),

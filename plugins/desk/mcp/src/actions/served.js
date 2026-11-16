@@ -1,5 +1,6 @@
 // The tools whose title, description, input schema and annotations are generated from the declarations in
-// actions/desk-read.actions.mts (ouro-actions generate). Dependency-free: a JSON import, read before the runtime pack.
-import generated from "./generated/mcp.json" with { type: "json" }
+// actions/*.actions.mts (ouro-actions generate, one folder per file). Dependency-free: JSON imports, read before the runtime pack.
+import read from "./generated/desk-read/mcp.json" with { type: "json" }
+import session from "./generated/desk-session/mcp.json" with { type: "json" }
 
-export const ACTION_TOOLS = Object.freeze(Object.fromEntries(generated.tools.map((tool) => [tool.name, Object.freeze(tool)])))
+export const ACTION_TOOLS = Object.freeze(Object.fromEntries([...read.tools, ...session.tools].map((tool) => [tool.name, Object.freeze(tool)])))
