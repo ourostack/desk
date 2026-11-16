@@ -473,6 +473,13 @@ for (const [lockedFile, expected] of [
 }
 
 {
+  const result = inspectSource(source(), github({ candidate: candidateCommit, compareStatus: "behind" }));
+  assert.equal(result.classification, "blocked");
+  assert.equal(result.reason, "candidate is not a forward update from the locked commit (behind)");
+  assert.equal(result.ancestry_basis, "compare");
+}
+
+{
   const result = inspectSource(source(), releaseLine({ lockedParents: [parentCommit, "5".repeat(40)] }));
   assert.equal(result.classification, "blocked");
   assert.match(result.reason, /has 2 parents, not one/u);
