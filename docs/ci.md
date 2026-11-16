@@ -1,6 +1,6 @@
 # CI, releases and red main
 
-One tier: a pull request runs all of it, and from opening a pull request to the release is under 10 minutes, so no check waits until after the merge. The workflows in `.github/workflows/` are the list of checks; `CI gate` knows which jobs a pull request may skip, so a skipped job never passes it by accident. Main requires `CI gate`, `Windows suite`, `Validate skills` and `Claude Code plugin load`, and merges on green with auto-merge (no merge queue). Main does not require branches to be up to date: with a 6 minute run that would make every busy hour a queue of rebases.
+One tier: a pull request runs all of it, and from opening a pull request to the release is under 10 minutes, so no check waits until after the merge. The workflows in `.github/workflows/` are the list of checks; `CI gate` knows which jobs a pull request may skip, so a skipped job never passes it by accident. Main requires `CI gate`, `Windows suite`, `Validate skills`, `Claude Code plugin load` and `ax-xray` (the Ouro AX X-ray and action claims, which fail when a must claim does not hold), and merges on green with auto-merge (no merge queue). Main does not require branches to be up to date: with a 6 minute run that would make every busy hour a queue of rebases.
 
 Only a change to nothing but `docs/`, `SETUP.md` or `LICENSE` may skip all but Quick checks and the skill checks. The root `README.md` is not on that list, because a test reads it. `windows_suite_shards.test.js` keeps the list the same in Quick checks, the Windows suite and both main workflows.
 
