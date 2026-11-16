@@ -1,4 +1,4 @@
-import { defineAction, defineActions, field } from "../lib/ouro-actions/ouro-actions.mts";
+import { defineAction, field } from "../lib/ouro-actions/ouro-actions.mts";
 
 export const deskStatus = defineAction({
   id: "desk_status",
@@ -39,5 +39,3 @@ export const improvementNext = defineAction({
   },
   output: {},
 });
-
-export default defineActions("desk-session", [deskStatus, deskDoctor, improvementNext], { tool: "desk" });
