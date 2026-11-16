@@ -63,3 +63,7 @@ Give the always-on runtime a [wake runner](https://github.com/ourostack/ouroboro
 ```
 
 `ouro status` then lists each schedule under the runner: its cadence, when it last landed and when it runs next.
+
+## When a session has no Desk tools
+
+A Copilot runtime can come up without Desk's plugin in two ways: the app starts it on its own with no plugins, or Agency skips `desk@release` because GitHub rate-limited its version lookup (HTTP 403), which a reboot that resumes many sessions at once can cause; Agency then keeps the other plugins from their cached copies but not Desk. Sessions it serves then have no `desk-*` tools, hooks or boot text, and nothing inside such a session can say so. `node <state>/ouroboros-skills/desk/drains/run.mjs runtimes status` lists those runtimes by pid and says how to recover: resume each affected session through Agency after the GitHub quota resets (`gh api rate_limit`), which starts its runtime with Desk's plugin, or start a new session. Waiting does not bring the tools back, and the Copilot app never needs restarting for this.
