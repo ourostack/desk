@@ -11,7 +11,7 @@ import { spawn, spawnSync } from "node:child_process"
 
 import { commandArgument } from "./pr-publication.js"
 import { deskFailure } from "./desk-failure.js"
-import { aheadBehindCounts, hasRemoteConfigured, readSyncStatus, recordPullOutcome, schedulePush } from "./sync-worker.js"
+import { hasRemoteConfigured, readSyncStatus, recordPullOutcome, schedulePush } from "./sync-worker.js"
 import { catchUpBehind, classifyPullFailure, undeliveredCommits, upstreamOf } from "./deliver.js"
 import { remoteIdentityEnv } from "./remote-identity.js"
 import { applyPublicationMode } from "./publication-mode.js"
@@ -33,14 +33,8 @@ function gitEnv() {
   return { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_SSH_COMMAND: sshCommand }
 }
 
-// A budget-exhausted caller must never hand `spawnSync` a `timeout` of `0`
-// (or less) -- Node treats that as "no timeout at all," the exact opposite
-// of what an exhausted budget needs -- so `run` itself refuses to spawn once
-// `timeoutMs` runs out and reports a synthetic failure instead. Every call
-// site below threads its own budgeted timeout through explicitly (fix
-// round), so `timeoutMs` has no default of its own left to fall back to.
+// Every call site threads its own budgeted, positive timeout through explicitly, so `timeoutMs` has no default of its own.
 function run(spawnGit, root, args, timeoutMs) {
-  if (timeoutMs <= 0) return { status: 1, stdout: "", stderr: "sync-workspace budget exhausted" }
   return spawnGit("git", ["-C", root, ...args], { windowsHide: true,
     encoding: "utf8",
     timeout: timeoutMs,
@@ -76,9 +70,7 @@ export function spawnGitAsync(command, args, { timeout, env, spawnImpl = spawn }
   })
 }
 
-function fetchUpstream(root, spawnGit, spawnFetch, timeoutMs) {
-  const upstream = upstreamOf((args) => run(spawnGit, root, args, GIT_TIMEOUT_MS))
-  if (upstream === null) return { status: 0, stderr: "" }
+function fetchUpstream(root, upstream, spawnFetch, timeoutMs) {
   return run(spawnFetch, root, ["fetch", "--quiet", "--no-tags", upstream.remote, `+${upstream.merge}:${upstream.tracking}`], timeoutMs)
 }
 
@@ -198,14 +190,15 @@ async function runSync({
 }) {
   // Nothing to sync against is "synced" for every caller, with `nothingToSync` saying which kind so boot never reports it as a sync that worked.
   if (!hasRemoteConfigured(root, spawnGit)) return { state: "synced", nothingToSync: "no_remote" }
-  if (aheadBehindCounts({ root, spawnGit }) === null) return { state: "synced", nothingToSync: "no_upstream" }
+  const upstream = upstreamOf((args) => run(spawnGit, root, args, GIT_TIMEOUT_MS))
+  if (upstream === null) return { state: "synced", nothingToSync: "no_upstream" }
 
   const deadlineAt = now() + SYNC_WORKSPACE_DEADLINE_MS
   const remaining = () => deadlineAt - now()
   const deadline = () => unresolved({ root, reason: "sync_deadline_exceeded", cause: "deadline", spawnGit, timeoutMs: GIT_TIMEOUT_MS })
   if (remaining() <= 0) return deadline()
 
-  const fetched = await fetchUpstream(root, spawnGit, spawnPull, Math.min(GIT_TIMEOUT_MS, remaining()))
+  const fetched = await fetchUpstream(root, upstream, spawnPull, Math.min(GIT_TIMEOUT_MS, remaining()))
   if (fetched.status !== 0) {
     const cause = classifyPullFailure({ stderr: fetched.stderr, timedOut: fetched.error?.code === "ETIMEDOUT" || fetched.signal === "SIGTERM" })
     return unresolved({ root, reason: "fetch_failed", cause, failed: fetched, spawnGit, timeoutMs: GIT_TIMEOUT_MS })

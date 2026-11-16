@@ -312,3 +312,29 @@ test("spawnGitAsync: spawnSync's result shape for an exit, a timeout and a spawn
   assert.equal(missing.status, null)
   assert.equal(missing.error.code, "ENOENT")
 })
+
+test("syncWorkspace reports sync_deadline_exceeded when the budget runs out during the fetch", async () => {
+  const { cloneA } = await mkOriginWithClone()
+  let reads = 0
+  const now = () => {
+    if (!new Error().stack.includes("at remaining (")) return 0
+    reads += 1
+    return reads <= 2 ? 0 : 999_999
+  }
+  const result = await syncWorkspace({ scheduleDelivery: noDelivery, root: cloneA, env, now })
+  assert.equal(result.state, "unresolved")
+  assert.match(result.diagnostic, /sync_deadline_exceeded/u)
+})
+
+test("syncWorkspace names an untracked file in the way of what was delivered, and leaves it untouched", async () => {
+  const { origin, cloneA } = await mkOriginWithClone()
+  const cloneB = await mkClone(origin, "b", { trackMain: true })
+  await writeAndCommit(cloneB, "card.md", "theirs\n", "b card")
+  git(cloneB, ["push", "-q", "origin", "main"])
+  writeFileSync(path.join(cloneA, "card.md"), "mine\n")
+
+  const result = await syncWorkspace({ scheduleDelivery: noDelivery, root: cloneA, env })
+  assert.equal(result.state, "unresolved")
+  assert.match(result.diagnostic, /card\.md/u)
+  assert.equal(await fs.readFile(path.join(cloneA, "card.md"), "utf8"), "mine\n")
+})
