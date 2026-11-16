@@ -19,7 +19,7 @@ export function findPluginlessRuntimes(psText) {
 }
 
 export function listProcesses() {
-  return execFileSync("ps", ["-axo", "pid=,command="], { encoding: "utf8", maxBuffer: 16 * 1024 * 1024 })
+  return execFileSync("ps", ["-axo", "pid=,command="], { encoding: "utf8", maxBuffer: 16 * 1024 * 1024, windowsHide: true })
 }
 
 /** One line per finding for `status`; a healthy host gets one line saying so. */
