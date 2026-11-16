@@ -1,6 +1,9 @@
 #!/usr/bin/env node
 "use strict";
 
+// Runs the newest Desk release on disk when this session started on an older one (lib/current-release.cjs).
+if (require("./lib/current-release.cjs").delegate(__filename)) return;
+
 // desk worker: the SessionStart hook Claude Code runs (hooks.json). It is Node, never a shell script: on Windows
 // a bare `bash` resolves through PATH, and a standard user can have the WSL relay bash.exe first with no distro installed,
 // where it exits 1. Foundation plus bounded local boot checks; repairs run detached. MUST always exit 0, because a nonzero

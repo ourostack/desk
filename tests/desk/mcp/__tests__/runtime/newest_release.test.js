@@ -81,13 +81,13 @@ function github(version, { tarball = () => gzipSync(tarOf(release(version))), ma
   return { fetchFn, seen, tarballs: () => seen.filter((url) => !url.endsWith("plugin.json")).length }
 }
 
-test("a release tarball extracts the plugin manifest and the server, and nothing outside them", async () => {
+test("a release tarball extracts the plugin manifest and the server, and the files hooks and skills read, nothing outside them", async () => {
   const dir = path.join(await mkTempRoot("newest-extract-"), "copy")
   mkdirSync(dir)
   const version = extractRelease({ tar: tarOf(release("3.2.117")), dir })
   assert.equal(version, "3.2.117")
   assert.equal(readFileSync(path.join(dir, "mcp", "src", ...Array(22).fill("deep"), "file.js"), "utf8"), "// long path\n", "a pax long name is read")
-  assert.equal(existsSync(path.join(dir, "skills")), false)
+  assert.equal(readFileSync(path.join(dir, "skills", "x", "SKILL.md"), "utf8"), "skill", "skills are kept for the hooks that read them on demand")
   assert.equal(existsSync(path.join(path.dirname(dir), "escape.txt")), false, "a path that climbs out is never written")
   assert.equal(existsSync(path.join(dir, "README.md")), false)
 })
@@ -133,12 +133,12 @@ test("an install on the release channel loads the newer release's copy once, kee
   assert.equal(first.latest, "3.2.117")
   assert.equal(first.mcpRoot, path.join(copiesDir, "3.2.117", "mcp"))
   assert.equal(readFileSync(path.join(first.mcpRoot, "index.js"), "utf8"), "// server\n")
-  assert.equal(existsSync(path.join(copiesDir, "3.2.117", "skills")), false, "only the manifest and the server are kept")
+  assert.equal(existsSync(path.join(copiesDir, "3.2.117", "README.md")), false, "only what the server, hooks and skills read is kept")
   assert.deepEqual(readdirSync(copiesDir).sort(), ["3.2.101", "3.2.102", "3.2.117"].filter((name) => name !== "3.2.101" || true).slice(0, 3).sort(), "the oldest copy is pruned and no staging is left")
   const second = await ensureNewestRelease(options)
   assert.equal(second.state, "loaded")
   assert.equal(gh.tarballs(), 1, "the second start reuses the copy and downloads nothing")
-  assert.match(newestReleaseLine(first), /^Desk's tools run 3\.2\.117, the newest release; this session's hooks and skills come from the 3\.2\.116 copy/u)
+  assert.match(newestReleaseLine(first), /^Desk's tools run 3\.2\.117, the newest release; this session's skill list, skill descriptions, agents and tool descriptions come from the 3\.2\.116 copy/u)
 })
 
 test("pruning tolerates a copy it cannot read", async (t) => {

@@ -1,6 +1,9 @@
 #!/usr/bin/env node
 "use strict";
 
+// Runs the newest Desk release on disk when this session started on an older one (lib/current-release.cjs).
+if (require("./lib/current-release.cjs").delegate(__filename)) return;
+
 // Copilot userPromptSubmitted: hands the model the session boot's result as context beside the message. Copilot weighs sessionStart
 // context lightly (boot acceptance rounds F and G), and it runs this hook before sessionStart on a new session, so this hook starts
 // the boot itself (mcp/src/runtime/startup-boot.js), waits for it within its budget and delivers it once; the sessionStart hook and

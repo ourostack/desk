@@ -125,6 +125,21 @@ test("a newer release that changes only what updates in place is not announced; 
   assert.equal(changesPerProcess(old, broken, "cit"), true, "a manifest that cannot be read is a change, not a reason to stay silent")
 })
 
+test("a Desk that follows skill text and hook scripts announces only what the host fixes: the skill list, descriptions and hook registration", async () => {
+  const helpers = { "hooks/lib/current-release.cjs": "//", "hooks/copilot-skill-current.cjs": "//", "hooks/copilot-hooks.json": "{}", "skills/s/SKILL.md": "---\nname: s\ndescription: one\n---\nold body" }
+  const loadedFiles = (a) => Object.entries(helpers).forEach(([rel, text]) => { mkdirSync(path.dirname(path.join(a.pluginRoot, rel)), { recursive: true }); writeFileSync(path.join(a.pluginRoot, rel), text) })
+  const release = (files) => [{ spec: spec("desk", "release"), name: "desk", version: "3.2.168", files: { ...helpers, ...files } }]
+  const body = await agency({ loaded: { desk: "3.2.154" }, fetched: release({ "skills/s/SKILL.md": "---\nname: s\ndescription: one\n---\nnew body", "hooks/copilot-session-start.cjs": "new" }) })
+  loadedFiles(body)
+  assert.equal(find(body), null, "a new skill body and new hook script load live")
+  const described = await agency({ loaded: { desk: "3.2.154" }, fetched: release({ "skills/s/SKILL.md": "---\nname: s\ndescription: two\n---\nold body" }) })
+  loadedFiles(described)
+  assert.equal(find(described).plugins[0].name, "desk", "a changed description is fixed at the app's start")
+  const registered = await agency({ loaded: { desk: "3.2.154" }, fetched: release({ "hooks/copilot-hooks.json": "{\"v\":2}" }) })
+  loadedFiles(registered)
+  assert.equal(find(registered).plugins[0].name, "desk", "the hook registration is fixed at the app's start")
+})
+
 test("nothing is said when every loaded plugin is current or newer, a plugin has no fetched release, or Desk is skipped", async () => {
   const a = await agency({
     loaded: { desk: "3.2.154", cit: "0.1.83", other: "1.0.0" },

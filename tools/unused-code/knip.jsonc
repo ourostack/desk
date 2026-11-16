@@ -53,6 +53,7 @@
         "copilot-session-start.cjs",
         "copilot-boot-prompt.cjs",
         "copilot-intake-context.cjs",
+        "copilot-skill-current.cjs",
         // Started by path, never imported: boot-checks.cjs as a command (--repair, --compatible, --fast-forward, --ack, --revoke) by the hooks, the docs and the doctor.
         "boot-checks.cjs",
         // The factory's own hooks. Since Epoch 3 no manifest registers them and no session start runs them: they run only where someone starts them (a host that registers factory-end.cjs, `node hooks/factory-start.cjs`, `node hooks/loop-start.cjs`).
