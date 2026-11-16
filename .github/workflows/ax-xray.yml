@@ -87,6 +87,7 @@ jobs:
           node plugins/desk/mcp/src/lib/ouro-actions/ouro-actions.mts check \
             plugins/desk/mcp/src/actions/desk.actions.mts "$RUNNER_TEMP/actions-all" \
             --report xray-actions/report.json --app "Desk MCP" --commit "$GITHUB_SHA"
+          node -e "const s = require('./xray-actions/report.json').summary; if (!s) process.exit(1); if (s.mustHolding !== s.must) { console.error('Action claims (Desk MCP): ' + s.mustHolding + ' of ' + s.must + ' must claims hold'); process.exit(1); }"
           node plugins/desk/mcp/src/lib/ouro-actions/ouro-actions.mts check \
             plugins/desk/mcp/src/actions/desk-web.actions.mts plugins/desk/mcp/src/actions/generated/desk-web --targets mcp,actions
           node plugins/desk/mcp/src/lib/ouro-actions/ouro-actions.mts generate \
@@ -94,6 +95,7 @@ jobs:
           node plugins/desk/mcp/src/lib/ouro-actions/ouro-actions.mts check \
             plugins/desk/mcp/src/actions/desk-web.actions.mts "$RUNNER_TEMP/actions-web-all" \
             --report xray-actions-desk-web/report.json --app "Desk Browser" --commit "$GITHUB_SHA"
+          node -e "const s = require('./xray-actions-desk-web/report.json').summary; if (!s) process.exit(1); if (s.mustHolding !== s.must) { console.error('Action claims (Desk Browser): ' + s.mustHolding + ' of ' + s.must + ' must claims hold'); process.exit(1); }"
 
       - name: Upload the desk-web action claims
         if: ${{ !cancelled() }}
