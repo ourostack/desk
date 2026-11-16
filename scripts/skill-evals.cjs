@@ -670,7 +670,7 @@ async function readStdin() {
   return Buffer.concat(chunks).toString("utf8");
 }
 
-function recordReceipt(suiteFile, resultFile, repoRoot = process.cwd(), stdinText) {
+function recordReceipt(suiteFile, resultFile, repoRoot, stdinText) {
   const root = path.resolve(repoRoot);
   return recordResult(suiteFile, () => (resultFile === "-" ? JSON.parse(stdinText) : readJson(path.resolve(root, resultFile))), root);
 }
