@@ -1,4 +1,4 @@
-// Finds Copilot runtimes started without Desk's plugin. A session served by one has no Desk tools or hooks, so nothing Desk-side can warn it from inside;
+// Finds Copilot runtimes started without Desk's plugin: the app starts runtimes with no plugins at all, and Agency skips a plugin whose GitHub lookup is rate limited (403) even with a cached copy, as happened to desk@release when many sessions resumed together after a reboot. A session served by one has no Desk tools or hooks, so nothing Desk-side can warn it from inside;
 // `drains.js runtimes status` is the outside check, and its lines say how to recover.
 import { execFileSync } from "node:child_process"
 
@@ -27,6 +27,6 @@ export function pluginlessRuntimeLines(pids) {
   if (pids.length === 0) return ["runtimes: every Copilot server runtime has Desk's plugin"]
   return [
     `runtimes: ${pids.length} Copilot server runtime(s) run without Desk's plugin (pid ${pids.join(", ")}); sessions they serve have no desk-* tools, hooks or boot text`,
-    "runtimes: recover by resuming each affected session through Agency (the runtime it starts carries --plugin-dir for Desk), or start a new session; never wait for the tools to appear or restart the Copilot app",
+    "runtimes: recover by resuming each affected session through Agency once the GitHub API quota has reset (check `gh api rate_limit`; the runtime it then starts carries --plugin-dir for Desk), or start a new session; never wait for the tools to appear or restart the Copilot app",
   ]
 }
