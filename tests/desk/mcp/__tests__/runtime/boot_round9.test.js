@@ -204,9 +204,7 @@ test("syncSummary preserves failure and unknown effects and names when the desk 
   assert.equal(failed("unreachable"), `sync failed: remote unreachable; effects unverified; local desk is as of ${asOf}`)
   assert.match(failed("auth_failed"), /^sync failed: remote refused this host's credentials; effects unverified/u)
   assert.match(failed("deadline"), /^sync failed: git timed out;/u)
-  assert.match(failed("conflict"), /^sync failed: the pull hit a conflict;/u)
-  assert.match(failed("diverged"), /^sync failed: the desk and its remote have diverged;/u)
-  assert.match(failed("other"), /^sync failed: the pull did not complete;/u)
+  assert.match(failed("other"), /^sync failed: the fetch did not complete;/u)
   assert.match(syncSummary({ sync: { state: "unresolved", cause: "unreachable" } }), /local desk is as of unknown$/u)
   assert.match(syncSummary({ sync: null, timedOut: true }), /^sync pending: it did not finish within the boot's time budget; effects unknown; verify with direct Git$/u)
   assert.match(syncSummary({ sync: null }), /^sync failed: it did not run;/u)
@@ -214,32 +212,22 @@ test("syncSummary preserves failure and unknown effects and names when the desk 
   assert.equal(syncSummary({ sync: { state: "synced" } }), "sync ok")
   assert.equal(syncSummary({ sync: { state: "synced", nothingToSync: "no_remote" } }), "no remote; nothing to sync")
   assert.equal(syncSummary({ sync: { state: "synced", nothingToSync: "no_upstream" } }), "no upstream branch; nothing to sync")
-  const moved = ["_cache/stray-2026-09-30/a.md", "_cache/stray-2026-09-30/b.md"]
-  assert.equal(syncSummary({ sync: { state: "quarantined", quarantinedPaths: moved }, root: "/work/desk" }), "sync ok: moved 2 stray untracked paths to /work/desk/_cache/stray-2026-09-30/ first, then pulled")
-  assert.equal(syncSummary({ sync: { state: "quarantined", quarantinedPaths: [moved[0]] } }), "sync ok: moved 1 stray untracked path to _cache/stray-2026-09-30/ first, then pulled")
-  assert.equal(syncSummary({ sync: { state: "quarantined" } }), "sync ok: moved 0 stray untracked paths to _cache/ first, then pulled")
 })
 
-test("syncSummary tells a pop conflict (the pull worked) from a failed pull, and says where quarantined files went", () => {
-  const pop = syncSummary({ sync: { state: "unresolved", reason: "autostash_pop_conflict", cause: "conflict", conflicted: ["a.md", "b.md"] }, lastSyncAt: "2026-09-30T10:00:00.000Z" })
-  assert.equal(pop, "sync: the pull succeeded, but the desk's uncommitted local changes conflict with what came in (conflicted: a.md, b.md); nothing was pushed; resolve them before changing the desk")
-  assert.doesNotMatch(pop, /sync failed|nothing was pulled/u)
-  assert.match(syncSummary({ sync: { state: "unresolved", reason: "autostash_pop_conflict_after_quarantine", conflicted: [], quarantinedPaths: ["_cache/stray-d/x"] }, root: "/d" }), /^sync: the pull succeeded, but the desk's uncommitted local changes conflict with what came in; nothing was pushed; resolve them before changing the desk \(1 stray untracked path had been moved to \/d\/_cache\/stray-d\/ first\)$/u)
-  assert.match(syncSummary({ sync: { state: "unresolved", reason: "pull_rebase_failed_after_quarantine", cause: "conflict", quarantinedPaths: ["_cache/stray-d/x", "_cache/stray-d/y"] }, root: "/d" }), /^sync failed: the pull hit a conflict; effects unverified; local desk is as of unknown \(2 stray untracked paths had been moved to \/d\/_cache\/stray-d\/ first\)$/u)
+test("syncSummary names the paths a local edit keeps the checkout from moving past", () => {
+  const summary = syncSummary({ sync: { state: "unresolved", reason: "local_changes_in_the_way", cause: "local_changes", conflicted: ["a.md", "b.md"] }, lastSyncAt: "2026-09-30T10:00:00.000Z" })
+  assert.match(summary, /^sync failed: files the remote also changed are modified or untracked here, so the checkout was not moved; effects unverified; local desk is as of 2026-09-30T10:00:00.000Z \(in the way: a.md, b.md\)$/u)
 })
 
 test("syncSummary says how many local commits are not on the remote, why, and whether Desk is delivering them", () => {
-  const conflict = syncSummary({ sync: { state: "unresolved", cause: "conflict", unpushed: { count: 105, delivering: true, reason: null } }, lastSyncAt: "2026-10-29T14:58:00.000Z" })
-  assert.equal(conflict, "sync failed: the pull hit a conflict; effects unverified; local desk is as of 2026-10-29T14:58:00.000Z; 105 local commits are not on the remote; Desk is delivering them from a clean copy in the background")
-  assert.equal(syncWords(conflict), "Desk could not sync: the pull hit a conflict; local state shown, as of 2026-10-29T14:58:00.000Z; 105 local commits are not on the remote; Desk is delivering them from a clean copy in the background")
+  const conflict = syncSummary({ sync: { state: "unresolved", cause: "unreachable", unpushed: { count: 105, delivering: true, reason: null } }, lastSyncAt: "2026-10-29T14:58:00.000Z" })
+  assert.equal(conflict, "sync failed: remote unreachable; effects unverified; local desk is as of 2026-10-29T14:58:00.000Z; 105 local commits are not on the remote; Desk is delivering them from a clean copy in the background")
+  assert.equal(syncWords(conflict), "Desk could not sync: remote unreachable; local state shown, as of 2026-10-29T14:58:00.000Z; 105 local commits are not on the remote; Desk is delivering them from a clean copy in the background")
   const offline = syncSummary({ sync: { state: "unresolved", cause: "auth_failed", unpushed: { count: 1, delivering: false, reason: "auth_failed" } } })
   assert.match(offline, /; 1 local commit is not on the remote \(the last push failed because the remote refused this machine's credentials\); they stay on this machine until a push succeeds$/u)
   const retried = syncSummary({ sync: { state: "synced", unpushed: { count: 2, delivering: true, reason: "conflict", paths: ["state.json"] } } })
   assert.equal(retried, "sync ok; 2 local commits are not on the remote (the last push failed because a conflict Desk could not resolve on its own: state.json); Desk is delivering them from a clean copy in the background")
   assert.equal(syncWords(retried), `Desk synced with origin${retried.slice("sync ok".length)}`)
-  const moved = syncSummary({ sync: { state: "quarantined", quarantinedPaths: ["_cache/stray-d/x"], unpushed: { count: 3, delivering: true } } })
-  assert.equal(syncWords(moved), "Desk synced with origin (moved 1 stray untracked path to _cache/stray-d/ first); 3 local commits are not on the remote; Desk is delivering them from a clean copy in the background")
-  assert.match(syncSummary({ sync: { state: "unresolved", reason: "autostash_pop_conflict", unpushed: { count: 1, delivering: true } } }), /resolve them before changing the desk; 1 local commit is not on the remote; Desk is delivering/u)
   assert.equal(syncSummary({ sync: { state: "synced", unpushed: { count: 0, delivering: true } } }), "sync ok")
 })
 
@@ -285,8 +273,6 @@ test("a failed fetch that bumps FETCH_HEAD does not move the 'as of' time: only 
   assert.equal(lastSyncedAt({ root, env }), first, "a failure with no reason or cause still keeps the last success")
   recordPullOutcome({ root, env, result: { state: "synced", nothingToSync: "no_remote" } })
   assert.equal(lastSyncedAt({ root, env }), first, "a desk with nothing to sync records no success")
-  recordPullOutcome({ root, env, result: { state: "quarantined", quarantinedPaths: [] } })
-  assert.ok(Date.parse(lastSyncedAt({ root, env })) >= Date.parse(first))
 })
 
 test("repoStates marks a clone with no remote at all as local-only, and nothing else", async () => {

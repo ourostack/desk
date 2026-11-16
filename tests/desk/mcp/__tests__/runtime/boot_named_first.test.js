@@ -120,12 +120,11 @@ test("a missing repo with no clone source asks with the expanded path, and clone
   assert.ok(first.includes(`clone valve-firmware to ${expanded} (or record the path they give)`), first)
 })
 
-test("sync diagnosis stays visible beside the recovery instruction, including an applied pull with conflicts", async () => {
+test("sync diagnosis stays visible beside the recovery instruction, including local edits in the way", async () => {
   const root = await desk(["flash-valves"])
   const text = async (sync) => formatBootText(await boot(root, null, { syncFn: async () => sync }))
   assert.match(await text({ state: "unresolved", cause: "auth_failed" }), /remote refused this host's credentials/u)
-  assert.match(await text({ state: "unresolved", cause: "diverged" }), /the desk and its remote have diverged/u)
-  const conflict = await text({ state: "unresolved", reason: "autostash_pop_conflict", conflicted: ["a/task.md"] })
-  assert.match(conflict, /Desk pulled from origin, but.*conflicted: a\/task\.md/u)
-  assert.match(conflict, /Verify desk sync with direct Git/u)
+  const blocked = await text({ state: "unresolved", reason: "local_changes_in_the_way", cause: "local_changes", conflicted: ["a/task.md"] })
+  assert.match(blocked, /the checkout was not moved.*in the way: a\/task\.md/u)
+  assert.match(blocked, /Verify desk sync with direct Git/u)
 })

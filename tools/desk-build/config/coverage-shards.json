@@ -424,7 +424,6 @@
     "tests/desk/mcp/__tests__/runtime/session_retention.test.js": 1.8,
     "tests/desk/mcp/__tests__/runtime/session_sync.test.js": 10.2,
     "tests/desk/mcp/__tests__/runtime/session_sync_causes.test.js": 2.2,
-    "tests/desk/mcp/__tests__/runtime/session_sync_stale_autostash.test.js": 8.3,
     "tests/desk/mcp/__tests__/runtime/signoff_listed.test.js": 0.4,
     "tests/desk/mcp/__tests__/runtime/stale_desk.test.js": 2.4,
     "tests/desk/mcp/__tests__/runtime/stale_desk_refresh.test.js": 13.7,

@@ -123,7 +123,7 @@ test("compact desk_status says degraded for a failed sync, the same line and wor
   assert.equal(compact.state, "degraded")
   assert.equal(compact.summary, "Desk works, but the last sync failed.")
   assert.deepEqual(compact.degraded, [syncDegradation(lastPull)])
-  assert.match(compact.fix, /git -C \/d pull --rebase --autostash/u)
+  assert.match(compact.fix, /git -C \/d fetch --no-tags origin/u)
   assert.equal(compact.sync, "last pull failed (unreachable): not known to be in sync")
   assert.equal(compactStatus({ ...ready, root: undefined, sync: { last_pull: { state: "unresolved" } } }).fix.includes("<desk>"), true)
   assert.equal(compactStatus({ ...ready, sync: { last_pull: { state: "unresolved" } } }).sync, "last pull failed: not known to be in sync")
@@ -235,7 +235,7 @@ test("desk_status keeps a failed pull after a multi-remote fetch with one dead r
 
 test("the sync fix quotes a desk path with a space", () => {
   const compact = compactStatus({ ...ready, root: { path: "/my desk" }, sync: { last_pull: lastPull } })
-  assert.match(compact.fix, /git -C '\/my desk' pull --rebase --autostash/u)
+  assert.match(compact.fix, /git -C '\/my desk' fetch --no-tags origin/u)
 })
 
 // ---- The status file's read-merge-write is locked: two writers never drop each other's fields. ----

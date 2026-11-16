@@ -85,7 +85,7 @@ export function classifyPullFailure({ stderr = "", conflicted = [], timedOut = f
 }
 
 /** The host's state rather than a Desk defect: these are reported, never filed as Desk problems. */
-export const NOT_A_DESK_DEFECT = new Set(["unreachable", "auth_failed", "deadline", "publication_blocked"])
+export const NOT_A_DESK_DEFECT = new Set(["unreachable", "auth_failed", "deadline", "publication_blocked", "push_rejected", "fetch_failed", "conflict"])
 
 const BLOCKED_WORDS = {
   auth_failed: "the remote refused this machine's credentials",
@@ -281,7 +281,7 @@ function replay({ git, spawnGit, paths, onto, commits, prefix }) {
   return { head: wt(["rev-parse", "HEAD"]).stdout.trim(), replayed, skipped }
 }
 
-function upstreamOf(git) {
+export function upstreamOf(git) {
   const branch = git(["symbolic-ref", "-q", "--short", "HEAD"]).stdout.trim()
   const remote = git(["config", `branch.${branch}.remote`]).stdout.trim()
   const merge = git(["config", `branch.${branch}.merge`]).stdout.trim()
