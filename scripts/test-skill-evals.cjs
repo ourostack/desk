@@ -1056,7 +1056,8 @@ try {
       assert.equal(once.status, 0, once.stderr);
       assert.match(once.stdout, /fixture\/case-1: the subject produced no final response; running the case once more/u);
       const startedHanging = Date.now();
-      const hung = run(["fixture", ...fake, "--suite-timeout-seconds", "2"], { FAKE_MODE: "hang-subject" });
+      const hung = run(["fixture", ...fake, "--suite-timeout-seconds", "2"], { FAKE_MODE: "hang-subject", DESK_EVAL_HEARTBEAT_MS: "200" });
+      assert.match(hung.stdout, /fixture: 0\/1 case\(s\) finished, 1 running/u, "a long suite reports progress while it waits");
       assert.equal(hung.status, 1);
       assert.match(hung.stdout, /fixture: timed out after 2 s with 0\/1 case\(s\) finished\. No receipt written/u, "a suite that runs out of time says so and stops its processes");
       const spent = run(["fixture", ...fake, "--suite-timeout-seconds", "1"]);

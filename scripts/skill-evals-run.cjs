@@ -593,7 +593,7 @@ async function runSuite(entry, context, api) {
   const template = prepareTemplate(suite, root, log);
   const progress = { started: 0, finished: 0 };
   const suiteContext = { ...context, suiteId: suite.id, deadline: Date.now() + options.suiteTimeoutSeconds * 1000, pluginDirs: pluginDirectories(suite, root), template };
-  const heartbeat = setInterval(() => log(`${suite.id}: ${progress.finished}/${suite.cases.length} case(s) finished, ${progress.started - progress.finished} running`), heartbeatSeconds * 1000);
+  const heartbeat = setInterval(() => log(`${suite.id}: ${progress.finished}/${suite.cases.length} case(s) finished, ${progress.started - progress.finished} running`), Number(process.env.DESK_EVAL_HEARTBEAT_MS) || heartbeatSeconds * 1000);
   let settled;
   try {
     settled = await Promise.allSettled(suite.cases.map((testCase) => context.limit(async () => {
