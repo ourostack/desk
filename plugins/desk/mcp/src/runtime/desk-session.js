@@ -33,6 +33,7 @@ import { createStaleCardLead, withStaleCardLead } from "./stale-card-lead.js"
 import { inspectStateBranch, inspectWriteBranch, writeBranchProblem, repairStateBranch, runGit, stateBranchProblem, isStateBranchName, STATE_BRANCH_REPAIR } from "./state-branch.js"
 import { removeReadinessLeftovers } from "../readiness/leftovers.js"
 import { TOOL_NAMES } from "../tool-names.js"
+import { unknownToolMessage } from "../tool-refusal.cjs"
 import { EXACT } from "../util/file-identity.js"
 
 const READ_TOOLS = new Set(["desk_search", "desk_recall"])
@@ -829,7 +830,7 @@ export function createDeskSession(deps) {
 
   async function callTool({ name, input = {}, signal, requestId }) {
     if (!TOOL_NAMES.includes(name)) {
-      return { content: [{ type: "text", text: `unknown tool: ${name}` }], isError: true }
+      return { content: [{ type: "text", text: unknownToolMessage(name, TOOL_NAMES, "Desk's") }], isError: true }
     }
     // A hosted Desk refuses before anything runs, so a refused repair or tool never reaches an implementation.
     const hostedRefused = hostedRefusal(name, input, env)

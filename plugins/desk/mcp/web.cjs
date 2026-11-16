@@ -25,6 +25,7 @@ var authBrowser = require("./web-auth.cjs");
 
 var PLAYWRIGHT_VERSION = "1.63.0";
 var BROWSER_TOOL_NAMES = ["browser_context", "browser_command"];
+var unknownToolMessage = require("./src/tool-refusal.cjs").unknownToolMessage;
 var ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 var PREFIX = "desk-browser-";
 var PROFILE_POLICY = 1;
@@ -795,7 +796,7 @@ function createController(options) {
       var given = input || {};
       if (name === "browser_context") return answer(function () { return context(given); });
       if (name === "browser_command") return answer(function () { return command(s, given.contextId, given.args); });
-      return answer(function () { throw plain("Unknown tool " + name + "."); });
+      return answer(function () { throw plain(unknownToolMessage(name, BROWSER_TOOL_NAMES, "Desk Browser's")); });
     },
     closeAll: function () {
       return Promise.all(Object.keys(s.contexts).map(function (id) {
