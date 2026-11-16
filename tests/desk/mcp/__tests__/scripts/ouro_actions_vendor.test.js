@@ -6,7 +6,7 @@ import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 
 const repoRoot = path.resolve(fileURLToPath(new URL("../../../../..", import.meta.url)))
-const vendor = path.join(repoRoot, "tools", "ouro-actions")
+const vendor = path.join(repoRoot, "plugins", "desk", "mcp", "src", "lib", "ouro-actions")
 const sha256 = (file) => crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex")
 
 test("the vendored action generator and claims are the ones core's release manifest names", () => {

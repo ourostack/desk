@@ -16,6 +16,7 @@
 // runtime pack is restored.
 
 import { flag, integer, list, oneOf, schema, text } from "./tool-schema-parts.js"
+import { ACTION_TOOLS } from "./actions/served.js"
 
 export const DOCTOR_REPAIRS = Object.freeze(["switch_state_branch"])
 
@@ -154,7 +155,7 @@ const TASK_ARCHIVE_OUTCOME = {
   description: 'Pass "cancelled" to archive a task not already `done` or `cancelled` as abandoned work, with no `evidence`. Omit otherwise.',
 }
 
-export const TOOL_INPUT_SCHEMAS = Object.freeze({
+const HAND_WRITTEN_INPUT_SCHEMAS = Object.freeze({
   task_create: schema({
     ...TASK_TARGET,
     slug: text("The task folder name: an outcome name, 2-6 lowercase kebab-case words."),
@@ -325,13 +326,9 @@ export const TOOL_INPUT_SCHEMAS = Object.freeze({
       description: "Filters, as a JSON object (not a string).",
     },
   }),
-  desk_recall: schema({ topic: text("What to recall."), limit: LIMIT, scope: SCOPE }, ["topic"]),
   desk_status: schema({
     detail: flag("Pass true for the full payload (tens of KB). Omit it for the compact answer."),
     has_instructions: flag("Hosted Desk only: pass true when an earlier desk_status answer in this conversation already gave you Desk's instructions."),
-  }),
-  desk_skill: schema({
-    name: text("The skill to read, such as task-lifecycle; omit it to list every skill."),
   }),
   desk_doctor: schema({
     format: { type: "string", enum: ["full", "preview"], description: "preview returns only the local package/process snapshot." },
@@ -355,4 +352,9 @@ export const TOOL_INPUT_SCHEMAS = Object.freeze({
     countermeasure: text("The pull request URL that ships the fix: https://github.com/<owner>/<repo>/pull/<n>."),
     close_reason: { type: "string", enum: ["wont_fix", "duplicate", "not_reproducible"], description: "Why you close the card; required with state closed_unverified." },
   }, ["key", "claim_id"]),
+})
+
+export const TOOL_INPUT_SCHEMAS = Object.freeze({
+  ...HAND_WRITTEN_INPUT_SCHEMAS,
+  ...Object.fromEntries(Object.entries(ACTION_TOOLS).map(([name, tool]) => [name, tool.inputSchema])),
 })
