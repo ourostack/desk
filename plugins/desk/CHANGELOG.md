@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.178 — 2026-11-16
+
+A `task_update` with `log` no longer loses its commit when the server ends within a few seconds of the entry. The detached push worker that already pushes card writes now commits waiting task logs too: each entry starts it, it waits until the logs have been quiet for 5 seconds (30 at most), commits them as one commit and pushes once. Session start commits any task log an earlier server left uncommitted and starts its delivery. Rapid entries are still one commit and one push, and still never refused.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.177 — 2026-11-16
 
 ### Drains: spot Copilot runtimes that came up without Desk
