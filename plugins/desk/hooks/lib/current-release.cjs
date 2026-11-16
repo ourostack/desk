@@ -120,7 +120,7 @@ function delegate(file) {
     if (current === null) return false;
     const env = { ...process.env, DESK_HOOK_DELEGATED: "1" };
     for (const name of ["PLUGIN_ROOT", "CLAUDE_PLUGIN_ROOT", "COPILOT_PLUGIN_ROOT", "DESK_PLUGIN_ROOT"]) if (typeof env[name] === "string" && env[name] !== "") env[name] = current.dir;
-    const ran = childProcess.spawnSync(process.execPath, [path.join(current.dir, "hooks", hookFile), ...process.argv.slice(2)], { stdio: "inherit", env });
+    const ran = childProcess.spawnSync(process.execPath, [path.join(current.dir, "hooks", hookFile), ...process.argv.slice(2)], { stdio: "inherit", env, windowsHide: true });
     if (ran.error) return false;
     process.exitCode = ran.status === null ? 1 : ran.status;
     return true;
