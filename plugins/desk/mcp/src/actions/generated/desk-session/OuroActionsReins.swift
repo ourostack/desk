@@ -4,11 +4,29 @@
 // test door that stands in for the person's finger, so person-only actions are here too.
 import OuroReins
 
+extension DeskStatusInput: ReinsInput {
+    public static var reinsSchema: ReinsSchema { .object(properties: ["detail": .boolean, "hasInstructions": .boolean], required: []) }
+}
+
+extension DeskDoctorInput: ReinsInput {
+    public static var reinsSchema: ReinsSchema { .object(properties: ["format": .oneOf(["full", "preview"]), "repair": .oneOf(["switch_state_branch"]), "reindex": .boolean, "factoryConsent": .oneOf(["yes", "no"])], required: []) }
+}
+
 extension ImprovementNextInput: ReinsInput {
     public static var reinsSchema: ReinsSchema { .object(properties: ["session": .string], required: []) }
 }
 
 extension ReinsAction {
+    /// Desk status: Check that Desk is ready for this session.
+    public static func deskStatus() -> ReinsAction {
+        ReinsAction("deskStatus", "Desk status", input: DeskStatusInput.self) { input in _ = try await DeskStatusAction.run(input) }
+    }
+
+    /// Desk doctor: Check Desk's runtime, and repair or reindex it when asked.
+    public static func deskDoctor() -> ReinsAction {
+        ReinsAction("deskDoctor", "Desk doctor", input: DeskDoctorInput.self) { input in _ = try await DeskDoctorAction.run(input) }
+    }
+
     /// Next improvement: Take the next improvement card to work on.
     public static func improvementNext() -> ReinsAction {
         ReinsAction("improvementNext", "Next improvement", input: ImprovementNextInput.self) { input in _ = try await ImprovementNextAction.run(input) }

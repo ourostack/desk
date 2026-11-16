@@ -31,6 +31,8 @@ public struct OuroActionNotBound: Error, Sendable, Equatable {
 /// The "desk-session" action set.
 public enum OuroActions {
     public static let consent: [String: OuroActionConsent] = [
+        "desk_status": .write,
+        "desk_doctor": .write,
         "improvement_next": .write,
     ]
 
@@ -40,6 +42,220 @@ public enum OuroActions {
         default:
             return nil
         }
+    }
+}
+
+// MARK: desk_status (write)
+
+public struct DeskStatusInput: Codable, Sendable, Hashable {
+    public var detail: Bool?
+    public var hasInstructions: Bool?
+    public init(detail: Bool? = nil, hasInstructions: Bool? = nil) {
+        self.detail = detail
+        self.hasInstructions = hasInstructions
+    }
+}
+
+public struct DeskStatusOutput: Codable, Sendable, Hashable {
+    public init() {
+    }
+}
+
+/// Desk status: Check that Desk is ready for this session.
+@MainActor
+public enum DeskStatusAction {
+    public static let id = "desk_status"
+    /// The app's handler; every door calls it.
+    public static var perform: (@MainActor @Sendable (DeskStatusInput) async throws -> DeskStatusOutput)?
+    /// What Siri and Shortcuts say when the App Intent finishes or fails: the result in words, or an error turned into
+    /// words (rethrow to let the system show it). Unset, the intent says "Done." and a failure throws.
+    public static var dialog: (@MainActor @Sendable (DeskStatusInput, Result<DeskStatusOutput, any Error>) async throws -> IntentDialog)?
+
+    public static func run(_ input: DeskStatusInput) async throws -> DeskStatusOutput {
+        guard let perform else { throw OuroActionNotBound(action: id) }
+        return try await perform(input)
+    }
+}
+
+public struct DeskStatusIntent: AppIntent {
+    public static let title: LocalizedStringResource = "Desk status"
+    public static let description = IntentDescription("Session-start health check for the resolved desk root. The compact answer has `state` (ready, degraded, admitting or setup_required), `degraded` (why), `fix` (what to do in this session), `search`, `notes` and where the desk is. Retries admission when Desk is not ready. `detail: true` returns the full payload. A hosted Desk (claude.ai, ChatGPT) also returns its instructions, unless `has_instructions: true`; follow them and read the skills they name with desk_skill.")
+
+    @Parameter(title: "Full payload", description: "Pass true for the full payload (tens of KB). Omit it for the compact answer.")
+    public var detail: Bool?
+    @Parameter(title: "Has instructions", description: "Hosted Desk only: pass true when an earlier desk_status answer in this conversation already gave you Desk's instructions.")
+    public var hasInstructions: Bool?
+
+    public init() {}
+
+    public init(_ input: DeskStatusInput) {
+        self.init()
+        self.detail = input.detail
+        self.hasInstructions = input.hasInstructions
+    }
+
+    public var input: DeskStatusInput {
+        DeskStatusInput(detail: detail, hasInstructions: hasInstructions)
+    }
+
+    @MainActor
+    public func perform() async throws -> some IntentResult & ProvidesDialog {
+        let input = self.input
+        let result: Result<DeskStatusOutput, any Error>
+        do { result = .success(try await DeskStatusAction.run(input)) } catch { result = .failure(error) }
+        if let dialog = DeskStatusAction.dialog { return .result(dialog: try await dialog(input, result)) }
+        _ = try result.get()
+        return .result(dialog: "Done.")
+    }
+}
+
+/// The control for desk_status: Button(_:intent:), the same intent Siri and Shortcuts run.
+@available(iOS 17.0, macOS 14.0, watchOS 10.0, tvOS 17.0, *)
+public struct DeskStatusButton<Label: View>: View {
+    public let input: DeskStatusInput
+    let label: Label
+
+    public init(_ input: DeskStatusInput, @ViewBuilder label: () -> Label) {
+        self.input = input
+        self.label = label()
+    }
+
+    public var body: some View {
+        Button(intent: DeskStatusIntent(input)) { label }
+            .accessibilityHint(Text(verbatim: "Check that Desk is ready for this session."))
+    }
+}
+
+@available(iOS 17.0, macOS 14.0, watchOS 10.0, tvOS 17.0, *)
+extension DeskStatusButton where Label == Text {
+    public init(_ input: DeskStatusInput) {
+        self.init(input) { Text(verbatim: "Desk status") }
+    }
+}
+
+// MARK: desk_doctor (write)
+
+public enum DeskDoctorFormatValue: String, Codable, Sendable, Hashable, CaseIterable, AppEnum {
+    case full = "full"
+    case preview = "preview"
+    public static let typeDisplayRepresentation: TypeDisplayRepresentation = "Format"
+    public static let caseDisplayRepresentations: [DeskDoctorFormatValue: DisplayRepresentation] = [
+        .full: "full",
+        .preview: "preview",
+    ]
+}
+
+public enum DeskDoctorRepairValue: String, Codable, Sendable, Hashable, CaseIterable, AppEnum {
+    case switchStateBranch = "switch_state_branch"
+    public static let typeDisplayRepresentation: TypeDisplayRepresentation = "Repair"
+    public static let caseDisplayRepresentations: [DeskDoctorRepairValue: DisplayRepresentation] = [
+        .switchStateBranch: "switch_state_branch",
+    ]
+}
+
+public enum DeskDoctorFactoryConsentValue: String, Codable, Sendable, Hashable, CaseIterable, AppEnum {
+    case yes = "yes"
+    case no = "no"
+    public static let typeDisplayRepresentation: TypeDisplayRepresentation = "Factory consent"
+    public static let caseDisplayRepresentations: [DeskDoctorFactoryConsentValue: DisplayRepresentation] = [
+        .yes: "yes",
+        .no: "no",
+    ]
+}
+
+public struct DeskDoctorInput: Codable, Sendable, Hashable {
+    public var format: DeskDoctorFormatValue?
+    public var repair: DeskDoctorRepairValue?
+    public var reindex: Bool?
+    public var factoryConsent: DeskDoctorFactoryConsentValue?
+    public init(format: DeskDoctorFormatValue? = nil, repair: DeskDoctorRepairValue? = nil, reindex: Bool? = nil, factoryConsent: DeskDoctorFactoryConsentValue? = nil) {
+        self.format = format
+        self.repair = repair
+        self.reindex = reindex
+        self.factoryConsent = factoryConsent
+    }
+}
+
+public struct DeskDoctorOutput: Codable, Sendable, Hashable {
+    public init() {
+    }
+}
+
+/// Desk doctor: Check Desk's runtime, and repair or reindex it when asked.
+@MainActor
+public enum DeskDoctorAction {
+    public static let id = "desk_doctor"
+    /// The app's handler; every door calls it.
+    public static var perform: (@MainActor @Sendable (DeskDoctorInput) async throws -> DeskDoctorOutput)?
+    /// What Siri and Shortcuts say when the App Intent finishes or fails: the result in words, or an error turned into
+    /// words (rethrow to let the system show it). Unset, the intent says "Done." and a failure throws.
+    public static var dialog: (@MainActor @Sendable (DeskDoctorInput, Result<DeskDoctorOutput, any Error>) async throws -> IntentDialog)?
+
+    public static func run(_ input: DeskDoctorInput) async throws -> DeskDoctorOutput {
+        guard let perform else { throw OuroActionNotBound(action: id) }
+        return try await perform(input)
+    }
+}
+
+public struct DeskDoctorIntent: AppIntent {
+    public static let title: LocalizedStringResource = "Desk doctor"
+    public static let description = IntentDescription("Use when Desk misbehaves or its runtime needs checking: report whether Desk MCP started in healthy runtime mode; in diagnostic mode, the precise startup failure and offline remediation. `format: \"preview\"` returns only the local package/process snapshot. `repair: \"switch_state_branch\"` switches the desk checkout back to its state branch when that is safe. `reindex: true` re-reads the desk into the search engine when search misses what you just wrote. `factory_consent` records the operator's factory contribution answer and returns only that record.")
+
+    @Parameter(title: "Format", description: "preview returns only the local package/process snapshot.")
+    public var format: DeskDoctorFormatValue?
+    @Parameter(title: "Repair", description: "A named repair to run.")
+    public var repair: DeskDoctorRepairValue?
+    @Parameter(title: "Reindex", description: "Pass true to re-read the desk into this session's search engine and wait until exact-word search is current.")
+    public var reindex: Bool?
+    @Parameter(title: "Factory consent", description: "The operator's answer to the factory contribution question; Desk resolves the store and, for yes, the GitHub account.")
+    public var factoryConsent: DeskDoctorFactoryConsentValue?
+
+    public init() {}
+
+    public init(_ input: DeskDoctorInput) {
+        self.init()
+        self.format = input.format
+        self.repair = input.repair
+        self.reindex = input.reindex
+        self.factoryConsent = input.factoryConsent
+    }
+
+    public var input: DeskDoctorInput {
+        DeskDoctorInput(format: format, repair: repair, reindex: reindex, factoryConsent: factoryConsent)
+    }
+
+    @MainActor
+    public func perform() async throws -> some IntentResult & ProvidesDialog {
+        let input = self.input
+        let result: Result<DeskDoctorOutput, any Error>
+        do { result = .success(try await DeskDoctorAction.run(input)) } catch { result = .failure(error) }
+        if let dialog = DeskDoctorAction.dialog { return .result(dialog: try await dialog(input, result)) }
+        _ = try result.get()
+        return .result(dialog: "Done.")
+    }
+}
+
+/// The control for desk_doctor: Button(_:intent:), the same intent Siri and Shortcuts run.
+@available(iOS 17.0, macOS 14.0, watchOS 10.0, tvOS 17.0, *)
+public struct DeskDoctorButton<Label: View>: View {
+    public let input: DeskDoctorInput
+    let label: Label
+
+    public init(_ input: DeskDoctorInput, @ViewBuilder label: () -> Label) {
+        self.input = input
+        self.label = label()
+    }
+
+    public var body: some View {
+        Button(intent: DeskDoctorIntent(input)) { label }
+            .accessibilityHint(Text(verbatim: "Check Desk's runtime, and repair or reindex it when asked."))
+    }
+}
+
+@available(iOS 17.0, macOS 14.0, watchOS 10.0, tvOS 17.0, *)
+extension DeskDoctorButton where Label == Text {
+    public init(_ input: DeskDoctorInput) {
+        self.init(input) { Text(verbatim: "Desk doctor") }
     }
 }
 
