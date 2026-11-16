@@ -20,6 +20,7 @@ import * as path from "node:path"
 
 import { gitEnv } from "../runtime/deliver.js"
 import { publicationPolicy, publishPullRequest } from "../runtime/pr-publication.js"
+import { closeSaved, savesFor, settleSaves, supersededComment } from "../runtime/unmerged-saves.js"
 
 const GIT_TIMEOUT_MS = 10_000
 const NETWORK_TIMEOUT_MS = 60_000
@@ -126,7 +127,12 @@ export function publishCardCommit({ root, relPaths, message, defaultBranch, spaw
   const indexGit = runner(spawnGit, top, { ...env, GIT_INDEX_FILE: indexFile })
   const git = runner(spawnGit, top, env)
   const remoteRef = `refs/remotes/${REMOTE}/${defaultBranch}`
+  // Pull requests a rebuild replaced: closed once what replaced them is on main, with the evidence.
+  const abandoned = []
+  const closeAbandoned = (target, how) => { for (const url of abandoned) closeSaved({ spawnGit, root, env, url, comment: supersededComment(target, [how]) }) }
   try {
+    // Saves still waiting from earlier writes are settled first: closed when superseded, rebuilt when they conflict with main.
+    try { settleSaves({ root, env, spawnGit, clock }) } catch { /* a failed settle leaves the saves recorded, and named */ }
     for (let attempt = 1; attempt <= PUSH_ATTEMPTS; attempt += 1) {
       const fetched = git(["fetch", "--quiet", "--no-tags", REMOTE, `+refs/heads/${defaultBranch}:${remoteRef}`], NETWORK_TIMEOUT_MS)
       if (fetched.status !== 0) {
@@ -145,6 +151,7 @@ export function publishCardCommit({ root, relPaths, message, defaultBranch, spaw
       if (tree === "") return fail(relPaths, "Desk could not write the tree", "git write-tree failed", `git -C ${root} status`, "nothing was written; retry the write")
       if (tree === git(["rev-parse", `${onto}^{tree}`]).stdout.trim()) {
         catchUp(git, full, staged, onto)
+        closeAbandoned(onto, `rebuilding the card on the newest ${defaultBranch} left nothing to add`)
         return { ok: true, stderr: "" }
       }
       const commit = git(["commit-tree", tree, "-p", onto, "-m", message]).stdout.trim()
@@ -158,8 +165,13 @@ export function publishCardCommit({ root, relPaths, message, defaultBranch, spaw
       let target
       if (policy !== null) {
         try {
-          target = publishPullRequest({ git, spawnGit, root: top, upstream: { remote: REMOTE, merge: `refs/heads/${defaultBranch}`, tracking: remoteRef }, head: commit, onto, policy, clock }).head
+          target = publishPullRequest({ git, spawnGit, root: top, upstream: { remote: REMOTE, merge: `refs/heads/${defaultBranch}`, tracking: remoteRef }, head: commit, onto, policy, clock, track: savesFor({ root, env }) }).head
         } catch (error) {
+          // The base moved, or the pull request now conflicts: the card is rebuilt on the newest base and published again.
+          if (error.requalify === true && attempt < PUSH_ATTEMPTS) {
+            abandoned.push(error.publication.url)
+            continue
+          }
           // A call cut off after GitHub merged the pull request still published the card.
           target = landedOn(git, commit, defaultBranch)
           if (target === null) return fail(relPaths, error.message, "the publication pull request did not merge", `gh pr list --head desk/publish/${commit} --state all`, "the card is still staged; check the pull request, then retry the write", "unknown")
@@ -175,6 +187,7 @@ export function publishCardCommit({ root, relPaths, message, defaultBranch, spaw
       }
       git(["update-ref", remoteRef, target])
       catchUp(git, full, staged, target)
+      closeAbandoned(target, `the card was rebuilt on the newest ${defaultBranch} and landed as ${target.slice(0, 12)}`)
       return { ok: true, stderr: "" }
     }
     return fail(relPaths, `the remote kept rejecting the push to ${defaultBranch} after ${PUSH_ATTEMPTS} tries`, "other writers pushed to the default branch at the same time, or a hook declined the commit", `git -C ${root} fetch ${REMOTE} ${defaultBranch}`, "the card is still staged; retry the write")

@@ -427,6 +427,8 @@ export function formatBootText(result) {
   for (const line of pendingSummaries) lines.push(`- ${line}`)
   for (const line of pendingRest) lines.push(line.startsWith("auth: ") ? `- warning: ${line.slice("auth: ".length)}` : `- pending (not finished in time, carry it): ${line}`)
   lines.push(...notesLines(result.notes))
+  // A save is not done until it is on main: any still waiting in a publication pull request past ten minutes gets its own heading.
+  if ((result.unmerged_saves ?? []).length > 0) lines.push("", "## Unmerged saves", "", ...result.unmerged_saves.map((save) => `- ${save.url}: not on main after ${save.minutes} min. Tell the operator before you call this work saved.`))
   // The task list, deliveries, pull requests and repos can run long; they are what gets shortened when the output would
   // pass its limit. The status, the instructions and the AGENTS.md files (the rules that bind the session) never are.
   const middle = [...namedTaskLines(result.task)]

@@ -92,6 +92,7 @@ import { planStaleRefresh, startStaleRefresh, startedLine } from "./stale-desk-r
 import { deferredToolsHint } from "../util/deferred-tools.js"
 import { recordUnsigned, signoffInstructions } from "../desk/unsigned-deliveries.js"
 import { noteSignoffListed } from "./signoff-listed.js"
+import { stuckSaves } from "./unmerged-saves.js"
 import { otherSessions } from "./other-sessions.js"
 import { resolveDeskStateDir } from "./last-start.js"
 import { applyPublicationMode } from "./publication-mode.js"
@@ -1020,6 +1021,7 @@ function emptyResult({ status, degraded, pending, instructions = [], root, host 
     other_sessions: null,
     release_alert: null,
     desk_problems: null,
+    unmerged_saves: [],
   }
 }
 
@@ -1569,6 +1571,7 @@ export async function bootOnce({
     other_sessions: otherWork,
     release_alert: releaseFinding?.release_alert ?? null,
     desk_problems: releaseFinding?.desk_problems ?? null,
+    unmerged_saves: headless ? [] : stuckSaves({ root: root.path, env }).map(({ url, minutes }) => ({ url, minutes })),
     needs_operator: needsOperator(instructionContext),
     // Only for the plain-text boot (`runBootCli` leaves it out of `--json`).
     text_instructions: buildTextInstructions(instructionContext),

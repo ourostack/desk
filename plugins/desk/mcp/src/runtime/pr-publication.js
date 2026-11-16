@@ -5,7 +5,9 @@ import { redactCredentialLikeText } from "../util/redact.js"
 const OBJECT_ID = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/u
 
 const POLICY = ".desk/publication.json"
-const FIELDS = "number,url,state,isDraft,headRefOid,baseRefName,baseRefOid,mergeCommit"
+const FIELDS = "number,url,state,isDraft,headRefOid,baseRefName,baseRefOid,mergeCommit,mergeable"
+// The label a merge-when-green relay (runtime/relays.js) polls for; a policy may name another with `merge_label`.
+export const MERGE_LABEL = "merge-when-green"
 const WAIT_MS = 300_000
 const CLOCK = {
   now: Date.now,
@@ -66,7 +68,7 @@ export function publicationRecovery(root, platform = process.platform) {
 }
 
 /** Publishes one immutable candidate. No upstream ref is pushed; only GitHub's exact-head merge endpoint can advance it. */
-export function publishPullRequest({ git, spawnGit, root, upstream, head, onto, policy, clock = CLOCK }) {
+export function publishPullRequest({ git, spawnGit, root, upstream, head, onto, policy, clock = CLOCK, track }) {
   // Both candidates must be object ids: a head or base that was never read would build a branch name, and a command, with nothing in them.
   if (!OBJECT_ID.test(String(head)) || !OBJECT_ID.test(String(onto))) {
     throw Object.assign(new Error("Run it again: Desk has no readable commit to publish, so nothing was pushed"), { code: "pr_publication_run_it_again_desk_has_no" })
@@ -158,6 +160,15 @@ export function publishPullRequest({ git, spawnGit, root, upstream, head, onto, 
   }
   if (pr === undefined) throw Object.assign(new Error("Run it again: The created publication PR could not be read back"), { code: "pr_publication_run_it_again_the_created" })
   const receipt = { url: pr.url, head, branch, base }
+  // Merging must not depend on one repository setting: the relay's label goes on every publication PR, and auto-merge is asked for where the repository allows it. Both are best effort; the checks below still gate Desk's own merge.
+  if (pr.state !== "MERGED") {
+    const label = typeof policy.merge_label === "string" && policy.merge_label.trim() !== "" ? policy.merge_label.trim() : MERGE_LABEL
+    const attempt = (args) => { try { gh(args, false); return true } catch { return false } }
+    attempt(["label", "create", label, "--repo", repo.full, "--force", "--description", "Merge when the required checks are green"])
+    receipt.labelled = attempt(["pr", "edit", String(pr.number), "--repo", repo.full, "--add-label", label])
+    receipt.auto_merge = attempt(["pr", "merge", String(pr.number), "--repo", repo.full, "--auto", "--merge", "--match-head-commit", head]) ? "enabled" : "refused"
+    track?.record(receipt)
+  }
   const view = () => gh(["pr", "view", String(pr.number), "--repo", repo.full, "--json", FIELDS])
   const verify = (current) => {
     if (current.headRefOid !== head || current.baseRefName !== base || current.isDraft || !["OPEN", "MERGED"].includes(current.state)) {
@@ -174,7 +185,7 @@ export function publishPullRequest({ git, spawnGit, root, upstream, head, onto, 
       pr = view()
       verify(pr)
       if (pr.state === "MERGED") break
-      if (pr.baseRefOid !== onto) throw Object.assign(new Error("Run it again: The publication base advanced; retry to qualify a fresh candidate"), { code: "pr_publication_run_it_again_the_publication", requalify: true })
+      if (pr.baseRefOid !== onto || pr.mergeable === "CONFLICTING") throw Object.assign(new Error(`Run it again: The publication ${pr.mergeable === "CONFLICTING" ? "conflicts with" : "base advanced past"} ${base}; retry to rebuild it on the newest ${base}`), { code: "pr_publication_run_it_again_the_publication", requalify: true })
       const reported = loadChecks()
       const waiting = checkState(reported, policy.required_checks, observed, ruled)
       if (waiting.length === 0) {
@@ -195,6 +206,7 @@ export function publishPullRequest({ git, spawnGit, root, upstream, head, onto, 
     const target = git(["rev-parse", upstream.tracking]).stdout.trim()
     if (git(["merge-base", "--is-ancestor", head, target]).status !== 0) throw Object.assign(new Error("Run it again once the upstream has caught up: The candidate is not reachable from the actual remote upstream"), { code: "pr_publication_run_it_again_once_the" })
     receipt.merge ??= pr.mergeCommit?.oid ?? target
+    track?.clear(receipt)
     return { head: target, receipt }
   } catch (error) {
     error.publication = receipt
