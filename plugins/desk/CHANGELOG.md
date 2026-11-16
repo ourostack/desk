@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.191 — 2026-11-16
+
+The merge-when-green relay now edits its status comment at most every ten minutes while it waits, instead of every two. Each edit changed the pull request, so the next poll read it and the labelled list again in full rather than as a free 304: on a shared 5,000-an-hour account that was about 3 REST calls per edit. The merge result still replaces the comment at once ([relays](docs/relays.md)).
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.190 — 2026-11-16
 
 ### Desk Browser serves its effect hints
