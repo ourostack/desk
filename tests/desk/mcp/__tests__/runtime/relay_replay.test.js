@@ -76,6 +76,24 @@ test("merge replay: a matrix job skipped before it expanded does not hold a pull
   for (const result of results.filter((entry) => !entry.merge)) assert.match(result.waiting.join(" "), /skipped|visual proof failure|other checks? on the head not green/u)
 })
 
+test("merge replay: a cancelled unexpanded matrix job and cancelled main runs that superseded the real one never hold a pull request that merged", async () => {
+  const fixture = loadFixture("merge-large.json")
+  const baseline = await decisions(fixture)
+  const withNoise = {
+    ...fixture,
+    pulls: fixture.pulls.map((pull) => ({
+      ...pull,
+      // Only a pull request whose matrix expanded gets the placeholder: one with no shards on the head is still held by it.
+      checks: [...pull.checks, ...(!pull.checks.some((check) => /^unit tests \(ubuntu/u.test(check.name)) ? [] : [{ id: 900_000, name: "unit tests (${{ matrix.os }}, ${{ matrix.shard }})", status: "completed", conclusion: "cancelled", started: -400, completed: -399 }])],
+      latest: pull.latest,
+      main: [...pull.main, { id: 900_001, conclusion: "cancelled", created: Math.max(...pull.main.map((run) => run.created)) + 1, completed: Math.max(...pull.main.map((run) => run.completed)) + 1 }],
+    })),
+  }
+  const noisy = await decisions(withNoise)
+  assert.deepEqual(noisy.map((result) => [result.pull.name, result.merge]), baseline.map((result) => [result.pull.name, result.merge]))
+  assert.deepEqual(noisy.filter((result) => result.error), [])
+})
+
 test("dispatch replay: a day of pushed runs fires once per head, after the settle", async () => {
   const fixture = loadFixture("dispatch-pushed.json")
   const { fires, errors } = await replayDispatch(fixture)

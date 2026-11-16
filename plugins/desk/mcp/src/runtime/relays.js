@@ -326,8 +326,9 @@ const statusAsRun = (status) => ({ name: status.context, status: status.state ==
 
 // Only completed runs are asked for, so a queued or in-progress run of the workflow is never the one judged.
 const readMain = (ctx, state, repo, workflow, branch) =>
-  cached(ctx, state, `/repos/${repo}/actions/workflows/${encodeURIComponent(workflow)}/runs?branch=${encodeURIComponent(branch)}&status=completed&per_page=1&exclude_pull_requests=true`, (body) => {
-    const run = body.workflow_runs?.[0]
+  cached(ctx, state, `/repos/${repo}/actions/workflows/${encodeURIComponent(workflow)}/runs?branch=${encodeURIComponent(branch)}&status=completed&per_page=20&exclude_pull_requests=true`, (body) => {
+    // A cancelled run was superseded by a newer push (concurrency) and says nothing about the branch's health.
+    const run = body.workflow_runs?.find((candidate) => candidate.conclusion !== "cancelled")
     return run ? { id: run.id, conclusion: run.conclusion, url: run.html_url } : null
   })
 
@@ -348,6 +349,12 @@ const skippedTemplateMatches = (run, required) => {
 /** An unexpanded matrix template that GitHub skipped stands in for a matrix that never ran; it says nothing once the matrix ran under expanded names. */
 const isTemplateSkip = (run) => run.conclusion === "skipped" && run.name.includes("${{")
 
+/** A matrix job cancelled before it expanded is posted under its literal template name too; it is only a placeholder once the same job's expanded shards are on the head. */
+const isCancelledTemplate = (run, newest) => {
+  const at = run.name.indexOf("${{")
+  return run.conclusion === "cancelled" && at > 0 && newest.some((other) => other !== run && !other.name.includes("${{") && other.name.startsWith(run.name.slice(0, at)))
+}
+
 /**
  * What still keeps the head from merging, as one line per entry that is not fully green. Only the newest attempt of each check counts, and it counts only
  * when it completed with `success`, or with `skipped` or `neutral` when `skippedPasses` is set. Each required pattern must also match something.
@@ -360,7 +367,7 @@ export function waitingOnChecks(requiredChecks, runs, skippedPasses = false, sta
   const counted = new Set()
   const required = requiredChecks.flatMap((required) => {
     const found = newest.filter((run) => globPattern(required).test(run.name) || skippedTemplateMatches(run, required))
-    const expanded = found.filter((run) => !isTemplateSkip(run))
+    const expanded = found.filter((run) => !isTemplateSkip(run) && !isCancelledTemplate(run, newest))
     const matching = expanded.length > 0 ? expanded : found
     for (const run of found) counted.add(run)
     if (matching.length === 0) return [`${required}: not started`]
@@ -368,7 +375,7 @@ export function waitingOnChecks(requiredChecks, runs, skippedPasses = false, sta
     return notGreen.length === 0 ? [] : [`${required}: ${notGreen.length === matching.length && matching.length === 1 ? shown(notGreen) : `${notGreen.length} of ${matching.length} not green (${shown(notGreen)})`}`]
   })
   // A check nobody required that a path filter skipped says nothing against the head, so only a failure, a cancellation or a run still going holds it.
-  const others = newest.filter((run) => !counted.has(run) && !green(run) && !(run.status === "completed" && SKIPPED_PASSES.has(run.conclusion)))
+  const others = newest.filter((run) => !counted.has(run) && !green(run) && !isCancelledTemplate(run, newest) && !(run.status === "completed" && SKIPPED_PASSES.has(run.conclusion)))
   return others.length === 0 ? required : [...required, `${others.length} other check${others.length === 1 ? "" : "s"} on the head not green (${shown(others)})`]
 }
 
@@ -441,7 +448,7 @@ async function handlePull(relay, state, ctx, number) {
     if (relay.requireMainWorkflowGreen) {
       mainBranch = await cached(ctx, state, `/repos/${relay.repo}`, (body) => body.default_branch)
       const main = await readMain(ctx, state, relay.repo, relay.requireMainWorkflowGreen, mainBranch)
-      if (!main) waiting.push(`${mainBranch} has no completed ${relay.requireMainWorkflowGreen} run yet`)
+      if (!main) waiting.push(`${mainBranch} has no completed ${relay.requireMainWorkflowGreen} run that was not cancelled yet`)
       else {
         judged = { branch: mainBranch, id: main.id, url: main.url }
         if (main.conclusion !== "success") waiting.push(`${mainBranch}'s latest completed ${relay.requireMainWorkflowGreen} run ${main.id} (${main.url}) is ${main.conclusion}`)
