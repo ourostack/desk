@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.189 — 2026-11-16
+
+A Desk tool that a host lists as deferred, such as `desk_save` in GitHub Copilot, is no longer reported as a Desk problem before the agent has looked it up by name. The `desk-problem` skill now asks for that lookup first, and the session-start details name GitHub Copilot's tool search beside Claude Code's.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.188 — 2026-11-16
 
 ### Desk Browser's tools are declared as actions
