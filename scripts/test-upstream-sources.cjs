@@ -23,6 +23,7 @@ const {
 const repoRoot = path.resolve(__dirname, "..");
 const lockedCommit = "1".repeat(40);
 const candidateCommit = "2".repeat(40);
+const parentCommit = "3".repeat(40);
 
 function hash(content) {
   return crypto.createHash("sha256").update(content).digest("hex");
@@ -68,6 +69,9 @@ function github({
   failure = null,
   files = {},
   topLevel = null,
+  lockedParents = [],
+  mergeBase = parentCommit,
+  lockedFiles = [],
 } = {}) {
   return {
     repository() {
@@ -83,14 +87,23 @@ function github({
       return release;
     },
     commit(_repository, ref) {
+      if (ref === lockedCommit) {
+        return { sha: lockedCommit, parents: lockedParents.map((sha) => ({ sha })) };
+      }
       assert.ok(ref === "main" || ref === release?.tag_name);
       return { sha: release && ref === release.tag_name ? releaseCandidate : candidate };
     },
     compare(_repository, base, head) {
+      if (head === lockedCommit) {
+        assert.equal(base, lockedParents[0], "the locked commit's own change is compared with its parent");
+        return { status: "ahead", files: lockedFiles };
+      }
       assert.equal(base, lockedCommit);
-      if (release && head === releaseCandidate) return { status: releaseCompareStatus };
+      if (release && head === releaseCandidate) {
+        return { status: releaseCompareStatus, merge_base_commit: { sha: mergeBase } };
+      }
       assert.equal(head, candidate);
-      return { status: compareStatus };
+      return { status: compareStatus, merge_base_commit: { sha: mergeBase } };
     },
     topLevel(_repository, ref) {
       // Only the approved Gauntlet source reads its tree; every other source must not.
@@ -415,6 +428,71 @@ assert.throws(
   }));
   assert.equal(result.classification, "blocked");
   assert.match(result.reason, /not a forward update/u);
+}
+
+// The locked commit is v1.0.0's release commit: one parent, the merge base with the newer release, and its own change.
+const releaseTag = { tag_name: "v1.0.1", html_url: "https://github.com/owner/repo/releases/tag/v1.0.1" };
+function releaseLine(options = {}) {
+  return github({
+    candidate: candidateCommit,
+    release: releaseTag,
+    releaseCandidate: candidateCommit,
+    compareStatus: "diverged",
+    releaseCompareStatus: "diverged",
+    lockedParents: [parentCommit],
+    ...options,
+  });
+}
+
+{
+  const result = inspectSource(source(), releaseLine({ lockedFiles: [{ filename: "docs/RELEASE-NOTES.md" }] }));
+  assert.equal(result.classification, "candidate-no-selected-payload-change");
+  assert.equal(result.ancestry, "ahead");
+  assert.equal(result.ancestry_basis, "release-line");
+  assert.equal(result.tracking.strategy, "latest-release");
+  assert.equal(result.tracking.release_considered.ancestry, "ahead");
+  assert.equal(result.tracking.release_considered.ancestry_basis, "release-line");
+}
+
+for (const [lockedFile, expected] of [
+  [{ filename: "skills/example/SKILL.md" }, /touches vendored path skills\/example\/SKILL\.md/u],
+  [{ filename: "skills/example/references/new.md" }, /touches vendored path skills\/example\/references\/new\.md/u],
+  [{ filename: "docs/moved.md", previous_filename: "skills/example/SKILL.md" }, /touches vendored path skills\/example\/SKILL\.md/u],
+]) {
+  const result = inspectSource(source(), releaseLine({ lockedFiles: [lockedFile] }));
+  assert.equal(result.classification, "blocked");
+  assert.equal(result.ancestry, "diverged");
+  assert.equal(result.ancestry_basis, "compare");
+  assert.match(result.reason, expected);
+}
+
+{
+  const result = inspectSource(source(), releaseLine({ mergeBase: "4".repeat(40) }));
+  assert.equal(result.classification, "blocked");
+  assert.match(result.reason, /merge base with the candidate is not the locked commit's parent/u);
+}
+
+{
+  const result = inspectSource(source(), releaseLine({ lockedParents: [parentCommit, "5".repeat(40)] }));
+  assert.equal(result.classification, "blocked");
+  assert.match(result.reason, /has 2 parents, not one/u);
+}
+
+{
+  const truncated = Array.from({ length: 300 }, (_, index) => ({ filename: `docs/file-${index}.md` }));
+  const result = inspectSource(source(), releaseLine({ lockedFiles: truncated }));
+  assert.equal(result.classification, "blocked");
+  assert.match(result.reason, /could not be listed completely/u);
+}
+
+{
+  const result = inspectSource(source(), releaseLine({
+    actualContent: "changed",
+    lockedFiles: [{ filename: "docs/RELEASE-NOTES.md" }],
+  }));
+  assert.equal(result.classification, "needs-human-approval");
+  assert.equal(result.ancestry_basis, "release-line");
+  assert.deepEqual(result.changed_paths, ["skills/example/SKILL.md"]);
 }
 
 {
