@@ -1,5 +1,13 @@
 # desk plugin — changelog
 
+## 3.2.180 — 2026-11-16
+
+### Vendored AX command, MCP and X-ray modules
+
+Desk now carries the Ouro AX modules its command and MCP surfaces are built on, at the Ouro UI release it is locked to, and Ouro's action generator from ouro-ui-core v0.16.0. Nothing about how Desk's tools behave changes yet: the next change declares them as actions. Each vendored file is recorded by hash in `upstream-sources.lock.json`.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.179 — 2026-11-16
 
 Desk no longer removes its own Agency cache entry. When boot found the running Desk behind its channel, it ran `agency plugin cache remove -f` on Desk's spec to force a fresh download. That left Agency with no copy of Desk to fall back on. When GitHub then refused the next fetch, as it did with a rate limit (HTTP 403) when many sessions resumed after a reboot, Agency skipped Desk while every other plugin loaded from its cached copy, and those sessions started with no Desk tools, hooks or boot text. Agency already refreshes Desk in the background at each session start (the `--cache-ttl 0` install), so under Agency boot now starts nothing (`auto_refresh` is `unavailable`), and the stale-Desk line says to start a new session instead of naming the removal ([`mcp/src/runtime/stale-desk-refresh.js`](mcp/src/runtime/stale-desk-refresh.js), [`mcp/src/runtime/stale-desk.js`](mcp/src/runtime/stale-desk.js)). Copilot and Claude Code installs keep their own update commands.
