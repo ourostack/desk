@@ -96,10 +96,9 @@ test("the Agency spec is the pinned ourostack/desk plugin on main for the sessio
 test("the plan per host; Copilot only for an installed plugin, never a dev checkout or --plugin-dir", async () => {
   const { home, pluginRoot } = await agency()
   const base = { running: "3.2.0-alpha.153", homeDir: home }
-  const viaAgency = refreshPlan({ ...base, env: { AGENCY_ENGINE: "copilot" }, pluginRoot, agentHost: "copilot" })
-  assert.deepEqual([viaAgency.host, viaAgency.command, viaAgency.args], ["agency", "agency", ["plugin", "cache", "remove", "-f", SPEC]])
-  assert.equal(viaAgency.doing, "refreshing the Agency plugin cache")
-  assert.equal(refreshPlan({ ...base, env: { AGENCY_ENGINE: "copilot" }, pluginRoot, agentHost: "copilot", running: "1.0.0" }), null)
+  // Agency refreshes its own cached Desk; removing that copy is what left sessions with no Desk under a GitHub rate limit.
+  assert.equal(refreshPlan({ ...base, env: { AGENCY_ENGINE: "copilot" }, pluginRoot, agentHost: "copilot" }), null)
+  assert.equal(refreshPlan({ ...base, env: {}, pluginRoot, agentHost: "claude" }), null)
   const installed = path.join(home, ".copilot", "installed-plugins", "ourostack", "desk")
   const direct = refreshPlan({ ...base, env: {}, pluginRoot: installed, agentHost: "copilot" })
   assert.deepEqual([direct.command, direct.args], ["copilot", ["plugin", "update", "desk"]])
@@ -119,9 +118,7 @@ test("the plan per host; Copilot only for an installed plugin, never a dev check
 test("the started line says what was started and the new version", () => {
   const plan = refreshPlan({ env: {}, pluginRoot: CLAUDE_ROOT, agentHost: "claude", running: "x", homeDir: "/h" })
   assert.equal(startedLine(finding(), plan), "Desk 3.2.0-alpha.153 is 19 releases behind main (3.2.0-alpha.172); running claude plugin update desk@ourostack in the background, so a new session will run 3.2.0-alpha.172.")
-  assert.equal(startedLine({ ...finding(), behind: null }, { doing: "refreshing the Agency plugin cache" }), "Desk 3.2.0-alpha.153 is behind main (3.2.0-alpha.172); refreshing the Agency plugin cache in the background, so a new session will run 3.2.0-alpha.172.")
-  const release = staleDeskFinding({ running: "3.2.92", latest: "3.2.93", agentHost: "copilot", channel: "release", agency: true, spec: "copilot:github:ourostack/desk:plugins/desk@release" })
-  assert.equal(startedLine(release, { doing: "refreshing the Agency plugin cache" }), "Desk 3.2.92 is behind the release channel (3.2.93); refreshing the Agency plugin cache in the background, so a new session will run 3.2.93.")
+  assert.equal(startedLine({ ...finding(), behind: null }, plan), "Desk 3.2.0-alpha.153 is behind main (3.2.0-alpha.172); running claude plugin update desk@ourostack in the background, so a new session will run 3.2.0-alpha.172.")
 })
 
 async function ctx(over = {}) {
@@ -282,14 +279,20 @@ test("current Desk, a Copilot dev checkout and an underivable host start nothing
   assert.equal(existsSync(path.join(stateDir, REFRESH_STAMP_FILE)), false)
 })
 
-test("Agency: the real session shape removes only this Desk's derived cache spec, with -f, and says so", async () => {
+// Removing Desk's Agency cache entry left Agency nothing to serve when GitHub refused the next fetch (a rate-limit 403 after a
+// reboot), so Desk alone was skipped while every other plugin loaded from its stale copy. Agency's own background refresh
+// already updates Desk at each session start, so boot starts nothing and never names the removal as a step.
+test("Agency: boot keeps Desk's Agency cache entry, starts nothing and never tells anyone to remove it", async () => {
   const { home, pluginRoot } = await agency()
   const { stateDir } = await ctx()
   const calls = []
   const io = out()
-  await runBootCli({ argv: [], env: { AGENCY_ENGINE: "copilot", AGENCY_SESSION_ID: "x" }, io, bootFn: stale("copilot"), refreshOptions: { stateDir, homeDir: home, pluginRoot, allowInTest: true, spawn: fakeSpawn(calls) } })
-  assert.equal(JSON.parse(calls[0].args[2]).shown, `agency plugin cache remove -f ${SPEC}`)
-  assert.match(io.chunks[0], /refreshing the Agency plugin cache in the background, so a new session will run 3\.2\.0-alpha\.172\./u)
+  await runBootCli({ argv: ["--json"], env: { AGENCY_ENGINE: "copilot", AGENCY_SESSION_ID: "x" }, io, bootFn: stale("copilot"), refreshOptions: { stateDir, homeDir: home, pluginRoot, allowInTest: true, spawn: fakeSpawn(calls) } })
+  assert.equal(calls.length, 0)
+  assert.equal(existsSync(path.join(stateDir, REFRESH_STAMP_FILE)), false)
+  const json = JSON.parse(io.chunks[0])
+  assert.equal(json.stale_desk.auto_refresh, "unavailable")
+  assert.doesNotMatch(json.stale_desk.line, /cache remove|cache clean/u)
 })
 
 // ---- Real processes -------------------------------------------------------------------------------------------------------

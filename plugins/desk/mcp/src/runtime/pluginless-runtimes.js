@@ -1,4 +1,4 @@
-// Finds Copilot runtimes started without Desk's plugin: the app starts runtimes with no plugins at all, and Agency skips a plugin whose GitHub lookup is rate limited (403) even with a cached copy, as happened to desk@release when many sessions resumed together after a reboot. A session served by one has no Desk tools or hooks, so nothing Desk-side can warn it from inside;
+// Finds Copilot runtimes started without Desk's plugin: the app starts runtimes with no plugins at all, and Agency skips a plugin with no cached copy whose GitHub lookup is rate limited (403), as happened to desk@release when many sessions resumed together after a reboot (boot's stale-Desk refresh had removed Desk's cached copy; it no longer does). A session served by one has no Desk tools or hooks, so nothing Desk-side can warn it from inside;
 // `drains.js runtimes status` is the outside check, and its lines say how to recover.
 import { execFileSync } from "node:child_process"
 

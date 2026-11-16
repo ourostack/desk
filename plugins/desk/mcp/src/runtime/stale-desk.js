@@ -29,11 +29,6 @@ export const VERSION_FAILURE_TTL_MS = 10 * 60 * 1000
 export const VERSION_CACHE_FILE = "latest-version.json"
 const VERSION_CHECK_SWITCH = "DESK_BOOT_VERSION_CHECK"
 
-/** The manual Agency refresh for the exact cache spec this Desk was loaded from. */
-export function agencyCacheCommand(spec) {
-  return `agency plugin cache remove "${spec}"`
-}
-
 /** How a line names the channel: "main", or "the release channel". */
 export function channelLabel(channel) {
   return channel === "release" ? "the release channel" : "main"
@@ -93,12 +88,12 @@ export function releasesBehind(running, latest) {
 }
 
 /**
- * What to do about it on each host. Under Agency the command names the exact cache spec this Desk was loaded from, so an
- * install on `main` is never told to refresh `release` or the other way round; when that spec is unknown it says how to find it.
+ * What to do about it on each host. Agency refreshes its cached Desk in the background as each session starts, so the step there
+ * is only a new session. It never removes that cached copy: Agency serves it when GitHub refuses a fetch, and without it a
+ * session starts with no Desk at all.
  */
-export function refreshStep(agentHost, { agency = false, spec = null } = {}) {
-  if (spec !== null) return `run ${agencyCacheCommand(spec)}, then start a new session`
-  if (agency) return "run agency plugin cache list, remove the ourostack/desk entry this session uses with agency plugin cache remove, then start a new session"
+export function refreshStep(agentHost, { agency = false } = {}) {
+  if (agency) return "start a new session; Agency refreshes Desk in the background as it starts, so the session after it runs the newer version"
   if (agentHost === "claude") return "update it with /plugin, then start a new session"
   if (agentHost === "copilot") return "run copilot plugin update desk, then start a new session"
   return "update the Desk plugin in this host, then start a new session"
@@ -110,11 +105,11 @@ export function behindText(behind) {
 }
 
 /** The warning as `{ running, latest, behind, channel, refresh, auto_refresh, line }`, or null when `running` is not behind `latest`. */
-export function staleDeskFinding({ running, latest, agentHost, channel = "main", agency = false, spec = null }) {
+export function staleDeskFinding({ running, latest, agentHost, channel = "main", agency = false }) {
   const order = compareVersions(running, latest)
   if (order === null || order >= 0) return null
   const behind = releasesBehind(running, latest)
-  const refresh = refreshStep(agentHost, { agency, spec })
+  const refresh = refreshStep(agentHost, { agency })
   const line =
     channel === "release" && agency
       ? releaseNotice({ running, latest })
@@ -191,7 +186,7 @@ export async function checkStaleDesk({ env, pluginRoot, agentHost, now = Date.no
   const dir = stateDir ?? resolveDeskStateDir({ env })
   const file = path.join(dir, VERSION_CACHE_FILE)
   const home = homeDir ?? os.homedir()
-  const { channel, spec, agency } = resolveDeskChannel({ env, agentHost, pluginRoot, running, homeDir: home, readFile })
+  const { channel, agency } = resolveDeskChannel({ env, agentHost, pluginRoot, running, homeDir: home, readFile })
   // On Agency's release channel the server loads the newest release itself (`./newest-release.js`): ask it the same question, so the finding says which version the tools run (and warms the copy the server is about to want).
   if (agency && channel === "release" && (newestReleaseFn !== undefined || !looksLikeNodeTestRunner(env))) {
     const { ensureNewestRelease, newestReleaseLine } = await import("./newest-release.js")
@@ -199,14 +194,14 @@ export async function checkStaleDesk({ env, pluginRoot, agentHost, now = Date.no
     const ensure = newestReleaseFn ?? ensureNewestRelease
     const result = await ensure({ env, pluginRoot, running, agentHost, homeDir: home, readFile, budgetMs: RELEASE_BUDGET_MS })
     if (result.latest !== undefined) {
-      const finding = staleDeskFinding({ running, latest: result.latest, agentHost, channel, agency, spec })
+      const finding = staleDeskFinding({ running, latest: result.latest, agentHost, channel, agency })
       return finding === null ? null : { ...finding, line: newestReleaseLine(result) }
     }
   }
   // Agency's cached release copy already names the release, so an Agency install on that channel asks no one.
   if (agency && channel === "release") {
     const known = cachedReleaseVersion({ env, agentHost, pluginRoot, homeDir: home, readFile })
-    if (known !== null) return staleDeskFinding({ running, latest: known, agentHost, channel, agency, spec })
+    if (known !== null) return staleDeskFinding({ running, latest: known, agentHost, channel, agency })
   }
   let latest = readCache(file, now, channel)
   if (latest === undefined) {
@@ -220,5 +215,5 @@ export async function checkStaleDesk({ env, pluginRoot, agentHost, now = Date.no
     latest = await Promise.race([fetchLatest(doFetch, budgetMs, channel), hard]).finally(() => clearTimeout(timer))
     writeCache(dir, file, latest, now, env, channel)
   }
-  return latest === null ? null : staleDeskFinding({ running, latest, agentHost, channel, agency, spec })
+  return latest === null ? null : staleDeskFinding({ running, latest, agentHost, channel, agency })
 }

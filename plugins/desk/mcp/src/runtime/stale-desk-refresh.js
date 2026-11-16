@@ -10,8 +10,10 @@
 //   releases the claim. The limit holds without the boot process, which has exited by then.
 // - Boot reports what it started. A failure shows in the next boot, from the stamp, as the manual step; it is never shown as an error.
 //
-// Per host (verified against `agency plugin cache remove --help`, `copilot plugin update --help` and `claude plugin update --help`):
-// - Agency: `agency plugin cache remove -f <spec>`, the spec read from Agency's own cache index.
+// Per host (verified against `copilot plugin update --help` and `claude plugin update --help`):
+// - Agency: nothing. Agency refreshes its cached Desk in the background at each session start, and serves that cached copy when
+//   GitHub refuses a fetch. Removing the entry (`agency plugin cache remove`) took that fallback away: after a reboot under a
+//   GitHub rate limit, Desk alone was skipped while every other plugin loaded from its stale copy.
 // - Copilot run directly (Desk under Copilot's installed-plugins directory): `copilot plugin update desk`.
 // - Claude Code: `claude plugin update desk@<marketplace>`, the marketplace read from where this Desk is installed.
 
@@ -21,7 +23,7 @@ import * as os from "node:os"
 import * as path from "node:path"
 import { appendRepairLog, resolveDeskStateDir } from "./last-start.js"
 import { behindText, channelLabel } from "./stale-desk.js"
-import { deriveAgencySpec, isAgencySession } from "./desk-channel.js"
+import { isAgencySession } from "./desk-channel.js"
 import { assertNotRealStateUnderTest, looksLikeNodeTestRunner } from "./test-state-guard.js"
 import { renameWithRetry } from "../util/rename-retry.js"
 
@@ -51,11 +53,8 @@ export function copilotInstalled({ env, pluginRoot, homeDir }) {
 }
 
 /** `{ host, command, args, doing }` for the host's own refresh, or null when none can be derived and the manual step stands. */
-export function refreshPlan({ env, pluginRoot, agentHost, running, homeDir, readFile }) {
-  if (isAgencySession({ env, pluginRoot })) {
-    const spec = deriveAgencySpec({ env, agentHost, pluginRoot, running, homeDir, readFile })
-    return spec === null ? null : { host: "agency", command: "agency", args: ["plugin", "cache", "remove", "-f", spec], doing: "refreshing the Agency plugin cache" }
-  }
+export function refreshPlan({ env, pluginRoot, agentHost, homeDir }) {
+  if (isAgencySession({ env, pluginRoot })) return null
   if (agentHost === "copilot") return copilotInstalled({ env, pluginRoot, homeDir }) ? { host: "copilot", command: "copilot", args: ["plugin", "update", "desk"], doing: "running copilot plugin update desk" } : null
   if (agentHost === "claude") {
     const marketplace = claudeMarketplace({ pluginRoot })
@@ -125,14 +124,14 @@ function writeFileAtomic(file, record) {
  * a state meaning the manual step stands: `disabled`, `skipped` (an attempt in the last hour), `failed` (that attempt failed),
  * `unavailable` (no command can be derived). Never throws. `allowInTest` lifts the node:test off switch.
  */
-export function planStaleRefresh({ finding, env, pluginRoot, agentHost, homeDir, now = Date.now, stateDir, readFile, allowInTest = false }) {
+export function planStaleRefresh({ finding, env, pluginRoot, agentHost, homeDir, now = Date.now, stateDir, allowInTest = false }) {
   try {
     if (String(env[REFRESH_SWITCH] ?? "").trim() === "0") return { state: "disabled" }
     if (!allowInTest && looksLikeNodeTestRunner(env)) return { state: "disabled" }
     const dir = stateDir ?? resolveDeskStateDir({ env })
     const stamp = readStamp(path.join(dir, REFRESH_STAMP_FILE))
     if (freshStamp(stamp, now)) return { state: stamp.ok === false ? "failed" : "skipped" }
-    const plan = refreshPlan({ env, pluginRoot, agentHost, running: finding.running, homeDir: homeDir ?? os.homedir(), readFile })
+    const plan = refreshPlan({ env, pluginRoot, agentHost, homeDir: homeDir ?? os.homedir() })
     return plan === null ? { state: "unavailable" } : { state: "ready", plan, dir }
   } catch {
     return { state: "unavailable" }

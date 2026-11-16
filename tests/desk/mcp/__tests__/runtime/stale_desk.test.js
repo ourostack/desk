@@ -7,7 +7,6 @@ import { mkTempRoot } from "../_temp_roots.js"
 import { bootOnce } from "../../../../../plugins/desk/mcp/src/runtime/boot.js"
 import { formatBootText } from "../../../../../plugins/desk/mcp/src/runtime/boot-text.js"
 import {
-  agencyCacheCommand,
   latestPluginUrl,
   VERSION_CACHE_FILE,
   VERSION_CACHE_TTL_MS,
@@ -27,6 +26,8 @@ async function fixture(version) {
   if (version !== null) await fs.writeFile(path.join(pluginRoot, "plugin.json"), JSON.stringify({ name: "desk", version }))
   return { pluginRoot, stateDir }
 }
+
+const AGENCY_STEP = "start a new session; Agency refreshes Desk in the background as it starts, so the session after it runs the newer version"
 
 const answering = (version, calls = []) => async (url, init) => {
   calls.push({ url, init })
@@ -70,17 +71,9 @@ test("the refresh step names the right command for each host", () => {
   assert.match(refreshStep("claude"), /\/plugin/u)
   assert.equal(refreshStep("copilot"), "run copilot plugin update desk, then start a new session")
   assert.match(refreshStep("unknown"), /update the Desk plugin/u)
-  // Under Agency the command names the exact spec the session was loaded from, so each channel gets its own.
-  const release = "copilot:github:ourostack/desk:plugins/desk@release"
-  const main = "copilot:github:ourostack/desk:plugins/desk@main"
-  assert.equal(agencyCacheCommand(release), `agency plugin cache remove "${release}"`)
-  assert.equal(refreshStep("copilot", { agency: true, spec: release }), `run agency plugin cache remove "${release}", then start a new session`)
-  assert.equal(refreshStep("claude", { agency: true, spec: main }), `run agency plugin cache remove "${main}", then start a new session`)
-  assert.doesNotMatch(refreshStep("copilot", { agency: true, spec: main }), /@release/u)
-  // An Agency session whose spec is unknown is told how to find it, not handed a guess.
-  const unknown = refreshStep("copilot", { agency: true })
-  assert.match(unknown, /agency plugin cache list/u)
-  assert.doesNotMatch(unknown, /@(release|main)/u)
+  // Under Agency the step is a new session; it never removes the cached copy Agency falls back on when GitHub refuses a fetch.
+  assert.equal(refreshStep("copilot", { agency: true }), AGENCY_STEP)
+  assert.equal(refreshStep("claude", { agency: true }), AGENCY_STEP)
   assert.equal(latestPluginUrl("release"), "https://raw.githubusercontent.com/ourostack/desk/release/plugins/desk/plugin.json")
   assert.equal(latestPluginUrl("main"), "https://raw.githubusercontent.com/ourostack/desk/main/plugins/desk/plugin.json")
 })
@@ -95,10 +88,10 @@ test("the finding is one line, with a count when reliable and just behind otherw
   const vague = staleDeskFinding({ running: "3.2.0-alpha.153", latest: "3.3.0", agentHost: "copilot" })
   assert.equal(vague.behind, null)
   assert.equal(vague.line, "Desk 3.2.0-alpha.153 is behind main (3.3.0); run copilot plugin update desk, then start a new session.")
-  const release = staleDeskFinding({ running: "3.2.92", latest: "3.2.93", agentHost: "copilot", channel: "release", agency: true, spec: "copilot:github:ourostack/desk:plugins/desk@release" })
+  const release = staleDeskFinding({ running: "3.2.92", latest: "3.2.93", agentHost: "copilot", channel: "release", agency: true })
   assert.equal(release.channel, "release")
   assert.equal(release.line, releaseNotice({ running: "3.2.92", latest: "3.2.93" }))
-  assert.equal(release.refresh, 'run agency plugin cache remove "copilot:github:ourostack/desk:plugins/desk@release", then start a new session')
+  assert.equal(release.refresh, AGENCY_STEP)
   const notAgency = staleDeskFinding({ running: "3.2.92", latest: "3.2.93", agentHost: "copilot", channel: "release" })
   assert.equal(notAgency.line, "Desk 3.2.92 is behind the release channel (3.2.93); run copilot plugin update desk, then start a new session.")
   assert.equal(staleDeskFinding({ running: "3.2.0-alpha.172", latest: "3.2.0-alpha.172", agentHost: "claude" }), null)
@@ -357,7 +350,7 @@ test("a release install is compared with the release copy Agency already cached,
   assert.deepEqual(calls2.map((call) => call.url), [latestPluginUrl("main")])
   assert.equal(main.channel, "main")
   assert.equal(main.latest, "3.3.0-rc.1")
-  assert.equal(main.line, `Desk 3.2.92 is behind main (3.3.0-rc.1); run agency plugin cache remove "${MAIN}", then start a new session.`)
+  assert.equal(main.line, `Desk 3.2.92 is behind main (3.3.0-rc.1); ${AGENCY_STEP}.`)
   assert.doesNotMatch(main.line, /@release/u)
 })
 
