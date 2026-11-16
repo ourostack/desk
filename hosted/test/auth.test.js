@@ -11,7 +11,25 @@ import { githubCallbackHandler } from "../src/auth/github.js";
 import { createRedirectPolicy } from "../src/auth/redirects.js";
 import * as pages from "../src/auth/pages.js";
 
-test("consent, invitation and refusal pages share an accessible logo without changing or unescaping their content", () => {
+test("every page has its own specific title, HTML-escaped like the rest of the page", () => {
+  const titleOf = (html) => /<title>([^<]*)<\/title>/.exec(html)?.[1];
+  const builders = {
+    consentPage: pages.consentPage({ clientName: "A", redirectUri: "https://claude.ai/api/mcp/auth_callback", consent: "c" }),
+    invitePage: pages.invitePage({ issuer: "https://desk.ouro.bot" }),
+    ...Object.fromEntries(
+      ["startingUpPage", "signInUnavailablePage", "startAgainPage", "inviteOnlyPage", "inviteRefusedPage", "accessOffPage", "noDeskPage", "inviteInvalidPage"].map((name) => [name, pages[name]()]),
+    ),
+  };
+  const titles = Object.entries(builders).map(([name, { html }]) => [name, titleOf(html)]);
+  for (const [name, title] of titles) assert.ok(title, `${name} has a title`);
+  assert.equal(new Set(titles.map(([, title]) => title)).size, titles.length, "no two pages share a title");
+  assert.ok(titles.every(([, title]) => title !== "Desk sign-in"), "no page keeps the generic title");
+  assert.equal(titleOf(builders.invitePage.html), "You&#39;re invited to Hosted Desk");
+  assert.equal(titleOf(builders.startAgainPage.html), "Sign-in link expired · Hosted Desk");
+  assert.equal(titleOf(pages.page(400, "x", '<b>"hi"</b>').html), "&lt;b&gt;&quot;hi&quot;&lt;/b&gt;");
+});
+
+test("the consent, invitation and refusal pages share an accessible logo without changing or unescaping their content", () => {
   const arguments_ = { clientName: '<img src=x onerror="attack()">', redirectUri: "https://claude.ai/api/mcp/auth_callback", consent: '"<&' };
   const rendered = [
     pages.page(400, "<script>attack()</script>"),

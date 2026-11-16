@@ -69,6 +69,18 @@ test("approved branding assets are public even while sign-in is unavailable", as
   }
 });
 
+test("the pages follow dark mode: desk.css sets a dark background and text under prefers-color-scheme", async (t) => {
+  const { base } = await start(t, { unavailable: NOT_SET_UP });
+  const css = await (await fetch(`${base}/assets/desk.css`)).text();
+  assert.match(css, /:root \{\s*color-scheme: light dark;/);
+  const dark = /@media \(prefers-color-scheme: dark\) \{([\s\S]*)\}\s*$/.exec(css);
+  assert.ok(dark, "a prefers-color-scheme: dark block");
+  const body = /body \{([^}]*)\}/.exec(dark[1]);
+  assert.ok(body, "the dark block sets body");
+  assert.match(body[1], /(^|\s)background:/);
+  assert.match(body[1], /(^|\s)color:/);
+});
+
 test("branded sign-in pages permit their own image and style without allowing scripts or blocking OAuth redirects", async (t) => {
   const { base } = await start(t, { unavailable: NOT_SET_UP });
   const response = await fetch(`${base}/authorize`);

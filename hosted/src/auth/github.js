@@ -22,7 +22,8 @@ const AUTHORIZE_URL = "https://github.com/login/oauth/authorize";
 const TOKEN_URL = "https://github.com/login/oauth/access_token";
 const USER_URL = "https://api.github.com/user";
 
-export const githubSignInOffPage = () => page(403, "GitHub sign-in is turned off for this Hosted Desk. Start again from Claude and sign in with Apple or email.");
+export const githubSignInOffPage = () =>
+  page(403, "GitHub sign-in is turned off for this Hosted Desk. Start again from Claude and sign in with Apple or email.", "GitHub sign-in is off · Hosted Desk");
 
 // `log` receives one line per refused or failed sign-in: the error code and
 // client id (and, with accounts, the accountId) only. `sealed(kind, payload,
@@ -86,7 +87,7 @@ export function createGitHubSignIn({ sealed, unsealed, clientId, clientSecret, c
     const pending = unsealed("pending", state);
     if (!pending) {
       log("sign-in refused: invalid_state");
-      return page(400, "This sign-in link has expired or is not valid. Start again from Claude.");
+      return page(400, "This sign-in link has expired or is not valid. Start again from Claude.", "Sign-in link expired · Hosted Desk");
     }
     const back = new URL(pending.redirectUri);
     if (pending.state !== undefined) back.searchParams.set("state", pending.state);
@@ -96,10 +97,10 @@ export function createGitHubSignIn({ sealed, unsealed, clientId, clientSecret, c
       return { redirectTo: back.href };
     }
     const user = await confirmedUser(code, pending);
-    if (!user) return page(502, "GitHub did not confirm who signed in. Start again from Claude.");
+    if (!user) return page(502, "GitHub did not confirm who signed in. Start again from Claude.", "GitHub did not confirm sign-in · Hosted Desk");
     if (!allowedLogins.includes(user.login)) {
       log(`sign-in refused: login_not_allowed client ${pending.clientId}`);
-      return page(403, `This Desk is not open to ${user.login}.`);
+      return page(403, `This Desk is not open to ${user.login}.`, "Desk not open to this account · Hosted Desk");
     }
     back.searchParams.set(
       "code",
@@ -145,11 +146,11 @@ export function createGitHubSignIn({ sealed, unsealed, clientId, clientSecret, c
       return { redirectTo: back.href, clearCookies };
     }
     const user = await confirmedUser(code, pending);
-    if (!user) return { ...page(502, "GitHub did not confirm who signed in. Start again from Claude."), clearCookies };
+    if (!user) return { ...page(502, "GitHub did not confirm who signed in. Start again from Claude.", "GitHub did not confirm sign-in · Hosted Desk"), clearCookies };
     const accountId = Number.isSafeInteger(user.id) ? fallback.accountFor(user.id) : undefined;
     if (!accountId) {
       log(`sign-in refused: github_user_not_mapped client ${pending.clientId}`);
-      return { ...page(403, `This Desk is not open to ${user.login}.`), clearCookies };
+      return { ...page(403, `This Desk is not open to ${user.login}.`, "Desk not open to this account · Hosted Desk"), clearCookies };
     }
     const refusal = await fallback.admit(accountId, pending.clientId);
     if (refusal) return { ...refusal, clearCookies };
@@ -192,7 +193,7 @@ export function githubCallbackHandler({ githubCallback }) {
       if (outcome.redirectTo) return res.redirect(302, outcome.redirectTo);
       sendPage(res, outcome);
     } catch {
-      sendPage(res, page(502, "Sign-in failed while talking to GitHub. Start again from Claude."));
+      sendPage(res, page(502, "Sign-in failed while talking to GitHub. Start again from Claude.", "GitHub sign-in failed · Hosted Desk"));
     }
   };
 }
