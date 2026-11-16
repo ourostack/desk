@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { runTerminalProtocol } from "../../native-protocol.mjs";
 
-const input = JSON.parse(fs.readFileSync(0));
+const input = JSON.parse(Buffer.concat(await Array.fromAsync(process.stdin)));
 const root = process.argv[2];
 fs.mkdirSync(root, { recursive: true });
 const evidenceRoot = path.join(root, "evidence");

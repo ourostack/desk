@@ -35,13 +35,13 @@ const bootstrap = [
   'const fs=require("node:fs"),crypto=require("node:crypto"),path=require("node:path");',
   'if(process.version!=="v22.23.2"||process.platform!=="linux"||process.arch!=="x64"||process.getuid()!==0)throw Error("RUNTIME_PLATFORM");',
   'if(JSON.parse(fs.readFileSync("/opt/copilot-v2/package/package.json")).version!=="1.0.84-1"||JSON.parse(fs.readFileSync("/opt/copilot-sdk-v2/node_modules/@github/copilot-sdk/package.json")).version!=="1.0.13")throw Error("RUNTIME_PACKAGES");',
-  'const input=fs.readFileSync(0);if(input.length>67108864)throw Error("INPUT_LIMIT");',
+  'const chunks=[];process.stdin.on("data",c=>chunks.push(c)).on("end",()=>{const input=Buffer.concat(chunks);if(input.length>67108864)throw Error("INPUT_LIMIT");',
   `const expected=${JSON.stringify(sourceMembers)};`,
   'const p=JSON.parse(input),f=p.files;if(!Array.isArray(f)||f.length!==expected.length||new Set(f.map(x=>x.path)).size!==expected.length)throw Error("ARCHIVE_MEMBERS");',
   'for(const x of f){if(!expected.includes(x.path))throw Error("ARCHIVE_MEMBERS");const b=Buffer.from(x.base64,"base64");if(b.length>524288||b.toString("base64")!==x.base64||crypto.createHash("sha256").update(b).digest("hex")!==x.sha256)throw Error("ARCHIVE_IDENTITY");',
   'const target=path.join("/run/controller",x.path);fs.mkdirSync(path.dirname(target),{recursive:true,mode:448});fs.writeFileSync(target,b,{flag:"wx",mode:384});}',
   'const sdk=require("/opt/copilot-sdk-v2/node_modules/@github/copilot-sdk/dist/cjs/index.js");',
-  'import("file:///run/controller/native-identity.mjs").then(async identity=>{const role=identity.prepareNativeRole();if(p.assessment)(await import("file:///run/controller/native-assessment.mjs")).stageAssessmentEvidence(p);const m=await import("file:///run/controller/native-protocol.mjs");const r=await m.runTerminalProtocol({sdk,root:role.root,model:p.model,token:p.credential,limits:p.limits,assessment:p.assessment});process.exitCode=p.assessment?(["passed","product_failure","inconclusive"].includes(r.status)?0:1):r.ok?0:1;}).catch(()=>{process.stderr.write("NATIVE_PROTOCOL_FAILED\\n");process.exitCode=1;});',
+  'import("file:///run/controller/native-identity.mjs").then(async identity=>{const role=identity.prepareNativeRole();if(p.assessment)(await import("file:///run/controller/native-assessment.mjs")).stageAssessmentEvidence(p);const m=await import("file:///run/controller/native-protocol.mjs");const r=await m.runTerminalProtocol({sdk,root:role.root,model:p.model,token:p.credential,limits:p.limits,assessment:p.assessment});process.exitCode=p.assessment?(["passed","product_failure","inconclusive"].includes(r.status)?0:1):r.ok?0:1;}).catch(()=>{process.stderr.write("NATIVE_PROTOCOL_FAILED\\n");process.exitCode=1;});});',
 ].join("");
 
 function observeProtocolEvidence(rows, plan, prepared) {

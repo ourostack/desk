@@ -36,10 +36,16 @@ function intakeContext(pluginRoot) {
   ].join("\n") };
 }
 
+async function readStdin() {
+  const chunks = [];
+  for await (const chunk of process.stdin) chunks.push(chunk);
+  return Buffer.concat(chunks).toString("utf8");
+}
+
 async function main() {
   let output = {};
   try {
-    const raw = fs.readFileSync(0, "utf8");
+    const raw = await readStdin();
     if (Buffer.byteLength(raw) > 262144) throw Object.assign(Error(), { code: "input_too_large" });
     const input = JSON.parse(raw);
     if (matching(input)) {
