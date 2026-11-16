@@ -1,0 +1,65 @@
+{
+  "generator": "ouro-actions 0.16.0",
+  "set": "desk-read",
+  "tools": [
+    {
+      "name": "desk_recall",
+      "title": "Recall",
+      "description": "Use for loose recall, as in `do I remember anything about X`. Ranks every desk Markdown file by meaning and exact words together. `scope`: 'active', 'archived' or 'all' (default; this is the historical lookback).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "topic": {
+            "type": "string",
+            "description": "What to recall."
+          },
+          "limit": {
+            "type": "integer",
+            "description": "Maximum number of results.",
+            "minimum": 1
+          },
+          "scope": {
+            "type": "string",
+            "description": "Which documents to search: live work, archived work, or both.",
+            "enum": [
+              "active",
+              "archived",
+              "all"
+            ]
+          }
+        },
+        "required": [
+          "topic"
+        ],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "desk_skill",
+      "title": "Read a skill",
+      "description": "Use when your client cannot load Desk's skills itself (claude.ai, ChatGPT): read one of Desk's skills, the working procedures its instructions point to. With no `name`, lists every skill with its description; with `name`, returns that skill's text to follow. Read-only and needs no desk.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "The skill to read, such as task-lifecycle; omit it to list every skill."
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "openWorldHint": false
+      }
+    }
+  ],
+  "refusals": {}
+}

@@ -183,7 +183,7 @@ function deskSurfaces() {
     tool: "desk",
   })
   const browser = JSON.parse(readFileSync(path.join(repoRoot, "plugins/desk/mcp/web-catalog.json"), "utf8")).tools
-  const found = extracted.errors.filter((error) => !error.id.includes("/lib/ouro-ui/"))
+  const found = extracted.errors.filter((error) => !error.id.includes("/lib/ouro-ui/") && !error.id.includes("/lib/ouro-actions/"))
   return {
     ...extracted,
     errors: found.filter((error) => !(error.id in NOT_ERRORS)),

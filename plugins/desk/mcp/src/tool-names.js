@@ -4,6 +4,8 @@
 // list is canonical). Kept in a no-deps file so tests can import without
 // the @modelcontextprotocol/sdk dep being installed.
 
+import { ACTION_TOOLS } from "./actions/served.js"
+
 export const TOOL_NAMES = [
   // Runtime CRUD (Unit 3)
   "task_create",
@@ -32,7 +34,7 @@ export const TOOL_NAMES = [
   "improvement_update",
 ]
 
-export const TOOL_DESCRIPTIONS = {
+const HAND_WRITTEN_DESCRIPTIONS = {
   task_create:
     "Use when new work needs its own card: create a task card at <track>/<slug>/task.md. `slug` must be an outcome name: 2-6 lowercase kebab-case words, not prompt-like or credential-like; a rejection says what to fix.",
   task_update:
@@ -57,10 +59,6 @@ export const TOOL_DESCRIPTIONS = {
     "After you write a file with Write or Edit (a planning doc, a spec, a report), call this with its path to commit it. `paths` are relative to the desk root, inside this session's write prefix (desks/<alias>/ in a shared workspace). Stages and commits exactly `paths` with `message`. A task card is refused: use the task tools. `tidy: true` commits a desk tidy or its undo. A client with no filesystem passes `files` ({ path, content } text) with or instead of `paths`.",
   desk_search:
     "Use when you cannot tell which file holds something, or what changed in a time window. Exact-word search across the desk. Filters: track, status, kind, since, until. `scope`: 'active' (default), 'archived' or 'all'. With no `query`, or `newest: true`, it lists documents by when they were updated, newest first, inside the since/until window (`scope` then defaults to 'all').",
-  desk_recall:
-    "Use for loose recall, as in `do I remember anything about X`. Ranks every desk Markdown file by meaning and exact words together. `scope`: 'active', 'archived' or 'all' (default; this is the historical lookback).",
-  desk_skill:
-    "Use when your client cannot load Desk's skills itself (claude.ai, ChatGPT): read one of Desk's skills, the working procedures its instructions point to. With no `name`, lists every skill with its description; with `name`, returns that skill's text to follow. Read-only and needs no desk.",
   desk_status:
     "Session-start health check for the resolved desk root. The compact answer has `state` (ready, degraded, admitting or setup_required), `degraded` (why), `fix` (what to do in this session), `search`, `notes` and where the desk is. Retries admission when Desk is not ready. `detail: true` returns the full payload. A hosted Desk (claude.ai, ChatGPT) also returns its instructions, unless `has_instructions: true`; follow them and read the skills they name with desk_skill.",
   desk_doctor:
@@ -72,3 +70,8 @@ export const TOOL_DESCRIPTIONS = {
   improvement_update:
     "Use when you ship, release or close a card you hold the claim on, with its `key` and `claim_id`: ship it (`countermeasure` is the pull request URL; `state` \"shipped\" or omitted), release it (`state` \"open\") or close it (`state` \"closed_unverified\" with `close_reason`).",
 }
+
+export const TOOL_DESCRIPTIONS = Object.freeze({
+  ...HAND_WRITTEN_DESCRIPTIONS,
+  ...Object.fromEntries(Object.entries(ACTION_TOOLS).map(([name, tool]) => [name, tool.description])),
+})

@@ -28,6 +28,7 @@ import {
 
 import { TOOL_NAMES, TOOL_DESCRIPTIONS } from "./tool-names.js"
 import { TOOL_INPUT_SCHEMAS } from "./tool-schemas.js"
+import { ACTION_TOOLS } from "./actions/served.js"
 import { deskVersion } from "./package-metadata.js"
 import {
   task_create,
@@ -360,6 +361,7 @@ export async function startServer({
       name,
       description: TOOL_DESCRIPTIONS[name],
       inputSchema: TOOL_INPUT_SCHEMAS[name],
+      ...(ACTION_TOOLS[name] ? { title: ACTION_TOOLS[name].title, annotations: ACTION_TOOLS[name].annotations } : {}),
     })),
   }))
 

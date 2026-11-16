@@ -1,0 +1,56 @@
+{
+  "generator": "ouro-actions 0.16.0",
+  "set": "desk-read",
+  "tool": "desk",
+  "actions": [
+    {
+      "id": "desk_recall",
+      "consent": "read",
+      "label": "Recall",
+      "description": "Recall what the desk says about a topic.",
+      "agent": "Use for loose recall, as in `do I remember anything about X`. Ranks every desk Markdown file by meaning and exact words together. `scope`: 'active', 'archived' or 'all' (default; this is the historical lookback).",
+      "input": {
+        "topic": {
+          "label": "Topic",
+          "description": "What to recall.",
+          "kind": "string"
+        },
+        "limit": {
+          "label": "Limit",
+          "description": "Maximum number of results.",
+          "optional": true,
+          "min": 1,
+          "kind": "integer"
+        },
+        "scope": {
+          "label": "Scope",
+          "description": "Which documents to search: live work, archived work, or both.",
+          "values": [
+            "active",
+            "archived",
+            "all"
+          ],
+          "optional": true,
+          "kind": "enum"
+        }
+      },
+      "output": {}
+    },
+    {
+      "id": "desk_skill",
+      "consent": "read",
+      "label": "Read a skill",
+      "description": "Read one of Desk's skills, or list them.",
+      "agent": "Use when your client cannot load Desk's skills itself (claude.ai, ChatGPT): read one of Desk's skills, the working procedures its instructions point to. With no `name`, lists every skill with its description; with `name`, returns that skill's text to follow. Read-only and needs no desk.",
+      "input": {
+        "name": {
+          "label": "Skill",
+          "description": "The skill to read, such as task-lifecycle; omit it to list every skill.",
+          "optional": true,
+          "kind": "string"
+        }
+      },
+      "output": {}
+    }
+  ]
+}
