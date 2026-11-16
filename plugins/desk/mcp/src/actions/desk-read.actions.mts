@@ -1,4 +1,4 @@
-import { defineAction, defineActions, field } from "../lib/ouro-actions/ouro-actions.mts";
+import { defineAction, field } from "../lib/ouro-actions/ouro-actions.mts";
 
 const SCOPE = field.enum({
   label: "Scope",
@@ -71,5 +71,3 @@ export const deskSkill = defineAction({
   },
   output: {},
 });
-
-export default defineActions("desk-read", [deskSearch, deskRecall, deskSkill], { tool: "desk" });
