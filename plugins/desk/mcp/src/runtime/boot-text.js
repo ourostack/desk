@@ -36,41 +36,26 @@ const FAILURE_WORDS = {
   unreachable: "remote unreachable",
   auth_failed: "remote refused this host's credentials",
   deadline: "git timed out",
-  conflict: "the pull hit a conflict",
-  diverged: "the desk and its remote have diverged",
-}
-
-// Where the quarantine put the moved paths: `_cache/stray-<date>/` under the desk, from the first moved path.
-function strayDir(sync, root) {
-  const first = Array.isArray(sync.quarantinedPaths) ? sync.quarantinedPaths[0] : undefined
-  const dir = typeof first === "string" ? first.split("/").slice(0, 2).join("/") : "_cache"
-  return root ? `${root}/${dir}/` : `${dir}/`
+  local_changes: "files the remote also changed are modified or untracked here, so the checkout was not moved",
 }
 
 const plural = (count, noun) => `${count} ${noun}${count === 1 ? "" : "s"}`
 
 /**
- * One plain sentence about the sync. Failure does not establish absent effects; a conflict while restoring local
- * changes means the pull itself succeeded; a desk with no
- * remote or upstream has nothing to sync, which is not a sync that worked. `sync` is `syncWorkspace`'s answer (null
- * when it did not return one); `timedOut` says boot stopped waiting, not that the operation stopped; `lastSyncAt` is ISO text or null;
- * `root` is the desk's path, used to name where moved files went.
+ * One plain sentence about the sync. Failure does not establish absent effects; a desk with no remote or upstream has
+ * nothing to sync, which is not a sync that worked. `sync` is `syncWorkspace`'s answer (null when it did not return
+ * one); `timedOut` says boot stopped waiting, not that the operation stopped; `lastSyncAt` is ISO text or null.
  */
-export function syncSummary({ sync, timedOut = false, lastSyncAt = null, root = "" }) {
+export function syncSummary({ sync, timedOut = false, lastSyncAt = null }) {
   const asOf = `local desk is as of ${lastSyncAt ?? "unknown"}`
   const failed = (why) => `sync failed: ${why}; effects unverified; ${asOf}`
   if (timedOut) return `sync pending: it did not finish within the boot's time budget; effects unknown; verify with direct Git`
   if (sync === null || sync === undefined) return failed("it did not run")
   const unpushed = unpushedText(sync.unpushed)
   if (sync.state === "unresolved") {
-    const moved = Array.isArray(sync.quarantinedPaths) && sync.quarantinedPaths.length > 0 ? ` (${plural(sync.quarantinedPaths.length, "stray untracked path")} had been moved to ${strayDir(sync, root)} first)` : ""
-    if (typeof sync.reason === "string" && sync.reason.startsWith("autostash_pop_conflict")) {
-      const paths = Array.isArray(sync.conflicted) && sync.conflicted.length > 0 ? ` (conflicted: ${sync.conflicted.join(", ")})` : ""
-      return `sync: the pull succeeded, but the desk's uncommitted local changes conflict with what came in${paths}; nothing was pushed; resolve them before changing the desk${moved}${unpushed}`
-    }
-    return `${failed(FAILURE_WORDS[sync.cause] ?? "the pull did not complete")}${moved}${unpushed}`
+    const paths = sync.cause === "local_changes" && Array.isArray(sync.conflicted) && sync.conflicted.length > 0 ? ` (in the way: ${sync.conflicted.join(", ")})` : ""
+    return `${failed(FAILURE_WORDS[sync.cause] ?? "the fetch did not complete")}${paths}${unpushed}`
   }
-  if (sync.state === "quarantined") return `sync ok: moved ${plural(sync.quarantinedPaths?.length ?? 0, "stray untracked path")} to ${strayDir(sync, root)} first, then pulled${unpushed}`
   if (sync.nothingToSync === "headless") return "headless session; nothing synced"
   if (sync.nothingToSync === "no_remote") return "no remote; nothing to sync"
   if (sync.nothingToSync === "no_upstream") return "no upstream branch; nothing to sync"

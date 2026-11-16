@@ -95,7 +95,7 @@ test("every file under plugins/desk that emits a denial is accounted for in this
     "mcp/src/runtime/test-state-guard.js": 1, "mcp/src/factory/test-state-guard.js": 1,
     "mcp/src/desk/card-commit-guard.js": 2,
     // Its `unresolved` is a sync outcome, not a denial.
-    "mcp/src/runtime/session-sync.js": 6,
+    "mcp/src/runtime/session-sync.js": 4,
   }
   // Comment lines do not emit anything.
   const code = (file) => readFileSync(path.join(plugin, file), "utf8").split("\n").filter((line) => !/^\s*(?:\/\/|\*|\/\*)/u.test(line)).join("\n")

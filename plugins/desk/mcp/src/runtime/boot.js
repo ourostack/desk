@@ -1025,24 +1025,6 @@ function emptyResult({ status, degraded, pending, instructions = [], root, host 
 
 export { isNoninteractive }
 
-// Every untracked file the sync moved out of the pull's way, by its old and new path, so the session that owns one can find
-// it. Each moved path is `_cache/stray-<date>/<old path>`. Returns null when nothing was moved.
-function movedPathsInstruction(sync, root) {
-  if (sync?.state !== "quarantined" && sync?.state !== "unresolved") return null
-  const moved = Array.isArray(sync.quarantinedPaths) ? sync.quarantinedPaths : []
-  if (moved.length === 0) {
-    return sync.state === "quarantined" ? `Sync moved untracked files out of the pull's way into _cache/stray-<date>/ under ${root.path}; mention it in one line and continue.` : null
-  }
-  const pairs = moved.map((to) => `${to.split(/[\\/]/u).slice(2).join("/")} to ${to}`)
-  return `Sync moved ${moved.length === 1 ? "1 untracked file" : `${moved.length} untracked files`} that the pull would have overwritten, under ${root.path}: ${pairs.join("; ")}. Another session may own them: tell the operator in one line, and leave them for their owner to restore.`
-}
-
-// A stuck checkout the sync repaired before pulling, in one plain sentence. Returns null when nothing was repaired.
-function repairedInstruction(sync, root) {
-  if (typeof sync?.repairedNote !== "string") return null
-  return `Sync repaired the desk under ${root.path} before pulling: ${sync.repairedNote} Tell the operator this in one line, and leave the stash entry for whoever owns the change.`
-}
-
 // The helper's result is evidence, not a permanent reporting rule after independent recovery.
 function syncInstruction(sync, root) {
   if (sync !== null && sync !== undefined && sync.state !== "unresolved") return null
@@ -1192,10 +1174,6 @@ function buildInstructionItems(ctx) {
   }
   const syncLine = syncInstruction(sync, root)
   if (syncLine !== null) add(syncLine)
-  const movedLine = movedPathsInstruction(sync, root)
-  if (movedLine !== null) add(movedLine)
-  const repairedLine = repairedInstruction(sync, root)
-  if (repairedLine !== null) add(repairedLine)
   for (const entry of cardValidationResult) {
     add(`Fix the frontmatter of ${cardLocation(entry)}/task.md (handle ${entry.handle}): ${entry.problems.join("; ")}.`)
   }
@@ -1411,7 +1389,7 @@ export async function bootOnce({
   } catch {
     lastSyncAt = null
   }
-  const syncSummaryText = syncSummary({ sync, timedOut: syncTimedOut, lastSyncAt, root: root.path })
+  const syncSummaryText = syncSummary({ sync, timedOut: syncTimedOut, lastSyncAt })
   // The desk's own rules, read after the sync so a pull that changed them is already in. Never throws.
   let agentsMd = null
   try {

@@ -211,7 +211,7 @@ test("a refused pull tells the agent the probable cause, how to look further, ho
   git(root, ["remote", "add", "origin", origin])
   git(root, ["push", "-q", "-u", "origin", "main"])
   git(root, ["remote", "set-url", "origin", REMOTE])
-  const refused = (command, args, options) => (args[2] === "pull" ? { status: 128, stdout: "", stderr: "remote: Repository not found.\nfatal: Authentication failed for 'https://github.com/arimendelow_microsoft/desk.git/'\n" } : spawnSync(command, args, options))
+  const refused = (command, args, options) => (args.includes("fetch") ? { status: 128, stdout: "", stderr: "remote: Repository not found.\nfatal: Authentication failed for 'https://github.com/arimendelow_microsoft/desk.git/'\n" } : spawnSync(command, args, options))
   const result = await syncWorkspace({ root, env: process.env, spawnGit: refused, spawnPull: refused, scheduleDelivery: () => {}, fileProblem: () => {} })
 
   assert.equal(result.cause, "auth_failed")
@@ -233,7 +233,7 @@ test("a refused pull on a branch that tracks a remote other than origin still na
   git(root, ["commit", "-q", "--allow-empty", "-m", "seed"])
   git(root, ["remote", "add", "fork", fork])
   git(root, ["push", "-q", "-u", "fork", "main"])
-  const refused = (command, args, options) => (args[2] === "pull" ? { status: 128, stdout: "", stderr: "fatal: Authentication failed for 'https://github.com/o/r.git/'\n" } : spawnSync(command, args, options))
+  const refused = (command, args, options) => (args.includes("fetch") ? { status: 128, stdout: "", stderr: "fatal: Authentication failed for 'https://github.com/o/r.git/'\n" } : spawnSync(command, args, options))
   const result = await syncWorkspace({ root, env: process.env, spawnGit: refused, spawnPull: refused, scheduleDelivery: () => {}, fileProblem: () => {} })
 
   assert.equal(result.cause, "auth_failed")

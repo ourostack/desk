@@ -86,7 +86,6 @@ function notesFor(payload) {
   const notes = []
   if (typeof payload.search?.old_index_removed === "string") notes.push(payload.search.old_index_removed)
   const sync = typeof payload.sync === "object" && payload.sync !== null ? payload.sync : null
-  if (typeof sync?.last_repair?.note === "string") notes.push(sync.last_repair.note)
   if (sync?.blocked === true) notes.push(`Pushing the desk is blocked${sync.reason ? ` (${sync.reason})` : ""}${sync.unpushed > 0 ? `: ${sync.unpushed} local commit(s) are only on this machine, so do not call them pushed` : ""}.`)
   // The latest thing Desk repaired by itself in this session (at its start, the checkout switched back to the state branch, for example), in the repair log's own words: the agent was not there to see it.
   if (typeof payload.repair === "string") notes.push(payload.repair)
@@ -139,7 +138,7 @@ export function compactStatus(payload) {
     summary: state === "ready" ? readySummary : starting ? startingSummary(payload.admission) : (base === "ready" ? "Desk works, but the last sync failed." : (payload.admission?.summary ?? payload.summary ?? "Desk is not ready.")),
     degraded: state === "ready" ? [] : whyNotReady(payload, syncProblem, base === "ready"),
     ...(state === "ready" || !payload.code ? {} : { code: payload.code }),
-    ...(state === "ready" ? {} : starting ? { fix: STARTING_FIX } : base === "ready" ? { fix: `Retry the sync: git -C ${shellQuote(payload.root?.path ?? "<desk>")} pull --rebase --autostash. Work continues on local state until it succeeds.` } : (payload.fix ? { fix: payload.fix } : {})),
+    ...(state === "ready" ? {} : starting ? { fix: STARTING_FIX } : base === "ready" ? { fix: `Retry the sync: git -C ${shellQuote(payload.root?.path ?? "<desk>")} fetch --no-tags origin. Work continues on local state until it succeeds.` } : (payload.fix ? { fix: payload.fix } : {})),
     ...(typeof payload.onboarding_skill === "string" ? { onboarding_skill: payload.onboarding_skill } : {}),
     ...(state === "ready" ? {} : Object.fromEntries(DIAGNOSTIC_KEYS.filter((key) => payload[key] !== undefined).map((key) => [key, payload[key]]))),
     ...(payload.activation?.selected_id ? { activation: { selected_id: payload.activation.selected_id, chain: payload.activation.chain ?? [] } } : {}),

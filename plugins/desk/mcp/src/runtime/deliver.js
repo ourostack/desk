@@ -85,7 +85,7 @@ export function classifyPullFailure({ stderr = "", conflicted = [], timedOut = f
 }
 
 /** The host's state rather than a Desk defect: these are reported, never filed as Desk problems. */
-export const NOT_A_DESK_DEFECT = new Set(["unreachable", "auth_failed", "deadline", "publication_blocked"])
+export const NOT_A_DESK_DEFECT = new Set(["unreachable", "auth_failed", "deadline", "publication_blocked", "push_rejected", "fetch_failed", "conflict"])
 
 const BLOCKED_WORDS = {
   auth_failed: "the remote refused this machine's credentials",
@@ -281,7 +281,7 @@ function replay({ git, spawnGit, paths, onto, commits, prefix }) {
   return { head: wt(["rev-parse", "HEAD"]).stdout.trim(), replayed, skipped }
 }
 
-function upstreamOf(git) {
+export function upstreamOf(git) {
   const branch = git(["symbolic-ref", "-q", "--short", "HEAD"]).stdout.trim()
   const remote = git(["config", `branch.${branch}.remote`]).stdout.trim()
   const merge = git(["config", `branch.${branch}.merge`]).stdout.trim()
@@ -384,20 +384,11 @@ export function deliver({ root, env = process.env, spawnGit = spawnSync, deliver
 // Moving the shared checkout to what was delivered, without overwriting anyone's work.
 // ---------------------------------------------------------------------------
 
-const OVERWRITTEN_LIST = /^(?:error: )?The following untracked working tree files would be overwritten by (?:merge|checkout):\s*$/u
 const OVERWRITTEN_ONE = /^(?:error: )?Untracked working tree file '(.+)' would be overwritten by (?:merge|checkout)\.?\s*$/u
 
-/** The untracked files Git named as in the way of a merge or checkout, from its own error text, in either of its two forms. */
-export function namedUntrackedPaths(stderr) {
-  const found = []
-  const text = String(stderr ?? "").split(/\r?\n/u)
-  for (let index = 0; index < text.length; index += 1) {
-    const one = OVERWRITTEN_ONE.exec(text[index])
-    if (one !== null) found.push(one[1])
-    if (!OVERWRITTEN_LIST.test(text[index])) continue
-    while (index + 1 < text.length && text[index + 1].startsWith("\t")) found.push(text[(index += 1)].slice(1))
-  }
-  return found
+/** The untracked files `git read-tree -m -u` named as in the way, from its own error text. */
+function namedUntrackedPaths(stderr) {
+  return stderr.split(/\r?\n/u).flatMap((line) => OVERWRITTEN_ONE.exec(line)?.[1] ?? [])
 }
 
 // An untracked file in the way whose bytes are exactly the incoming file's is removed: the checkout puts the same bytes back.
