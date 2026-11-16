@@ -448,10 +448,17 @@ async function sessionStartHooks(ctx, world, shared) {
       const first = hookContext(outputs.prompt["desk#0"].stdout)
       assert(first.length > 0, "the first prompt got no boot direction")
     })
+    // A boot that was still running at the first prompt is delivered once, at the next prompt; after that every prompt is quiet.
     await check(ctx, "hook.prompt.later_prompts_quiet", "hooks", async () => {
-      const again = await runEvent(world, EVENTS.copilot.prompt, { prompt: "and again" }, ["desk"])
-      assertHookOk(again["desk#0"], "second prompt")
-      assert(hookContext(again["desk#0"].stdout) === "", `a later prompt repeated the boot direction: ${again["desk#0"].stdout.slice(0, 200)}`)
+      const prompt = async (text) => {
+        const again = await runEvent(world, EVENTS.copilot.prompt, { prompt: text }, ["desk"])
+        assertHookOk(again["desk#0"], text)
+        return hookContext(again["desk#0"].stdout)
+      }
+      const second = await prompt("and again")
+      assert(second === "" || /Desk boot \(Desk ran it/u.test(second), `a later prompt repeated the boot direction: ${second.slice(0, 200)}`)
+      const third = await prompt("and once more")
+      assert(third === "", `a prompt after the boot was delivered repeated it: ${third.slice(0, 200)}`)
     })
   }
 }
