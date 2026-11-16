@@ -239,7 +239,8 @@ jobs:
     needs: quick-checks
     if: needs.quick-checks.outputs.code == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # A shard job takes 3 to 4 minutes. Its stuck-shard watchdog fires at 7, so 10 only bounds a job whose watchdog could not (#932 ran the full 30 with no log).
+    timeout-minutes: 10
     permissions:
       contents: read
     strategy:
@@ -272,7 +273,7 @@ jobs:
         env:
           DESK_COVERAGE_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before }}
           SHARD: ${{ matrix.shard }}/${{ strategy.job-total }}
-        # A shard that has not finished after 15 minutes (a whole shard job takes about 3 to 8) is stuck, not slow. The
+        # A shard that has not finished after 7 minutes (the step takes about 2 to 3) is stuck, not slow. The
         # shard runs in its own process group so the watchdog can stop exactly it and everything it started: it prints
         # what is still running (the deepest node process names the test file that is not finishing), then signals
         # that group and no other process. A stopped shard exits non-zero, so the run fails there with output.
@@ -280,11 +281,13 @@ jobs:
           setsid npm run test:coverage -- --shard "$SHARD" --output "$RUNNER_TEMP/desk-coverage-shard" &
           shard=$!
           (
-            sleep 900 & sleeper=$!
+            sleep 420 & sleeper=$!
             trap 'kill "$sleeper" 2>/dev/null; exit 0' TERM
             wait "$sleeper"
-            echo "::error title=Coverage shard ${SHARD} is stuck::still running after 15 minutes; the process tree follows."
-            ps -eo pid,pgid,ppid,etimes,stat,args --forest | cut -c1-400
+            echo "::error title=Coverage shard ${SHARD} is stuck::still running after 7 minutes; the process tree follows."
+            # Kept in the shard's artifact too, because a stuck job's log has been lost before (#932).
+            mkdir -p "$RUNNER_TEMP/desk-coverage-shard"
+            ps -eo pid,pgid,ppid,etimes,stat,args --forest | cut -c1-400 | tee "$RUNNER_TEMP/desk-coverage-shard/stuck-process-tree.txt"
             touch "$RUNNER_TEMP/shard-stuck"
             kill -TERM -- "-$shard" 2>/dev/null || true
             sleep 10
