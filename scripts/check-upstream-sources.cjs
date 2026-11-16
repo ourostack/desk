@@ -110,12 +110,51 @@ function createGitHubClient(run = spawnSync) {
 // add terms, so one that the lock does not vendor needs a person's review even when LICENSE itself is unchanged.
 const LICENSE_NOTICE = /^(?:NOTICE|COPYING)(?:\.|$)/iu;
 
-function compareAncestry(github, repository, base, head) {
-  const status = github.compare(repository, base, head).status;
-  if (!ancestryStates.has(status)) {
-    throw new Error(`unknown ancestry status for ${repository}: ${status ?? "missing"}`);
+function compareChecked(github, repository, base, head) {
+  const comparison = github.compare(repository, base, head);
+  if (!ancestryStates.has(comparison.status)) {
+    throw new Error(`unknown ancestry status for ${repository}: ${comparison.status ?? "missing"}`);
   }
-  return status;
+  return comparison;
+}
+
+// GitHub caps a compare's changed-file list at 300, so a list that long may be missing files.
+const COMPARE_FILE_LIMIT = 300;
+
+// A release commit is made on top of its parent but kept off the default branch, so the next release commit branches
+// from that parent and the older release reads as "diverged". When the locked commit has one parent, that parent is
+// the merge base with the candidate, and the locked commit's own change vendors nothing, the locked commit is part of
+// the same release line rather than a rewritten history. Returns why it was not, so a person can see the reason.
+function releaseLineAncestry(github, source, comparison) {
+  const rejected = (note) => ({ ancestry: "diverged", basis: "compare", note });
+  const parents = github.commit(source.repository, source.commit).parents;
+  if (parents.length !== 1) return rejected(`the locked commit has ${parents.length} parents, not one`);
+  const [parent] = parents;
+  if (comparison.merge_base_commit.sha !== parent.sha) {
+    return rejected("the merge base with the candidate is not the locked commit's parent");
+  }
+  const own = compareChecked(github, source.repository, parent.sha, source.commit);
+  if (own.status !== "ahead" || own.files.length >= COMPARE_FILE_LIMIT) {
+    return rejected("the locked commit's own change could not be listed completely");
+  }
+  const vendored = new Set(source.files.map((file) => file.sourcePath));
+  const skills = source.files.map((file) => skillDirectory(file.sourcePath)).filter(Boolean);
+  const touchesVendored = (name) => vendored.has(name) || skills.some((skill) => name.startsWith(skill));
+  for (const file of own.files) {
+    // A renamed file leaves its previous path too, so that path counts as changed.
+    const changedPath = [file.filename, file.previous_filename].find((name) => name !== undefined && touchesVendored(name));
+    if (changedPath !== undefined) return rejected(`the locked commit's own change touches vendored path ${changedPath}`);
+  }
+  return { ancestry: "ahead", basis: "release-line", note: null };
+}
+
+// The locked commit's relation to a candidate: the compare's status, unless it is "diverged" and the locked commit is
+// part of the release line (see releaseLineAncestry).
+function candidateAncestry(github, source, head) {
+  if (head === source.commit) return { ancestry: "identical", basis: "compare", note: null };
+  const comparison = compareChecked(github, source.repository, source.commit, head);
+  if (comparison.status !== "diverged") return { ancestry: comparison.status, basis: "compare", note: null };
+  return releaseLineAncestry(github, source, comparison);
 }
 
 function inspectSource(source, github) {
@@ -158,16 +197,16 @@ function inspectSource(source, github) {
   let releaseConsidered = null;
   if (release) {
     const releaseCommit = github.commit(source.repository, release.tag_name).sha;
-    const releaseAncestry = releaseCommit === source.commit
-      ? "identical"
-      : compareAncestry(github, source.repository, source.commit, releaseCommit);
+    const releaseVerdict = candidateAncestry(github, source, releaseCommit);
     releaseConsidered = {
       ref: release.tag_name,
       commit: releaseCommit,
-      ancestry: releaseAncestry,
+      ancestry: releaseVerdict.ancestry,
+      ancestry_basis: releaseVerdict.basis,
+      ...(releaseVerdict.note === null ? {} : { ancestry_note: releaseVerdict.note }),
       url: release.html_url,
     };
-    if (releaseAncestry === "identical" || releaseAncestry === "ahead") {
+    if (releaseVerdict.ancestry === "identical" || releaseVerdict.ancestry === "ahead") {
       candidateRef = release.tag_name;
       candidateRefType = "latest-release";
       candidateCommit = releaseCommit;
@@ -178,9 +217,8 @@ function inspectSource(source, github) {
     throw new Error(`invalid candidate commit for ${source.repository}:${candidateRef}`);
   }
 
-  const ancestry = candidateCommit === source.commit
-    ? "identical"
-    : compareAncestry(github, source.repository, source.commit, candidateCommit);
+  const finalVerdict = candidateAncestry(github, source, candidateCommit);
+  const ancestry = finalVerdict.ancestry;
 
   const selected = source.files.some((file) => skillDirectory(file.sourcePath))
     ? selectedUpstreamPaths(source, { entries: github.tree(source.repository, candidateCommit) }).selected
@@ -217,7 +255,7 @@ function inspectSource(source, github) {
     reason = "selected payload at the locked commit does not match the recorded hashes";
   } else if (ancestry !== "ahead") {
     classification = "blocked";
-    reason = `candidate is not a forward update from the locked commit (${ancestry})`;
+    reason = `candidate is not a forward update from the locked commit (${ancestry})${finalVerdict.note === null ? "" : `: ${finalVerdict.note}`}`;
   } else if (changedPaths.length === 0) {
     classification = "candidate-no-selected-payload-change";
     reason = "repository advanced without changing selected payload";
@@ -246,6 +284,7 @@ function inspectSource(source, github) {
     locked_commit: source.commit,
     candidate_commit: candidateCommit,
     ancestry,
+    ancestry_basis: finalVerdict.basis,
     selected_payload_digest: selectedPayloadDigest(selectedFiles),
     changed_paths: changedPaths,
     added_paths: addedPaths,
