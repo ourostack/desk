@@ -20,6 +20,7 @@ import * as path from "node:path"
 
 import { gitEnv } from "../runtime/deliver.js"
 import { publicationPolicy, publishPullRequest } from "../runtime/pr-publication.js"
+import { savesFor, settleSaves } from "../runtime/unmerged-saves.js"
 
 const GIT_TIMEOUT_MS = 10_000
 const NETWORK_TIMEOUT_MS = 60_000
@@ -127,6 +128,8 @@ export function publishCardCommit({ root, relPaths, message, defaultBranch, spaw
   const git = runner(spawnGit, top, env)
   const remoteRef = `refs/remotes/${REMOTE}/${defaultBranch}`
   try {
+    // Saves still waiting from earlier writes are settled first: closed when superseded, rebuilt when they conflict with main.
+    settleSaves({ root, env, spawnGit, clock })
     for (let attempt = 1; attempt <= PUSH_ATTEMPTS; attempt += 1) {
       const fetched = git(["fetch", "--quiet", "--no-tags", REMOTE, `+refs/heads/${defaultBranch}:${remoteRef}`], NETWORK_TIMEOUT_MS)
       if (fetched.status !== 0) {
@@ -158,8 +161,9 @@ export function publishCardCommit({ root, relPaths, message, defaultBranch, spaw
       let target
       if (policy !== null) {
         try {
-          target = publishPullRequest({ git, spawnGit, root: top, upstream: { remote: REMOTE, merge: `refs/heads/${defaultBranch}`, tracking: remoteRef }, head: commit, onto, policy, clock }).head
+          target = publishPullRequest({ git, spawnGit, root: top, upstream: { remote: REMOTE, merge: `refs/heads/${defaultBranch}`, tracking: remoteRef }, head: commit, onto, policy, clock, track: savesFor({ root, env, now: Date.now }) }).head
         } catch (error) {
+          // A PR that conflicts or fell behind stays recorded; the next write or the sync worker rebuilds it or closes it as superseded.
           // A call cut off after GitHub merged the pull request still published the card.
           target = landedOn(git, commit, defaultBranch)
           if (target === null) return fail(relPaths, error.message, "the publication pull request did not merge", `gh pr list --head desk/publish/${commit} --state all`, "the card is still staged; check the pull request, then retry the write", "unknown")

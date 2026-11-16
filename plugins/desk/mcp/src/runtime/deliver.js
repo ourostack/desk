@@ -27,6 +27,7 @@ import * as path from "node:path"
 import { lastStartRootKey, resolveDeskStateDir } from "./last-start.js"
 import { remoteIdentityEnv } from "./remote-identity.js"
 import { publicationPolicy, publicationRecovery, publishPullRequest } from "./pr-publication.js"
+import { abandonedComment, closeSaved, savesFor } from "./unmerged-saves.js"
 
 const GIT_TIMEOUT_MS = 10_000
 const NETWORK_TIMEOUT_MS = 60_000
@@ -52,7 +53,7 @@ function subcommand(args) {
   return args[at]
 }
 
-function runner(spawnGit, cwd) {
+export function runner(spawnGit, cwd) {
   return (args, timeout = GIT_TIMEOUT_MS) => {
     const env = remoteIdentityEnv({ root: cwd, args, env: gitEnv(), spawn: spawnGit })
     const once = (limit) => spawnGit("git", ["-C", cwd, ...args], { windowsHide: true, encoding: "utf8", timeout: limit, env, maxBuffer: 64 * 1024 * 1024 })
@@ -214,13 +215,13 @@ function resolveConflict({ git, tree, scratch, file, prefix, commit }) {
 // Replaying in a private worktree, and pushing.
 // ---------------------------------------------------------------------------
 
-function deliveryPaths({ root, env }) {
+export function deliveryPaths({ root, env }) {
   const dir = path.join(resolveDeskStateDir({ env }), "sync")
   const key = lastStartRootKey(root)
   return { tree: path.join(dir, `${key}.deliver`), scratch: path.join(dir, `${key}.merge`), hooks: path.join(dir, "no-hooks") }
 }
 
-function removeWorktree(git, paths) {
+export function removeWorktree(git, paths) {
   git(["worktree", "remove", "--force", paths.tree])
   for (const dir of [paths.tree, paths.scratch]) rmSync(dir, { recursive: true, force: true })
   git(["worktree", "prune"])
@@ -244,7 +245,7 @@ function touchedPaths(git, commits) {
 // larger than the room its disk has for a second copy (#589). Cherry-picks and conflict resolution only ever write
 // those files; every other path stays in the index alone. The sparse settings are passed per command and the pattern
 // file lives in the worktree's own Git folder, so the shared checkout's configuration is never changed.
-function replay({ git, spawnGit, paths, onto, commits, prefix }) {
+export function replay({ git, spawnGit, paths, onto, commits, prefix }) {
   removeWorktree(git, paths)
   mkdirSync(paths.hooks, { recursive: true })
   const added = git(["-c", `core.hooksPath=${paths.hooks}`, "worktree", "add", "--detach", "--force", "--no-checkout", paths.tree, onto], CHECKOUT_TIMEOUT_MS)
@@ -330,6 +331,8 @@ export function deliver({ root, env = process.env, spawnGit = spawnSync, deliver
   const paths = deliveryPaths({ root, env })
   const prefix = git(["rev-parse", "--show-prefix"]).stdout.trim()
   const head = git(["rev-parse", "HEAD"]).stdout.trim()
+  // Pull requests a rebuild replaced: closed once what replaced them is on main, with the evidence.
+  const abandoned = []
   for (let attempt = 1; ; attempt += 1) {
     const fetched = git(["fetch", "--quiet", "--no-tags", upstream.remote, `+${upstream.merge}:${upstream.tracking}`], NETWORK_TIMEOUT_MS)
     if (fetched.status !== 0) return failure(fetched, "fetch_failed")
@@ -353,15 +356,15 @@ export function deliver({ root, env = process.env, spawnGit = spawnSync, deliver
     let pushed, publication, target = built.head
     if (policy !== null && built.head !== onto) {
       try {
-        const published = publishPullRequest({ git, spawnGit, root, upstream, head: built.head, onto, policy, clock: publicationClock })
+        const published = publishPullRequest({ git, spawnGit, root, upstream, head: built.head, onto, policy, clock: publicationClock, track: savesFor({ root, env, now: Date.now }) })
         target = published.head
         publication = published.receipt
         pushed = { status: 0 }
       } catch (error) {
         cleanup()
-        // The base moved while the checks ran: the candidate is rebuilt on the new base and qualified again, here, not handed back. The abandoned pull request is closed.
+        // The base moved (or the pull request now conflicts) while the checks ran: the candidate is rebuilt on the newest base and qualified again, here, not handed back. The abandoned pull request is closed once the rebuild has landed.
         if (error.requalify === true && attempt < REQUALIFY_ATTEMPTS) {
-          spawnGit("gh", ["pr", "close", error.publication.url, "--delete-branch", "--comment", "The base moved while its checks ran; Desk rebuilt the change on the new base and opened a fresh pull request."], { cwd: root, encoding: "utf8", windowsHide: true, timeout: 60_000, env: process.env })
+          abandoned.push(error.publication.url)
           continue
         }
         const recovery = error.message.includes("Fix:") ? "" : `. Fix: run ${publicationRecovery(root)}`
@@ -371,6 +374,10 @@ export function deliver({ root, env = process.env, spawnGit = spawnSync, deliver
     cleanup()
     if (pushed.status === 0) {
       git(["update-ref", upstream.tracking, target])
+      for (const url of abandoned) {
+        const comment = abandonedComment({ target, branch: upstream.branch, publication })
+        closeSaved({ spawnGit, root, env, url, comment })
+      }
       const checkout = built.skipped.length === 0 ? followsUpstream({ git, upstream, head, target }) : { state: "behind", reason: "skipped_commits" }
       return { state: "delivered", delivered: built.replayed, skipped: built.skipped, checkout, ...(publication ? { publication } : {}) }
     }

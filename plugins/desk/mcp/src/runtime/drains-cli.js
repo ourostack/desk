@@ -3,6 +3,7 @@
 import * as os from "node:os"
 import * as path from "node:path"
 import { deskFailure } from "./desk-failure.js"
+import { allStuckSaves, stuckLine } from "./unmerged-saves.js"
 import { pollRelays, readRelayConfig, readRelayStates, relayPaths, relayStatusLines, relaysOfPull, whyRelay } from "./relays.js"
 import { findPluginlessRuntimes, listProcesses as psList, pluginlessRuntimeLines } from "./pluginless-runtimes.js"
 import { ackStalled, pollStalled, stalledPaths, stalledStatus } from "./stalled.js"
@@ -125,7 +126,7 @@ export async function runDrainsCli({ argv, script, env = process.env, io = proce
       io.stdout.write(`${JSON.stringify(answer, null, 1)}\n`)
       return 0
     } else {
-      result = { status: [...drainStatusLines(readDrainConfig(paths.config), readDrainStates(paths.state), now()), ...relayLines(env, now())] }
+      result = { status: [...drainStatusLines(readDrainConfig(paths.config), readDrainStates(paths.state), now()), ...relayLines(env, now()), ...allStuckSaves({ env, now }).map((save) => `unmerged save: ${stuckLine(save)}`)] }
     }
     if (command !== "ack") {
       const { line, ...desk } = deskInUse({ script, env })

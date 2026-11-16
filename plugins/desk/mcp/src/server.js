@@ -18,6 +18,7 @@
 // protected-storage primitive for records that already exist, with no route
 // from this server and none to be added without its own approval.
 
+import { withStuckSaves } from "./runtime/unmerged-saves.js"
 import { Server } from "@modelcontextprotocol/sdk/server/index.js"
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { types } from "node:util"
@@ -308,8 +309,9 @@ export async function callTool({ deskRoot, name, input, person = null, statusCon
     if (stageStore?.summaries.length === 1) emitNativeStageSummary(stageStore.summaries[0], traceRequestId, traceWrite)
     // desk_skill answers with the skill's own text: its result is already an MCP answer.
     if (name === "desk_skill" && Array.isArray(result?.content)) return result
+    // A save that has waited past ten minutes in an unmerged publication PR is named in every reply of every session on this desk.
     return {
-      content: [{ type: "text", text: JSON.stringify(result) }],
+      content: [{ type: "text", text: JSON.stringify(withStuckSaves(result, { root: deskRoot, env, now: Date.now })) }],
     }
   } catch (err) {
     if (name === "task_archive" && nativeReceiptTraceEnabled(env)) emitNativeReceipt(err, traceRequestId, traceWrite)
