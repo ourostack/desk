@@ -7,7 +7,7 @@ const OBJECT_ID = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/u
 const POLICY = ".desk/publication.json"
 const FIELDS = "number,url,state,isDraft,headRefOid,baseRefName,baseRefOid,mergeCommit,mergeable"
 // The label a merge-when-green relay (runtime/relays.js) polls for; a policy may name another with `merge_label`.
-export const MERGE_LABEL = "merge-when-green"
+const MERGE_LABEL = "merge-when-green"
 const WAIT_MS = 300_000
 const CLOCK = {
   now: Date.now,

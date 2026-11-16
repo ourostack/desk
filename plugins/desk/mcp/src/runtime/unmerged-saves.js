@@ -13,7 +13,7 @@ import { resolveDeskStateDir } from "./last-start.js"
 import { publicationPolicy, publishPullRequest } from "./pr-publication.js"
 import { readSyncStatus, updateSyncStatus } from "./sync-worker.js"
 
-export const STUCK_AFTER_MS = 10 * 60 * 1000
+const STUCK_AFTER_MS = 10 * 60 * 1000
 const OBJECT_ID = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/u
 const KEY = "unmerged_saves"
 const NETWORK_TIMEOUT_MS = 60_000
@@ -26,7 +26,7 @@ export function savesFor({ root, env = process.env, now = Date.now }) {
 }
 
 /** Notes a publication PR as waiting to merge; the first time it was noted stays its start. Never throws. */
-export function recordUnmerged({ root, env = process.env, receipt, at = Date.now() }) {
+function recordUnmerged({ root, env = process.env, receipt, at = Date.now() }) {
   try {
     updateSyncStatus(root, env, (current) => {
       const list = entries(current)
@@ -39,7 +39,7 @@ export function recordUnmerged({ root, env = process.env, receipt, at = Date.now
 }
 
 /** Forgets a PR that merged or was closed. Never throws. */
-export function clearUnmerged({ root, env = process.env, url }) {
+function clearUnmerged({ root, env = process.env, url }) {
   try {
     if (!entries(readSyncStatus({ root, env })).some((save) => save.url === url)) return
     updateSyncStatus(root, env, (current) => ({ [KEY]: entries(current).filter((save) => save.url !== url) }))
@@ -98,7 +98,7 @@ const FRONTMATTER_KEY = /^([A-Za-z][\w-]*):(?:\s|$)/u
  * main, when every line the commit adds is on main, or when the commit only sets frontmatter fields that a newer commit on
  * main has since set differently.
  */
-export function supersession(git, head, main) {
+function supersession(git, head, main) {
   const parent = git(["rev-parse", "--verify", "--quiet", `${head}^`]).stdout.trim()
   if (parent === "") return null
   const files = git(["diff", "--name-only", "--no-renames", "-z", parent, head]).stdout.split("\0").filter(Boolean)
