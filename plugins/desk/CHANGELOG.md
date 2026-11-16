@@ -1,5 +1,13 @@
 # desk plugin — changelog
 
+## 3.2.190 — 2026-11-16
+
+### Desk Browser serves its effect hints
+
+Desk Browser's `tools/list` now carries each tool's effect hints (`readOnlyHint`, `destructiveHint`, `openWorldHint`), from the declarations in `plugins/desk/mcp/src/actions/desk-web.actions.mts`. The Ouro AX kit is re-pinned to v1.3.222, which the X-ray's `--app` option comes from.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.189 — 2026-11-16
 
 A Desk tool that a host lists as deferred, such as `desk_save` in GitHub Copilot, is no longer reported as a Desk problem before the agent has looked it up by name. The `desk-problem` skill now asks for that lookup first, and the session-start details name GitHub Copilot's tool search beside Claude Code's.
