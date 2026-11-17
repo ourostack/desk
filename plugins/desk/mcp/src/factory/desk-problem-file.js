@@ -40,6 +40,8 @@
 // `src/factory/**` imports only `node:` built-ins and other `src/factory/`
 // files.
 
+import { defineCli, defineCommand } from "../lib/ouro-ui/registry/ouro/ax/command.ts"
+import { runCli } from "../lib/ouro-ui/registry/ouro/ax/cli.ts"
 import { deskVersion } from "../package-metadata.js"
 
 import { deskProblemFingerprint, normalizeErrorSignature } from "./desk-problem-fingerprint.js"
@@ -270,32 +272,39 @@ async function attemptFiling(env, {
 }
 
 /**
- * The detached filer's whole CLI surface (`mcp/scripts/file-desk-problem.js`), kept here so it is
- * unit-tested directly rather than through a subprocess -- the script itself is one line. Mechanism-
- * agnostic: any boot check or future caller that wants filing off its own critical path launches this
- * script detached (the same `launchCommand`/`compatibleCommand` pattern boot-checks.cjs already uses
- * for its repairs) with `--mechanism <m> [--reason <text>] [--host <h>] [--fix-attempt <text>]`.
- * `--mechanism` is the only required flag. A usage error throws (a bad launch site is a bug in Desk's
- * own code to fix, not a runtime condition this needs to survive); `fileDeskProblem` itself beneath it
- * already never throws. Nothing reads this process's exit code or output -- it is started with ignored
- * stdio -- so there is nothing to print; the fingerprint dedup and the daily cap make it safe to run
- * again at the next session start if this attempt is lost.
+ * The detached filer's whole CLI surface (`mcp/scripts/file-desk-problem.js`), defined with Ouro AX and kept here so it is unit-tested
+ * directly: `--mechanism <m> [--reason <text>] [--host <h>] [--fix-attempt <text>]`, `--mechanism` the only required flag. Any boot
+ * check that wants filing off its own critical path launches it detached. Nothing reads its output -- it is started with ignored stdio --
+ * so a usage error is one stderr line and exit 2, and a run is silent and exits 0; `fileDeskProblem` beneath it never throws, and the
+ * fingerprint dedup and the daily cap make it safe to run again at the next session start if this attempt is lost.
  */
-export async function runFileDeskProblemCli({ argv = process.argv.slice(2), env = process.env } = {}) {
-  const options = new Map()
-  for (let index = 0; index < argv.length; index += 2) {
-    const key = argv[index]
-    if (typeof key !== "string" || !key.startsWith("--")) throw Object.assign(new Error(`file-desk-problem.js: Pass only --<name> <value> pairs: unexpected argument ${JSON.stringify(key ?? "")}`), { code: "desk_problem_file_file_desk_problem_js_pass_2" })
-    options.set(key.slice(2), argv[index + 1])
-  }
-  const mechanism = options.get("mechanism")
-  if (typeof mechanism !== "string" || mechanism === "") throw Object.assign(new Error("file-desk-problem.js: Pass --mechanism <name>: it is required"), { code: "desk_problem_file_file_desk_problem_js_pass" })
-  const reason = options.get("reason") ?? ""
-  try {
-    await fileDeskProblem(env, { mechanism, rawText: reason, fixAttempt: options.get("fix-attempt") ?? "not recorded", host: options.get("host") ?? "unknown" })
-  } finally {
-    // The outcome (or the drop for a failed attempt) is recorded: the launcher's stamp is no longer a pending launch (`filer-launch.js`).
-    endLaunch(env, { mechanism, signature: reason })
-  }
-  return 0
+export async function runFileDeskProblemCli({ argv = process.argv.slice(2), env = process.env, io = process } = {}) {
+  const text = { type: "string" }
+  const cli = defineCli({
+    name: "file-desk-problem",
+    about: "Files one failure of a Desk mechanism as a public issue on ourostack/desk, or recognizes the known one.",
+    command: defineCommand({
+      name: "file",
+      summary: "File the problem, or record that it is known.",
+      effect: "private",
+      output: "nothing: it is silent",
+      text: () => "",
+      flags: {
+        mechanism: { ...text, required: true, placeholder: "<name>", description: "The Desk mechanism that failed." },
+        reason: { ...text, description: "Why it failed: the error text." },
+        host: { ...text, description: "The host the session ran on." },
+        "fix-attempt": { ...text, description: "What was tried to repair it." },
+      },
+      run: async (input) => {
+        const reason = input.reason ?? ""
+        try {
+          await fileDeskProblem(env, { mechanism: input.mechanism, rawText: reason, fixAttempt: input["fix-attempt"] ?? "not recorded", host: input.host ?? "unknown" })
+        } finally {
+          // The outcome (or the drop for a failed attempt) is recorded: the launcher's stamp is no longer a pending launch (`filer-launch.js`).
+          endLaunch(env, { mechanism: input.mechanism, signature: reason })
+        }
+      },
+    }),
+  })
+  return runCli(cli, argv, { stdout: io.stdout, stderr: io.stderr })
 }
