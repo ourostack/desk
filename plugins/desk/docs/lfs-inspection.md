@@ -8,7 +8,7 @@ From the installed Desk plugin's `mcp` directory:
 node scripts/lfs.js inspect --repo "/existing/repository"
 ```
 
-Omit `--repo` to inspect the current directory's Git repository. The command accepts no setup, repair or conversion action. It prints one JSON object. Exit `0` means an inspection report was produced, including a report with limitations or defects; exit `1` means the repository or Git metadata could not be inspected; exit `2` means invalid arguments. Exit `0` never means storage is ready. [CLI](../mcp/scripts/lfs.js).
+Omit `--repo` to inspect the current directory's Git repository. The command accepts no setup, repair or conversion action. It prints one JSON object. Exit `0` means an inspection report was produced, including a report with limitations or defects; exit `1` means the repository or Git metadata could not be inspected; exit `2` means invalid arguments, reported as one line on stderr with its fix. Exit `0` never means storage is ready. [CLI](../mcp/scripts/lfs.js).
 
 ## API and evidence scope
 

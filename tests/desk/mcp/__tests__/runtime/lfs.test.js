@@ -510,7 +510,7 @@ test("GivenCliInspectAndInvalidArguments_WhenRun_UsesDocumentedExitAndJsonContra
   assert.deepEqual(snapshot(root), before)
   const refused = spawnSync(process.execPath, [cli, "setup", "--repo", root], { encoding: "utf8" })
   assert.equal(refused.status, 2)
-  assert.equal(JSON.parse(refused.stdout).state, "usage")
+  assert.match(refused.stderr, /^lfs: .*Fix: .*\n$/u)
   const absent = spawnSync(process.execPath, [cli, "inspect", "--repo", path.join(root, "missing")], { encoding: "utf8" })
   assert.equal(absent.status, 1)
   assert.equal(JSON.parse(absent.stdout).state, "not_git")
