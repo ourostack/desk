@@ -515,31 +515,23 @@ test("a store checkout that is missing or holds a bad file warns and still repor
   assert.deepEqual(reconcile({ deskRoot: desk, since: SINCE, until: UNTIL, storeDir: path.join(base, "store"), env }).warnings, ["store_file_unreadable"], "a folder named like a facts file is unreadable too")
 }))
 
-test("bad arguments return ok:false with a usage error, and the command exits 1", async () => {
-  const good = ["--desk", "/tmp/desk", "--since", SINCE, "--until", UNTIL]
-  const cases = [
-    [],
-    ["--desk", "/tmp/desk", "--since", SINCE],
-    ["--desk", "relative/desk", "--since", SINCE, "--until", UNTIL],
-    ["--desk", "/tmp/desk", "--since", "yesterday", "--until", UNTIL],
-    ["--desk", "/tmp/desk", "--since", "2026-09-25", "--until", UNTIL],
-    ["--desk", "/tmp/desk", "--since", UNTIL, "--until", SINCE],
-    ["--desk", "/tmp/desk", "--since", SINCE, "--until", SINCE],
-    [...good, "--wat", "1"],
-    [...good, "--store", ""],
-    [...good, "--desk", "/tmp/other"],
-    [...good, "--store"],
-  ]
-  for (const argv of cases) {
-    const result = await runReconcileCommand({ argv, env: {} })
-    assert.equal(result.ok, false, JSON.stringify(argv))
-    assert.equal(typeof result.error, "string")
+test("bad arguments are usage errors, and a desk that cannot be read exits 1", async () => {
+  const good = { desk: "/tmp/desk", since: SINCE, until: UNTIL }
+  for (const flags of [
+    { ...good, desk: "relative/desk" },
+    { ...good, since: "yesterday" },
+    { ...good, since: "2026-09-25" },
+    { ...good, since: UNTIL, until: SINCE },
+    { ...good, until: SINCE },
+    { ...good, store: "" },
+  ]) {
+    await assert.rejects(runReconcileCommand(flags, { env: {} }), (error) => error.exit === 2, JSON.stringify(flags))
   }
-  const written = []
-  const code = await main({ argv: ["reconcile", "--desk", "relative"], env: {}, write: (text) => written.push(text), logError: () => {} })
-  assert.equal(code, 1)
-  assert.equal(JSON.parse(written.join("")).ok, false)
-  assert.equal((await runReconcileCommand({ argv: ["--desk", "/nonexistent-desk-folder", "--since", SINCE, "--until", UNTIL], env: {} })).ok, false)
+  const errors = []
+  const code = await main({ argv: ["reconcile", "--desk", "relative", "--since", SINCE, "--until", UNTIL], env: {}, write: () => assert.fail("a usage error prints nothing"), logError: (text) => errors.push(text) })
+  assert.equal(code, 2)
+  assert.match(errors.join(""), /^factory: reconcile: --desk is not an absolute path\. Fix: /u)
+  assert.equal((await runReconcileCommand({ desk: "/nonexistent-desk-folder", since: SINCE, until: UNTIL }, { env: {} })).ok, false)
 })
 
 test("the command runs end to end, accepts offset times and prints one JSON value with exit 0 even when mismatches exist", () => scratch(async (context) => {

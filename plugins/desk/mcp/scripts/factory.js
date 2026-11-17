@@ -413,7 +413,6 @@ export async function runBuildCommand({ store, out }) {
   return build({ storeDir: store, outDir: out })
 }
 
-const JOB_LINK_USAGE = "Usage: factory.js job-link --store <owner/repo> --desk-remote <url> [--person-prefix <prefix>] [--desk <desk root>] --track <track> --slug <slug> [--this-machine]"
 
 /**
  * `job-link`: the card's report URL. Without `--desk` this hashes the given
@@ -438,22 +437,14 @@ const JOB_LINK_USAGE = "Usage: factory.js job-link --store <owner/repo> --desk-r
  * card to its store job, which is why the card never carries it: it is for
  * the operator's own reading, never for the card or any public record.
  */
-export async function runJobLinkCommand({ argv, env = process.env }) {
-  const thisMachine = argv.includes("--this-machine")
-  const options = parseOptions(argv.filter((arg) => arg !== "--this-machine"))
-  const required = ["store", "desk-remote", "track", "slug"]
-  const allowed = [...required, "person-prefix", "desk"]
-  if (options === null || required.some((key) => !options.has(key)) || [...options.keys()].some((key) => !allowed.includes(key))) {
-    throw new Error(JOB_LINK_USAGE)
-  }
-  const personPrefix = options.get("person-prefix") ?? ""
-  let track = options.get("track")
-  let slug = options.get("slug")
-  if (options.has("desk")) {
-    if (!path.isAbsolute(options.get("desk"))) throw new Error(JOB_LINK_USAGE)
+export async function runJobLinkCommand({ store, "desk-remote": deskRemote, track: trackFlag, slug: slugFlag, "person-prefix": personPrefix = "", desk, "this-machine": thisMachine = false }, { env }) {
+  let track = trackFlag
+  let slug = slugFlag
+  if (desk !== undefined) {
+    if (!path.isAbsolute(desk)) throw usageError("job-link", "--desk is not an absolute path", "factory job-link --desk <absolute desk root> ...")
     let root
     try {
-      root = realpathSync(options.get("desk"))
+      root = realpathSync(desk)
     } catch {
       throw new Error("factory.js job-link: the desk folder could not be read")
     }
@@ -461,8 +452,6 @@ export async function runJobLinkCommand({ argv, env = process.env }) {
     track = birth.track
     slug = birth.slug
   }
-  const store = options.get("store")
-  const deskRemote = options.get("desk-remote")
   // A bad store fails with the usage error before any state is read.
   jobReportUrl({ store, job: "0".repeat(32) })
   const job = jobId({ deskRemote, personPrefix, track, slug })
@@ -488,7 +477,7 @@ export function deskVersion() {
   return JSON.parse(readFileSync(new URL("../../plugin.json", import.meta.url), "utf8")).version
 }
 
-const EVALUATE_USAGE = "Usage: factory.js evaluate --desk <absolute desk root> --task [desks/<alias>/]<track>/<slug> | --pending"
+const EVALUATE_FIX = "factory evaluate --desk <absolute desk root> --task [desks/<alias>/]<track>/<slug> | --pending"
 
 /**
  * Runs `evaluate`: the task's job ID, computed exactly as the task tools
@@ -496,18 +485,15 @@ const EVALUATE_USAGE = "Usage: factory.js evaluate --desk <absolute desk root> -
  * prepare its briefs). `--pending` prepares every retained request again.
  * Prints results and brief paths only.
  */
-export async function runEvaluateCommand({ argv, env, pluginVersion = deskVersion() }) {
-  if (argv.length === 1 && argv[0] === "--pending") return evaluatePending(env, { pluginVersion })
-  const options = parseOptions(argv)
-  if (options === null || options.size !== 2 || !options.has("desk") || !options.has("task") || !path.isAbsolute(options.get("desk"))) {
-    throw new Error(EVALUATE_USAGE)
-  }
-  const segments = options.get("task").split("/")
+export async function runEvaluateCommand({ desk, task, pending = false }, { env, pluginVersion = deskVersion() }) {
+  if (pending) return evaluatePending(env, { pluginVersion })
+  if (desk === undefined || task === undefined || !path.isAbsolute(desk)) throw usageError("evaluate", "--desk must be an absolute path and --task given", EVALUATE_FIX)
+  const segments = task.split("/")
   const crew = segments.length === 4 && segments[0] === "desks"
-  if (segments.length !== (crew ? 4 : 2)) throw new Error(EVALUATE_USAGE)
+  if (segments.length !== (crew ? 4 : 2)) throw usageError("evaluate", "--task is not <track>/<slug> or desks/<alias>/<track>/<slug>", EVALUATE_FIX)
   let root
   try {
-    root = realpathSync(options.get("desk"))
+    root = realpathSync(desk)
   } catch {
     throw new Error("factory.js evaluate: the desk folder could not be read")
   }
@@ -518,7 +504,7 @@ export async function runEvaluateCommand({ argv, env, pluginVersion = deskVersio
     const birth = resolveJobIdentity({ deskRoot: root, personPrefix, track: segments.at(-2), slug: segments.at(-1) })
     job = jobId({ deskRemote, personPrefix, track: birth.track, slug: birth.slug })
   } catch {
-    throw new Error(EVALUATE_USAGE)
+    throw usageError("evaluate", "--task is not <track>/<slug> or desks/<alias>/<track>/<slug>", EVALUATE_FIX)
   }
   return evaluateTask(env, { job, deskRoot: root, pluginVersion })
 }
@@ -536,62 +522,50 @@ export async function runAccountCommand({ store }, { env, runner }) {
   return chooseAccount({ store, runner: runner ?? ghRunner({ env }) })
 }
 
-const STORE_ISSUE_OPTIONS = ["store", "repo", "author"]
 
 // The options `kaizen-check` (and andon) share: the checked-out store, the
 // store's `owner/repo`, the bot login whose comments are the build's own, and
 // the token from `GH_TOKEN`.
-async function storeIssueContext({ argv, env, runner, usage }) {
-  const options = parseOptions(argv)
-  if (options === null || !options.has("store") || !PATTERNS.prRepo.test(options.get("repo") ?? "") || [...options.keys()].some((key) => !STORE_ISSUE_OPTIONS.includes(key))) {
-    throw new Error(usage)
-  }
+async function storeIssueContext({ store, repo, author }, { env, runner }, thing) {
+  if (!PATTERNS.prRepo.test(repo)) throw usageError(thing, "--repo is not an owner/repo", `factory ${thing} --store <directory> --repo <owner/repo>`)
   const token = env.GH_TOKEN ?? ""
-  if (token === "") throw new Error(`${usage}; GH_TOKEN must hold the store's token`)
-  const records = storeRecords(options.get("store"))
+  if (token === "") throw usageError(thing, "GH_TOKEN is empty", "set GH_TOKEN to the store's token")
+  const records = storeRecords(store)
   const { ghRunner } = await import("../src/factory/flush.js")
-  const client = issuesClient({ runner: runner ?? ghRunner({ env }), repo: options.get("repo"), token })
-  return { records, client, ...(options.has("author") ? { author: options.get("author") } : {}) }
+  const client = issuesClient({ runner: runner ?? ghRunner({ env }), repo, token })
+  return { records, client, ...(author === undefined ? {} : { author }) }
 }
 
 /** Runs `kaizen-check`: the kaizen check on every open card of the store; prints each card's status. */
-export async function runKaizenCheckCommand({ argv, env, runner }) {
-  const context = await storeIssueContext({ argv, env, runner, usage: "Usage: factory.js kaizen-check --store <directory> --repo <owner/repo> [--author <login>]" })
+export async function runKaizenCheckCommand(flags, ctx) {
+  const context = await storeIssueContext(flags, ctx, "kaizen-check")
   return syncKaizenCards(context)
 }
 
 /** Runs `andon`: opens, updates, reopens and closes the store's andon issues; prints each alarm's action. */
-export async function runAndonCommand({ argv, env, runner }) {
-  const context = await storeIssueContext({ argv, env, runner, usage: "Usage: factory.js andon --store <directory> --repo <owner/repo> [--author <login>]" })
-  const configPath = path.join(parseOptions(argv).get("store"), "factory.json")
+export async function runAndonCommand(flags, ctx) {
+  const context = await storeIssueContext(flags, ctx, "andon")
+  const configPath = path.join(flags.store, "factory.json")
   const config = parseStoreConfig(existsSync(configPath) ? readFileSync(configPath, "utf8") : null)
   if (!config.ok) throw new Error(`factory.js andon: the store's factory.json is not valid (${config.code})`)
   // Other plugins are named only when public by the publishing rule (M3-12).
-  return syncAndon({ ...context, plugins: config.plugins, publicPlugins: storePublicPlugins(parseOptions(argv).get("store")) })
+  return syncAndon({ ...context, plugins: config.plugins, publicPlugins: storePublicPlugins(flags.store) })
 }
 
-const RECONCILE_USAGE = "Usage: factory.js reconcile --desk <absolute desk root> --since <iso> --until <iso> [--store <directory>] [--person-prefix desks/<alias>]"
-const RECONCILE_OPTIONS = ["desk", "since", "until", "store", "person-prefix"]
-
-/** Runs `reconcile`: bad arguments give `{ ok: false, error }`; see `src/factory/reconcile.js`. */
-export async function runReconcileCommand({ argv, env, git = "git" }) {
-  const options = parseOptions(argv)
-  const fail = (error = RECONCILE_USAGE) => ({ ok: false, error })
-  if (options === null || ["desk", "since", "until"].some((key) => !options.has(key)) || [...options.keys()].some((key) => !RECONCILE_OPTIONS.includes(key))) return fail()
-  if (!path.isAbsolute(options.get("desk"))) return fail()
-  if (options.has("store") && options.get("store") === "") return fail()
-  const since = normalizeTimestamp(options.get("since"))
-  const until = normalizeTimestamp(options.get("until"))
-  if (since === null || until === null || !PATTERNS.timestamp.test(since) || !PATTERNS.timestamp.test(until)) return fail("factory.js reconcile: --since and --until must be exact UTC timestamps")
-  if (!(Date.parse(since) < Date.parse(until))) return fail("factory.js reconcile: --since must be before --until")
+/** Runs `reconcile`: bad arguments are usage errors; see `src/factory/reconcile.js`. */
+export async function runReconcileCommand({ desk, since: sinceFlag, until: untilFlag, store, "person-prefix": personPrefix = "" }, { env, git = "git" }) {
+  if (!path.isAbsolute(desk)) throw usageError("reconcile", "--desk is not an absolute path", "factory reconcile --desk <absolute desk root> --since <iso> --until <iso>")
+  if (store === "") throw usageError("reconcile", "--store is empty", "factory reconcile --store <directory> ...")
+  const since = normalizeTimestamp(sinceFlag)
+  const until = normalizeTimestamp(untilFlag)
+  if (since === null || until === null || !PATTERNS.timestamp.test(since) || !PATTERNS.timestamp.test(until)) throw usageError("reconcile", "--since and --until must be exact UTC timestamps", "factory reconcile --since 2026-09-28T00:00:00Z --until 2026-09-29T00:00:00Z")
+  if (!(Date.parse(since) < Date.parse(until))) throw usageError("reconcile", "--since is not before --until", "factory reconcile --since <earlier iso> --until <later iso>")
   return reconcile({
-    deskRoot: options.get("desk"), personPrefix: options.get("person-prefix") ?? "", since, until,
-    storeDir: options.has("store") ? path.resolve(options.get("store")) : null, env,
+    deskRoot: desk, personPrefix, since, until,
+    storeDir: store === undefined ? null : path.resolve(store), env,
     ...(typeof git === "string" ? { git } : {}),
   })
 }
-
-const LOOP_USAGE = "Usage: factory.js loop --desk <absolute desk root> [--person-prefix desks/<alias>]"
 
 /** An explicit operator request owns one existing source-bound job, never a background budget override. */
 export async function runContextRequestCommand({ store, job }, { env, run = runRequestedTaskContext }) {
@@ -600,15 +574,13 @@ export async function runContextRequestCommand({ store, job }, { env, run = runR
 }
 
 /** Runs `loop`: one run of the improvement steps for the desk and person given (`src/factory/loop-worker.js`); returns codes and integers only. `impls`, `pluginVersion` and the rest of `extra` are test seams. */
-export async function runLoopCommand({ argv, env, pluginVersion = deskVersion(), ...extra }) {
-  const options = parseOptions(argv)
-  const person = options?.get("person-prefix") ?? ""
-  if (options === null || [...options.keys()].some((key) => key !== "desk" && key !== "person-prefix") || (options.has("desk") && !path.isAbsolute(options.get("desk"))) || !/^(?:|desks\/[A-Za-z0-9][A-Za-z0-9._-]*)$/u.test(person)) {
-    throw new Error(LOOP_USAGE)
+export async function runLoopCommand({ desk, "person-prefix": person = "" }, { env, pluginVersion = deskVersion(), ...extra }) {
+  if ((desk !== undefined && !path.isAbsolute(desk)) || !/^(?:|desks\/[A-Za-z0-9][A-Za-z0-9._-]*)$/u.test(person)) {
+    throw usageError("loop", "--desk must be absolute and --person-prefix empty or desks/<alias>", "factory loop --desk <absolute desk root> [--person-prefix desks/<alias>]")
   }
   const { runLoopWorker } = await import("../src/factory/loop-worker.js")
   const { impls, clock, alive, budgetMs, ceilingMs, exit, readStatusImpl } = extra
-  return runLoopWorker(env, { deskRoot: options.get("desk") ?? null, personPrefix: person, pluginVersion, impls, clock, alive, budgetMs, ceilingMs, exit, readStatusImpl })
+  return runLoopWorker(env, { deskRoot: desk ?? null, personPrefix: person, pluginVersion, impls, clock, alive, budgetMs, ceilingMs, exit, readStatusImpl })
 }
 
 /** Runs the `consent` subcommand and returns the JSON-ready result: calls `setConsent`. */
@@ -621,8 +593,10 @@ const usageError = (thing, problem, fix) => new AxError({ code: "usage", exit: 2
 
 const STORE = { type: "string", required: true, placeholder: "<owner/repo>", description: "The store, as owner/repo." }
 const JOB_FLAG = { type: "string", required: true, placeholder: "<job>", description: "The job id." }
+const ISSUE_FLAGS = { store: { type: "string", required: true, placeholder: "<directory>", description: "The checked-out store." }, repo: { type: "string", required: true, placeholder: "<owner/repo>", description: "The store's owner/repo." }, author: { type: "string", placeholder: "<login>", description: "The bot login whose comments are the build's own." } }
 const text = (result) => JSON.stringify(result)
 const exitFor = (ok) => (ok ? "ok" : "error")
+const noFailures = (result) => exitFor(!(Object(result).failed > 0))
 
 /** The commands defined with Ouro AX; each prints one JSON value on one line, and a refusal exits 1. */
 function factoryCli({ env, cwd, git, runner }) {
@@ -641,6 +615,12 @@ function factoryCli({ env, cwd, git, runner }) {
       command("finalize", { summary: "Finalize up to eight finished jobs, then start the loop worker when its step is due.", flags: { job: { ...JOB_FLAG, repeat: true } } }, runFinalizeCommand),
       command("build", { summary: "Build the store's reports.", flags: { store: { type: "string", required: true, placeholder: "<directory>", description: "The checked-out store." }, out: { type: "string", required: true, placeholder: "<directory>", description: "Where to write the build." } } }, runBuildCommand),
       command("evaluate-accept", { summary: "Check what the evaluator wrote for a job and move accepted labels into the outbox.", flags: { job: JOB_FLAG } }, runEvaluateAcceptCommand),
+      command("evaluate", { summary: "Record a job's evaluation request and prepare its briefs; --pending prepares every retained request again.", flags: { desk: { type: "string", placeholder: "<absolute desk root>", description: "The desk." }, task: { type: "string", placeholder: "<track>/<slug>", description: "The task, as [desks/<alias>/]<track>/<slug>." }, pending: { type: "boolean", description: "Prepare every retained request again." } } }, runEvaluateCommand),
+      command("job-link", { summary: "Print the keyed link of a job in the store (private).", readOnly: true, flags: { store: STORE, "desk-remote": { type: "string", required: true, placeholder: "<url>", description: "The desk's remote." }, track: { type: "string", required: true, placeholder: "<track>", description: "The track." }, slug: { type: "string", required: true, placeholder: "<slug>", description: "The task slug." }, "person-prefix": { type: "string", placeholder: "<prefix>", description: "The person prefix, desks/<alias>." }, desk: { type: "string", placeholder: "<desk root>", description: "The desk, to follow a renamed task." }, "this-machine": { type: "boolean", description: "Print only this machine's own link." } } }, runJobLinkCommand),
+      command("kaizen-check", { summary: "Run the kaizen check on every open card of the store.", flags: ISSUE_FLAGS, exit: noFailures }, runKaizenCheckCommand),
+      command("andon", { summary: "Open, update, reopen and close the store's andon issues.", flags: ISSUE_FLAGS, exit: noFailures }, runAndonCommand),
+      command("reconcile", { summary: "Reconcile a desk's sessions against the store for a time window.", readOnly: true, flags: { desk: { type: "string", required: true, placeholder: "<absolute desk root>", description: "The desk." }, since: { type: "string", required: true, placeholder: "<iso>", description: "Window start, a UTC timestamp." }, until: { type: "string", required: true, placeholder: "<iso>", description: "Window end, a UTC timestamp." }, store: { type: "string", placeholder: "<directory>", description: "The store checkout." }, "person-prefix": { type: "string", placeholder: "desks/<alias>", description: "The person prefix." } }, exit: (r) => exitFor(r.ok !== false) }, runReconcileCommand),
+      command("loop", { summary: "Run the improvement steps once for the desk and person given.", flags: { desk: { type: "string", placeholder: "<absolute desk root>", description: "The desk." }, "person-prefix": { type: "string", placeholder: "desks/<alias>", description: "The person prefix." } } }, runLoopCommand),
       command("proof", { summary: "Mark an existing local session as a controlled proof.", args: [{ name: "session", required: true, description: "The session id." }], flags: { desk: { type: "string", placeholder: "<absolute desk root>", description: "The desk the session belongs to." } }, exit: (r) => exitFor(["marked", "already_proof"].includes(r.result)) }, runProofCommand),
     ],
   })
@@ -656,22 +636,12 @@ export async function main({ argv = process.argv.slice(2), env = process.env, cw
     return runCli(cli, argv, { stdout: { write }, stderr })
   }
   try {
-    if (!SUPPORTED_COMMANDS.includes(subcommand)) {
+    if (subcommand !== "validate-pr") {
       throw new Error(`factory.js: unknown subcommand ${JSON.stringify(subcommand ?? "")} (supported: ${SUPPORTED_COMMANDS.join(", ")})`)
     }
-    const command = {
-      "validate-pr": runValidatePrCommand,
-      "job-link": runJobLinkCommand,
-      evaluate: runEvaluateCommand,
-      "kaizen-check": runKaizenCheckCommand,
-      andon: runAndonCommand,
-      reconcile: runReconcileCommand,
-      loop: runLoopCommand,
-    }[subcommand]
-    const result = await command({ argv: rest, env, cwd, git, runner })
+    const result = await runValidatePrCommand({ argv: rest, env, cwd, git, runner })
     write(`${JSON.stringify(result)}\n`)
-    const failed = ((subcommand === "validate-pr" || subcommand === "reconcile") && result.ok === false) || Object(result).failed > 0
-    return failed ? 1 : 0
+    return Number(result.ok === false)
   } catch (error) {
     logError(`${error.message}\n`)
     return 1

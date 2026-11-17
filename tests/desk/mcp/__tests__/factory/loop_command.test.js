@@ -607,18 +607,16 @@ test("the worker ends the process itself if a step hangs past the ceiling, and n
 
 test("the command parses its options, takes the desk and person from the arguments and prints a result holding codes and integers only", () => scratch(async (ctx) => {
   assert.ok(SUPPORTED_COMMANDS.includes("loop"))
-  await assert.rejects(runLoopCommand({ argv: ["--desk"], env: ctx.env }), /Usage: factory.js loop/)
-  await assert.rejects(runLoopCommand({ argv: ["--desk", "relative"], env: ctx.env }), /Usage: factory.js loop/)
-  await assert.rejects(runLoopCommand({ argv: ["--desk", ctx.desk, "--store", "x/y"], env: ctx.env }), /Usage: factory.js loop/)
-  await assert.rejects(runLoopCommand({ argv: ["--desk", ctx.desk, "--person-prefix", "nope"], env: ctx.env }), /Usage: factory.js loop/)
+  await assert.rejects(runLoopCommand({ desk: "relative" }, { env: ctx.env }), /loop: --desk must be absolute/)
+  await assert.rejects(runLoopCommand({ desk: ctx.desk, "person-prefix": "nope" }, { env: ctx.env }), /loop: --desk must be absolute/)
   const log = []
-  const outcome = await runLoopCommand({ argv: ["--desk", ctx.desk, "--person-prefix", "desks/ari"], env: ctx.env, impls: fakes(log), pluginVersion: "9.9.9" })
+  const outcome = await runLoopCommand({ desk: ctx.desk, "person-prefix": "desks/ari" }, { env: ctx.env, impls: fakes(log), pluginVersion: "9.9.9" })
   assert.equal(outcome.result, "completed")
   assert.equal(Object.fromEntries(log).mirror.deskRoot, ctx.desk)
   assert.equal(Object.fromEntries(log).mirror.personPrefix, "desks/ari")
-  assert.equal((await runLoopCommand({ argv: [], env: ctx.env, impls: fakes([]) })).result, "no_desk")
+  assert.equal((await runLoopCommand({}, { env: ctx.env, impls: fakes([]) })).result, "no_desk")
   const solo = []
-  await runLoopCommand({ argv: ["--desk", ctx.desk], env: ctx.env, impls: fakes(solo), pluginVersion: "9.9.9" })
+  await runLoopCommand({ desk: ctx.desk }, { env: ctx.env, impls: fakes(solo), pluginVersion: "9.9.9" })
   assert.equal(Object.fromEntries(solo).measure.personPrefix, "")
   // Everything the command can print is a short code or an integer.
   const walk = (value, where) => {
