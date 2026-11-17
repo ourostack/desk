@@ -2207,7 +2207,7 @@ test("corrupt planning turns cannot silently choose a phase or publish wording",
   for (const value of [null, [], "prepare", { [STORE]: null }, { [STORE]: "unexpected" }]) {
     await updateStatus(f.env, (status) => ({ ...status, context_planning: value }))
     await assert.rejects(queue.planContextPublication(f.env, { ...f.options, now: 1000 }),
-      { message: "context_planning_state_invalid" })
+      { message: /context_planning_state_invalid/u })
   }
 })
 
