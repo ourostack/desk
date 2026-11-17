@@ -1,1 +1,0 @@
-The `tidy-status` command line is now defined with Ouro AX instead of a hand-written argument parser: `tidy-status.js --help` is generated from the definition and a wrong or missing argument is one line naming the fix (exit 2). The tidy's output and exit codes are unchanged.

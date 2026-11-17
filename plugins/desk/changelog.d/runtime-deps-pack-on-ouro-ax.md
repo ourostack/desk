@@ -1,1 +1,0 @@
-The `build-runtime-deps-pack` and `verify-runtime-deps-pack` command lines are now defined once with Ouro AX instead of a hand-written argument parser: `--help` is generated from the definition, and a wrong or missing argument is one line naming the exact command to run instead.

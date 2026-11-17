@@ -1,1 +1,0 @@
-The `lfs.js` command line is now built on Ouro AX: help and usage errors come from the kit, and a usage error is one line on stderr with its fix (exit 2) instead of a JSON `usage` result on stdout. Inspection results are unchanged.

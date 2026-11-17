@@ -1,1 +1,0 @@
-The `sync-push.js` command line is now defined with Ouro AX instead of a hand-written argument parser: `--help` is generated from the definition, and a missing `--root`, an unknown flag or a non-numeric `--debounce-ms` is one line naming the fix (exit 2). A push that is blocked still exits 1 with the same message.

@@ -1,1 +1,0 @@
-The `sessions` command line (`whoami`, `tail`, `send`) is now built on Ouro AX: its help and usage errors come from the kit, a usage error is one line with its fix (exit 2), and output on success is unchanged.

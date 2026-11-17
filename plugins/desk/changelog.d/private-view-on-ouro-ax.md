@@ -1,1 +1,0 @@
-The `private-view` command line is now defined with Ouro AX: `--help` is generated from the definition and an argument it does not take is one line naming the fix (exit 2), instead of being ignored. Its output is unchanged.

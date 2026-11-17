@@ -1,1 +1,0 @@
-The `migrations` command line (`migrations.js run <id>` and `roots`) is now defined once with Ouro AX instead of a hand-written argument parser: `migrations.js --help` is generated from the definition, and a wrong or missing argument is one line naming the exact command to run instead.

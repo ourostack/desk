@@ -1,5 +1,49 @@
 # desk plugin — changelog
 
+## 3.2.223 — 2026-11-17
+
+Corrections and lessons now become checks before prose. The [curator](skills/curator/SKILL.md) tries a new first disposition, `encode-as-check`: remove the cause in code, then a type, then a lint or CI check whose error names the fix (baselined when the pattern is already common), then a test, with prose kept for judgment calls; once a check enforces a prose rule, that rule is deleted. [lesson-capture](skills/lesson-capture/SKILL.md) ships such a check instead of recording a prose line. Borrowed from pstack's `/correct` and `principle-encode-lessons-in-structure`.
+
+The `crew.js` command line (`status`, `start`, `join`, `initiative`) is now built on Ouro AX: help and usage errors come from the kit, and a usage error is one line on stderr with its fix (exit 2) instead of a JSON `usage` result on stdout. Results are unchanged.
+
+Crew now merges its pull requests with an explicit commit message (the pull request title plus its number, and its body without AI or bot credit lines), so GitHub's default message cannot add a `Co-authored-by` trailer that a repository rule rejects. A rebase merge has no message and is unchanged.
+
+The `finish-commit.js` command line is now built on Ouro AX: help and usage errors come from the kit, and a usage error is one line on stderr with its fix (exit 2) instead of a JSON `usage` result on stdout. Answers and the done/ready/held/unknown exit codes are unchanged.
+
+A fresh browser start gets 90 seconds on its first try, up from 45, because real cold starts on Linux CI take up to about a minute; a start that stalls with no output still gets one more try within the same two minutes ([#763](https://github.com/ourostack/desk/issues/763)).
+
+The `lfs.js` command line is now built on Ouro AX: help and usage errors come from the kit, and a usage error is one line on stderr with its fix (exit 2) instead of a JSON `usage` result on stdout. Inspection results are unchanged.
+
+The `local-recovery` command line is now defined with Ouro AX instead of a hand-written argument parser: `--help` is generated from the definition and a wrong argument is one line naming the fix (exit 2); the JSON report and its exit codes are unchanged.
+
+The `migrations` command line (`migrations.js run <id>` and `roots`) is now defined once with Ouro AX instead of a hand-written argument parser: `migrations.js --help` is generated from the definition, and a wrong or missing argument is one line naming the exact command to run instead.
+
+`task_update` and `task_archive` now refuse a `non_code` done with no `evidence.screenshot`: a screenshot of the primary source, given as an https URL or a desk-relative image file (.png, .jpg, .jpeg, .gif or .webp) that exists. It is recorded on the card's `evidence`. Pull request, commit, CI run and steps evidence are unchanged, because Desk already checks those against their sources.
+
+Desk's MCP server now vendors Ouro UI v1.3.258, moved by Ouro Current.
+
+Desk's MCP server now vendors Ouro UI v1.3.260, moved by Ouro Current.
+
+The `private-view` command line is now defined with Ouro AX: `--help` is generated from the definition and an argument it does not take is one line naming the fix (exit 2), instead of being ignored. Its output is unchanged.
+
+The `resolve-desk-root` command line is now defined with Ouro AX: `--help` is generated from the definition and an unknown argument is one line naming the fix (exit 2), instead of being ignored. What it prints, and its use by the startup hooks, is unchanged.
+
+The `build-runtime-deps-pack` and `verify-runtime-deps-pack` command lines are now defined once with Ouro AX instead of a hand-written argument parser: `--help` is generated from the definition, and a wrong or missing argument is one line naming the exact command to run instead.
+
+The session-start boot's command line is now defined with Ouro AX: a wrong flag is one stderr line with its fix and exit 2, `--help` works, and `--json` prints indented JSON.
+
+The `session-retention` command line is now defined once with Ouro AX instead of a hand-written argument parser: `session-retention.js --help` is generated from the definition, and a wrong flag or value is one line naming the exact command to run instead.
+
+The `session-sync.js` command line is now defined with Ouro AX instead of a hand-written argument parser: `--help` is generated from the definition and an unknown flag is one line naming the fix (exit 2). A sync still always exits 0 and prints nothing unless it did not resolve.
+
+The `sessions` command line (`whoami`, `tail`, `send`) is now built on Ouro AX: its help and usage errors come from the kit, a usage error is one line with its fix (exit 2), and output on success is unchanged.
+
+The `sync-push.js` command line is now defined with Ouro AX instead of a hand-written argument parser: `--help` is generated from the definition, and a missing `--root`, an unknown flag or a non-numeric `--debounce-ms` is one line naming the fix (exit 2). A push that is blocked still exits 1 with the same message.
+
+The `tidy-status` command line is now defined with Ouro AX instead of a hand-written argument parser: `tidy-status.js --help` is generated from the definition and a wrong or missing argument is one line naming the fix (exit 2). The tidy's output and exit codes are unchanged.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.222 — 2026-11-17
 
 The detached Desk-problem filer's command line is now defined with Ouro AX: a usage error is one stderr line with its fix and exit 2, and `--help` works.
