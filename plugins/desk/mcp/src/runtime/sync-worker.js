@@ -758,7 +758,14 @@ export async function runSyncPushCli({ argv = process.argv.slice(2), env = proce
         const outcome = await runWorker({ root, env, debounceMs: input["debounce-ms"] ?? DEFAULT_DEBOUNCE_MS })
         if (outcome?.result === "blocked") {
           const detail = text(readSyncStatus({ root, env })?.error) ?? outcome.reason
-          throw new Error(redactCredentialLikeText(`Workspace publication blocked; local commits are preserved. ${detail}. Fix: inspect desk_status, resolve the reported cause, then run ${publicationRecovery(root)}`))
+          throw new Error(redactCredentialLikeText(deskFailure({
+      code: "sync_push_publication_blocked",
+      thing: "sync-push.js: workspace publication blocked",
+      probably: `${detail}`,
+      look: "call desk_status for the blocked reason and the unpushed count",
+      keepWorking: "local commits are preserved and nothing was forced, so keep working in the workspace",
+      fix: `resolve the reported cause, then run ${publicationRecovery(root)}`,
+    })))
         }
         return {}
       },

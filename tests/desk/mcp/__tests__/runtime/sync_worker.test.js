@@ -820,6 +820,7 @@ test("the recovery CLI fails a blocked publication instead of returning success"
     assert.match(out.stderr, /publication.*blocked/iu)
     assert.match(out.stderr, /local commits.*preserved/iu)
     assert.match(out.stderr, /Fix:.*sync-push\.js/u)
+    assert.match(out.stderr, /friction_add with \{"error_code":"sync_push_publication_blocked"\}/u)
     assert.doesNotMatch(out.stderr, /ghp_abcdefghijklmnopqrstuvwxyz0123456789/u)
     if (diagnostic !== null) assert.match(out.stderr, /workspace-policy failed/u)
   }
