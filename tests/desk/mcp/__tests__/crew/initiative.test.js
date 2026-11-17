@@ -202,7 +202,7 @@ test("the command line: new, adopt and check print JSON and check exits 1 on pro
   const run = async (argv) => {
     let out = ""
     let err = ""
-    const code = await main({ argv: [...argv, "--repo", clone], cwd: "/elsewhere", write: (text) => { out += text }, writeError: (text) => { err += text }, script: "/crew.js" })
+    const code = await main({ argv: [...argv, "--repo", clone], cwd: "/elsewhere", write: (text) => { out += text }, stderr: { write: (text) => { err += text } }, script: "/crew.js" })
     return { code, err, result: out === "" ? null : JSON.parse(out) }
   }
   const failing = await run(["initiative", "check"])

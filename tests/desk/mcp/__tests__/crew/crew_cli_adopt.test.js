@@ -7,7 +7,7 @@ import { main } from "../../../../../plugins/desk/mcp/scripts/crew.js"
 async function run(argv, engine) {
   let out = ""
   let err = ""
-  const code = await main({ argv, cwd: "/work/team", write: (text) => { out += text }, writeError: (text) => { err += text }, engine })
+  const code = await main({ argv, cwd: "/work/team", write: (text) => { out += text }, stderr: { write: (text) => { err += text } }, engine })
   return { code, err, result: out === "" ? null : JSON.parse(out) }
 }
 

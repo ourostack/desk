@@ -70,8 +70,8 @@ function crewCli({ cwd, engine, script }) {
   })
 }
 
-export async function main({ argv = process.argv.slice(2), cwd = process.cwd(), write = (text) => process.stdout.write(text), writeError = (text) => process.stderr.write(text), engine = { crewStatus, startWorkspace, joinWorkspace, newInitiative, adoptInitiative, checkTracks }, script = fileURLToPath(import.meta.url) } = {}) {
-  return runCli(crewCli({ cwd, engine, script }), argv, { stdout: { write }, stderr: { write: writeError } })
+export async function main({ argv = process.argv.slice(2), cwd = process.cwd(), write = (text) => process.stdout.write(text), stderr = process.stderr, engine = { crewStatus, startWorkspace, joinWorkspace, newInitiative, adoptInitiative, checkTracks }, script = fileURLToPath(import.meta.url) } = {}) {
+  return runCli(crewCli({ cwd, engine, script }), argv, { stdout: { write }, stderr })
 }
 
 /** Whether this file is the script node was started with (compared as real paths, since a temp folder may be a link). */
