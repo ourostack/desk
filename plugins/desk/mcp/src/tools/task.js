@@ -121,6 +121,8 @@ async function assertScreenshot(screenshot, deskRoot, toolName) {
       `Example: {"kind": "non_code", "ref": "https://example.com/proof", "screenshot": "my-track/my-task/proof.png"}.`), { code: "task_pass_evidence_screenshot_non_code" })
 }
 
+const screenshotField = (evidence) => (evidence.kind === "non_code" ? { screenshot: evidence.screenshot.trim() } : {})
+
 const DONE_EVIDENCE_REF_CHECKS = {
   pr: {
     test: (ref) => PR_REF.test(ref),
@@ -1165,7 +1167,7 @@ export async function task_update({ deskRoot, input, person = null, search, stat
       existingRepos: existing.data.repos, created: existing.data.created,
       files: [filePath], spawnGit, homeDir: env.HOME, env, fetchFn,
     })
-    merged.evidence = { kind: evidence.kind, ref: stepsNow === null ? evidence.ref : stepsRef(stepsNow.rows), ...(evidence.kind === "non_code" ? { screenshot: evidence.screenshot.trim() } : {}), recorded_at: merged.updated }
+    merged.evidence = { kind: evidence.kind, ref: stepsNow === null ? evidence.ref : stepsRef(stepsNow.rows), ...screenshotField(evidence), recorded_at: merged.updated }
     delivered = deliveryAnswer({ data: merged, slug, ref: merged.evidence.ref })
     report = await factoryReportFor({ deskRoot, person, track, slug, env })
   } else if (Object.hasOwn(existing.data, "factory_report_unavailable")) {
@@ -1546,7 +1548,7 @@ export async function task_archive({ deskRoot, input, person = null, search, sta
         const live = await readMarkdown(srcFile)
         const steps = stepsView(applyRefresh(live.content, refresh.derived).body, refresh)
         await assertDoneEvidence(evidence, deskRoot, "task_archive", { repos: live.data.repos, existingRepos: live.data.repos, created: live.data.created, files: [srcFile, archivedFile], spawnGit, homeDir: env.HOME, env, fetchFn, steps })
-        archiveBump = { status: "done", evidence: { kind: evidence.kind, ref: steps === null ? evidence.ref : stepsRef(steps.rows), ...(evidence.kind === "non_code" ? { screenshot: evidence.screenshot.trim() } : {}) }, derived: refresh.derived }
+        archiveBump = { status: "done", evidence: { kind: evidence.kind, ref: steps === null ? evidence.ref : stepsRef(steps.rows), ...screenshotField(evidence) }, derived: refresh.derived }
       }
       // The record the bump writes is worked out here, before the folder moves: a card whose record cannot be read refuses the archive
       // with the folder untouched, never after a move it would leave unpatched and uncommitted.
