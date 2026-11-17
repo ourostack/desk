@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
-import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
+import { chmodSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs"
 import * as path from "node:path"
 import { spawnSync } from "node:child_process"
 import { mkTempRoot } from "../_temp_roots.js"
@@ -114,6 +114,17 @@ test("installing again changes nothing, an older Desk hook is rewritten, and a f
   ok(commit(other, "x", { COPILOT_AGENT_SESSION_ID: "abc-123" }))
   assert.match(message(other), /Session: abc-123$/u)
   assert.match(readFileSync(path.join(other, ".git", "hooks", "ran.log"), "utf8"), /foreign ran/u)
+})
+
+test("a foreign hook that replaces Desk's later is chained and the stale chained hook is kept as a backup", async () => {
+  const dir = await repo()
+  const hook = path.join(dir, ".git", "hooks", "prepare-commit-msg")
+  for (const body of ["first", "second"]) {
+    writeFileSync(hook, `#!/bin/sh\n# ${body}\n`)
+    assert.equal(installSessionTrailerHooks(dir).hooks[0].chained, true)
+  }
+  assert.match(readFileSync(`${hook}.desk-chained`, "utf8"), /second/u)
+  assert.equal(readdirSync(path.dirname(hook)).filter((name) => name.startsWith("prepare-commit-msg.desk-chained.bak-")).length, 1)
 })
 
 test("a tracked core.hooksPath is left alone and outside a repository nothing happens", async () => {
