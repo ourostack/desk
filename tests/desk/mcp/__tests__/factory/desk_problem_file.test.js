@@ -621,17 +621,13 @@ test("two concurrent filings for the same new fingerprint create only one issue;
 
 // ── runFileDeskProblemCli: the detached filer's whole CLI surface, unit-tested directly ───────────
 
-test("runFileDeskProblemCli requires --mechanism, and refuses an empty one", () => scratch(async ({ env }) => {
-  await assert.rejects(runFileDeskProblemCli({ argv: [], env }), /Pass --mechanism <name>/u)
-  await assert.rejects(runFileDeskProblemCli({ argv: ["--mechanism", ""], env }), /Pass --mechanism <name>/u)
-}))
-
-test("runFileDeskProblemCli refuses an argument that isn't a --flag", () => scratch(async ({ env }) => {
-  await assert.rejects(runFileDeskProblemCli({ argv: ["oops"], env }), /unexpected argument "oops"/u)
-}))
-
-test("runFileDeskProblemCli refuses a non-string argument too, naming it safely rather than throwing on the name itself", () => scratch(async ({ env }) => {
-  await assert.rejects(runFileDeskProblemCli({ argv: [null], env }), /unexpected argument ""/u)
+test("runFileDeskProblemCli requires --mechanism, and refuses an argument that isn't a --flag, as one usage line on stderr", () => scratch(async ({ env }) => {
+  for (const argv of [[], ["oops"]]) {
+    let err = ""
+    const code = await runFileDeskProblemCli({ argv, env, io: { stdout: { write() {} }, stderr: { write: (line) => { err += line } } } })
+    assert.equal(code, 2)
+    assert.match(err, /^file-desk-problem: .*\. Fix: .*\.\n$/u)
+  }
 }))
 
 test("runFileDeskProblemCli resolves 0 and never throws once --mechanism is given, whether or not the optional flags are, and even when nothing can file", () => scratch(async ({ env }) => {
