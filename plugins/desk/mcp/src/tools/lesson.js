@@ -18,6 +18,7 @@
 // searchable; this tool no longer writes them.
 
 import { promises as fs, existsSync } from "node:fs"
+import { deskFailure } from "../runtime/desk-failure.js"
 import * as path from "node:path"
 import { spawnSync } from "node:child_process"
 import { today, slugify, pathExists } from "../util/fm.js"
@@ -57,8 +58,16 @@ const MESSAGE_TOPIC_CHARS = 500
  * `foundation` the always-on `using-desk` text.
  */
 function ownerOf(owner, { env, scan }) {
-  const usage = "lesson_add: a desk lesson needs `owner`: skill:<plugin>:<skill>, tool:<tool name>, brief or foundation"
-  if (typeof owner !== "string") throw new Error(usage)
+  const usage = () =>
+    new Error(deskFailure({
+      code: "lesson_add_owner_invalid",
+      thing: "lesson_add: owner",
+      probably: `a desk lesson needs \`owner\`: skill:<plugin>:<skill>, tool:<tool name>, brief or foundation, and got ${JSON.stringify(owner)}`,
+      look: "call desk_doctor to see the installed plugins and skills, or read the `lesson_add` tool description",
+      keepWorking: "nothing was written, so keep working and call lesson_add again with a valid owner",
+      fix: 'call lesson_add with {"owner":"brief", ...}',
+    }))
+  if (typeof owner !== "string") throw usage()
   if (owner === "brief" || owner === "foundation") return { owner, plugin: "desk", frictionClass: "skill" }
   const tool = /^tool:(.+)$/u.exec(owner)
   if (tool) {
@@ -66,7 +75,7 @@ function ownerOf(owner, { env, scan }) {
     return { owner, plugin: "desk", frictionClass: "mcp_tool" }
   }
   const skill = /^skill:([^:]+):(.+)$/u.exec(owner)
-  if (!skill || !NAME.test(skill[1]) || !NAME.test(skill[2])) throw new Error(usage)
+  if (!skill || !NAME.test(skill[1]) || !NAME.test(skill[2])) throw usage()
   const plugins = installedPlugins(env, scan)
   const plugin = plugins.get(skill[1])
   if (plugin === undefined) {

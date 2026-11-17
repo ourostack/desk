@@ -26,6 +26,7 @@ import { DESK_COMMIT_HASH_NOTE, headSha } from "./task.js"
 import { isGitRepository, hasUnmergedPath, hasUnstagedWork, stagedChanges, indexEntries, stagePaths, commitPaths, commitIndexPaths } from "../util/git-stage.js"
 import { commitFailure, commitRoute, withNext } from "../util/route-around.js"
 import { operationAnswer } from "../util/cas-commit.js"
+import { deskFailure } from "../runtime/desk-failure.js"
 import { deskPushNote, schedulePush as schedulePushDefault } from "../runtime/sync-worker.js"
 import { admitContent, assertCleanContentTarget } from "../desk/content-home.js"
 import { scratchPathWarning } from "../desk/scratch-paths.js"
@@ -59,7 +60,16 @@ function pathsInput(value) {
 }
 
 const MAX_FILE_BYTES = 1024 * 1024
-const FILES_SHAPE = "desk_save: `files` must be a non-empty array of { path, content } objects whose path and content are strings"
+const FILES_SHAPE = "`files` must be a non-empty array of { path, content } objects whose path and content are strings"
+const filesShape = (detail) =>
+  new Error(deskFailure({
+    code: "desk_save_files_shape",
+    thing: "desk_save: files",
+    probably: `${FILES_SHAPE}${detail}`,
+    look: "read the `files` description in the `desk_save` tool schema",
+    keepWorking: "nothing was saved, so keep working and call desk_save again with the files",
+    fix: 'call desk_save with {"files":[{"path":"<path in the desk>","content":"<text>"}]}',
+  }))
 // Git reads these in a pathspec as a pattern or as magic, so `git add -- <path>` could stage files the call never wrote.
 const PATHSPEC_SPECIAL = /[*?[\\]|^:/u
 
@@ -69,7 +79,7 @@ function filesInput(value) {
     try {
       parsed = JSON.parse(value)
     } catch {
-      throw Object.assign(new Error(`${FILES_SHAPE} (got a string that is not valid JSON)`), { code: "desk_save_got_a_string_that_is" })
+      throw filesShape(" (got a string that is not valid JSON)")
     }
   }
   if (
@@ -77,7 +87,7 @@ function filesInput(value) {
     parsed.length === 0 ||
     !parsed.every((entry) => entry !== null && typeof entry === "object" && typeof entry.path === "string" && typeof entry.content === "string")
   ) {
-    throw new Error(FILES_SHAPE)
+    throw filesShape("")
   }
   return parsed
 }

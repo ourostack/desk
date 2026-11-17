@@ -406,7 +406,7 @@ test("task_create rejects a status outside the eight lifecycle states and names 
   for (const status of ["active", "Processing", "in-progress", "", 3]) {
     await assert.rejects(
       task_create({ deskRoot: root, input: { track: "t", slug: "bad-status-task", title: "T", status } }),
-      (error) => /^task_create: invalid status /.test(error.message) && error.message.includes(JSON.stringify(status)) && /drafting, processing, validating, collaborating, paused, blocked, done, cancelled/.test(error.message),
+      (error) => /^desk: task_create: status: invalid status /.test(error.message) && error.message.includes(JSON.stringify(status)) && /drafting, processing, validating, collaborating, paused, blocked, done, cancelled/.test(error.message),
     )
   }
   assert.equal(await exists(path.join(root, "t", "bad-status-task", "task.md")), false)
@@ -429,7 +429,7 @@ test("task_create refuses signoff, flow and returns in frontmatter-like input an
   for (const [key, value] of [["signoff", { state: "accepted" }], ["flow", { rev: 9 }], ["returns", ["x"]]]) {
     await assert.rejects(
       task_create({ deskRoot: root, input: { track: "t", slug: `refuse-${key}`, title: "T", [key]: value } }),
-      /these records are written by the task tools; to record an answer call task_signoff/,
+      /these records are written by the task tools.*Fix: to record an answer call task_signoff/,
     )
     assert.equal(await exists(path.join(root, "t", `refuse-${key}`, "task.md")), false)
   }
@@ -439,7 +439,7 @@ test("task_create refuses signoff in frontmatter", async () => {
   const root = await mkTempDeskRoot()
   await assert.rejects(
     task_create({ deskRoot: root, input: { track: "t", slug: "forged-signoff", title: "T", frontmatter: { signoff: { state: "accepted", verified: true } } } }),
-    /these records are written by the task tools; to record an answer call task_signoff/,
+    /these records are written by the task tools.*Fix: to record an answer call task_signoff/,
   )
   assert.equal(await exists(path.join(root, "t", "forged-signoff", "task.md")), false)
 })

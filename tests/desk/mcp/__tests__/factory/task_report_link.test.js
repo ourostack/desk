@@ -483,11 +483,11 @@ test("the link fields are the tools' own: task_update and task_create refuse the
   for (const key of ["factory_report", "factory_report_unavailable"]) {
     await assert.rejects(
       task_update({ deskRoot: desk, env, input: { track: "track", slug: "finished-work", frontmatter: { [key]: "anything" } } }),
-      /^Error: task_update: `factory_report` and `factory_report_unavailable` are written by the task tools/u,
+      /^Error: desk: task_update: record keys: `factory_report` and `factory_report_unavailable` are written by the task tools/u,
     )
     await assert.rejects(
       task_create({ deskRoot: desk, input: { track: "track", slug: `new-${key.length}`, title: "fixture", frontmatter: { [key]: "anything" } } }),
-      /^Error: task_create: `factory_report` and `factory_report_unavailable` are written by the task tools/u,
+      /^Error: desk: task_create: record keys: `factory_report` and `factory_report_unavailable` are written by the task tools/u,
     )
   }
   assert.equal(Object.hasOwn(await card(desk, "track/finished-work/task.md"), "factory_report_unavailable"), false)

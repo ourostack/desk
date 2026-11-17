@@ -28,6 +28,7 @@ import { deskRelativePath, resolveWriteTarget, personPrefix } from "../util/path
 import { withCreatedDirs } from "../util/created-dirs.js"
 import { isGitRepository, hasUnstagedWork, stagePaths, commitIndexPaths, indexEntries } from "../util/git-stage.js"
 import { commitFailure, withNext } from "../util/route-around.js"
+import { deskFailure } from "../runtime/desk-failure.js"
 import { schedulePush as schedulePushDefault } from "../runtime/sync-worker.js"
 import { redactCredentialLikeText, redactName } from "../util/redact.js"
 import { focusNote } from "./task-focus.js"
@@ -146,7 +147,7 @@ function taskMoveSource(deskRoot, person, values) {
     throw Object.assign(new Error("task_update: pass `handle` or `track` and `slug`, not both"), { code: "task_update_move_pass_handle_or_track_and" })
   }
   const source = resolveTaskHandle(deskRoot, personPrefix(deskRoot, person), values.handle)
-  if (source === null) throw new Error(handleMiss("task_update", "task"))
+  if (source === null) throw handleMiss("task_update", "task")
   return source
 }
 
@@ -161,15 +162,30 @@ function trackRenameSource(deskRoot, person, values) {
     throw Object.assign(new Error("track_update: pass `handle` or `slug`, not both"), { code: "track_update_rename_pass_handle_or_track_not" })
   }
   const track = resolveTrackHandle(deskRoot, personPrefix(deskRoot, person), values.handle)
-  if (track === null) throw new Error(handleMiss("track_update", "track"))
+  if (track === null) throw handleMiss("track_update", "track")
   return track
 }
 
 function handleMiss(tool, kind) {
-  return (
-    `${tool}: no ${kind} in this session's desk has that handle. A handle is \`${kind}-\` and ten hex characters, ` +
-    "and it changes when the folder moves; take a fresh one from desk_status (active_tasks) or desk_doctor"
-  )
+  return new Error(deskFailure({
+    code: `${tool}_handle_not_found`,
+    thing: `${tool}: handle`,
+    probably: `no ${kind} in this session's desk has that handle; a handle is \`${kind}-\` and ten hex characters, and it changes when the folder moves`,
+    look: "call desk_status (active_tasks) or desk_doctor for a fresh handle",
+    keepWorking: "nothing was moved, so keep working and call this tool again with the fresh handle",
+    fix: "take a fresh handle from desk_status (active_tasks)",
+  }))
+}
+
+function gitStepFailed(step, what, stderr) {
+  return new Error(redactCredentialLikeText(deskFailure({
+    code: `move_git_${step}_failed`,
+    thing: `move: git ${step}`,
+    probably: `git ${step} failed ${what}: ${stderr}`,
+    look: "call desk_doctor, or run `git status` in the desk to see what is staged",
+    keepWorking: "the move did not complete, so keep working and retry after the desk's git state is clean",
+    fix: "resolve the git error shown, then call the move tool again",
+  })))
 }
 
 // ── Git plumbing ─────────────────────────────────────────────────────────
@@ -206,7 +222,7 @@ function stageWrites({ root, files, spawnGit }) {
   if (files.length === 0 || !isGitRepository(root, spawnGit)) return
   const result = stagePaths(root, files.map((p) => relPath(root, p)), spawnGit)
   if (!result.ok) {
-    throw new Error(redactCredentialLikeText(`desk-mcp: git add failed staging the move's edits: ${result.stderr}`))
+    throw gitStepFailed("add", "staging the move's edits", result.stderr)
   }
 }
 
@@ -258,14 +274,14 @@ async function moveInto({ root, from, to, spawnGit }) {
     encoding: "utf8",
   })
   if (addResult.status !== 0) {
-    throw new Error(redactCredentialLikeText(`desk-mcp: git add failed staging ${shownPath(relFrom)}: ${addResult.stderr}`))
+    throw gitStepFailed("add", `staging ${shownPath(relFrom)}`, addResult.stderr)
   }
 
   const mvResult = spawnGit("git", ["-C", root, "mv", "--sparse", relFrom, relTo], { windowsHide: true,
     encoding: "utf8",
   })
   if (mvResult.status !== 0) {
-    throw new Error(redactCredentialLikeText(`desk-mcp: git mv failed moving ${shownPath(relFrom)} to ${shownPath(relTo)}: ${mvResult.stderr}`))
+    throw gitStepFailed("mv", `moving ${shownPath(relFrom)} to ${shownPath(relTo)}`, mvResult.stderr)
   }
 }
 

@@ -68,7 +68,7 @@ test("a PR in a repo the card does not list is refused, and the error names the 
   const root = await codeTask([{ name: "acme/widgets", local_path: clone, mode: "local" }])
   await assert.rejects(
     done(root, { kind: "pr", ref: "https://github.com/anthropics/claude-code/pull/1" }),
-    /is not in this task's repos \(acme\/widgets \(.*clone\)\)\. Supply a PR URL in one of those repos/,
+    /is not in this task's repos \(acme\/widgets \(.*clone\)\).*Fix: supply a PR URL in one of those repos/,
   )
   const { data } = await readFront(path.join(root, "t", "ship-it", "task.md"))
   assert.equal(data.status, "processing")

@@ -13,6 +13,7 @@ import { spawnSync } from "node:child_process"
 import { readMarkdown, patchMarkdownFrontmatter } from "../util/fm.js"
 import { validateWriteSegment } from "../util/paths.js"
 import { readRecord, toFrontmatter, sign, refuse, STATUSES, REFUSAL_REASONS, RETURN_REASONS } from "../factory/outcome.js"
+import { deskFailure } from "../runtime/desk-failure.js"
 import { deskPushNote, schedulePush as schedulePushDefault } from "../runtime/sync-worker.js"
 import { findCard } from "./task-focus.js"
 import { refreshSignoffStatus } from "../desk/unsigned-deliveries.js"
@@ -87,7 +88,14 @@ export async function taskSignoff({
   try {
     signed = sign(readRecord(card.data), { status: "done", outcome, reason, returnReason, at })
   } catch (error) {
-    throw new Error(`task_signoff: ${error.message}`)
+    throw new Error(deskFailure({
+      code: "task_signoff_refused",
+      thing: "task_signoff: outcome",
+      probably: error.message,
+      look: "read the card's `signoff` record with desk_status",
+      keepWorking: "nothing was recorded, so keep working and call task_signoff again with a corrected outcome",
+      fix: "pass `outcome`, `reason` and `return_reason` as the tool description lists them",
+    }))
   }
   const result = { status: "unchanged", path: relPath(deskRoot, found.file), signoff: signed.record.signoff }
   result.say = sentence({ slug, outcome, reason: signed.record.signoff.reason, changed: signed.changed })

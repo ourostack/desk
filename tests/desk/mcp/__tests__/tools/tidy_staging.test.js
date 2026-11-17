@@ -169,7 +169,7 @@ test("task_update surfaces a git add failure while staging its edits", async () 
     args.includes("add") && !args.includes("-A") ? { status: 1, stdout: "", stderr: "boom" } : spawnSync(cmd, args, opts)
   await assert.rejects(
     moveTask({ deskRoot: root, input: { track: "track-a", slug: "task-one", to_slug: "first-outcome" }, spawnGit }),
-    /^Error: desk-mcp: git add failed staging the move's edits: boom$/,
+    /^Error: desk: move: git add: git add failed staging the move's edits: boom;/,
   )
 })
 

@@ -863,7 +863,7 @@ test("task_update refuses an unknown top-level field, naming it and the accepted
 // ── the delivery record and the sign-off packet ─────────────────────────────
 
 const PR_EVIDENCE = { kind: "pr", ref: "https://github.com/example-org/example-repo/pull/7" }
-const RECORD_ERROR = /these records are written by the task tools; to record an answer call task_signoff/
+const RECORD_ERROR = /these records are written by the task tools.*Fix: to record an answer call task_signoff/
 const SENTINEL = "SENTINEL-card-body-text"
 
 test("task_update refuses signoff, flow and returns in frontmatter and writes nothing", async () => {

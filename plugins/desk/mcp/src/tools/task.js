@@ -29,6 +29,7 @@ import { readRecord, toFrontmatter, move, needsReturnReason, parseReturn, RETURN
 import { deskRelativePath, isPathContained, resolveWriteTarget, personPrefix } from "../util/paths.js"
 import { isGitRepository, hasUnmergedPath, hasUnstagedWork, stagePaths, commitPaths, includeInCheckout, releaseFromCheckout } from "../util/git-stage.js"
 import { commitFailure, commitRoute, unfinishedNext, withNext } from "../util/route-around.js"
+import { deskFailure } from "../runtime/desk-failure.js"
 import { deskPushNote, schedulePush as schedulePushDefault } from "../runtime/sync-worker.js"
 import { validateName, describeNameRejection } from "../desk/naming.js"
 import { factoryStateRoot, requestEvaluation, requestFinalize } from "../factory/outbox.js"
@@ -343,18 +344,29 @@ export const TASK_ARCHIVE_FIELDS = ["track", "slug", "evidence", "outcome"]
 
 // The three outcome records are written only by the task tools; a caller never supplies them.
 const RECORD_KEYS = ["signoff", "flow", "returns", "returns_damaged"]
-const RECORD_REFUSAL = "these records are written by the task tools; to record an answer call task_signoff"
+const RECORD_REFUSAL = "these records are written by the task tools"
 
 // The report link fields are the task tools' answer about the factory report, never the caller's: a hand-set link could name any job on a
 // public desk's card, and a hand-set reason would not be a reason code.
+function writtenByTools(tool, code, probably, fix) {
+  return new Error(deskFailure({
+    code,
+    thing: `${tool}: record keys`,
+    probably,
+    look: "call desk_status or read the card to see what the task tools have already recorded",
+    keepWorking: "nothing was written, so keep working on the task with the remaining fields",
+    fix,
+  }))
+}
+
 const REPORT_KEYS = ["factory_report", "factory_report_unavailable"]
 const REPORT_REFUSAL = "`factory_report` and `factory_report_unavailable` are written by the task tools: the move to done writes the link or the reason it has none, and a later update fills a missing link by itself"
 
 function refuseRecordKeys(tool, ...sources) {
   for (const source of sources) {
     if (source == null) continue
-    if (RECORD_KEYS.some((key) => Object.hasOwn(source, key))) throw new Error(`${tool}: ${RECORD_REFUSAL}`)
-    if (REPORT_KEYS.some((key) => Object.hasOwn(source, key))) throw new Error(`${tool}: ${REPORT_REFUSAL}`)
+    if (RECORD_KEYS.some((key) => Object.hasOwn(source, key))) throw writtenByTools(tool, "task_written_record", RECORD_REFUSAL, "to record an answer call task_signoff")
+    if (REPORT_KEYS.some((key) => Object.hasOwn(source, key))) throw writtenByTools(tool, "task_written_report_link", REPORT_REFUSAL, "drop those keys and call this tool again")
   }
 }
 
@@ -730,7 +742,14 @@ export async function task_create({ deskRoot, input, person = null, search, stat
   }
 
   if (values.status != null && !LIFECYCLE_STATES.includes(values.status)) {
-    throw new Error(`task_create: ${invalidStatusMessage(values.status)}`)
+    throw new Error(deskFailure({
+      code: "task_create_invalid_status",
+      thing: "task_create: status",
+      probably: invalidStatusMessage(values.status),
+      look: "read the `status` description in the `task_create` tool schema",
+      keepWorking: "no task was created, so keep working and call task_create again with a valid status",
+      fix: `pass one of ${LIFECYCLE_STATES.join(", ")} as \`status\``,
+    }))
   }
   if (values.focus !== undefined && typeof values.focus !== "boolean") {
     throw Object.assign(new Error("task_create: Pass `focus` as true or false: `focus` must be true or false"), { code: "task_create_focus_must_be_true_or" })
