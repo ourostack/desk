@@ -165,6 +165,16 @@ requires(
 );
 requires(
   "plugins/desk/skills/curator/SKILL.md",
+  "curator tries encode-as-check first and deletes prose a check enforces",
+  /1\. \*\*encode-as-check\*\*[\s\S]+remove the cause in code[\s\S]+type[\s\S]+error names the fix[\s\S]+baseline[\s\S]+test[\s\S]+judgment[\s\S]+delete that rule/iu,
+);
+requires(
+  "plugins/desk/skills/lesson-capture/SKILL.md",
+  "lesson-capture ships a check instead of a prose line",
+  /fix can be a check[\s\S]+ship the check[\s\S]+no prose line/iu,
+);
+requires(
+  "plugins/desk/skills/curator/SKILL.md",
   "curator consolidates governing rules before adding prose",
   /conflict[\s\S]+consolidate[\s\S]+one owner[\s\S]+buried[\s\S]+cut or simplify[\s\S]+before adding[\s\S]+root cause/iu,
 );

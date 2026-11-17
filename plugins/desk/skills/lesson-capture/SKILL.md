@@ -43,7 +43,7 @@ when the job reported to a factory store, its job report there carries the evalu
 
 ## Output: lessons that take effect
 
-each lesson worth keeping lands through `lesson_add`, which puts it where something loads it. pick the scope by whose behaviour it changes:
+when a lesson's fix can be a check in a repository (code, a type, a lint or CI check whose error names the fix, a test: `curator`'s `encode-as-check`), ship the check there and record no prose line. every other lesson worth keeping lands through `lesson_add`, which puts it where something loads it. pick the scope by whose behaviour it changes:
 
 - **personal** — this operator's preference. it becomes a line in their AGENTS.md, which session start prints. once AGENTS.md outgrows what session start prints, the tool moves the oldest lessons to the LESSONS.md shelf beside it (or shelves the new one when nothing else makes room); session start lists every shelved topic and `task_focus` returns the shelved lessons, so nothing needs trimming by hand. the reply's `shelved` names every lesson that moved: tell the operator which ones.
 - **desk** — how Desk's tools or an installed plugin's skills behave. name the `owner` that carries the behaviour (`skill:<plugin>:<skill>` for any installed plugin, overlays included; `tool:<name>`, `brief` or `foundation`); the tool records system friction against it and opens an improvement card, which the improvement loop turns into a pull request.
@@ -64,7 +64,7 @@ a correction the operator gave is theirs, so record it straight away. a lesson i
 | encoding decision | operator + agent in same pass | agent proposes; operator (or self-authorized agent) confirms |
 | cadence | reactive (when friction happens) | periodic (post-task) |
 
-both end in the same place: a change where it is loaded — a line in an AGENTS.md, or an improvement card that ships a change to a skill or tool (or a no-op-with-reason if the lesson doesn't warrant encoding). they're complementary, not competing. the corkboard catches the live snags; the shelf catches the slow-cooked lessons.
+both end in the same place: a change where it is loaded — a check, a line in an AGENTS.md, or an improvement card that ships a change to a skill or tool (or a no-op-with-reason if the lesson doesn't warrant encoding). they're complementary, not competing. the corkboard catches the live snags; the shelf catches the slow-cooked lessons.
 
 ## Hard rules
 
@@ -72,7 +72,7 @@ both end in the same place: a change where it is loaded — a line in an AGENTS.
 2. **quote evidence.** each proposed lesson cites the artifact(s) that surfaced it. no inference without source.
 3. **concrete landing place.** "should probably go somewhere" is not actionable. name the scope, and for a desk lesson the owner `lesson_add` takes.
 4. **don't over-encode.** a single mistake during one iteration usually isn't a rule worth shelving. wait for the second occurrence — OR explicitly note "first occurrence; flagging in case of recurrence" without yet proposing encoding.
-5. **respect existing rules.** before proposing a new rule, check if an existing skill already covers it. if yes, the proposal is "make the existing rule stickier" (e.g., promote it from a triggered skill into the always-on `using-desk` foundation) rather than "add new rule."
+5. **respect existing rules.** before proposing a new rule, check if an existing skill already covers it. if yes, the proposal is "make the existing rule stickier" (e.g., turn it into a check, or promote it from a triggered skill into the always-on `using-desk` foundation) rather than "add new rule."
 
 ## What this skill does NOT do
 
@@ -82,4 +82,4 @@ both end in the same place: a change where it is loaded — a line in an AGENTS.
 
 ## Inspired by
 
-AIDLC's `continuous-improvement` skill (auto-update target instruction files post-session). adapted for desk's agent-vs-operator-driven distinction.
+AIDLC's `continuous-improvement` skill (auto-update target instruction files post-session). adapted for desk's agent-vs-operator-driven distinction. check-first encoding borrows pstack's `/correct` and `principle-encode-lessons-in-structure`.

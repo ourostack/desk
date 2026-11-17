@@ -28,11 +28,12 @@ a Sunday-afternoon pass over the corkboard. i sit down, take every still-pinned 
 
 ## What this skill does
 
-for each open friction entry in `$DESK/<track>/_friction/` (or `$DESK/_meta/friction.md` for cross-track entries), produce one of three dispositions:
+for each open friction entry in `$DESK/<track>/_friction/` (or `$DESK/_meta/friction.md` for cross-track entries), produce one of four dispositions, trying them in order:
 
-1. **encode-in-skill** — content belongs in an existing or new `plugins/<plugin>/skills/<name>/SKILL.md`. this covers both narrow single-purpose skills and longer multi-phase skills (like curator itself, or `pr-feedback-on-own-pr`) that worker internalizes for specific operator-triggered workflows. use `content-routing` to choose the plugin (generic vs an overlay) and the within-plugin surface (the layer's always-on foundation vs a triggered skill).
-2. **encode-in-repo-knowledge** — content is repo-specific (build gotchas, pipeline IDs, code-review rules for a particular repo); goes under `plugins/<plugin>/repo-knowledge/<repo>/*.md` where the `repo-handling` auto-loader picks it up.
-3. **no-op** — content cannot be encoded in the plugin. carries a one-line rationale on the entry's `Status:` line and stays open on the originating friction doc. see the canonical example below.
+1. **encode-as-check** — fix it in the repository it is about, in the first form that works: remove the cause in code, then a type, then a lint or CI check whose error names the fix (with a baseline, so only new hits fail, when the pattern is already common), then a test. prose is only for judgment calls no check can make. once a check enforces a prose rule, delete that rule in the same pull request.
+2. **encode-in-skill** — content belongs in an existing or new `plugins/<plugin>/skills/<name>/SKILL.md`. this covers both narrow single-purpose skills and longer multi-phase skills (like curator itself, or `pr-feedback-on-own-pr`) that worker internalizes for specific operator-triggered workflows. use `content-routing` to choose the plugin (generic vs an overlay) and the within-plugin surface (the layer's always-on foundation vs a triggered skill).
+3. **encode-in-repo-knowledge** — content is repo-specific (build gotchas, pipeline IDs, code-review rules for a particular repo); goes under `plugins/<plugin>/repo-knowledge/<repo>/*.md` where the `repo-handling` auto-loader picks it up.
+4. **no-op** — content cannot be encoded as a check or in the plugin. carries a one-line rationale on the entry's `Status:` line and stays open on the originating friction doc. see the canonical example below.
 
 ### Triage the governing rule before encoding
 
@@ -52,7 +53,7 @@ when a card is about a human-intervention point in a skill (a sign-off gate, an 
 2. **read each card end-to-end** before picking a disposition. don't skim. reactive edits without reading the full entry produce churn.
 3. **decide disposition.** name the target file or rationale.
 4. **batch decisions.** present dispositions to operator in one message with a clear table (entry → disposition → target). wait for signoff. don't walk the operator through one card at a time (`interaction-style` §1).
-5. **Encode in a single authorized PR** against the plugin repo, one unit per card with acceptance checks. Invoke `desk:using-superpowers-with-desk` for the needed Superpowers planning and implementation skills.
+5. **Encode in a single authorized PR** against the plugin repo (a check goes to the repository it guards), one unit per card with acceptance checks. Invoke `desk:using-superpowers-with-desk` for the needed Superpowers planning and implementation skills.
 6. **take landed cards down** in the same motion they shipped: update the `Status:` line to name the PR and merge SHA, move the entry to `_friction/_archive/`. see the `friction-management` skill.
 
 ## Engine-agnostic constraint
