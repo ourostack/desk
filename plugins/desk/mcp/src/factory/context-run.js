@@ -18,6 +18,12 @@ import { checkRequestedLaunchState, finishAgentLaunch, reserveAgentLaunch, witne
 import { dueStep } from "./loop-status.js"
 import { EVALUATOR_LOCK_NAME, releaseLock, takeLock, trackChild } from "./process-lock.js"
 import { PATTERNS } from "./schema.js"
+import { deskFailure } from "../runtime/desk-failure.js"
+
+const runFailure = (code, thing, probably, fix) => new Error(deskFailure({
+  code, thing, probably, look: "call desk_doctor and read its factory section for the context run folder",
+  keepWorking: "no context was written for this task and the other tasks carry on", fix,
+}))
 
 const MAX_BATCH = 8
 const DAY = 24 * 3600 * 1000
@@ -106,11 +112,11 @@ async function readRunFile(file, maxBytes = 16 * 1024 * 1024) {
     throw error
   }
   if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || stat.size > maxBytes)
-    throw new Error("context_run_file_unsafe")
+    throw runFailure("context_run_file_unsafe", "context run file", "it is a link, shared by several links, not a regular file, or larger than the limit", "replace it with a regular file only this run owns")
   const handle = await fs.open(file, constants.O_RDONLY | constants.O_NOFOLLOW)
   try {
     const opened = await handle.stat()
-    if (opened.dev !== stat.dev || opened.ino !== stat.ino) throw new Error("context_run_file_changed")
+    if (opened.dev !== stat.dev || opened.ino !== stat.ino) throw runFailure("context_run_file_changed", "context run file", "something replaced it while it was being opened", "run again once nothing else writes to that folder")
     return await handle.readFile()
   } finally { await handle.close() }
 }
@@ -294,7 +300,7 @@ async function runContextStep(env, options, requestPolicy) {
         if (!evidence.conversation?.file) continue
         const bytes = await readTaskContextFile(env, work.store, work.job, evidence.conversation.file)
         if (bytes === null || createHash("sha256").update(bytes).digest("hex") !== evidence.conversation.projection_sha256)
-          throw new Error("context_projection_changed")
+          throw runFailure("context_projection_changed", "conversation projection", "the stored projection is missing or differs from the one the work was planned with", "run again so the work is planned afresh")
         const name = `${work.job}-${evidence.conversation.file}`
         const staged = path.join(workDir, name)
         await stageFile(runFiles, staged, bytes)
@@ -304,7 +310,7 @@ async function runContextStep(env, options, requestPolicy) {
       let card = work.source.task_card
       if (card !== null) {
         const bytes = await readRunFile(card.path, 1024 * 1024)
-        if (bytes === null || createHash("sha256").update(bytes).digest("hex") !== card.sha256) throw new Error("context_card_changed")
+        if (bytes === null || createHash("sha256").update(bytes).digest("hex") !== card.sha256) throw runFailure("context_card_changed", "task card", "the card was edited or removed after the work was planned", "run again so the work is planned from the current card")
         const file = path.join(workDir, `${work.job}.task.md`)
         await stageFile(runFiles, file, bytes)
         card = { ...card, path: file }
