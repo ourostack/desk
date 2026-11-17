@@ -60,14 +60,14 @@ test("the requested context CLI requires one exact store and job", async () => {
     assert.deepEqual(options, { store: "test/store", job })
     return { ok: true, result: "context_requested", ready: true }
   }
-  assert.equal((await runContextRequestCommand({ argv: ["--store", "test/store", "--job", job], env, run })).ready, true)
+  assert.equal((await runContextRequestCommand({ store: "test/store", job }, { env, run })).ready, true)
   for (const argv of [
     [], ["--store"], ["--store", "test/store"], ["--job", job],
     ["--store", "invalid", "--job", job], ["--store", "test/store", "--job", "invalid"],
     ["--other", "test/store", "--job", job], ["--store", "test/store", "--other", job],
     ["--store", "test/store", "--job", job, "--approved", "yes"],
     ["--store", "test/store", "--job", job, "--job", job],
-  ]) await assert.rejects(runContextRequestCommand({ argv, env, run }), /Usage: factory\.js context-request/u)
+  ]) await refused(["context-request", ...argv], env)
   assert.equal(calls, 1)
 })
 
@@ -83,6 +83,15 @@ test("the requested context CLI reports a real headless refusal as failure", asy
   assert.equal(code, 1)
   assert.equal(JSON.parse(output[0]).result, "headless_session")
 })
+
+/** `main`'s exit code and stderr for a command line that must be refused as one usage line, with nothing printed to stdout. */
+async function refused(argv, env = {}) {
+  let err = ""
+  const code = await main({ argv, env, write: () => assert.fail("a usage error prints nothing"), logError: (text) => { err += text } })
+  assert.equal(code, 2, err)
+  assert.match(err, /^factory: [^\n]*\. Fix: [^\n]*\n$/u)
+  return err
+}
 
 async function scratch(run) {
   const rawBase = mkdtempSync(path.join(os.tmpdir(), "desk-factory-cli-"))
@@ -476,14 +485,10 @@ test("derive refuses an arbitrary marker path without echoing it", () => scratch
 }))
 
 test("derive and status reject malformed options and out-of-budget quiet waits", () => scratch(async (env) => {
-  for (const argv of [[], ["--marker"], ["--other", "x"], ["--marker", "x", "--other", "y"]]) {
-    await assert.rejects(runDeriveCommand({ argv, env }), /Usage:/u)
-  }
-  for (const wait of ["-1", "NaN", "30001", "9999999"]) {
-    await assert.rejects(runDeriveCommand({ argv: ["--marker", "x", "--wait-quiet", wait], env }), /wait-quiet must/u)
-  }
-  assert.deepEqual(await runDeriveCommand({ argv: ["--marker", "x", "--wait-quiet", "0"], env }), { result: "invalid", store: null })
-  await assert.rejects(runStatusCommand({ argv: ["extra"], env }), /Usage:/u)
+  for (const argv of [[], ["--marker"], ["--other", "x"], ["--marker", "x", "--other", "y"]]) await refused(["derive", ...argv], env)
+  for (const wait of ["-1", "NaN", "30001", "9999999"]) await refused(["derive", "--marker", "x", "--wait-quiet", wait], env)
+  assert.deepEqual(await runDeriveCommand({ marker: "x", "wait-quiet": 0 }, { env }), { result: "invalid", store: null })
+  await refused(["status", "extra"], env)
 }))
 
 /** Records `repo` as a private desk in the factory state's visibility cache, so job-link names its plain job ID. */
@@ -495,7 +500,7 @@ test("build writes the deterministic report tree and job-link returns the accept
   const store = path.join(env.HOME, "store")
   const out = path.join(store, "_out")
   cpSync(FIXTURE_STORE, store, { recursive: true })
-  assert.deepEqual(await runBuildCommand({ argv: ["--store", store, "--out", out] }), { jobs: 2, sessions: 4 })
+  assert.deepEqual(await runBuildCommand({ store, out }), { jobs: 2, sessions: 4 })
   assert.equal(JSON.parse(readFileSync(path.join(out, "jobs", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.json"), "utf8")).job, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
   await knownPrivate(env, "ourostack/desk")
   assert.deepEqual(await runJobLinkCommand({ env, argv: ["--store", "ourostack/factory", "--desk-remote", "git@github.com:OuroStack/Desk.git", "--person-prefix", "", "--track", "factory", "--slug", "store-pipeline"] }), {
@@ -504,7 +509,7 @@ test("build writes the deterministic report tree and job-link returns the accept
   assert.deepEqual(await runJobLinkCommand({ env, argv: ["--store", "ourostack/factory", "--desk-remote", "git@github.com:OuroStack/Desk.git", "--track", "factory", "--slug", "store-pipeline"] }), {
     link: "https://github.com/ourostack/factory/blob/reports/jobs/3e7101c7c7d8774223be31b99495dd7f.md",
   })
-  await assert.rejects(runBuildCommand({ argv: ["--store", store] }), /Usage: factory\.js build/u)
+  await refused(["build", "--store", store])
   await assert.rejects(runJobLinkCommand({ argv: ["--store", "ourostack/factory"] }), /Usage: factory\.js job-link/u)
 }))
 
@@ -1034,7 +1039,7 @@ test("validate-pr rejects malformed options and main exits one while still print
 // ---------------------------------------------------------------------------
 
 test("runConsentCommand sets consent and returns the store's record", () => scratch(async (env) => {
-  const result = await runConsentCommand({ argv: ["--store", "ourostack/factory", "--contribute", "yes"], env })
+  const result = await runConsentCommand({ store: "ourostack/factory", contribute: "yes" }, { env })
   assert.equal(result.store, "ourostack/factory")
   assert.equal(result.contribute, true)
   assert.match(result.intake_id, /^[0-9a-f]{16}$/u)
@@ -1042,22 +1047,12 @@ test("runConsentCommand sets consent and returns the store's record", () => scra
 }))
 
 test("runConsentCommand accepts an optional --account", () => scratch(async (env) => {
-  const result = await runConsentCommand({ argv: ["--store", "ourostack/factory", "--contribute", "yes", "--account", "arimendelow"], env })
+  const result = await runConsentCommand({ store: "ourostack/factory", contribute: "yes", account: "arimendelow" }, { env })
   assert.equal(result.account, "arimendelow")
 }))
 
-test("runConsentCommand rejects malformed argv, a missing --store, and a --contribute that isn't yes/no", () => scratch(async (env) => {
-  await assert.rejects(() => runConsentCommand({ argv: ["--store"], env }), /Usage: factory\.js consent/u)
-  await assert.rejects(() => runConsentCommand({ argv: ["--contribute", "yes"], env }), /Usage: factory\.js consent/u)
-  await assert.rejects(() => runConsentCommand({ argv: ["--store", "a/b", "--contribute", "maybe"], env }), /Usage: factory\.js consent/u)
-  await assert.rejects(() => runConsentCommand({ argv: ["--store", "a/b", "--mentioned", "yes"], env }), /Usage: factory\.js consent/u)
-}))
-
-test("runConsentCommand rejects an unknown option", () => scratch(async (env) => {
-  await assert.rejects(
-    () => runConsentCommand({ argv: ["--store", "a/b", "--contribute", "yes", "--extra", "x"], env }),
-    /unknown option --extra/u,
-  )
+test("consent rejects malformed argv, a missing --store, a --contribute that isn't yes/no and an unknown option", () => scratch(async (env) => {
+  for (const argv of [["--store"], ["--contribute", "yes"], ["--store", "a/b", "--contribute", "maybe"], ["--store", "a/b", "--mentioned", "yes"], ["--store", "a/b", "--contribute", "yes", "--extra", "x"]]) await refused(["consent", ...argv], env)
 }))
 
 // ---------------------------------------------------------------------------
@@ -1080,11 +1075,8 @@ test("main returns exit code 1 and logs one line for an unknown subcommand", () 
   assert.match(logged, /unknown subcommand "bogus"/u)
 }))
 
-test("main returns exit code 1 and logs the usage message for a malformed consent call", () => scratch(async (env) => {
-  let logged = ""
-  const code = await main({ argv: ["consent"], env, write: () => assert.fail("should not write"), logError: (text) => { logged += text } })
-  assert.equal(code, 1)
-  assert.match(logged, /Usage: factory\.js consent/u)
+test("main exits 2 with one usage line for a malformed consent call", () => scratch(async (env) => {
+  assert.match(await refused(["consent"], env), /^factory: consent: /u)
 }))
 
 test("main reports an unknown subcommand as an empty string when argv is empty", () => scratch(async (env) => {
@@ -1139,8 +1131,8 @@ test("the real CLI exits non-zero and prints one line to stderr for a bad invoca
     execFileSync(process.execPath, [SCRIPT, "consent"], { encoding: "utf8", env: fullEnv, stdio: ["ignore", "pipe", "pipe"] })
     assert.fail("expected a non-zero exit")
   } catch (error) {
-    assert.equal(error.status, 1)
-    assert.match(error.stderr.toString(), /Usage: factory\.js consent/u)
+    assert.equal(error.status, 2)
+    assert.match(error.stderr.toString(), /^factory: consent: .*\. Fix: .*\.\n$/u)
   }
 }))
 
@@ -1158,10 +1150,8 @@ test("flush --store runs one delivery attempt through the injected runner and pr
   const runner = () => assert.fail("no consent, no gh")
   assert.equal(await main({ argv: ["flush", "--store", "ourostack/factory"], env, runner, write: (text) => { output += text }, logError: () => assert.fail("flush must succeed") }), 0)
   assert.deepEqual(JSON.parse(output), { result: "not_opted_in" })
-  assert.deepEqual(await runFlushCommand({ argv: ["--store", "ourostack/factory"], env }), { result: "not_opted_in" })
-  for (const argv of [[], ["--store"], ["--store", "a/b", "--other", "x"], ["--other", "x"]]) {
-    await assert.rejects(runFlushCommand({ argv, env, runner }), /Usage: factory\.js flush/u)
-  }
+  assert.deepEqual(await runFlushCommand({ store: "ourostack/factory" }, { env }), { result: "not_opted_in" })
+  for (const argv of [[], ["--store"], ["--store", "a/b", "--other", "x"], ["--other", "x"]]) await refused(["flush", ...argv], env)
 }))
 
 test("finalize takes one to eight distinct jobs and reports each job's outcome", () => scratch(async (env) => {
@@ -1170,19 +1160,17 @@ test("finalize takes one to eight distinct jobs and reports each job's outcome",
   let output = ""
   assert.equal(await main({ argv: ["finalize", "--job", a, "--job", b], env, runner: () => assert.fail("no state"), write: (text) => { output += text }, logError: () => assert.fail("finalize must succeed") }), 0)
   assert.deepEqual(JSON.parse(output), { jobs: { [a]: { result: "retained", reason: "no_state" }, [b]: { result: "retained", reason: "no_state" } } })
-  assert.deepEqual(await runFinalizeCommand({ argv: ["--job", a], env }), { jobs: { [a]: { result: "retained", reason: "no_state" } } })
+  assert.deepEqual(await runFinalizeCommand({ job: [a] }, { env }), { jobs: { [a]: { result: "retained", reason: "no_state" } } })
   const nine = Array.from({ length: 9 }, (_, index) => ["--job", index.toString(16).repeat(32)]).flat()
-  for (const argv of [[], ["--job"], ["--job", "xyz"], ["--job", a, "--job", a], ["--other", a], nine]) {
-    await assert.rejects(runFinalizeCommand({ argv, env }), /Usage: factory\.js finalize/u)
-  }
+  for (const argv of [[], ["--job"], ["--job", "xyz"], ["--job", a, "--job", a], ["--other", a], nine]) await refused(["finalize", ...argv], env)
 }))
 
 test("finalize starts the loop worker when the evaluator step is due, after every job, and a kick that fails changes nothing printed", () => scratch(async (env) => {
   const a = "a".repeat(32)
   const kicks = []
-  assert.deepEqual(await runFinalizeCommand({ argv: ["--job", a], env, kick: async (given) => { kicks.push(given) } }), { jobs: { [a]: { result: "retained", reason: "no_state" } } })
+  assert.deepEqual(await runFinalizeCommand({ job: [a] }, { env, kick: async (given) => { kicks.push(given) } }), { jobs: { [a]: { result: "retained", reason: "no_state" } } })
   assert.deepEqual(kicks, [env])
-  assert.deepEqual(await runFinalizeCommand({ argv: ["--job", a], env, kick: async () => { throw new Error("SENTINEL kick") } }), { jobs: { [a]: { result: "retained", reason: "no_state" } } })
+  assert.deepEqual(await runFinalizeCommand({ job: [a] }, { env, kick: async () => { throw new Error("SENTINEL kick") } }), { jobs: { [a]: { result: "retained", reason: "no_state" } } })
 }))
 
 // ---------------------------------------------------------------------------
@@ -1297,12 +1285,10 @@ test("evaluate-accept checks the evaluator's answer and moves accepted labels in
   assert.equal(output.includes("SENTINEL"), false)
   assert.deepEqual(JSON.parse(output).sessions, [{ session: EVAL_SESSION, result: "rejected", errors: [{ code: "unknown_key", path: "" }] }])
   await fs.writeFile(brief.output, JSON.stringify(labels))
-  assert.deepEqual(await runEvaluateAcceptCommand({ argv: ["--job", job], env, pluginVersion: LABELS_GOLDEN.evaluator.plugin_version }), { job, sessions: [{ session: EVAL_SESSION, result: "accepted" }], request: "cleared" })
+  assert.deepEqual(await runEvaluateAcceptCommand({ job }, { env, pluginVersion: LABELS_GOLDEN.evaluator.plugin_version }), { job, sessions: [{ session: EVAL_SESSION, result: "accepted" }], request: "cleared" })
   const root = await factoryStateRoot(env)
   assert.ok(existsSync(path.join(root, "labels", "ourostack__factory", job, `${EVAL_SESSION}.json`)))
-  for (const argv of [[], ["--job", "SENTINEL"], ["--other", "x"], ["--job", job, "--extra", "x"]]) {
-    await assert.rejects(runEvaluateAcceptCommand({ argv, env }), (error) => /Usage: factory\.js evaluate-accept/u.test(error.message) && !error.message.includes("SENTINEL"))
-  }
+  for (const argv of [[], ["--job", "SENTINEL"], ["--other", "x"], ["--job", job, "--extra", "x"]]) assert.equal((await refused(["evaluate-accept", ...argv], env)).includes("SENTINEL"), false)
 }))
 
 test("kaizen-check reads the store's jobs, checks each open card through gh with GH_TOKEN and prints each card's status", () => scratch(async (env) => {

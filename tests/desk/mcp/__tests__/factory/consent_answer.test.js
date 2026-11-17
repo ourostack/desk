@@ -35,7 +35,7 @@ test("yes records the account Desk finds, in the consent file factory.js writes"
   assert.deepEqual(result, { status: "recorded", store: STORE, contribute: true, account: "example-user" })
   const status = factoryStatus({ env, deskRoot: desk, signoff: false })
   assert.equal(status.consent, "yes")
-  const again = await runConsentCommand({ argv: ["--store", STORE, "--contribute", "yes", "--account", "example-user"], env })
+  const again = await runConsentCommand({ store: STORE, contribute: "yes", account: "example-user" }, { env })
   assert.equal(again.account, "example-user", "the CLI reads and writes the same store")
 }))
 
