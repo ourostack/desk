@@ -62,6 +62,9 @@ import { createHash, randomUUID } from "node:crypto"
 import * as os from "node:os"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
+import { AxError } from "../lib/ouro-ui/registry/ouro/ax/problem.ts"
+import { defineCli, defineCommand } from "../lib/ouro-ui/registry/ouro/ax/command.ts"
+import { runCli } from "../lib/ouro-ui/registry/ouro/ax/cli.ts"
 import { loadFrontmatterParser, organizationFindings, redactedRelPath } from "./organization.js"
 import { operatorNames } from "./naming.js"
 import { crewWorkspace, readCrewRoster } from "./crew-roster.js"
@@ -776,25 +779,19 @@ function reportText(status, dirty) {
   return `${lines.join("\n")}\n`
 }
 
-function parseArgs(argv) {
-  const args = { mode: "json", root: undefined, person: undefined, claim: undefined, reason: undefined }
-  for (let index = 0; index < argv.length; index += 1) {
-    const arg = argv[index]
-    if (arg === "--root" || arg === "--person" || arg === "--claim") {
-      args[arg.slice(2)] = argv[index + 1]
-      index += 1
-    } else if (arg === "--defer") {
-      args.mode = "defer"
-      args.reason = argv[index + 1]
-      index += 1
-    } else if (["--detect", "--report", "--write-record", "--refresh-identity"].includes(arg)) {
-      args.mode = arg.slice(2)
-    } else {
-      throw Object.assign(new Error(`tidy-status: Remove the unknown argument ${JSON.stringify(arg)}; it takes --detect, --report, --write-record, --defer <reason>, --refresh-identity, --root, --person and --claim`), { code: "tidy_tidy_status_remove_the_unknown" })
-    }
-  }
-  return args
+const FLAGS = {
+  detect: { type: "boolean", description: "Exit 0 when the tidy is needed and not held, 1 otherwise; print `held: <reason>` when it is held." },
+  report: { type: "boolean", description: "Take the claim, print the report and its claim token, and exit 0 when the tidy can run now; otherwise print the one line to say instead and exit 1." },
+  "write-record": { type: "boolean", description: "Write _meta/organization.json in this session's own desk once step 7's own checks pass, then release the claim and any hold." },
+  defer: { type: "string", placeholder: "<reason>", description: "Hold the tidy until the desk's latest commit or its uncommitted paths change, and release the claim." },
+  "refresh-identity": { type: "boolean", description: "Look the `gh` identity up and cache it (needs --root; Detect starts this in the background)." },
+  root: { type: "string", description: "The Desk tools' own root, from desk_status." },
+  person: { type: "string", description: "The Desk tools' own person, from desk_status." },
+  claim: { type: "string", description: "The token --report printed." },
 }
+const MODES = ["detect", "report", "write-record", "defer", "refresh-identity"]
+
+const usageError = (code, problem, fix) => new AxError({ code, exit: 2, thing: "tidy-status", problem, fix })
 
 /**
  * The `scripts/tidy-status.js` command line. Modes:
@@ -817,8 +814,36 @@ function parseArgs(argv) {
  * person, from `desk_status`; `--claim <token>` is the token `--report`
  * printed.
  */
-export function runTidyStatusCli({
-  argv,
+export async function runTidyStatusCli({ argv, env, io, ...deps }) {
+  let code = 1
+  let lines = ""
+  const cli = defineCli({
+    name: "tidy-status",
+    about: ["Reports or records the one-time tidy for this session's own desk; the 02-tidy-desk migration runs it."],
+    command: defineCommand({
+      name: "tidy-status",
+      summary: "Print the tidy's status as JSON, or take the one step a mode flag names.",
+      effect: "private",
+      output: "the status JSON, or the one step's lines",
+      flags: FLAGS,
+      text: ({ lines }) => lines,
+      run: (input) => {
+        const args = { mode: MODES.find((mode) => input[mode] !== undefined) ?? "json", root: input.root, person: input.person, claim: input.claim, reason: input.defer }
+        if (args.mode === "defer" && !hasText(args.reason)) throw usageError("defer-reason", "--defer needs a one-line reason", "tidy-status --defer <reason>")
+        if (args.mode === "refresh-identity" && !hasText(args.root)) throw usageError("refresh-root", "--refresh-identity needs --root", "tidy-status --refresh-identity --root <root>")
+        code = runTidy({ args, env, io: { stdout: { write: (text) => { lines += text } } }, ...deps })
+        return { lines }
+      },
+    }),
+  })
+  // A step that prints nothing (a detect that exits 1) stays silent; the kit would end it with an empty line.
+  const stdout = { write: (text) => (lines === "" && text === "\n" ? true : io.stdout.write(text)) }
+  const kit = await runCli(cli, argv, { stdin: process.stdin, stdout, stderr: io.stderr }, { env })
+  return kit === 0 ? code : kit
+}
+
+function runTidy({
+  args,
   env,
   io,
   cwd,
@@ -829,15 +854,6 @@ export function runTidyStatusCli({
   spawnBackground = spawnChild,
   installGuard = installCardGuard,
 }) {
-  let args
-  try {
-    args = parseArgs(argv)
-    if (args.mode === "defer" && !hasText(args.reason)) throw Object.assign(new Error("tidy-status: Pass a one-line reason after --defer"), { code: "tidy_tidy_status_pass_a_one" })
-    if (args.mode === "refresh-identity" && !hasText(args.root)) throw Object.assign(new Error("tidy-status: Pass --root with --refresh-identity"), { code: "tidy_tidy_status_pass_root_with" })
-  } catch (error) {
-    io.stderr.write(`${error.message}\n`)
-    return 2
-  }
   const clock = now ?? Date.now()
 
   if (args.mode === "refresh-identity") {
