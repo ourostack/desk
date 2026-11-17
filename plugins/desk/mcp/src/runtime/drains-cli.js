@@ -1,8 +1,11 @@
-// The `drains` command line: `poll`, `ack`, `status`, `why`, `schedule`, `stalled`, `relays` and `runtimes`. Output is one JSON value on stdout; a usage error is one line on stderr
-// (exit 2) and a failure is a Desk failure line on stderr (exit 1).
+// The `drains` command line: `poll`, `ack`, `status`, `why`, `schedule`, `stalled`, `relays` and `runtimes`, defined once with Ouro AX, which
+// parses the arguments, writes the help and prints a usage error as one line on stderr with its fix (exit 2). Output is one JSON value
+// on stdout; a failure is the Desk failure line its code built on stderr (exit 1).
 import * as os from "node:os"
 import * as path from "node:path"
-import { deskFailure } from "./desk-failure.js"
+import { AxError } from "../lib/ouro-ui/registry/ouro/ax/problem.ts"
+import { defineCli, defineCommand } from "../lib/ouro-ui/registry/ouro/ax/command.ts"
+import { runCli } from "../lib/ouro-ui/registry/ouro/ax/cli.ts"
 import { allStuckSaves, stuckLine } from "./unmerged-saves.js"
 import { pollRelays, readRelayConfig, readRelayStates, relayPaths, relayStatusLines, relaysOfPull, whyRelay } from "./relays.js"
 import { findPluginlessRuntimes, listProcesses as psList, pluginlessRuntimeLines } from "./pluginless-runtimes.js"
@@ -10,64 +13,8 @@ import { ackStalled, pollStalled, stalledPaths, stalledStatus } from "./stalled.
 import { ackSchedule, pollSchedules, readScheduleConfig, readScheduleStates, scheduleStatusLines, schedulePaths } from "./schedules.js"
 import { ackWake, connectGithub, drainPaths, deskInUse, drainStatusLines, installLauncher, pollDrains, readDrainConfig, readDrainStates, whyOf, withDrainLock } from "./drains.js"
 
-const USAGE = [
-  "Usage: drains.js poll [--config <file>] [--state <file>]",
-  "       drains.js ack --repo <owner/name> --wake <id> [--error <text>] [--state <file>]",
-  "       drains.js status [--config <file>] [--state <file>]",
-  "       drains.js why <owner/name>#<number> [--state <file>]",
-  "       drains.js why --relay <relay name>",
-  "       drains.js schedule poll|status [--config <file>] [--state <file>]",
-  "       drains.js schedule ack --name <schedule> --wake <id> [--error <text>] [--state <file>]",
-  "       drains.js stalled poll|status [--config <file>] [--state <file>]",
-  "       drains.js stalled ack --session <id> --wake <id> [--error <text>] [--state <file>]",
-  "       drains.js relays poll|status [--config <file>] [--state <file>]",
-  "       drains.js runtimes status",
-  "poll lists each configured repository's open issues, records what changed and prints the wakes to deliver.",
-  "why prints the recorded reason for each wake made for one issue, newest first, and what a merge relay decided about it; with --relay it prints that relay's recent fires, merges and what it waits on instead.",
-  "stalled prints the nudges due to sessions that went idle with their focused task card unfinished and nothing running, once per idle stretch; status lists them without recording anything (a dry run); see docs/stalled-nudges.md.",
-  "relays polls the dispatch and merge-when-green relays in relays.json, acts on what it finds and prints no wakes; see docs/relays.md.",
-  "schedule prints the prompts due to a session (schedules.json), at most one per schedule however many intervals were missed; see docs/schedules.md.",
-  "runtimes status names Copilot server runtimes started without Desk's plugin, whose sessions have no desk-* tools, and how to recover; see docs/schedules.md.",
-  "A runner delivers each wake's message to its session, then runs the wake's `done` command, adding --error <text> when delivery failed.",
-].join("\n")
-
-const usageFailure = (code, thing, fix) => deskFailure({ code, thing, probably: "the command line does not match the drains usage", look: "run drains.js --help", keepWorking: "nothing was polled or changed", fix })
-
 /** The Desk a poll ran from, for the history: its version, and the release commit when the launcher's own copy ran. */
 const deskLabel = ({ version, release }) => (release ? `${version} ${release.slice(0, 8)}` : version)
-
-const VALUED = { poll: ["--config", "--state"], ack: ["--repo", "--wake", "--error", "--state"], status: ["--config", "--state"], why: ["--state", "--relay"], schedule: ["--config", "--state", "--name", "--wake", "--error"], stalled: ["--config", "--state", "--session", "--wake", "--error"], relays: ["--config", "--state"], runtimes: [] }
-
-export function parseDrainsArgs(argv) {
-  const [command, ...args] = argv
-  if (command === undefined || command === "--help" || command === "-h") return { help: true }
-  if (!(command in VALUED)) return { error: usageFailure("drains_unknown_command", `unknown command ${JSON.stringify(command)}`, "run drains.js poll, ack, status, why, schedule, stalled or relays") }
-  const target = command === "why" ? /^([^#\s/]+\/[^#\s/]+)#(\d+)$/u.exec(args[0] ?? "") : null
-  const whyFailure = () => usageFailure("drains_why_target", "why needs an issue such as owner/name#123 or --relay <relay name>", "run drains.js why owner/name#123 or drains.js why --relay <relay name>")
-  if (command === "why" && !target && !args[0]?.startsWith("--")) return { error: whyFailure() }
-  const sub = command === "schedule" || command === "relays" || command === "stalled" || command === "runtimes" ? args[0] : undefined
-  if (command === "schedule" && !["poll", "ack", "status"].includes(sub)) return { error: usageFailure("drains_schedule_command", "schedule needs poll, ack or status", "run drains.js schedule poll, ack or status") }
-  if (command === "stalled" && !["poll", "ack", "status"].includes(sub)) return { error: usageFailure("drains_stalled_command", "stalled needs poll, ack or status", "run drains.js stalled poll, ack or status") }
-  if (command === "relays" && !["poll", "status"].includes(sub)) return { error: usageFailure("drains_relays_command", "relays needs poll or status", "run drains.js relays poll or status") }
-  if (command === "runtimes" && sub !== "status") return { error: usageFailure("drains_runtimes_command", "runtimes needs status", "run drains.js runtimes status") }
-  const rest = command === "schedule" || command === "relays" || command === "stalled" || command === "runtimes" || target ? args.slice(1) : args
-  const flags = {}
-  for (let i = 0; i < rest.length; i++) {
-    const name = rest[i]
-    const value = rest[i + 1]
-    if (!VALUED[command].includes(name)) return { error: usageFailure("drains_unknown_flag", `${command} does not take ${JSON.stringify(name)}`, `drop ${name} or use ${VALUED[command].join(" or ")}`) }
-    if (value === undefined || value.startsWith("--")) return { error: usageFailure("drains_flag_value", `${name} needs a value`, `pass ${name} <value>`) }
-    flags[name.slice(2)] = value
-    i++
-  }
-  if (command === "ack" && (!flags.repo || !flags.wake)) return { error: usageFailure("drains_ack_args", "ack needs --repo and --wake", "run drains.js ack --repo <owner/name> --wake <id>") }
-  if (command === "schedule" && sub === "ack" && (!flags.name || !flags.wake)) return { error: usageFailure("drains_schedule_ack_args", "schedule ack needs --name and --wake", "run drains.js schedule ack --name <schedule> --wake <id>") }
-  if (command === "stalled" && sub === "ack" && (!flags.session || !flags.wake)) return { error: usageFailure("drains_stalled_ack_args", "stalled ack needs --session and --wake", "run drains.js stalled ack --session <id> --wake <id>") }
-  if (command === "schedule" || command === "relays" || command === "stalled" || command === "runtimes") return { command, sub, flags }
-  if (command === "why" && !target && !flags.relay) return { error: whyFailure() }
-  if (command === "why") return target ? { command, flags, repo: target[1], number: Number(target[2]) } : { command, flags, relay: flags.relay }
-  return { command, flags }
-}
 
 /** The relays' status lines; a relays.json that cannot be read is one line saying so, never a reason to hide the drains. */
 function relayLines(env, at) {
@@ -89,125 +36,110 @@ function refreshLauncher(env) {
   }
 }
 
+const CONFIG = { type: "string", description: "The config file to read instead of the default." }
+const STATE = { type: "string", description: "The state file to keep instead of the default." }
+const WAKE = { type: "string", required: true, description: "The id of the wake that was delivered, as poll printed it." }
+const ERROR = { type: "string", description: "Why delivery failed; leave it out when the wake was delivered." }
+const READ = { effect: "private", readOnly: true }
+const ACK = (kind, flags) => ({ effect: "private", summary: `Record that a ${kind} wake was delivered (or failed, with --error).`, flags: { ...flags, wake: WAKE, error: ERROR, state: STATE } })
+const text = (result) => JSON.stringify(result, null, 1)
+
+const WHY_TARGET = /^([^#\s/]+\/[^#\s/]+)#(\d+)$/u
+const WHY_NEEDS = "why needs an issue such as owner/name#123 or --relay <relay name>"
+const usageError = (code, problem, fix) => new AxError({ code, exit: 2, thing: "why", problem, fix })
+
+/** The paths for a command's files, with `--config` and `--state` taking the place of the defaults. */
+const pathsOf = (defaults, flags) => ({
+  ...defaults,
+  ...(flags.config ? { config: path.resolve(flags.config) } : {}),
+  ...(flags.state ? { state: path.resolve(flags.state), lock: `${path.resolve(flags.state)}.lock` } : {}),
+})
+
+/** A poll or status result with the Desk it ran from, its status line first and the refreshed launcher. */
+function withDesk(result, { script, env }) {
+  const { line, ...desk } = deskInUse({ script, env })
+  return { ...result, desk, status: [line, ...result.status], launcher: refreshLauncher(env) }
+}
+
+function drainsCli({ script, env, now, connect, listProcesses }) {
+  const ackFlags = (flags, paths) => (flags.state ? ["--state", paths.state] : [])
+  const ackCommand = [process.execPath, path.resolve(script)]
+  const command = (name, def, run) => defineCommand({ name, output: "one JSON value", text, ...def, run })
+  return defineCli({
+    name: "drains",
+    about: [
+      "poll lists each configured repository's open issues, records what changed and prints the wakes to deliver.",
+      "A runner delivers each wake's message to its session, then runs the wake's `done` command, adding --error <text> when delivery failed.",
+    ],
+    groups: {
+      schedule: "The prompts due to a session (schedules.json), at most one per schedule however many intervals were missed; see docs/schedules.md.",
+      stalled: "The nudges due to sessions that went idle with their focused task card unfinished and nothing running, once per idle stretch; see docs/stalled-nudges.md.",
+      relays: "The dispatch and merge-when-green relays in relays.json: poll acts on what it finds and prints no wakes; see docs/relays.md.",
+      runtimes: "Copilot server runtimes started without Desk's plugin, whose sessions have no desk-* tools, and how to recover; see docs/schedules.md.",
+    },
+    commands: [
+      command("poll", { ...READ, summary: "List each configured repository's open issues, record what changed and print the wakes to deliver.", flags: { config: CONFIG, state: STATE }, examples: ["poll"] }, async (input) => {
+        const paths = pathsOf(drainPaths({ env }), input)
+        return withDesk(await withDrainLock(paths.lock, () => pollDrains({ paths, connect, now: now(), ackCommand, ackFlags: ackFlags(input, paths), desk: deskLabel(deskInUse({ script, env })) })), { script, env })
+      }),
+      command("ack", ACK("repository", { repo: { type: "string", required: true, placeholder: "<owner/name>", description: "The repository the wake was for." } }), (input) => {
+        const paths = pathsOf(drainPaths({ env }), input)
+        return withDrainLock(paths.lock, () => ackWake({ paths, repo: input.repo, wake: input.wake, error: input.error, now: now() }))
+      }),
+      command("status", { ...READ, summary: "List each drain's state, the relays and any unmerged save, without recording anything.", flags: { config: CONFIG, state: STATE } }, (input) => {
+        const paths = pathsOf(drainPaths({ env }), input)
+        const status = [...drainStatusLines(readDrainConfig(paths.config), readDrainStates(paths.state), now()), ...relayLines(env, now()), ...allStuckSaves({ env, now }).map((save) => `unmerged save: ${stuckLine(save)}`)]
+        return withDesk({ status }, { script, env })
+      }),
+      command("why", { ...READ, summary: "Print the recorded reason for each wake made for one issue, newest first, and what a merge relay decided about it; with --relay, that relay's recent fires, merges and what it waits on instead.", args: [{ name: "target", description: "The issue, as owner/name#123.", unless: "relay", missing: "needs an issue such as owner/name#123 or --relay <relay name>" }], flags: { state: STATE, relay: { type: "string", placeholder: "<relay name>", description: "A relay's name, instead of an issue." } }, examples: ["why owner/name#123", "why --relay <relay name>"] }, (input) => {
+        const files = relayPaths({ env })
+        const relays = readRelayConfig(files.config)
+        const relayStates = readRelayStates(files.state)
+        if (input.relay) return whyRelay(relays, relayStates, input.relay)
+        const target = WHY_TARGET.exec(input.target)
+        if (!target) throw usageError("why-target", `${WHY_NEEDS}, not ${JSON.stringify(input.target)}`, "run drains why owner/name#123 or drains why --relay <relay name>")
+        const paths = pathsOf(drainPaths({ env }), input)
+        return { ...whyOf(readDrainStates(paths.state), target[1], Number(target[2])), relays: relaysOfPull(relays, relayStates, target[1], Number(target[2])) }
+      }),
+      command("schedule poll", { ...READ, summary: "Print the prompts due to a session, at most one per schedule.", flags: { config: CONFIG, state: STATE } }, async (input) => {
+        const paths = pathsOf(schedulePaths({ env }), input)
+        return withDesk(await withDrainLock(paths.lock, async () => pollSchedules({ paths, now: now(), ackCommand, ackFlags: ackFlags(input, paths) })), { script, env })
+      }),
+      command("schedule ack", ACK("schedule", { name: { type: "string", required: true, placeholder: "<schedule>", description: "The schedule the wake was for." } }), (input) => {
+        const paths = pathsOf(schedulePaths({ env }), input)
+        return withDrainLock(paths.lock, async () => ackSchedule({ paths, name: input.name, wake: input.wake, error: input.error, now: now() }))
+      }),
+      command("schedule status", { ...READ, summary: "List the schedules without recording anything.", flags: { config: CONFIG, state: STATE } }, (input) => {
+        const paths = pathsOf(schedulePaths({ env }), input)
+        return withDesk({ status: scheduleStatusLines(readScheduleConfig(paths.config), readScheduleStates(paths.state), now()) }, { script, env })
+      }),
+      command("stalled poll", { ...READ, summary: "Print the nudges due, once per idle stretch.", flags: { config: CONFIG, state: STATE } }, async (input) => {
+        const paths = pathsOf(stalledPaths({ env }), input)
+        return withDesk(await withDrainLock(paths.lock, () => pollStalled({ paths, now: now(), ackCommand, ackFlags: ackFlags(input, paths), env, homeDir: os.homedir() })), { script, env })
+      }),
+      command("stalled ack", ACK("stalled-session", { session: { type: "string", required: true, placeholder: "<id>", description: "The session the nudge was for." } }), (input) => {
+        const paths = pathsOf(stalledPaths({ env }), input)
+        return withDrainLock(paths.lock, async () => ackStalled({ paths, session: input.session, wake: input.wake, error: input.error, now: now() }))
+      }),
+      command("stalled status", { ...READ, summary: "List the nudges due without recording anything (a dry run).", flags: { config: CONFIG, state: STATE } }, async (input) => {
+        const paths = pathsOf(stalledPaths({ env }), input)
+        return withDesk(await stalledStatus({ paths, now: now(), env, homeDir: os.homedir() }), { script, env })
+      }),
+      command("relays poll", { effect: "private", summary: "Poll the relays in relays.json, act on what is found and print no wakes.", flags: { config: CONFIG, state: STATE } }, async (input) => {
+        const paths = pathsOf(relayPaths({ env }), input)
+        return withDesk(await withDrainLock(paths.lock, () => pollRelays({ paths, drainFiles: drainPaths({ env }), connect, now: now() })), { script, env })
+      }),
+      command("relays status", { ...READ, summary: "List the relays without acting.", flags: { config: CONFIG, state: STATE } }, (input) => {
+        const paths = pathsOf(relayPaths({ env }), input)
+        return withDesk({ status: relayStatusLines(readRelayConfig(paths.config), readRelayStates(paths.state), now()) }, { script, env })
+      }),
+      command("runtimes status", { ...READ, summary: "Name the Copilot server runtimes started without Desk's plugin, and how to recover." }, () => ({ status: pluginlessRuntimeLines(findPluginlessRuntimes(listProcesses())) })),
+    ],
+  })
+}
+
 export async function runDrainsCli({ argv, script, env = process.env, io = process, now = Date.now, connect = connectGithub, listProcesses = psList }) {
-  const parsed = parseDrainsArgs(argv)
-  if (parsed.help) {
-    io.stdout.write(`${USAGE}\n`)
-    return 0
-  }
-  if (parsed.error) {
-    io.stderr.write(`${parsed.error}\n${USAGE}\n`)
-    return 2
-  }
-  const { command, flags } = parsed
-  if (command === "runtimes") {
-    io.stdout.write(`${JSON.stringify({ status: pluginlessRuntimeLines(findPluginlessRuntimes(listProcesses())) }, null, 1)}\n`)
-    return 0
-  }
-  if (command === "schedule") return runScheduleCli({ parsed, script, env, io, now })
-  if (command === "stalled") return runStalledCli({ parsed, script, env, io, now })
-  if (command === "relays") return runRelaysCli({ parsed, script, env, io, now, connect })
-  const defaults = drainPaths({ env })
-  const paths = { ...defaults, ...(flags.config ? { config: path.resolve(flags.config) } : {}), ...(flags.state ? { state: path.resolve(flags.state), lock: `${path.resolve(flags.state)}.lock` } : {}) }
-  try {
-    let result
-    if (command === "poll") {
-      const ackFlags = flags.state ? ["--state", paths.state] : []
-      result = await withDrainLock(paths.lock, () => pollDrains({ paths, connect, now: now(), ackCommand: [process.execPath, path.resolve(script)], ackFlags, desk: deskLabel(deskInUse({ script, env })) }))
-    } else if (command === "ack") {
-      result = await withDrainLock(paths.lock, () => ackWake({ paths, repo: flags.repo, wake: flags.wake, error: flags.error, now: now() }))
-    } else if (command === "why") {
-      const files = relayPaths({ env })
-      const relays = readRelayConfig(files.config)
-      const relayStates = readRelayStates(files.state)
-      const answer = parsed.relay
-        ? whyRelay(relays, relayStates, parsed.relay)
-        : { ...whyOf(readDrainStates(paths.state), parsed.repo, parsed.number), relays: relaysOfPull(relays, relayStates, parsed.repo, parsed.number) }
-      io.stdout.write(`${JSON.stringify(answer, null, 1)}\n`)
-      return 0
-    } else {
-      result = { status: [...drainStatusLines(readDrainConfig(paths.config), readDrainStates(paths.state), now()), ...relayLines(env, now()), ...allStuckSaves({ env, now }).map((save) => `unmerged save: ${stuckLine(save)}`)] }
-    }
-    if (command !== "ack") {
-      const { line, ...desk } = deskInUse({ script, env })
-      result = { ...result, desk, status: [line, ...result.status], launcher: refreshLauncher(env) }
-    }
-    io.stdout.write(`${JSON.stringify(result, null, 1)}\n`)
-    return 0
-  } catch (error) {
-    io.stderr.write(`${error.message}\n`)
-    return 1
-  }
-}
-
-async function runScheduleCli({ parsed, script, env, io, now }) {
-  const { sub, flags } = parsed
-  const defaults = schedulePaths({ env })
-  const paths = { ...defaults, ...(flags.config ? { config: path.resolve(flags.config) } : {}), ...(flags.state ? { state: path.resolve(flags.state), lock: `${path.resolve(flags.state)}.lock` } : {}) }
-  try {
-    let result
-    if (sub === "poll") {
-      const ackFlags = flags.state ? ["--state", paths.state] : []
-      result = await withDrainLock(paths.lock, async () => pollSchedules({ paths, now: now(), ackCommand: [process.execPath, path.resolve(script)], ackFlags }))
-    } else if (sub === "ack") {
-      result = await withDrainLock(paths.lock, async () => ackSchedule({ paths, name: flags.name, wake: flags.wake, error: flags.error, now: now() }))
-    } else {
-      result = { status: scheduleStatusLines(readScheduleConfig(paths.config), readScheduleStates(paths.state), now()) }
-    }
-    if (sub !== "ack") {
-      const { line, ...desk } = deskInUse({ script, env })
-      result = { ...result, desk, status: [line, ...result.status], launcher: refreshLauncher(env) }
-    }
-    io.stdout.write(`${JSON.stringify(result, null, 1)}\n`)
-    return 0
-  } catch (error) {
-    io.stderr.write(`${error.message}\n`)
-    return 1
-  }
-}
-
-async function runStalledCli({ parsed, script, env, io, now }) {
-  const { sub, flags } = parsed
-  const defaults = stalledPaths({ env })
-  const paths = { ...defaults, ...(flags.config ? { config: path.resolve(flags.config) } : {}), ...(flags.state ? { state: path.resolve(flags.state), lock: `${path.resolve(flags.state)}.lock` } : {}) }
-  try {
-    let result
-    if (sub === "poll") {
-      const ackFlags = flags.state ? ["--state", paths.state] : []
-      result = await withDrainLock(paths.lock, () => pollStalled({ paths, now: now(), ackCommand: [process.execPath, path.resolve(script)], ackFlags, env, homeDir: os.homedir() }))
-    } else if (sub === "ack") {
-      result = await withDrainLock(paths.lock, async () => ackStalled({ paths, session: flags.session, wake: flags.wake, error: flags.error, now: now() }))
-    } else {
-      result = await stalledStatus({ paths, now: now(), env, homeDir: os.homedir() })
-    }
-    if (sub !== "ack") {
-      const { line, ...desk } = deskInUse({ script, env })
-      result = { ...result, desk, status: [line, ...result.status], launcher: refreshLauncher(env) }
-    }
-    io.stdout.write(`${JSON.stringify(result, null, 1)}\n`)
-    return 0
-  } catch (error) {
-    io.stderr.write(`${error.message}\n`)
-    return 1
-  }
-}
-
-async function runRelaysCli({ parsed, script, env, io, now, connect }) {
-  const { sub, flags } = parsed
-  const defaults = relayPaths({ env })
-  const paths = { ...defaults, ...(flags.config ? { config: path.resolve(flags.config) } : {}), ...(flags.state ? { state: path.resolve(flags.state), lock: `${path.resolve(flags.state)}.lock` } : {}) }
-  try {
-    let result
-    if (sub === "poll") {
-      result = await withDrainLock(paths.lock, () => pollRelays({ paths, drainFiles: drainPaths({ env }), connect, now: now() }))
-    } else {
-      result = { status: relayStatusLines(readRelayConfig(paths.config), readRelayStates(paths.state), now()) }
-    }
-    const { line, ...desk } = deskInUse({ script, env })
-    io.stdout.write(`${JSON.stringify({ ...result, desk, status: [line, ...result.status], launcher: refreshLauncher(env) }, null, 1)}\n`)
-    return 0
-  } catch (error) {
-    io.stderr.write(`${error.message}\n`)
-    return 1
-  }
+  // A failure from the code underneath is already a whole line of its own; the kit's tool-name prefix would say it twice.
+  const stderr = { write: (line) => io.stderr.write(line.replace(/^drains: drains: /u, "")) }
+  return runCli(drainsCli({ script, env, now, connect, listProcesses }), argv, { stdout: io.stdout, stderr })
 }
