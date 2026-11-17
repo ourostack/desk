@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.236 — 2026-11-17
+
+Desk's MCP server now vendors Ouro UI v1.3.267, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.235 — 2026-11-17
 
 Derive run's invalid session marker failure now says what probably happened, where to look, how to file a bug with evidence and how to keep working.
