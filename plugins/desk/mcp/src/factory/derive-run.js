@@ -25,6 +25,7 @@ import { normalizeTimestamp } from "./time.js"
 import { RETRACTED_COPIES, declared, deskRootOf, markerRoute, proofIndex, provenBy, sessionRoute } from "./session-route.js"
 import { reconcileMarker } from "./session-lifetime.js"
 import { routeHolds } from "./held-route.js"
+import { deskFailure } from "../runtime/desk-failure.js"
 
 async function sourceStamp(file) {
   const stat = await fs.lstat(file)
@@ -230,7 +231,11 @@ const lazyProofIndex = (load) => {
 async function newestMarker(env, root, marker, requireStored) {
   try {
     const stored = await readMarker(env, path.join(root, "markers", `${marker.host}-${marker.session_id}.json`))
-    if (stored === null) throw new Error("invalid_marker")
+    if (stored === null) throw new Error(deskFailure({
+      code: "invalid_marker", thing: "session marker", probably: `the stored marker for ${marker.host} session ${marker.session_id} is not a valid marker`,
+      look: "call desk_doctor and read its factory section", keepWorking: "nothing was derived for this session and the other sessions carry on",
+      fix: "delete that marker file so the next session event writes it again",
+    }))
     if (requireStored) return stored
     return (stored.ended_at ?? stored.updated_at) > (marker.ended_at ?? marker.updated_at) ? stored : marker
   } catch (error) {
