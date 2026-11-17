@@ -319,13 +319,22 @@ function cliPath(s) {
 }
 
 // Run the Playwright CLI in a context folder; resolves { code, text, timedOut }.
+// The CLI traps SIGTERM while it starts a daemon and then exits 0, so a stopped open looks like a success to execFile.
+// The stop is therefore noted here, and counts as a failure whatever the exit code says.
 function runCli(s, cwd, args, timeoutMs) {
   return new Promise(function (resolve) {
-    childProcess.execFile(s.node, [cliPath(s), "--session=" + SESSION].concat(args), {
-      cwd: cwd, env: s.env, timeout: timeoutMs, windowsHide: true, maxBuffer: 64 * 1024 * 1024, encoding: "utf8"
+    var timedOut = false;
+    var timer;
+    var child = childProcess.execFile(s.node, [cliPath(s), "--session=" + SESSION].concat(args), {
+      cwd: cwd, env: s.env, windowsHide: true, maxBuffer: 64 * 1024 * 1024, encoding: "utf8"
     }, function (error, stdout, stderr) {
-      resolve({ code: error ? 1 : 0, text: (stdout + "\n" + stderr).trim(), timedOut: Boolean(error && error.killed) });
+      clearTimeout(timer);
+      resolve({ code: error || timedOut ? 1 : 0, text: (stdout + "\n" + stderr).trim(), timedOut: timedOut || Boolean(error && error.killed) });
     });
+    timer = setTimeout(function () {
+      timedOut = true;
+      child.kill();
+    }, timeoutMs);
   });
 }
 
