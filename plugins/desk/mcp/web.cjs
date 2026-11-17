@@ -147,8 +147,6 @@ function settings(o) {
     profileRoots: o.profileRoots || {},
     installMs: o.installMs || 180000,
     openMs: o.openMs || 120000,
-    firstOpenMs: o.firstOpenMs || 45000,
-    retryMinMs: o.retryMinMs || 30000,
     commandMs: o.commandMs || 120000,
     authDriver: o.authDriver,
     runtimeStateReader: o.runtimeStateReader || function () {
@@ -459,8 +457,10 @@ async function openAuth(s) {
   }
 }
 
-// One start of a fresh browser in its own context folder; resolves { id, outputDir, result } and leaves the judging to open().
-function startFresh(s, kind, browser, budgetMs) {
+function open(s, kind) {
+  if (kind !== "fresh" && kind !== "mine") throw plain("browser must be \"fresh\" or \"mine\".");
+  if (kind === "mine") return openAuth(s);
+  var browser = chooseBrowser(s, false);
   var id = crypto.randomUUID();
   var dir = contextDir(s, id);
   // Screenshots, snapshots and logs stay inside the private context folder, so they go when the context closes.
@@ -474,58 +474,22 @@ function startFresh(s, kind, browser, budgetMs) {
     var profileDir = path.join(dir, "profile");
     fs.mkdirSync(profileDir, { mode: 448 });
     fs.writeFileSync(path.join(dir, "config.json"), JSON.stringify(launchConfig(kind, browser, profileDir, null, outputDir)));
-    return runCli(s, dir, ["open", "--config=config.json"], budgetMs);
+    return runCli(s, dir, ["open", "--config=config.json"], s.openMs);
   }).then(function (result) {
     return recordProcesses(s, dir, result.text).then(function () {
-      return { id: id, outputDir: outputDir, result: result };
+      return result;
     });
+  }).then(function (result) {
+    if (result.timedOut) throw plain("The browser did not start within " + s.openMs / 1000 + " seconds and was stopped. Try again, or use a fresh browser." + (result.text ? " Details: " + result.text.slice(-1500) : ""));
+    if (result.code !== 0) throw plain("The browser did not start. Try again, or use a fresh browser. Details: " + result.text.slice(-1500));
+    var opened = {
+      contextId: id, browser: kind, app: BROWSERS[browser.channel].name, files: outputDir, evidence: evidenceDir(s),
+      note: "Runs in the background and leaves your own browser windows alone. Close it with browser_context action \"close\" when done; closing deletes the files folder, but a screenshot is also copied to the evidence folder, which stays after close."
+    };
+    return opened;
   }).catch(function (error) {
     return close(s, id).then(function () {
       throw error;
-    });
-  });
-}
-
-// Replies with the opened context, or closes the failed one and throws. retry is { firstMs } when an earlier try stalled with no output.
-function finishFresh(s, kind, browser, attempt, budgetMs, retry) {
-  var result = attempt.result;
-  if (result.code === 0) {
-    var opened = {
-      contextId: attempt.id, browser: kind, app: BROWSERS[browser.channel].name, files: attempt.outputDir, evidence: evidenceDir(s),
-      note: "Runs in the background and leaves your own browser windows alone. Close it with browser_context action \"close\" when done; closing deletes the files folder, but a screenshot is also copied to the evidence folder, which stays after close."
-    };
-    if (retry) opened.retried = true;
-    return opened;
-  }
-  var details = result.text ? " Details: " + result.text.slice(-1500) : "";
-  var message;
-  if (retry) {
-    var stalled = "the first try stalled with no output for " + retry.firstMs / 1000 + " seconds, and the second try ";
-    message = result.timedOut ? "The browser did not start: " + stalled + "did not start within " + budgetMs / 1000 + " seconds and was stopped. Try again, or use a fresh browser." + details :
-      "The browser did not start: " + stalled + "failed. Try again, or use a fresh browser. Details: " + result.text.slice(-1500);
-  } else {
-    message = result.timedOut ? "The browser did not start within " + budgetMs / 1000 + " seconds and was stopped. Try again, or use a fresh browser." + details :
-      "The browser did not start. Try again, or use a fresh browser. Details: " + result.text.slice(-1500);
-  }
-  return close(s, attempt.id).then(function () {
-    throw plain(message);
-  });
-}
-
-function open(s, kind) {
-  if (kind !== "fresh" && kind !== "mine") throw plain("browser must be \"fresh\" or \"mine\".");
-  if (kind === "mine") return openAuth(s);
-  var browser = chooseBrowser(s, false);
-  var begun = Date.now();
-  var firstMs = Math.min(s.firstOpenMs, s.openMs);
-  return startFresh(s, kind, browser, firstMs).then(function (first) {
-    if (!first.result.timedOut || first.result.text) return finishFresh(s, kind, browser, first, firstMs);
-    // A start that stalls with no output is stopped and tried once more, within the same overall budget.
-    return close(s, first.id).then(function () {
-      var secondMs = Math.max(s.retryMinMs, s.openMs - (Date.now() - begun));
-      return startFresh(s, kind, browser, secondMs).then(function (second) {
-        return finishFresh(s, kind, browser, second, secondMs, { firstMs: firstMs });
-      });
     });
   });
 }

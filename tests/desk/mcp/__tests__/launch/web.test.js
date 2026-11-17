@@ -45,11 +45,6 @@ const verb = args[1] === "eval" ? args[2] : args[1], mode = process.env.FAKE_CLI
 if (verb === "open" && mode === "open-fail") { process.stderr.write("Browser failed\\nline two\\n"); process.exit(1) }
 if (verb === "open" && mode === "open-hang") setTimeout(() => {}, 10000)
 if (verb === "open" && mode === "open-hang-loud") { process.stderr.write("Waiting for the browser\\n"); setTimeout(() => {}, 10000) }
-// "open-stall-once" hangs silently on the first open only, and "open-stall-then-fail" then fails on the second, so a retry is what gets the browser, or not.
-const openCalls = verb === "open" ? fs.readFileSync(path.join(__dirname, "calls.log"), "utf8").trim().split("\\n").filter((line) => JSON.parse(line).args[1] === "open").length : 0
-if (verb === "open" && mode === "open-stall-once" && openCalls === 1) setTimeout(() => {}, 10000)
-if (verb === "open" && mode === "open-stall-then-fail" && openCalls === 1) setTimeout(() => {}, 10000)
-if (verb === "open" && mode === "open-stall-then-fail" && openCalls === 2) { process.stderr.write("Browser failed\\nline two\\n"); process.exit(1) }
 if (verb === "snapshot" && mode === "web-option") process.stdout.write('- button "Open app" [ref=e3]\\n- link "Join from browser" [ref=e4] [cursor=pointer]:\\n')
 else if (verb === "snapshot") process.stdout.write("- generic [ref=e1]\\n")
 if (verb === "screenshot" && mode !== "no-picture") { fs.writeFileSync(path.join(process.cwd(), "files", "page-1.png"), "PNG"); process.stdout.write("### Result\\n- [Screenshot](files/page-1.png)\\n") }
@@ -1329,63 +1324,16 @@ test("browser_command runs only page commands, refuses options that switch sessi
 })
 
 test("a start that hangs past its budget says it timed out", async () => {
+  const { options, tmp } = await setup({ mode: "open-hang" })
+  const controller = web.createController({ ...options, openMs: 1000 })
+  const hung = await controller.call("browser_context", { action: "open", browser: "fresh" })
+  assert.equal(hung.isError, true)
+  assert.equal(text(hung), "The browser did not start within 1 seconds and was stopped. Try again, or use a fresh browser.")
+  assert.deepEqual(fs.readdirSync(tmp), [])
   const loud = await setup({ mode: "open-hang-loud" })
   const talker = web.createController({ ...loud.options, openMs: 1000 })
   assert.equal(text(await talker.call("browser_context", { action: "open", browser: "fresh" })), "The browser did not start within 1 seconds and was stopped. Try again, or use a fresh browser. Details: Waiting for the browser")
   assert.deepEqual(fs.readdirSync(loud.tmp), [])
-})
-
-// Retry timings: the first try gets 0.6 s; a second try gets at least 0.5 s, the rest of the 1 s budget.
-const retryOptions = (options) => ({ ...options, openMs: 1000, firstOpenMs: 600, retryMinMs: 500 })
-const openCount = (calls) => calls().filter((call) => call.args[1] === "open").length
-
-test("a fresh start that stalls with no output is stopped, and tried once more in a new context", async () => {
-  const { options, tmp, root, calls } = await setup({ mode: "open-stall-once" })
-  const controller = web.createController(retryOptions(options))
-  const opened = json(await controller.call("browser_context", { action: "open", browser: "fresh" }))
-  assert.equal(opened.retried, true)
-  const [first, second] = calls().filter((call) => call.args[1] === "open")
-  assert.notEqual(path.basename(first.cwd), path.basename(second.cwd), "the second try has its own context folder")
-  assert.ok(calls().some((call) => call.args[1] === "close" && path.basename(call.cwd) === path.basename(first.cwd)), "the stalled try was closed")
-  assert.equal(fs.existsSync(path.join(tmp, path.basename(first.cwd))), false, "the stalled try's folder is gone")
-  assert.deepEqual(fs.readdirSync(tmp), [path.basename(second.cwd)], "only the opened context's folder is left")
-  assert.deepEqual(fakesRunning(root), [])
-  await controller.closeAll()
-  assert.deepEqual(fs.readdirSync(tmp), [])
-})
-
-test("a fresh start that stalls on both tries says so, and leaves nothing behind", async () => {
-  const { options, tmp, root, calls } = await setup({ mode: "open-hang" })
-  const controller = web.createController(retryOptions(options))
-  const stalled = await controller.call("browser_context", { action: "open", browser: "fresh" })
-  assert.equal(stalled.isError, true)
-  assert.equal(text(stalled), "The browser did not start: the first try stalled with no output for 0.6 seconds, and the second try did not start within 0.5 seconds and was stopped. Try again, or use a fresh browser.")
-  assert.equal(openCount(calls), 2)
-  assert.deepEqual(fs.readdirSync(tmp), [])
-  assert.deepEqual(fakesRunning(root), [])
-})
-
-test("a stalled first try and a failed second try are both reported", async () => {
-  const { options, tmp, calls } = await setup({ mode: "open-stall-then-fail" })
-  const controller = web.createController(retryOptions(options))
-  const failed = await controller.call("browser_context", { action: "open", browser: "fresh" })
-  assert.equal(failed.isError, true)
-  assert.equal(text(failed), "The browser did not start: the first try stalled with no output for 0.6 seconds, and the second try failed. Try again, or use a fresh browser. Details: Browser failed\nline two")
-  assert.equal(openCount(calls), 2)
-  assert.deepEqual(fs.readdirSync(tmp), [])
-})
-
-test("a fresh start that times out with output, or exits with an error, is not tried again", async () => {
-  const loud = await setup({ mode: "open-hang-loud" })
-  const talker = web.createController(retryOptions(loud.options))
-  assert.equal(text(await talker.call("browser_context", { action: "open", browser: "fresh" })), "The browser did not start within 0.6 seconds and was stopped. Try again, or use a fresh browser. Details: Waiting for the browser")
-  assert.equal(openCount(loud.calls), 1)
-  assert.deepEqual(fs.readdirSync(loud.tmp), [])
-  const failing = await setup({ mode: "open-fail" })
-  const failer = web.createController(retryOptions(failing.options))
-  assert.equal(text(await failer.call("browser_context", { action: "open", browser: "fresh" })), "The browser did not start. Try again, or use a fresh browser. Details: Browser failed\nline two")
-  assert.equal(openCount(failing.calls), 1)
-  assert.deepEqual(fs.readdirSync(failing.tmp), [])
 })
 
 test("an unexpected error is reported as such", async () => {
