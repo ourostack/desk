@@ -29,6 +29,8 @@ import { publishedJobId } from "../src/factory/local-status.js"
 import { readMachineSecret } from "../src/factory/outbox.js"
 import { keyedJobId } from "../src/factory/publish.js"
 import { parseFrontmatterLite } from "../src/desk/frontmatter-lite.js"
+import { defineCli, defineCommand } from "../src/lib/ouro-ui/registry/ouro/ax/command.ts"
+import { runCli } from "../src/lib/ouro-ui/registry/ouro/ax/cli.ts"
 import { resolveHookDeskRoot } from "./resolve-desk-root.js"
 
 export const SITE = "https://ourostack.github.io/factory/"
@@ -151,15 +153,24 @@ export async function main({ env, fetchFile = fetchText, log }) {
 }
 
 /** Runs `main` when this module is the entry point; the server keeps the process alive until Ctrl-C. */
-export async function runIfMain(importMetaUrl, argv1, run = main) {
+export async function runIfMain(importMetaUrl, argv1, run = main, argv = process.argv.slice(2)) {
   if (typeof argv1 !== "string" || importMetaUrl !== pathToFileURL(argv1).href) return false
-  try {
-    process.stdout.write(`${(await run({ env: process.env, log: (line) => process.stdout.write(`${line}\n`) })).url}\n`)
-    process.stdout.write("Serving until Ctrl-C: an agent should run this command in the background and read the URL above.\n")
-  } catch (error) {
-    process.stderr.write(`${error.message}\n`)
-    process.exitCode = 1
-  }
+  const out = process.stdout
+  const cli = defineCli({
+    name: "private-view",
+    about: ["Serves a private, local copy of the factory site on 127.0.0.1 that shows this desk's real task names."],
+    command: defineCommand({
+      name: "private-view",
+      summary: "Build the private view and serve it until Ctrl-C; run it in the background and read the URL from its first line.",
+      effect: "private",
+      output: "the URL, then a line saying it serves until Ctrl-C",
+      text: ({ url }) => `${url}\nServing until Ctrl-C: an agent should run this command in the background and read the URL above.`,
+      run: () => run({ env: process.env, log: (line) => out.write(`${line}\n`) }),
+    }),
+  })
+  // A failure from the code underneath is already a whole line of its own; the kit's tool-name prefix would say it twice.
+  const stderr = { write: (line) => process.stderr.write(line.replace(/^(private-view: )+/u, "private-view: ")) }
+  process.exitCode = await runCli(cli, argv, { stdin: process.stdin, stdout: out, stderr }, { env: process.env })
   return true
 }
 

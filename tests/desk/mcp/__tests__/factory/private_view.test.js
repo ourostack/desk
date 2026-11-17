@@ -246,15 +246,15 @@ test("runIfMain runs only as the entry point, printing the URL or the failure", 
   process.stdout.write = capture
   process.stderr.write = capture
   try {
-    assert.equal(await runIfMain(url, entry, async ({ log }) => { log("note"); return { url: "http://127.0.0.1:1/" } }), true)
-    assert.equal(await runIfMain(url, entry, async () => { throw new Error("nope") }), true)
+    assert.equal(await runIfMain(url, entry, async ({ log }) => { log("note"); return { url: "http://127.0.0.1:1/" } }, []), true)
+    assert.equal(await runIfMain(url, entry, async () => { throw new Error("nope") }, []), true)
     assert.equal(process.exitCode, 1)
   } finally {
     process.stdout.write = stdout
     process.stderr.write = stderr
     process.exitCode = code
   }
-  assert.deepEqual(out, ["note\n", "http://127.0.0.1:1/\n", "Serving until Ctrl-C: an agent should run this command in the background and read the URL above.\n", "nope\n"])
+  assert.deepEqual(out, ["note\n", "http://127.0.0.1:1/\nServing until Ctrl-C: an agent should run this command in the background and read the URL above.\n", "private-view: nope.\n"])
 })
 
 test("run as a process, an unbound desk exits 1 with the reason", () => scratch(({ home }) => {
