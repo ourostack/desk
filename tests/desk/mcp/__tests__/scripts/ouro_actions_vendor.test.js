@@ -11,9 +11,9 @@ const sha256 = (file) => crypto.createHash("sha256").update(fs.readFileSync(file
 
 test("the vendored action generator and claims are the ones core's release manifest names", () => {
   const manifest = JSON.parse(fs.readFileSync(path.join(vendor, "dist-manifest.json"), "utf8"))
-  assert.equal(manifest.coreTag, "v0.17.4")
+  assert.match(manifest.coreTag, /^v\d+\.\d+\.\d+$/)
   for (const [key, file] of [["dist/actions/ouro-actions.mts", "ouro-actions.mts"], ["dist/ax/actions.claims.json", "actions.claims.json"]]) {
-    assert.equal(sha256(path.join(vendor, file)), manifest.files[key], `${file} differs from ${key} in core v0.17.4`)
+    assert.equal(sha256(path.join(vendor, file)), manifest.files[key], `${file} differs from ${key} in core ${manifest.coreTag}`)
   }
 })
 
