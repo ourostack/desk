@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.221 — 2026-11-17
+
+The `drains` command line is now defined once with Ouro AX instead of a hand-written argument parser: `drains.js --help` and `drains.js <command> --help` are generated from the definition, and a wrong or missing argument is one line naming the exact command to run instead.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.220 — 2026-11-17
 
 A fresh browser whose start stalled past its time budget was sometimes reported as opened, and the next command then failed with "The browser 'desk' is not open". The Playwright CLI exits 0 when Desk stops it mid-start, so Desk now counts its own stop as a failed start and tries once more in a new context, or says the browser did not start.
