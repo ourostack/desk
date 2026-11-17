@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, readFileSync, renameSync, symlinkSync, writeFil
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { execFileSync } from "node:child_process"
-import { runValidatePrCommand } from "../../../../../plugins/desk/mcp/scripts/factory.js"
+import { validatePrCommand as runValidatePrCommand } from "./_validate_pr_command.js"
 import { build } from "../../../../../plugins/desk/mcp/src/factory/pipeline/build.js"
 import { renderJobMarkdown } from "../../../../../plugins/desk/mcp/src/factory/pipeline/report.js"
 import { contextPathParts, validatePr } from "../../../../../plugins/desk/mcp/src/factory/pipeline/validate-pr.js"

@@ -14,6 +14,7 @@ import * as path from "node:path"
 import { setImmediate as nextTurn } from "node:timers/promises"
 import { fileURLToPath, pathToFileURL } from "node:url"
 
+import { validatePrCommand as runValidatePrCommand } from "./_validate_pr_command.js"
 import {
   KEYED_LINK_NOTE,
   SUPPORTED_COMMANDS,
@@ -21,7 +22,6 @@ import {
   isMainModule,
   runIfMain,
   main,
-  parseOptions,
   runBuildCommand,
   runKaizenCheckCommand,
   runAndonCommand,
@@ -33,7 +33,6 @@ import {
   runEvaluateCommand,
   runJobLinkCommand,
   runStatusCommand,
-  runValidatePrCommand,
 } from "../../../../../plugins/desk/mcp/scripts/factory.js"
 import { jobId } from "../../../../../plugins/desk/mcp/src/factory/binding.js"
 import { factoryStateRoot, readConsent, readMachineSecret, setConsent, updateStatus, writeLocalFacts } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
@@ -443,18 +442,6 @@ test("triage API malformed permission exceptions and changed head stay unavailab
       {endpoint:"repos/example/project/pulls/1",token:"synthetic-test-token"},
     ])
   }))
-test("parseOptions reads --flag value pairs into a map", () => {
-  assert.deepEqual([...parseOptions(["--store", "a/b", "--contribute", "yes"]).entries()], [["store", "a/b"], ["contribute", "yes"]])
-})
-
-test("parseOptions rejects a non-string flag, a flag with no leading --, a bare --, and a dangling flag with no value", () => {
-  assert.equal(parseOptions([42, "x"]), null)
-  assert.equal(parseOptions(["store", "x"]), null)
-  assert.equal(parseOptions(["--", "x"]), null)
-  assert.equal(parseOptions(["--store"]), null)
-  assert.equal(parseOptions(["--store", "a/b", "--store", "c/d"]), null)
-})
-
 test("status returns local factory health without exposing marker paths or secrets", () => scratch(async (env) => {
   let output = ""
   assert.equal(await main({ argv: ["status"], env, write: (text) => { output += text }, logError: () => assert.fail("status must succeed") }), 0)
@@ -990,23 +977,16 @@ test("validate-pr handles added, removed, unknown, invalid-path, malformed, over
     errors: [{ code: "too_many_changes", path: "changes" }],
   })
   await assert.rejects(
-    runValidatePrCommand({ argv: [...args, "--extra", "x"], git: () => "" }),
-    /unknown option/u,
-  )
-  await assert.rejects(
     runValidatePrCommand({ argv: args, cwd: os.tmpdir() }),
     /Git data could not be read/u,
   )
 })
 
 test("validate-pr rejects malformed options and main exits one while still printing stable validation JSON", () => scratch(async (env) => {
-  for (const argv of [
-    ["--base", "x"],
-    ["--base", "x".repeat(40), "--head", "y", "--author-association", "NONE"],
-    ["--base", "a".repeat(40), "--head", "b".repeat(40), "--author-association", "bad"],
-  ]) {
-    await assert.rejects(runValidatePrCommand({ argv }), /Usage: factory\.js validate-pr/u)
-  }
+  await refused(["validate-pr", "--base", "x"], env)
+  await refused(["validate-pr", "--base", "x", "--head", "y", "--author-association", "NONE", "--extra", "z"], env)
+  await assert.rejects(runValidatePrCommand({ argv: ["--base", "x".repeat(40), "--head", "y", "--author-association", "NONE"] }), /base and --head/u)
+  await assert.rejects(runValidatePrCommand({ argv: ["--base", "a".repeat(40), "--head", "b".repeat(40), "--author-association", "bad"] }), /--author-association/u)
   let output = ""
   let logged = ""
   const code = await main({
@@ -1015,9 +995,9 @@ test("validate-pr rejects malformed options and main exits one while still print
     write: (text) => { output += text },
     logError: (text) => { logged += text },
   })
-  assert.equal(code, 1)
+  assert.equal(code, 2)
   assert.equal(output, "")
-  assert.match(logged, /base and head/u)
+  assert.match(logged, /^factory: validate-pr: --base and --head must be full commit SHAs\. Fix: /u)
 
   output = ""
   logged = ""
@@ -1071,19 +1051,19 @@ test("main dispatches consent, prints one JSON line, and returns exit code 0", (
 test("main returns exit code 1 and logs one line for an unknown subcommand", () => scratch(async (env) => {
   let logged = ""
   const code = await main({ argv: ["bogus"], env, write: () => assert.fail("should not write"), logError: (text) => { logged += text } })
-  assert.equal(code, 1)
-  assert.match(logged, /unknown subcommand "bogus"/u)
+  assert.equal(code, 2)
+  assert.match(logged, /bogus/u)
 }))
 
 test("main exits 2 with one usage line for a malformed consent call", () => scratch(async (env) => {
   assert.match(await refused(["consent"], env), /^factory: consent: /u)
 }))
 
-test("main reports an unknown subcommand as an empty string when argv is empty", () => scratch(async (env) => {
+test("main refuses an empty command line with one usage line", () => scratch(async (env) => {
   let logged = ""
   const code = await main({ argv: [], env, write: () => assert.fail("should not write"), logError: (text) => { logged += text } })
-  assert.equal(code, 1)
-  assert.match(logged, /unknown subcommand ""/u)
+  assert.equal(code, 2)
+  assert.match(logged, /^factory: /u)
 }))
 
 // ---------------------------------------------------------------------------
@@ -1372,16 +1352,16 @@ test("main writes to stdout and stderr by default", async () => {
   process.stdout.write = (text) => { out.push(String(text)); return true }
   process.stderr.write = (text) => { err.push(String(text)); return true }
   try {
-    assert.equal(await main({ argv: ["no-such-command"] }), 1)
+    assert.equal(await main({ argv: ["no-such-command"] }), 2)
     // With no argv, main reads the process arguments, which name no subcommand here.
-    assert.equal(await main(), 1)
-    assert.equal(await main({ argv: ["validate-pr"] }), 1)
+    assert.equal(await main(), 2)
+    assert.equal(await main({ argv: ["validate-pr"] }), 2)
     assert.equal(await main({ argv: ["reconcile", "--desk", "/nonexistent-desk-for-test", "--since", "2026-09-28T00:00:00Z", "--until", "2026-09-29T00:00:00Z"], env: { HOME: "/nonexistent-home-for-test" } }), 1)
   } finally {
     process.stdout.write = write
     process.stderr.write = error
   }
-  assert.match(err.join(""), /unknown subcommand/u)
+  assert.match(err.join(""), /^factory: /u)
   assert.equal(out.length, 1)
   assert.equal(JSON.parse(out[0]).ok, false)
 })
@@ -1390,7 +1370,7 @@ test("the removed triage commands are unknown subcommands", async () => {
   for (const command of ["triage", "triage-qualify"]) {
     assert.equal(SUPPORTED_COMMANDS.includes(command), false)
     const errors = []
-    assert.equal(await main({ argv: [command], write: () => assert.fail("prints nothing"), logError: (text) => errors.push(text) }), 1)
-    assert.match(errors[0], /unknown subcommand/u)
+    assert.equal(await main({ argv: [command], write: () => assert.fail("prints nothing"), logError: (text) => errors.push(text) }), 2)
+    assert.match(errors[0], /triage/u)
   }
 })
