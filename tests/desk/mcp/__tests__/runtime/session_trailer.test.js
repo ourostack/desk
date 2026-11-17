@@ -150,15 +150,44 @@ async function pushFixture() {
   return dir
 }
 
-test("pushing onto a branch whose tip carries another session's trailer warns once, naming it, and still pushes", async () => {
+test("pushing to a feature branch whose tip carries another session's trailer warns, naming it, and still pushes", async () => {
+  const dir = await pushFixture()
+  ok(git(dir, ["checkout", "-q", "-b", "feature"]))
+  ok(commit(dir, "theirs", { COPILOT_AGENT_SESSION_ID: "other-session" }))
+  ok(git(dir, ["push", "-q", "origin", "feature"]))
+  ok(commit(dir, "mine", { COPILOT_AGENT_SESSION_ID: "my-session" }))
+  const push = git(dir, ["push", "origin", "feature"], { COPILOT_AGENT_SESSION_ID: "my-session" })
+  assert.equal(push.status, 0, push.stderr)
+  assert.equal(push.stderr.match(/Warning: the latest commit on refs\/heads\/feature was made by session other-session/gu)?.length, 1)
+  assert.match(push.stderr, /this is session my-session/u)
+})
+
+test("pushing to the default branch (main) with another session's trailer prints no warning", async () => {
   const dir = await pushFixture()
   ok(commit(dir, "theirs", { COPILOT_AGENT_SESSION_ID: "other-session" }))
   ok(git(dir, ["push", "-q", "origin", "main"]))
   ok(commit(dir, "mine", { COPILOT_AGENT_SESSION_ID: "my-session" }))
   const push = git(dir, ["push", "origin", "main"], { COPILOT_AGENT_SESSION_ID: "my-session" })
   assert.equal(push.status, 0, push.stderr)
-  assert.equal(push.stderr.match(/Warning: the latest commit on refs\/heads\/main was made by session other-session/gu)?.length, 1)
-  assert.match(push.stderr, /this is session my-session/u)
+  assert.doesNotMatch(push.stderr, /Warning/u)
+})
+
+test("pushing to a feature branch with another session's trailer warns, but main does not", async () => {
+  const dir = await pushFixture()
+  ok(commit(dir, "base", { COPILOT_AGENT_SESSION_ID: "session-a" }))
+  ok(git(dir, ["push", "-q", "origin", "main"]))
+  ok(git(dir, ["checkout", "-q", "-b", "feature"]))
+  ok(commit(dir, "feature work", { COPILOT_AGENT_SESSION_ID: "session-b" }))
+  ok(git(dir, ["push", "-q", "origin", "feature"]))
+  ok(commit(dir, "another", { COPILOT_AGENT_SESSION_ID: "session-b" }))
+  const pushFeature = git(dir, ["push", "origin", "feature"], { COPILOT_AGENT_SESSION_ID: "session-c" })
+  assert.equal(pushFeature.status, 0, pushFeature.stderr)
+  assert.match(pushFeature.stderr, /Warning/u)
+  ok(git(dir, ["checkout", "-q", "main"]))
+  ok(commit(dir, "another main", { COPILOT_AGENT_SESSION_ID: "session-c" }))
+  const pushMain = git(dir, ["push", "origin", "main"], { COPILOT_AGENT_SESSION_ID: "session-c" })
+  assert.equal(pushMain.status, 0, pushMain.stderr)
+  assert.doesNotMatch(pushMain.stderr, /Warning/u)
 })
 
 test("pushing onto your own session's tip, a new branch, or without a session id prints no warning", async () => {
