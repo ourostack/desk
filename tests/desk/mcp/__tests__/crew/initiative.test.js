@@ -201,8 +201,9 @@ test("the command line: new, adopt and check print JSON and check exits 1 on pro
   const clone = await workspace({ ...WORKSPACE, "_shared/tracks/loose.md": "# Loose\n" })
   const run = async (argv) => {
     let out = ""
-    const code = await main({ argv: [...argv, "--repo", clone], cwd: "/elsewhere", write: (text) => { out += text }, script: "/crew.js" })
-    return { code, result: JSON.parse(out) }
+    let err = ""
+    const code = await main({ argv: [...argv, "--repo", clone], cwd: "/elsewhere", write: (text) => { out += text }, stderr: { write: (text) => { err += text } }, script: "/crew.js" })
+    return { code, err, result: out === "" ? null : JSON.parse(out) }
   }
   const failing = await run(["initiative", "check"])
   assert.equal(failing.code, 1)
@@ -211,11 +212,10 @@ test("the command line: new, adopt and check print JSON and check exits 1 on pro
   assert.equal((await run(["initiative", "check"])).code, 0)
   assert.equal((await run(["initiative", "new", "fresh-idea", "--title", "Fresh idea"])).result.state, "created")
   assert.equal((await run(["initiative", "new", "fresh-idea"])).code, 0, "exists is not a failure")
-  assert.equal((await main({ argv: ["initiative"], cwd: clone, write: () => {} })), 2)
   for (const argv of [["initiative"], ["initiative", "rename"], ["initiative", "new"], ["initiative", "adopt", "--slug", "x"], ["initiative", "check", "--slug", "x"], ["initiative", "adopt", "x", "--slug"], ["initiative", "new", "a", "--bogus"]]) {
     const usage = await run(argv)
     assert.equal(usage.code, 2, argv.join(" "))
-    assert.match(usage.result.message, /usage: crew\.js initiative/u)
+    assert.match(usage.err, /^crew: .*Fix: /u)
   }
 })
 

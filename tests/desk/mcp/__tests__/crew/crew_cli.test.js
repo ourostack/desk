@@ -14,24 +14,17 @@ const SCRIPT = fileURLToPath(new URL("../../../../../plugins/desk/mcp/scripts/cr
 
 async function run(argv, engine) {
   let out = ""
-  const code = await main({ argv, cwd: "/work/team", write: (text) => { out += text }, engine })
-  return { code, result: JSON.parse(out) }
+  let err = ""
+  const code = await main({ argv, cwd: "/work/team", write: (text) => { out += text }, stderr: { write: (text) => { err += text } }, engine })
+  return { code, err, result: out === "" ? null : JSON.parse(out) }
 }
 
-test("usage errors: an unknown action, a flag the action does not take, and a flag with no value exit 2", async () => {
-  const usage = [
-    [[], "unknown action \"\""],
-    [["rename"], "unknown action \"rename\""],
-    [["status", "--apply"], "status does not take --apply"],
-    [["join", "alias"], "join does not take alias"],
-    [["join", "--alias"], "--alias needs a value"],
-    [["join", "--alias", "--apply"], "--alias needs a value"],
-  ]
-  for (const [argv, error] of usage) {
-    const { code, result } = await run(argv)
+test("usage errors: an unknown action, a flag the action does not take, and a flag with no value exit 2 with one line on stderr", async () => {
+  for (const argv of [[], ["rename"], ["status", "--apply"], ["join", "alias"], ["join", "--alias"], ["join", "--alias", "--apply"], ["initiative"], ["initiative", "new"]]) {
+    const { code, err, result } = await run(argv)
     assert.equal(code, 2, argv.join(" "))
-    assert.equal(result.state, "usage")
-    assert.ok(result.message.startsWith(`${error}. usage: crew.js`), result.message)
+    assert.equal(result, null)
+    assert.match(err, /^crew: .*Fix: .*\n$/u, argv.join(" "))
   }
 })
 
@@ -42,7 +35,7 @@ test("main hands each action its options and exits by the result's state", async
     joinWorkspace: async (args) => (calls.push(["join", args]), { state: "refused" }),
     startWorkspace: async (args) => (calls.push(["start", args]), { state: "plan" }),
   }
-  assert.deepEqual(await run(["status"], engine), { code: 0, result: { state: "not_crew" } })
+  assert.deepEqual(await run(["status"], engine), { code: 0, err: "", result: { state: "not_crew" } })
   assert.deepEqual(calls.pop(), ["status", { repo: "/work/team", identity: undefined, session: true }])
   assert.equal((await run(["join", "--repo", "/r", "--identity", "me", "--alias", "me", "--apply"], engine)).code, 1)
   assert.deepEqual(calls.pop(), ["join", { repo: "/r", identity: "me", alias: "me", apply: true }])
@@ -61,7 +54,7 @@ test("main hands each action its options and exits by the result's state", async
   assert.equal((await run(["start", "--merge-workflow", "x.yml"], engine)).code, 2)
   const usage = await run(["status", "--bogus"], engine)
   assert.equal(usage.code, 2)
-  assert.match(usage.result.message, /^status does not take --bogus\. usage: crew\.js/u)
+  assert.match(usage.err, /^crew: .*--bogus/u)
 })
 
 test("the real engine through main: a team repository that is not a Crew workspace yet", async () => {
