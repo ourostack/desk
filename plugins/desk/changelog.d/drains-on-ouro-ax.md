@@ -1,0 +1,1 @@
+The `drains` command line is now defined once with Ouro AX instead of a hand-written argument parser: `drains.js --help` and `drains.js <command> --help` are generated from the definition, and a wrong or missing argument is one line naming the exact command to run instead.

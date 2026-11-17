@@ -36,5 +36,5 @@ test("drains.js runtimes status prints the findings, and needs the status word",
   assert.equal(await runDrainsCli({ argv: ["runtimes", "status"], script: "s", io, listProcesses: () => PS }), 0)
   assert.match(JSON.parse(out.join("")).status[0], /pid 1756, 7093/u)
   assert.equal(await runDrainsCli({ argv: ["runtimes"], script: "s", io }), 2)
-  assert.match(err.join(""), /runtimes needs status/u)
+  assert.match(err.join(""), /drains: .*runtimes/u)
 })

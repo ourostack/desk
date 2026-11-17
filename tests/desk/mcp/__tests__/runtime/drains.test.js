@@ -12,7 +12,7 @@ import {
   ackWake, connectGithub, DRAIN_STATUS_MARKER, drainPaths, drainsHome, deskInUse, drainStatusLines, installLauncher, parseDrainConfig, pollDrain, pollDrains, quotaHold, quotaLines,
   readDrainConfig, readDrainStates, wakeId, wakeMessage, whyOf, withDrainLock,
 } from "../../../../../plugins/desk/mcp/src/runtime/drains.js"
-import { parseDrainsArgs, runDrainsCli } from "../../../../../plugins/desk/mcp/src/runtime/drains-cli.js"
+import { runDrainsCli } from "../../../../../plugins/desk/mcp/src/runtime/drains-cli.js"
 
 const SCRIPT = fileURLToPath(new URL("../../../../../plugins/desk/mcp/scripts/drains.js", import.meta.url))
 const DRAIN = { repo: "acme/widgets", session: "58fbd57e-e371-4169-b013-2f413ab4a046", account: "maintainer" }
@@ -435,7 +435,7 @@ test("`drains why owner/name#n` prints the recorded reasons", async () => {
   assert.equal(JSON.parse((await cli(["why", "acme/widgets#7", "--state", state])).out).wakes.length, 0)
   const bad = await cli(["why", "nonsense"])
   assert.equal(bad.code, 2)
-  assert.match(bad.err, /why needs an issue such as owner\/name#123/u)
+  assert.match(bad.err, /owner\/name#123/u)
 })
 
 test("self is resolved per repository from the account that polls it: a personal and a work drain in one poll", async () => {
@@ -1407,20 +1407,6 @@ test("pollDrain records a drain that has no state yet", async () => {
   matches(states[DRAIN.repo], { seeded: true, openCount: 0, lastPollAt: new Date(NOW).toISOString() })
 })
 
-test("the command line parses its commands and refuses what it does not know", () => {
-  assert.deepEqual(parseDrainsArgs([]), { help: true })
-  assert.deepEqual(parseDrainsArgs(["-h"]), { help: true })
-  assert.deepEqual(parseDrainsArgs(["poll", "--state", "s.json"]), { command: "poll", flags: { state: "s.json" } })
-  assert.match(parseDrainsArgs(["nope"]).error, /unknown command "nope"/u)
-  assert.match(parseDrainsArgs(["poll", "--repo", "a/b"]).error, /does not take "--repo"/u)
-  assert.match(parseDrainsArgs(["poll", "--state"]).error, /--state needs a value/u)
-  assert.match(parseDrainsArgs(["poll", "--state", "--config"]).error, /--state needs a value/u)
-  assert.match(parseDrainsArgs(["ack", "--repo", "a/b"]).error, /ack needs --repo and --wake/u)
-  assert.deepEqual(parseDrainsArgs(["why", "a/b#12", "--state", "s.json"]), { command: "why", flags: { state: "s.json" }, repo: "a/b", number: 12 })
-  for (const bad of [["why"], ["why", "a/b"], ["why", "a#1"], ["why", "a/b#x"], ["why", "--state", "s.json"]]) assert.match(parseDrainsArgs(bad).error, /why needs an issue such as owner\/name#123/u, bad.join(" "))
-  assert.match(parseDrainsArgs(["why", "a/b#1", "--config", "c"]).error, /does not take "--config"/u)
-})
-
 function cli(argv, extra = {}) {
   const out = []
   const err = []
@@ -1465,11 +1451,16 @@ test("the command line says what is wrong: usage, a busy lock and a bad config",
   const dir = await mkTempRoot("desk-drains-")
   const config = path.join(dir, "config.json")
   const state = path.join(dir, "state.json")
-  assert.equal((await cli([])).code, 0)
-  assert.match((await cli(["--help"])).out, /^Usage: drains\.js poll/u)
+  assert.equal((await cli(["--help"])).code, 0)
+  assert.match((await cli(["--help"])).out, /poll +List each configured repository's open issues/u)
   const usage = await cli(["poll", "--bogus", "x"])
   assert.equal(usage.code, 2)
-  assert.match(usage.err, /^desk: poll does not take "--bogus": .*Fix: drop --bogus or use --config or --state\./u)
+  assert.match(usage.err, /^drains: poll: .*--bogus.*Fix: /u)
+  const nowhere = await cli(["nope"])
+  assert.equal(nowhere.code, 2)
+  assert.match(nowhere.err, /^drains: .*nope/u)
+  assert.match((await cli(["ack", "--repo", "a/b"])).err, /--wake/u)
+  for (const bad of [["why"], ["why", "a/b"], ["why", "a#1"], ["why", "a/b#x"]]) assert.match((await cli(bad)).err, /why: .*owner\/name#123/u, bad.join(" "))
   writeFileSync(config, "{")
   const bad = await cli(["poll", "--config", config, "--state", state])
   assert.equal(bad.code, 1)
