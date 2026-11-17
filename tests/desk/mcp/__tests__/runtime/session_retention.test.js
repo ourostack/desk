@@ -8,7 +8,7 @@ import { test } from "node:test"
 import { fileURLToPath } from "node:url"
 import Database from "better-sqlite3"
 import { mkTempRoot } from "../_temp_roots.js"
-import { parseRetentionArgs, runRetention, runSessionRetentionCli, USAGE } from "../../../../../plugins/desk/mcp/src/runtime/session-retention.js"
+import { retentionOptions, runRetention, runSessionRetentionCli } from "../../../../../plugins/desk/mcp/src/runtime/session-retention.js"
 
 const SCRIPT = fileURLToPath(new URL("../../../../../plugins/desk/mcp/scripts/session-retention.js", import.meta.url))
 const DAY = 86_400_000
@@ -110,10 +110,19 @@ async function world(prefix) {
 
 const baseArgs = (w) => ["--session-state", w.state, "--app-db", w.db, "--log-dirs", w.logs, "--report-dir", w.report, "--trash", w.trash, "--git-pause-ms", "0", "--load-limit", "1000"]
 
+const NUMERIC = /^\d+$/u
+
+// The flags as the kit hands them to the command: a flag with a value takes it, one without is true.
 function options(argv, env = {}) {
-  const parsed = parseRetentionArgs(argv, { env: { HOME: env.HOME ?? "/home/fixture", ...env } })
-  assert.ok(parsed.options, parsed.error)
-  return parsed.options
+  const input = {}
+  for (let i = 0; i < argv.length; i++) {
+    const name = argv[i].slice(2)
+    const value = argv[i + 1]
+    if (value === undefined || value.startsWith("--")) input[name] = true
+    else input[name] = NUMERIC.test(value) ? Number(value) : (i++, value)
+    if (NUMERIC.test(value ?? "")) i++
+  }
+  return retentionOptions(input, { env: { HOME: env.HOME ?? "/home/fixture", ...env } })
 }
 
 const byCategory = (report, category) => report.plan.filter((item) => item.category === category).map((item) => item.path).sort()
@@ -500,27 +509,28 @@ test("the CLI parses flags, prints a summary or JSON, and reports failures", asy
     return { code, ...o.io }
   }
 
-  assert.deepEqual(await cli(["--help"]), { code: 0, text: `${USAGE}\n`, err: "" })
+  const help = await cli(["--help"])
+  assert.equal(help.code, 0)
+  assert.match(help.text, /--apply +Delete what the dry run lists/u)
   assert.equal((await cli(["-h"])).code, 0)
   for (const [argv, message] of [
     [["--log-days"], "--log-days needs a value"],
-    [["--log-days", "soon"], "--log-days needs a number of zero or more, not soon"],
-    [["--log-days", " "], "--log-days needs a number of zero or more"],
-    [["--log-days", "-1"], "--log-days needs a number of zero or more"],
-    [["--skip", "logs,everything"], "--skip takes logs, sessions, worktrees, state, not everything"],
-    [["--frobnicate", "1"], "unknown option --frobnicate"],
+    [["--log-days", "soon"], "--log-days"],
+    [["--log-days", "-1"], "--log-days"],
+    [["--skip", "logs,everything"], "it takes logs, sessions, worktrees, state, not everything"],
+    [["--frobnicate", "1"], "--frobnicate"],
   ]) {
     const r = await cli(argv)
     assert.equal(r.code, 2)
     assert.ok(r.err.includes(message), r.err)
   }
 
-  const defaults = parseRetentionArgs([], { env: { COPILOT_HOME: path.join(w.root, "copilot"), XDG_STATE_HOME: path.join(w.root, "xdg") }, homeDir: path.join(w.root, "h") }).options
+  const defaults = retentionOptions({}, { env: { COPILOT_HOME: path.join(w.root, "copilot"), XDG_STATE_HOME: path.join(w.root, "xdg") }, homeDir: path.join(w.root, "h") })
   assert.equal(defaults.home, path.join(w.root, "h"))
   assert.equal(defaults.appDb, path.join(w.root, "copilot", "data.db"))
   assert.equal(defaults.reportDir, path.join(w.root, "xdg", "desk", "session-retention"))
-  assert.equal(parseRetentionArgs([]).options.sessionState, path.join(process.env.COPILOT_HOME, "session-state"))
-  const fromHome = parseRetentionArgs([], { env: { HOME: env.HOME } }).options
+  assert.equal(retentionOptions().sessionState, path.join(process.env.COPILOT_HOME, "session-state"))
+  const fromHome = retentionOptions({}, { env: { HOME: env.HOME } })
   assert.equal(fromHome.logDirs[0], path.join(env.HOME, ".copilot", "logs"))
   assert.equal(fromHome.trash, path.join(env.HOME, ".local", "state", "desk", "session-retention", "trash"))
 
@@ -562,13 +572,13 @@ test("the CLI parses flags, prints a summary or JSON, and reports failures", asy
   assert.match(measured.text, /agent storage 0\.00 GB, ceiling 60\.00 GB; the ceiling pass pruned 0 sessions/u)
 
   await write(path.join(w.root, "not-a-folder"), "")
-  const broken = await cli([...baseArgs(w), "--report-dir", path.join(w.root, "not-a-folder", "report")])
+  const broken = await cli([...baseArgs({ ...w, report: path.join(w.root, "not-a-folder", "report") })])
   assert.equal(broken.code, 1)
-  assert.match(broken.err, /^session-retention failed: /u)
+  assert.match(broken.err, /^session-retention: /u)
 })
 
 test("the script runs the CLI", async () => {
   const r = spawnSync(process.execPath, [SCRIPT, "--help"], { encoding: "utf8", env: process.env })
   assert.equal(r.status, 0, r.stderr)
-  assert.equal(r.stdout, `${USAGE}\n`)
+  assert.match(r.stdout, /--apply +Delete what the dry run lists/u)
 })

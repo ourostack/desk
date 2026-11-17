@@ -1,0 +1,1 @@
+The `session-retention` command line is now defined once with Ouro AX instead of a hand-written argument parser: `session-retention.js --help` is generated from the definition, and a wrong flag or value is one line naming the exact command to run instead.
