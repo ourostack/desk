@@ -1,0 +1,1 @@
+The `resolve-desk-root` command line is now defined with Ouro AX: `--help` is generated from the definition and an unknown argument is one line naming the fix (exit 2), instead of being ignored. What it prints, and its use by the startup hooks, is unchanged.

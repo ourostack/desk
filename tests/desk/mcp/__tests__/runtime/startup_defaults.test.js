@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
-import { execFileSync } from "node:child_process"
+import { execFileSync, spawnSync } from "node:child_process"
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
@@ -97,6 +97,9 @@ test("resolve-desk-root reports configuration errors and prints nothing for --ro
     assert.deepEqual(broken.tried, [])
     assert.match(broken.error, /must be valid JSON/u)
     assert.equal(execFileSync(process.execPath, [script, "--root-only"], { encoding: "utf8", env }), "")
+    const wrong = spawnSync(process.execPath, [script, "--bogus"], { encoding: "utf8", env })
+    assert.equal(wrong.status, 2)
+    assert.match(wrong.stderr, /^resolve-desk-root: .*Fix: .*\n$/u)
   } finally {
     rmSync(scratch, { recursive: true, force: true })
   }
