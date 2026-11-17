@@ -161,7 +161,7 @@ test("sync-push.js, run directly with an inherited NODE_TEST_CONTEXT and a real 
   }
 })
 
-test("sync-push.js's own top-level catch reports a genuine failure and exits 1, instead of an uncaught stack trace", async () => {
+test("sync-push.js reports a missing --root as one usage line, instead of an uncaught stack trace", async () => {
   // Ruling (c)'s backstop, exercised for a failure the guard fix does not itself remove: runSyncPushCli still throws
   // synchronously when --root is missing (argument validation, not the test-isolation guard), so this is the one
   // remaining live path through sync-push.js's own try/catch. Deliberately does NOT touch HOME/NODE_OPTIONS -- this
@@ -174,7 +174,7 @@ test("sync-push.js's own top-level catch reports a genuine failure and exits 1, 
     [path.join(mcpRoot, "scripts", "sync-push.js")],
     { cwd: mcpRoot, encoding: "utf8", timeout: 120000 },
   )
-  assert.equal(run.status, 1)
+  assert.equal(run.status, 2)
   assert.doesNotMatch(run.stderr, /Uncaught|at runSyncPushCli/u, "must degrade to a clean message, not an uncaught stack trace")
-  assert.match(run.stderr, /sync-push\.js:.*--root <path> is required/u)
+  assert.match(run.stderr, /sync-push\.js:.*--root/u)
 })

@@ -70,6 +70,8 @@ import { publicationDeferred } from "./publication-mode.js"
 import { deliveryIsPublication } from "../util/main-publish.js"
 import { NOT_A_DESK_DEFECT, blockedWords, deliver, gitEnv, undeliveredCommits } from "./deliver.js"
 import { commitWaitingLogs, settleLogs, waitingLogs } from "./append-lane.js"
+import { defineCli, defineCommand } from "../lib/ouro-ui/registry/ouro/ax/command.ts"
+import { runCli } from "../lib/ouro-ui/registry/ouro/ax/cli.ts"
 
 const GIT_TIMEOUT_MS = 10_000
 export const DEFAULT_DEBOUNCE_MS = 2000
@@ -729,16 +731,6 @@ export function schedulePush({ root, env = process.env, debounceMs = DEFAULT_DEB
 // The detached script's own CLI surface (`mcp/scripts/sync-push.js`).
 // ---------------------------------------------------------------------------
 
-function parseSyncPushArgs(argv) {
-  const options = new Map()
-  for (let index = 0; index < argv.length; index += 2) {
-    const key = argv[index]
-    if (typeof key !== "string" || !key.startsWith("--")) throw Object.assign(new Error(`sync-push.js: Remove the unexpected argument: unexpected argument ${JSON.stringify(key ?? "")}`), { code: "sync_worker_sync_push_js_remove_the" })
-    options.set(key.slice(2), argv[index + 1])
-  }
-  return options
-}
-
 /**
  * The detached worker script's whole CLI surface, kept here so it is
  * unit-tested directly rather than through a subprocess — the script itself
@@ -747,17 +739,34 @@ function parseSyncPushArgs(argv) {
  * nonzero; busy and intentionally skipped work remain successful no-ops.
  * `runWorker` is a test seam.
  */
-export async function runSyncPushCli({ argv = process.argv.slice(2), env = process.env, runWorker = runPushWorker } = {}) {
-  const options = parseSyncPushArgs(argv)
-  const root = options.get("root")
-  if (typeof root !== "string" || root === "") throw Object.assign(new Error("sync-push.js: Pass --root <path>: --root <path> is required"), { code: "sync_worker_sync_push_js_pass_root" })
-  const debounceMs = Number.parseInt(options.get("debounce-ms") ?? "", 10)
-  const outcome = await runWorker({ root, env, debounceMs: Number.isFinite(debounceMs) ? debounceMs : DEFAULT_DEBOUNCE_MS })
-  if (outcome?.result === "blocked") {
-    const detail = text(readSyncStatus({ root, env })?.error) ?? outcome.reason
-    throw new Error(redactCredentialLikeText(`Workspace publication blocked; local commits are preserved. ${detail}. Fix: inspect desk_status, resolve the reported cause, then run ${publicationRecovery(root)}`))
-  }
-  return 0
+export async function runSyncPushCli({ argv = process.argv.slice(2), env = process.env, runWorker = runPushWorker, io = process } = {}) {
+  const cli = defineCli({
+    name: "sync-push.js",
+    about: ["The detached push worker: pushes the desk's unpushed commits once the debounce has passed. Busy and skipped runs are successful no-ops."],
+    command: defineCommand({
+      name: "sync-push.js",
+      summary: "Push the desk's unpushed commits in the background.",
+      effect: "private",
+      output: "nothing",
+      flags: {
+        root: { type: "string", required: true, description: "The desk to push." },
+        "debounce-ms": { type: "number", min: 0, description: `How long to wait for further commits first; ${DEFAULT_DEBOUNCE_MS} when left out.` },
+      },
+      text: () => "",
+      run: async (input) => {
+        const root = input.root
+        const outcome = await runWorker({ root, env, debounceMs: input["debounce-ms"] ?? DEFAULT_DEBOUNCE_MS })
+        if (outcome?.result === "blocked") {
+          const detail = text(readSyncStatus({ root, env })?.error) ?? outcome.reason
+          throw new Error(redactCredentialLikeText(`Workspace publication blocked; local commits are preserved. ${detail}. Fix: inspect desk_status, resolve the reported cause, then run ${publicationRecovery(root)}`))
+        }
+        return {}
+      },
+    }),
+  })
+  // The worker prints nothing on success; the kit would end that with an empty line.
+  const stdout = { write: (line) => (line === "\n" ? true : io.stdout.write(line)) }
+  return runCli(cli, argv, { stdin: process.stdin, stdout, stderr: io.stderr }, { env })
 }
 
 // ---------------------------------------------------------------------------
