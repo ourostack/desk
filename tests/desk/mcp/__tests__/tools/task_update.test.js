@@ -275,7 +275,7 @@ for (const evidence of [
   { kind: "pr", ref: "https://github.com/example-org/example-repo/pull/42" },
   { kind: "commit", ref: "a1b2c3d on origin/main" },
   { kind: "ci_run", ref: "https://ci.example.invalid/runs/9001" },
-  { kind: "non_code", ref: "https://example.invalid/confirmation/abc" },
+  { kind: "non_code", screenshot: "https://example.invalid/shot.png", ref: "https://example.invalid/confirmation/abc" },
 ]) {
   test(`task_update accepts a move to \`done\` with ${evidence.kind} evidence, and records it on the card`, async () => {
     const root = await mkTempDeskRoot()
@@ -309,7 +309,7 @@ for (const evidence of [
 for (const evidence of [
   { kind: "commit", ref: "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2", label: "a full 40-character sha with no repo/branch suffix" },
   { kind: "commit", ref: "https://github.com/example-org/example-repo/commit/a1b2c3d", label: "a commit URL rather than a bare sha" },
-  { kind: "non_code", ref: "reports/2026-09-29-confirmation.md", label: "a desk-relative path to a file that exists in the desk" },
+  { kind: "non_code", screenshot: "https://example.invalid/shot.png", ref: "reports/2026-09-29-confirmation.md", label: "a desk-relative path to a file that exists in the desk" },
 ]) {
   test(`task_update accepts ${evidence.kind} evidence in its other checkable shape (${evidence.label})`, async () => {
     const root = await mkTempDeskRoot()
@@ -325,7 +325,7 @@ for (const evidence of [
 
     const result = await task_update({
       deskRoot: root,
-      input: { track: "t", slug: "book-flights", frontmatter: { status: "done" }, evidence: { kind: evidence.kind, ref: evidence.ref } },
+      input: { track: "t", slug: "book-flights", frontmatter: { status: "done" }, evidence: { kind: evidence.kind, ref: evidence.ref, ...(evidence.screenshot ? { screenshot: evidence.screenshot } : {}) } },
     })
     assert.equal(result.status, "updated")
 
@@ -342,11 +342,11 @@ for (const evidence of [
   { kind: "commit", ref: "not-hex-at-all", why: "not a hex string" },
   { kind: "ci_run", ref: "http://ci.example.invalid/runs/9001", why: "http, not https" },
   { kind: "ci_run", ref: "ci.example.invalid/runs/9001", why: "no scheme at all" },
-  { kind: "non_code", ref: "the confirmation email ari sent", why: "free text with a space, not a link or path" },
-  { kind: "non_code", ref: "/etc/confirmation.txt", why: "an absolute path, machine-specific" },
-  { kind: "non_code", ref: "~/confirmation.txt", why: "a tilde path, machine-specific" },
-  { kind: "non_code", ref: "ftp://files.example.invalid/confirmation.txt", why: "a non-https URL scheme" },
-  { kind: "non_code", ref: "C:\\Users\\ari\\confirmation.txt", why: "a Windows drive-letter path" },
+  { kind: "non_code", screenshot: "https://example.invalid/shot.png", ref: "the confirmation email ari sent", why: "free text with a space, not a link or path" },
+  { kind: "non_code", screenshot: "https://example.invalid/shot.png", ref: "/etc/confirmation.txt", why: "an absolute path, machine-specific" },
+  { kind: "non_code", screenshot: "https://example.invalid/shot.png", ref: "~/confirmation.txt", why: "a tilde path, machine-specific" },
+  { kind: "non_code", screenshot: "https://example.invalid/shot.png", ref: "ftp://files.example.invalid/confirmation.txt", why: "a non-https URL scheme" },
+  { kind: "non_code", screenshot: "https://example.invalid/shot.png", ref: "C:\\Users\\ari\\confirmation.txt", why: "a Windows drive-letter path" },
 ]) {
   test(`task_update refuses ${evidence.kind} evidence whose ref is ${evidence.why}, naming the expected shape`, async () => {
     const root = await mkTempDeskRoot()
@@ -387,7 +387,7 @@ test("task_update accepts non_code evidence whose ref is a desk-relative path to
       track: "t",
       slug: "book-flights",
       frontmatter: { status: "done" },
-      evidence: { kind: "non_code", ref: "reports/confirmation-photos" },
+      evidence: { kind: "non_code", screenshot: "https://example.invalid/shot.png", ref: "reports/confirmation-photos" },
     },
   })
   assert.equal(result.status, "updated")
@@ -416,11 +416,28 @@ test("task_update refuses non_code evidence whose ref escapes the desk root via 
         track: "t",
         slug: "book-flights",
         frontmatter: { status: "done" },
-        evidence: { kind: "non_code", ref },
+        evidence: { kind: "non_code", screenshot: "https://example.invalid/shot.png", ref },
       },
     }),
     /task_update: Pass a checkable `evidence\.ref`: `evidence\.ref` is not a checkable non_code reference.*actually present inside the desk/,
   )
+})
+
+test("task_update refuses non_code evidence without a screenshot, and records one that is an https URL or a desk image", async () => {
+  const root = await mkTempDeskRoot()
+  await task_create({ deskRoot: root, input: { track: "t", slug: "book-flights", title: "T", status: "processing" } })
+  const call = (evidence) => task_update({ deskRoot: root, input: { track: "t", slug: "book-flights", frontmatter: { status: "done" }, evidence } })
+  const ref = "https://example.invalid/proof"
+
+  await assert.rejects(call({ kind: "non_code", ref }), /Pass `evidence\.screenshot`: non_code evidence needs `screenshot`/)
+  await assert.rejects(call({ kind: "non_code", ref, screenshot: "reports/notes.md" }), /Pass `evidence\.screenshot`/)
+  await assert.rejects(call({ kind: "non_code", ref, screenshot: "reports/missing.png" }), /Pass `evidence\.screenshot`/)
+
+  await fs.mkdir(path.join(root, "reports"), { recursive: true })
+  await fs.writeFile(path.join(root, "reports", "shot.png"), "png")
+  await call({ kind: "non_code", ref, screenshot: "reports/shot.png" })
+  const { data: card } = await readFront(path.join(root, "t", "book-flights", "task.md"))
+  assert.equal(card.evidence.screenshot, "reports/shot.png")
 })
 
 test("task_update refuses non_code evidence whose ref names nothing that exists in the desk", async () => {
@@ -437,7 +454,7 @@ test("task_update refuses non_code evidence whose ref names nothing that exists 
         track: "t",
         slug: "book-flights",
         frontmatter: { status: "done" },
-        evidence: { kind: "non_code", ref: "reports/does-not-exist.md" },
+        evidence: { kind: "non_code", screenshot: "https://example.invalid/shot.png", ref: "reports/does-not-exist.md" },
       },
     }),
     /task_update: Pass a checkable `evidence\.ref`: `evidence\.ref` is not a checkable non_code reference.*actually present inside the desk/,
