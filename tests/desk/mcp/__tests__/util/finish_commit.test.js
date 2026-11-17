@@ -353,17 +353,19 @@ test("the repository's own pre-commit hook still runs: the card guard refuses a 
   assert.equal(overridden.reason.includes(TOOL_COMMIT_ENV), false, "the reply never names the override, so an agent cannot copy it")
 })
 
-test("the command line prints JSON and exits 0 done, 3 ready, 4 held, 5 unknown, 2 usage", () => {
+test("the command line prints JSON and exits 0 done, 3 ready, 4 held, 5 unknown, 2 usage", async () => {
   const root = repo()
   writeFileSync(path.join(root, "notes.md"), "mine\n")
   const committed = capturedFailure(root, ["notes.md"], "save notes")
   const args = ["--root", root, "--branch", committed.capture.branch, "--before", committed.capture.before, "--message", "save notes", "--path", "notes.md", ...committed.capture.expected.flatMap((line) => ["--entry", line])]
-  const run = (argv) => { let text = ""; const code = runFinishCommitCli(argv, { env, out: { write: (s) => { text += s } } }); return { code, answer: JSON.parse(text) } }
-  assert.deepEqual([run(args).code, run(args).answer.state], [3, "ready"])
-  assert.deepEqual([run([...args, "--commit"]).code, run(args).answer.state], [0, "committed"])
-  assert.equal(run(["--root"]).code, 2)
-  assert.equal(run(["--bogus", "x"]).code, 2)
-  assert.equal(run(["--root", root, "--branch", "main", "--before", "", "--message", "m"]).code, 4, "no captured change: held")
+  const run = async (argv) => { let text = ""; let err = ""; const code = await runFinishCommitCli(argv, { env, out: { write: (s) => { text += s } }, err: { write: (s) => { err += s } } }); return { code, err, answer: text === "" ? null : JSON.parse(text) } }
+  assert.deepEqual([(await run(args)).code, (await run(args)).answer.state], [3, "ready"])
+  assert.deepEqual([(await run([...args, "--commit"])).code, (await run(args)).answer.state], [0, "committed"])
+  assert.equal((await run(["--root"])).code, 2)
+  const bogus = await run(["--bogus", "x"])
+  assert.equal(bogus.code, 2)
+  assert.match(bogus.err, /^finish-commit: .*Fix: .*\n$/u)
+  assert.equal((await run(["--root", root, "--branch", "main", "--before", "", "--message", "m"])).code, 4, "no captured change: held")
 })
 
 test("the command line answers unknown, exit 5, and changes nothing when the finish itself throws before it can commit", () => {
@@ -815,12 +817,14 @@ test("a post-commit hook that fails silently, deletes the branch or detaches HEA
   }
 })
 
-test("the command line without --root is bad usage, exit 2, and reads nothing", () => {
+test("the command line without --root is bad usage, exit 2, and reads nothing", async () => {
   let out = ""
+  let err = ""
   let calls = 0
-  const code = runFinishCommitCli(["--branch", "main"], { out: { write: (text) => { out += text } }, spawnGit: () => { calls++; return { status: 1 } }, env })
+  const code = await runFinishCommitCli(["--branch", "main"], { out: { write: (text) => { out += text } }, err: { write: (text) => { err += text } }, spawnGit: () => { calls++; return { status: 1 } }, env })
   assert.equal(code, 2)
-  assert.deepEqual(JSON.parse(out), { state: "usage", reason: "--root is required" })
+  assert.equal(out, "")
+  assert.match(err, /^finish-commit: .*--root.*Fix: /u)
   assert.equal(calls, 0)
 })
 
@@ -892,21 +896,21 @@ function recordedCard(root) {
   }
 }
 
-const runRecorded = (argv, recorded) => {
+const runRecorded = async (argv, recorded) => {
   let text = ""
-  const code = runFinishCommitCli(argv, { env: recorded.recorded, out: { write: (s) => { text += s } } })
+  const code = await runFinishCommitCli(argv, { env: recorded.recorded, out: { write: (s) => { text += s } } })
   return { code, answer: JSON.parse(text) }
 }
 
 const withArg = (argv, flag, value) => argv.map((arg, i) => (argv[i - 1] === flag ? value : arg))
 
-test("a recorded card change is finished by its id: the record supplies the change, the guard lets that commit through, and the record is removed", () => {
+test("a recorded card change is finished by its id: the record supplies the change, the guard lets that commit through, and the record is removed", async () => {
   const root = repo()
   const recorded = recordedCard(root)
   assert.deepEqual(readdirSync(recorded.records), [`${recorded.finish[recorded.finish.indexOf("--capture-id") + 1]}.json`])
   const check = recorded.finish.filter((arg) => arg !== "--commit")
-  assert.equal(runRecorded(check, recorded).code, 3, "the read says ready")
-  const done = runRecorded(recorded.finish, recorded)
+  assert.equal((await runRecorded(check, recorded)).code, 3, "the read says ready")
+  const done = await runRecorded(recorded.finish, recorded)
   assert.equal(done.code, 0, JSON.stringify(done.answer))
   assert.equal(done.answer.state, "finished")
   assert.equal(git(root, ["show", "--name-only", "--format=", "HEAD"]).trim(), "greenhouse/watering-api/task.md")
@@ -914,7 +918,7 @@ test("a recorded card change is finished by its id: the record supplies the chan
   assert.deepEqual(readdirSync(recorded.records), [], "the record is removed once its commit landed")
 })
 
-test("a recorded finish is held for another checkout, other paths, another message, or an id Desk did not issue, and changes nothing", () => {
+test("a recorded finish is held for another checkout, other paths, another message, or an id Desk did not issue, and changes nothing", async () => {
   const root = repo()
   const recorded = recordedCard(root)
   const head = git(root, ["rev-parse", "HEAD"])
@@ -927,7 +931,7 @@ test("a recorded finish is held for another checkout, other paths, another messa
     withArg(recorded.finish, "--capture-id", "../escape"),
   ]
   for (const argv of variants) {
-    const answer = runRecorded(argv, recorded)
+    const answer = await runRecorded(argv, recorded)
     assert.equal(answer.code, 4, JSON.stringify(answer.answer))
     assert.equal(answer.answer.state, "held")
   }
@@ -935,12 +939,12 @@ test("a recorded finish is held for another checkout, other paths, another messa
   assert.equal(readdirSync(recorded.records).length, 1, "the record stays")
 })
 
-test("a recorded finish is held when Desk's record of the change cannot be read or is malformed", () => {
+test("a recorded finish is held when Desk's record of the change cannot be read or is malformed", async () => {
   const root = repo()
   const recorded = recordedCard(root)
   const file = path.join(recorded.records, readdirSync(recorded.records)[0])
   writeFileSync(file, "{\"schema_version\":1}\n")
-  const answer = runRecorded(recorded.finish, recorded)
+  const answer = await runRecorded(recorded.finish, recorded)
   assert.equal(answer.code, 4)
   assert.match(answer.answer.reason, /malformed/u)
   assert.notEqual(git(root, ["status", "--porcelain"]), "", "nothing was committed")
