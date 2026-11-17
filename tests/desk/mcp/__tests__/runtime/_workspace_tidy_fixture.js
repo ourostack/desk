@@ -14,10 +14,22 @@ import { TIDY_GIT_TIMEOUT_MS } from "../../../../../plugins/desk/mcp/src/runtime
 export const tidyInspectionGit = (cwd, args) => readInspectionGit(cwd, args, { timeoutMs: TIDY_GIT_TIMEOUT_MS })
 
 export const moduleUrl = new URL("../../../../../plugins/desk/mcp/src/runtime/workspace-tidy.js", import.meta.url)
-export const tidy = await import(moduleUrl).catch((error) => {
+const tidyModule = await import(moduleUrl).catch((error) => {
   if (error.code !== "ERR_MODULE_NOT_FOUND") throw error
   return {}
 })
+
+// The writers the fixture started and saw exit. Windows reuses process ids quickly, and when one is reused by a process this test
+// cannot open, `process.kill(pid, 0)` throws EPERM and tidy rightly calls the writer unobservable (#1159). These ids are known to
+// be gone, so they answer ESRCH; every other id is still checked for real.
+const exitedWriters = new Set()
+export function fixtureSignal(pid, signal) {
+  if (exitedWriters.has(pid)) throw Object.assign(new Error("fixture writer exited"), { code: "ESRCH" })
+  return process.kill(pid, signal)
+}
+export const tidy = tidyModule.repairWorkspace
+  ? { ...tidyModule, repairWorkspace: (options = {}) => tidyModule.repairWorkspace({ signal: fixtureSignal, ...options }) }
+  : tidyModule
 export const git = (cwd, ...args) => execFileSync("git", args, { cwd, encoding: "utf8", env: { ...process.env, GIT_CONFIG_NOSYSTEM: "1" }, stdio: ["ignore", "pipe", "pipe"] }).trim()
 
 export async function fixture() {
@@ -59,6 +71,7 @@ export async function worktree(f, branch = "topic") {
     child.kill()
     if (child.exitCode === null && child.signalCode === null) await once(child, "exit")
   }
+  exitedWriters.add(child.pid)
   const record = {
     version: 2, task: path.relative(f.desk, f.card), owner: "task/attempt-1", disposition: "remove",
     repository: git(f.repo, "rev-parse", "--path-format=absolute", "--git-common-dir"),
