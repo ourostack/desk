@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.222 — 2026-11-17
+
+The detached Desk-problem filer's command line is now defined with Ouro AX: a usage error is one stderr line with its fix and exit 2, and `--help` works.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.221 — 2026-11-17
 
 The `drains` command line is now defined once with Ouro AX instead of a hand-written argument parser: `drains.js --help` and `drains.js <command> --help` are generated from the definition, and a wrong or missing argument is one line naming the exact command to run instead.
