@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.238 — 2026-11-17
+
+The factory and private-view scripts now report their refusals as Desk failures that say what probably happened, how to look further, how to file a bug with evidence, and how to keep working.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.237 — 2026-11-17
 
 Desk's command-line tools hand their stderr straight to Ouro AX, which now prints a failure that already starts with its tool name as it is, so the eight copies of the doubled-prefix filter are gone.
