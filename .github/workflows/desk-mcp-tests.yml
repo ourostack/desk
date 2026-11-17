@@ -641,6 +641,18 @@ jobs:
             platform: linux
             arch: x64
             node_abi: "127"
+          - target: linux-x64-node-137
+            runner: ubuntu-latest
+            node: "24.18.0"
+            platform: linux
+            arch: x64
+            node_abi: "137"
+          - target: linux-x64-node-147
+            runner: ubuntu-latest
+            node: "26.13.1"
+            platform: linux
+            arch: x64
+            node_abi: "147"
           - target: win32-x64-node-137
             runner: windows-latest
             node: "24.18.0"
@@ -822,6 +834,7 @@ jobs:
 
       - name: Retain the verified native runtime dependency pack
         id: retain-runtime-pack
+        if: ${{ always() }}
         continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
