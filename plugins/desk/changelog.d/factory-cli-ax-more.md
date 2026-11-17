@@ -1,1 +1,0 @@
-The factory command line's evaluate, job-link, kaizen-check, andon, reconcile and loop commands now take their arguments and report usage errors through Ouro AX; a bad argument is one stderr line with exit 2.
