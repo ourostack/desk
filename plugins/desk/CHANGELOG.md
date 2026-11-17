@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.241 — 2026-11-17
+
+A fresh browser whose first start times out is now tried once more even if it printed something, because Chrome prints warnings while it hangs, so output is no sign that it is starting ([#763](https://github.com/ourostack/desk/issues/763)).
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.240 — 2026-11-17
 
 Desk's MCP server now vendors Ouro UI v1.3.270, moved by Ouro Current.

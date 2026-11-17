@@ -1,1 +1,0 @@
-A fresh browser whose first start times out is now tried once more even if it printed something, because Chrome prints warnings while it hangs, so output is no sign that it is starting ([#763](https://github.com/ourostack/desk/issues/763)).
