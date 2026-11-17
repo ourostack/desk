@@ -1,5 +1,5 @@
 #!/usr/bin/env node
 
-import { runRuntimeDependencyPackBuildCli } from "../src/runtime/runtime-deps.js"
+import { runRuntimeDependencyPackBuildCli } from "../src/runtime/runtime-deps-cli.js"
 
-process.exitCode = runRuntimeDependencyPackBuildCli()
+process.exitCode = await runRuntimeDependencyPackBuildCli()

@@ -648,72 +648,6 @@ function existingRuntimeDependencyPackCreatedAt(manifestPath) {
     : undefined
 }
 
-export function runRuntimeDependencyPackBuildCli({ argv = process.argv.slice(2), io = process } = {}) {
-  const parsed = parseArgs(argv)
-  if (parsed.help) {
-    io.stdout.write(buildHelpText())
-    return 0
-  }
-  const result = buildRuntimeDependencyPack({
-    outputRoot: parsed.options["output-root"],
-    platform: parsed.options.platform,
-    arch: parsed.options.arch,
-    nodeAbi: parsed.options["node-abi"],
-  })
-  io.stdout.write(`runtime dependency pack built: ${result.packDir}\n`)
-  return 0
-}
-
-export function runRuntimeDependencyPackVerifyCli({ argv = process.argv.slice(2), io = process } = {}) {
-  const parsed = parseArgs(argv)
-  if (parsed.help) {
-    io.stdout.write(verifyHelpText())
-    return 0
-  }
-  const packageJson = readJson(path.join(defaultMcpRoot, "package.json"))
-  const packageLock = readJson(path.join(defaultMcpRoot, "package-lock.json"))
-  const paths = deriveRuntimeDependencyPackPaths({
-    mcpRoot: defaultMcpRoot,
-    packageJson,
-    packageLock,
-    platform: parsed.options.platform ?? process.platform,
-    arch: parsed.options.arch ?? process.arch,
-    nodeAbi: parsed.options["node-abi"] ?? process.versions.modules,
-  })
-  const result = verifyRuntimeDependencyPack({
-    packDir: parsed.options["pack-dir"] ?? paths.packDir,
-    platform: parsed.options.platform ?? process.platform,
-    arch: parsed.options.arch ?? process.arch,
-    nodeAbi: parsed.options["node-abi"] ?? process.versions.modules,
-  })
-  if (result.ok) {
-    io.stdout.write("runtime dependency pack verified\n")
-    return 0
-  }
-  for (const error of result.errors) {
-    io.stderr.write(`${error}\n`)
-  }
-  return 1
-}
-
-function buildHelpText() {
-  return [
-    "Build a runtime dependency pack for the desk MCP server.",
-    "",
-    "Usage: build-runtime-deps-pack.js [--output-root DIR] [--platform OS] [--arch ARCH] [--node-abi ABI]",
-    "",
-  ].join("\n")
-}
-
-function verifyHelpText() {
-  return [
-    "Verify a runtime dependency pack for the desk MCP server.",
-    "",
-    "Usage: verify-runtime-deps-pack.js [--pack-dir DIR] [--platform OS] [--arch ARCH] [--node-abi ABI]",
-    "",
-  ].join("\n")
-}
-
 function validateManifestDependencies({ dependencies, expectedDependencies }) {
   const errors = []
   const expectedByLockPath = new Map(expectedDependencies.map((dependency) => [dependency.lock_path, dependency]))
@@ -1172,26 +1106,4 @@ function normalizePath(file) {
 
 function unique(values) {
   return [...new Set(values)]
-}
-
-function parseArgs(argv) {
-  const options = {}
-  for (let index = 0; index < argv.length; index += 1) {
-    const arg = argv[index]
-    if (arg === "--help" || arg === "-h") {
-      return { help: true, options }
-    }
-    if (!arg.startsWith("--")) {
-      continue
-    }
-    const key = arg.slice(2)
-    const value = argv[index + 1]
-    if (value !== undefined && !value.startsWith("--")) {
-      options[key] = value
-      index += 1
-    } else {
-      options[key] = "true"
-    }
-  }
-  return { help: false, options }
 }
