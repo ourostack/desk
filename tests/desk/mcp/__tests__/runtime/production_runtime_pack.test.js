@@ -323,7 +323,7 @@ test("production runtime dependency pack is committed at the current canonical p
 
   assert.deepEqual(
     expectations.map((expectation) => expectation.target),
-    ["darwin-arm64-node-127", "darwin-arm64-node-137", "linux-x64-node-127", "win32-x64-node-137", "win32-x64-node-147"],
+    ["darwin-arm64-node-127", "darwin-arm64-node-137", "linux-x64-node-127", "linux-x64-node-137", "linux-x64-node-147", "win32-x64-node-137", "win32-x64-node-147"],
   )
   for (const expectation of expectations) {
     const expectedPackDir = path.join(
@@ -461,6 +461,8 @@ test("generated artifact freshness script verifies the production runtime depend
   assert.match(result.stdout, /darwin-arm64-node-127/u)
   assert.match(result.stdout, /darwin-arm64-node-137/u)
   assert.match(result.stdout, /linux-x64-node-127/u)
+  assert.match(result.stdout, /linux-x64-node-137/u)
+  assert.match(result.stdout, /linux-x64-node-147/u)
   assert.match(result.stdout, /win32-x64-node-137/u)
   assert.match(result.stdout, /win32-x64-node-147/u)
 })
@@ -526,6 +528,8 @@ test("generated artifact verification uses explicit published targets instead of
       { platform: "darwin", arch: "arm64", nodeAbi: "127" },
       { platform: "darwin", arch: "arm64", nodeAbi: "137" },
       { platform: "linux", arch: "x64", nodeAbi: "127" },
+      { platform: "linux", arch: "x64", nodeAbi: "137" },
+      { platform: "linux", arch: "x64", nodeAbi: "147" },
       { platform: "win32", arch: "x64", nodeAbi: "137" },
       { platform: "win32", arch: "x64", nodeAbi: "147" },
     ],
@@ -533,8 +537,10 @@ test("generated artifact verification uses explicit published targets instead of
   assert.equal(expectations[0].target, "darwin-arm64-node-127")
   assert.equal(expectations[1].target, "darwin-arm64-node-137")
   assert.equal(expectations[2].target, "linux-x64-node-127")
-  assert.equal(expectations[3].target, "win32-x64-node-137")
-  assert.equal(expectations[4].target, "win32-x64-node-147")
+  assert.equal(expectations[3].target, "linux-x64-node-137")
+  assert.equal(expectations[4].target, "linux-x64-node-147")
+  assert.equal(expectations[5].target, "win32-x64-node-137")
+  assert.equal(expectations[6].target, "win32-x64-node-147")
   assert.deepEqual(platformOptionExpectations.map((expectation) => expectation.target), ["linux-arm64-node-127"])
   assert.equal(linuxHostExpectation.target, "linux-x64-node-127")
   assert.deepEqual(explicitTargetExpectations.map((expectation) => expectation.target), ["linux-x64-node-127"])
@@ -552,13 +558,15 @@ test("generated artifact verification uses explicit published targets instead of
   assert.equal(result.ok, true)
   assert.deepEqual(
     result.expectations.map((expectation) => expectation.target),
-    ["darwin-arm64-node-127", "darwin-arm64-node-137", "linux-x64-node-127", "win32-x64-node-137", "win32-x64-node-147"],
+    ["darwin-arm64-node-127", "darwin-arm64-node-137", "linux-x64-node-127", "linux-x64-node-137", "linux-x64-node-147", "win32-x64-node-137", "win32-x64-node-147"],
   )
   assert.deepEqual(result.errors, [])
   assert.match(stdout.join(""), /Desk generated artifacts verified for /u)
   assert.match(stdout.join(""), /darwin-arm64-node-127/u)
   assert.match(stdout.join(""), /darwin-arm64-node-137/u)
   assert.match(stdout.join(""), /linux-x64-node-127/u)
+  assert.match(stdout.join(""), /linux-x64-node-137/u)
+  assert.match(stdout.join(""), /linux-x64-node-147/u)
   assert.match(stdout.join(""), /win32-x64-node-137/u)
   assert.match(stdout.join(""), /win32-x64-node-147/u)
   assert.equal(stderr.join(""), "")
@@ -815,6 +823,22 @@ const hostedNativePackLanes = Object.freeze([
     platform: "linux",
     arch: "x64",
     nodeAbi: "127",
+  }),
+  Object.freeze({
+    target: "linux-x64-node-137",
+    runnerPrefix: "ubuntu",
+    nodeVersion: "24.18.0",
+    platform: "linux",
+    arch: "x64",
+    nodeAbi: "137",
+  }),
+  Object.freeze({
+    target: "linux-x64-node-147",
+    runnerPrefix: "ubuntu",
+    nodeVersion: "26.13.1",
+    platform: "linux",
+    arch: "x64",
+    nodeAbi: "147",
   }),
   Object.freeze({
     target: "win32-x64-node-137",

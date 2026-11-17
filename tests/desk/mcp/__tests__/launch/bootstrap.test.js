@@ -183,7 +183,7 @@ test("the bootstrap reads engines.node and the runtime pack ABIs from the same f
 
   for (const [platform, arch, abis] of [
     ["darwin", "arm64", ["127", "137"]],
-    ["linux", "x64", ["127"]],
+    ["linux", "x64", ["127", "137", "147"]],
     ["win32", "x64", ["137", "147"]],
   ]) {
     assert.deepEqual(bootstrap.packAbis(mcpRoot, packageJson.version, platform, arch), abis)

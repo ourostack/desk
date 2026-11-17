@@ -1,0 +1,1 @@
+Linux x64 now has native runtime packs for Node 24 (ABI 137) and Node 26 (ABI 147), so a Linux machine whose Node is 24 or 26 gets Desk's task tools instead of `no_compatible_node` ([#1144](https://github.com/ourostack/desk/issues/1144)).
