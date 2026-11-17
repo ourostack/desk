@@ -40,6 +40,7 @@ import { CAPTURE_PATH, validateCaptureBytes } from "./capture-schema.js"
 import { loopSlotFrom, triageRefreshFrom } from "./loop-slot.js"
 import { gitBlobSha, readStatus, writeStatus } from "./outbox.js"
 import { storeAcceptsContext } from "./context-capability.js"
+import { deskFailure } from "../runtime/desk-failure.js"
 
 const CAPTURE_FLAG = 1
 const SEND_INTERVAL_MS = 20 * 60 * 60 * 1000
@@ -173,7 +174,11 @@ export async function prepareCaptureContext(env, { client, store, ref, record, f
   else delete value.loop.triage_refresh
   value.loop = Object.fromEntries(Object.entries(value.loop).sort(([left], [right]) => left.localeCompare(right)))
   const bytes = Buffer.from(`${JSON.stringify(value)}\n`, "utf8")
-  if (!validateCaptureBytes(bytes).ok) throw new Error("capture_context_invalid")
+  if (!validateCaptureBytes(bytes).ok) throw new Error(deskFailure({
+    code: "capture_context_invalid", thing: "capture record", probably: "the capture record with its context settings does not pass the capture schema",
+    look: "call desk_doctor and read its factory section", keepWorking: "the stored capture record was left as it was and the flush carries on without it",
+    fix: "run the flush again; if it repeats, file the bug",
+  }))
   return { ...record, bytes, sha: gitBlobSha(bytes) }
 }
 
