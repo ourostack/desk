@@ -217,7 +217,7 @@ export function wasDelivered(paths) {
  */
 export function bootContext({ boot, maxChars = Infinity }) {
   const took = boot.seconds === null ? "" : `, ${boot.seconds.toFixed(1)} s`
-  const frame = `Desk boot (Desk ran it for you at session start${took}; its instructions are for the operator's session, so a child agent with a bounded brief follows its brief instead):`
+  const frame = `Desk boot (session start${took}; not for a child agent with a bounded brief):`
   const whole = boot.text.length + frame.length + 2 <= maxChars
   if (whole) return { whole, text: `${frame}\n\n${boot.text.trimEnd()}` }
   const note = "[The rest of the boot arrives with your first Desk tool reply.]"

@@ -335,6 +335,6 @@ test("a name that matches no open task gets the report-every-task instruction fr
   assert.ok(result.instructions.includes(UNMATCHED_TASK_INSTRUCTION), result.instructions.join("\n"))
   assert.ok(result.text_instructions.includes(UNMATCHED_TASK_INSTRUCTION_TEXT), result.text_instructions.join("\n"))
   const text = formatBootText(result)
-  assert.match(text, /The name matches no open task: report every task under "Active tasks" above, each with its status and its next step or blocker, then ask what to resume or start\./u)
+  assert.match(text, /The name matches no open task: report each task under "Active tasks" with its status and next step, then ask what to resume or start\./u)
   assert.doesNotMatch(text, /show the active_tasks status block/u)
 })
