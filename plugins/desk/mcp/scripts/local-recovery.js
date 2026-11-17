@@ -7,27 +7,40 @@ import { fileURLToPath, pathToFileURL } from "node:url"
 import { resolveStartupStateBranch } from "../src/runtime/startup-resolve.js"
 import { redactCredentialLikeText } from "../src/util/redact.js"
 import { TOOL_COMMIT_ENV } from "../src/desk/card-commit-guard.js"
+import { defineCli, defineCommand, parse } from "../src/lib/ouro-ui/registry/ouro/ax/command.ts"
+import { runCli } from "../src/lib/ouro-ui/registry/ouro/ax/cli.ts"
 
-const OPERATIONS = new Set(["task_update", "task_create", "task_archive", "desk_save"])
-const FLAGS = new Set(["--root", "--operation", "--input-file", "--person", "--activation-config", "--state-branch", "--publication"])
 const BOOTSTRAP = fileURLToPath(new URL("../bootstrap.cjs", import.meta.url))
 
 function failure(code) {
   return Object.assign(new Error(code), { code })
 }
 
+const FLAGS = {
+  root: { type: "string", required: true, description: "The Desk root the mutation is for." },
+  operation: { type: "enum", required: true, values: ["task_update", "task_create", "task_archive", "desk_save"], description: "The Desk tool to run once." },
+  "input-file": { type: "string", description: "A JSON file holding the tool's input, instead of stdin." },
+  person: { type: "string", description: "The person whose desk the write must land in." },
+  "activation-config": { type: "string", description: "The activation config that declares the state branch." },
+  "state-branch": { type: "string", description: "The state branch the activation config declares." },
+  publication: { type: "enum", values: ["deferred"], description: "deferred leaves the push for later." },
+}
+
+// A protocol command: stdout is one JSON report another program reads, with the report's own exit code (0 completed, 1 refused, 2 partial or unknown).
+function recoveryCli(run) {
+  return defineCli({
+    name: "local-recovery",
+    about: ["Runs one Desk mutation (a task update, create or archive, or a save) through the ordinary MCP bootstrap and prints a JSON report of what was and was not done; the tool's input is JSON on stdin."],
+    command: defineCommand({ name: "local-recovery", summary: "Run one Desk mutation and report it.", effect: "private", protocol: true, output: "one JSON report", flags: FLAGS, text: (report) => JSON.stringify(report), run }),
+  })
+}
+
 function argumentsFor(argv) {
-  const options = {}
-  for (let i = 0; i < argv.length; i += 2) {
-    const flag = argv[i]
-    if (!FLAGS.has(flag) || !argv[i + 1] || argv[i + 1].startsWith("--") || options[flag] !== undefined) {
-      throw failure("invalid_arguments")
-    }
-    options[flag] = argv[i + 1]
-  }
-  if (!options["--root"] || !OPERATIONS.has(options["--operation"])) throw failure("invalid_arguments")
-  if (options["--publication"] !== undefined && options["--publication"] !== "deferred") throw failure("invalid_arguments")
-  return options
+  let parsed
+  try { parsed = parse(recoveryCli(), argv) } catch { throw failure("invalid_arguments") }
+  // An empty --person would otherwise read as no person at all, a wider scope than the caller named.
+  if (parsed.kind !== "run" || Object.values(parsed.input).some((value) => value === "")) throw failure("invalid_arguments")
+  return parsed.input
 }
 
 async function readInput(input, deadline) {
@@ -180,7 +193,7 @@ function gitHead(root, env) {
 
 /** One mutation at most, through the ordinary MCP bootstrap and admission. */
 export async function runRecovery({
-  argv = process.argv.slice(2), env = process.env, cwd = process.cwd(),
+  argv = process.argv.slice(2), options, env = process.env, cwd = process.cwd(),
   input = process.stdin, launch = launchBootstrap, timeoutMs = 60000, dispatchTimeoutMs = 60000, totalTimeoutMs = 100000,
 } = {}) {
   const report = {
@@ -200,9 +213,9 @@ export async function runRecovery({
   // The whole run ends within totalTimeoutMs, so it prints its report before a 120 s command limit (Claude Code's default) kills it.
   const totalDeadline = startedAt + totalTimeoutMs
   try {
-    const options = argumentsFor(argv)
-    report.operation = options["--operation"]
-    report.requestedRoot = path.resolve(cwd, options["--root"])
+    options ??= argumentsFor(argv)
+    report.operation = options["operation"]
+    report.requestedRoot = path.resolve(cwd, options["root"])
     let root
     try {
       root = realpathSync(report.requestedRoot)
@@ -211,22 +224,22 @@ export async function runRecovery({
     report.requestedRoot = root
     if (env[TOOL_COMMIT_ENV] !== undefined) throw failure("commit_override_refused")
     const serverArgs = ["--root", root]
-    for (const flag of ["--person", "--activation-config", "--state-branch", "--publication"]) {
-      if (options[flag]) serverArgs.push(flag, options[flag])
+    for (const flag of ["person", "activation-config", "state-branch", "publication"]) {
+      if (options[flag]) serverArgs.push(`--${flag}`, options[flag])
     }
-    if (options["--state-branch"]) {
+    if (options["state-branch"]) {
       let declared
       try {
         declared = resolveStartupStateBranch({
-          args: { activationConfig: options["--activation-config"] }, env, cwd,
+          args: { activationConfig: options["activation-config"] }, env, cwd,
         })
       } catch { throw failure("activation_unavailable") }
-      if (declared !== options["--state-branch"]) throw failure("state_branch_not_declared")
+      if (declared !== options["state-branch"]) throw failure("state_branch_not_declared")
     }
     let text
-    if (options["--input-file"]) {
+    if (options["input-file"]) {
       try {
-        const file = path.resolve(cwd, options["--input-file"])
+        const file = path.resolve(cwd, options["input-file"])
         if (statSync(file).size > 1024 * 1024) throw failure("input_too_large")
         text = await fs.readFile(file, "utf8")
       } catch { throw failure("input_file_unavailable") }
@@ -277,7 +290,7 @@ export async function runRecovery({
         const scopeMismatch = !scope || (scope.mode !== "workspace" && scope.mode !== "person") ||
           (scope.mode === "workspace" && (scope.person !== null || scope.relative_path !== ".")) ||
           (scope.mode === "person" && (!scope.person || scope.relative_path !== `desks/${scope.person}`)) ||
-          (options["--person"] && scope.person !== options["--person"])
+          (options["person"] && scope.person !== options["person"])
         if (!scopeMismatch) break
         if (!status.status_detail) throw failure("scope_mismatch")
       }
@@ -308,7 +321,7 @@ export async function runRecovery({
       : report.git.headBefore !== null && report.git.headAfter !== null
         ? report.git.headBefore !== report.git.headAfter ? "observed" : "not_observed"
         : "unknown"
-    report.effects.push = status.sync === "no remote configured" ? "not_applicable" : options["--publication"] === "deferred" ? "deferred" : "pending"
+    report.effects.push = status.sync === "no remote configured" ? "not_applicable" : options["publication"] === "deferred" ? "deferred" : "pending"
     const commitExpected = ["updated", "created", "archived", "committed"].includes(result.status)
     if (report.effects.commit === "failed" || report.effects.push === "pending" ||
         (commitExpected && report.effects.commit !== "observed")) {
@@ -342,7 +355,10 @@ export async function runRecovery({
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
-  const { exitCode, report } = await runRecovery()
-  process.stdout.write(JSON.stringify(report) + "\n")
-  process.exitCode = exitCode
+  let recovered
+  const cli = recoveryCli(async (options) => (recovered = await runRecovery({ options })).report)
+  // The kit prefixes the tool's name to a message that already starts with it.
+  const stderr = { write: (line) => process.stderr.write(line.replace(/^local-recovery: local-recovery: /u, "local-recovery: ")) }
+  const code = await runCli(cli, process.argv.slice(2), { stdin: process.stdin, stdout: process.stdout, stderr }, { env: process.env })
+  process.exitCode = recovered?.exitCode ?? code
 }
