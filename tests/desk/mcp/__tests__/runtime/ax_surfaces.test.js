@@ -52,8 +52,6 @@ const NOT_ERRORS = {
   "plugins/desk/mcp/src/search/engine.js#meaning-based-search-is-off": "a status note, not a failure",
   "plugins/desk/mcp/web.cjs#method-not-found": "the JSON-RPC protocol's own method-not-found reply",
   "plugins/desk/mcp/src/runtime/agency-desk-channel.js#usage-run-it-with-detect": "a command-line usage line: the exit status is its code",
-  "plugins/desk/mcp/src/runtime/pending-migrations.js#migrations-js-install-bash-first": "a command-line usage line: the exit status is its code",
-  "plugins/desk/mcp/src/runtime/pending-migrations.js#migrations-js-name-a-migration": "a command-line usage line: the exit status is its code",
   "plugins/desk/mcp/src/runtime/session-sync.js#session-sync-js-pass-root": "a command-line usage line: the exit status is its code",
   "plugins/desk/mcp/src/runtime/deliver.js#fix-desk-publication-json-through": "a result whose `reason` is its stable code",
   "plugins/desk/mcp/src/runtime/deliver.js#run-the-push-again-nothing": "a result whose `reason` is its stable code",

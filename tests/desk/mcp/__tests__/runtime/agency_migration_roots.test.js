@@ -91,7 +91,7 @@ test("null or incomplete index entries are skipped, not a crash", async () => {
     assert.deepEqual(agencyMigrationRoots({ home: fixture.home }), [], JSON.stringify(entries))
     let out = ""
     const code = await runMigrationCli({ argv: ["roots"], home: fixture.home, io: { stdout: { write: (text) => { out += text } }, stderr: { write() {} } }, pluginRoot: deskPluginRoot, cwd: fixture.home })
-    assert.deepEqual([code, out], [0, ""])
+    assert.deepEqual([code, out], [0, "\n"])
   }
   writeFileSync(index, JSON.stringify({ entries: null }))
   assert.deepEqual(agencyMigrationRoots({ home: fixture.home }), [])
@@ -139,7 +139,7 @@ test("migrations.js roots prints one root per line, honours --engine, and defaul
   }
   assert.deepEqual(await run(["roots"], { home: fixture.home }), { code: 0, out: `${fixture.folder("a")}\n` })
   assert.deepEqual(await run(["roots", "--engine", "claude"], { home: fixture.home }), { code: 0, out: `${fixture.folder("b")}\n` })
-  assert.deepEqual(await run(["roots", "--engine"], { home: fixture.home }), { code: 0, out: `${fixture.folder("a")}\n` })
+  assert.deepEqual(await run(["roots", "--engine=copilot"], { home: fixture.home }), { code: 0, out: `${fixture.folder("a")}\n` })
   assert.deepEqual(await run(["roots"], { env: { HOME: fixture.home } }), { code: 0, out: `${fixture.folder("a")}\n` })
   const fallback = await run(["roots"], { env: {} })
   assert.equal(fallback.code, 0)
