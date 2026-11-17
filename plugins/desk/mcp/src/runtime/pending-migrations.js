@@ -42,6 +42,9 @@ import * as path from "node:path"
 import { diffStagedPaths, formatDeskProblem, formatIndexDriftProblem, snapshotStagedPaths } from "./index-drift.js"
 import { isWslRelay, resolveBash } from "../util/bash.js"
 import { isGitRepository } from "../util/git-stage.js"
+import { AxError } from "../lib/ouro-ui/registry/ouro/ax/problem.ts"
+import { defineCli, defineCommand } from "../lib/ouro-ui/registry/ouro/ax/command.ts"
+import { runCli } from "../lib/ouro-ui/registry/ouro/ax/cli.ts"
 
 // All Detect blocks together, plus any Safety check and Migrate the hook runs,
 // get this long. The Copilot hook has 5 s in all and the registry's boot
@@ -520,21 +523,8 @@ export function agencyMigrationRoots({ home, engine = "copilot" }) {
 }
 
 // ---------------------------------------------------------------------------
-// `scripts/migrations.js run <id> [--tools-root <path>] [--tools-person <alias>]`
+// `scripts/migrations.js run <id> [--tools-root <path>] [--tools-person <alias>]` and `roots`
 // ---------------------------------------------------------------------------
-
-function parseRunArgs(argv) {
-  const [command, id, ...rest] = argv
-  if (command !== "run" || typeof id !== "string" || id === "") throw Object.assign(new Error("usage: Run it as migrations.js run <id>: migrations.js run <id> [--tools-root <path>] [--tools-person <alias>]"), { code: "usage_migrations_js_run_id_tools" })
-  const args = { id, toolsRoot: "", toolsPerson: "" }
-  for (let index = 0; index < rest.length; index += 2) {
-    const flag = rest[index]
-    const value = rest[index + 1]
-    if (!["--tools-root", "--tools-person"].includes(flag) || typeof value !== "string") throw Object.assign(new Error(`migrations.js: Pass a complete, known argument: unknown or incomplete argument ${JSON.stringify(flag)}`), { code: "pending_migrations_migrations_js_pass_a_complete" })
-    args[flag === "--tools-root" ? "toolsRoot" : "toolsPerson"] = value
-  }
-  return args
-}
 
 /**
  * Runs one of Desk's own migrations the way `desk:session-start-migrations`
@@ -551,91 +541,112 @@ function parseRunArgs(argv) {
  * migration's Safety check and Migrate blocks (the real `02-tidy-desk` is the
  * only one today) run only here — `pendingMigrations` stops after Detect for
  * those — so this is where the incident behind this design actually
- * happened. A drift found here is printed straight to `io.stdout`, tagged
+ * happened. A drift found here is printed in the run's output, tagged
  * `<id>:detect`/`<id>:safety-check`/`<id>:migrate`; it never changes the exit
  * code and never undoes the staging. `spawnGit` is a test-only seam, passed
  * through unchanged.
  */
 export async function runMigrationCli({ argv, env = process.env, io, pluginRoot, cwd, spawn, spawnGit = spawnSync, home = env.HOME || os.homedir() }) {
-  if (argv[0] === "roots") {
-    const engine = argv[1] === "--engine" && argv[2] ? argv[2] : "copilot"
-    for (const root of agencyMigrationRoots({ home, engine })) io.stdout.write(`${root}\n`)
-    return 0
-  }
-  let args
-  try {
-    args = parseRunArgs(argv)
-  } catch (error) {
-    io.stderr.write(`${error.message}\n`)
-    return 2
-  }
-  const migration = readMigrations(pluginRoot).find((candidate) => candidate.id === args.id)
-  if (migration === undefined) {
-    io.stderr.write(`migrations.js: Name a migration Desk has: Desk has no migration ${args.id}\n`)
-    return 2
-  }
-  const blockEnv = { ...env, DESK_PLUGIN_ROOT: pluginRoot, DESK_TOOLS_ROOT: args.toolsRoot, DESK_TOOLS_PERSON: args.toolsPerson }
-  if (!args.toolsRoot) delete blockEnv.DESK_TOOLS_ROOT
-  if (!args.toolsPerson) delete blockEnv.DESK_TOOLS_PERSON
-  const tracksIndex = typeof cwd === "string" && isGitRepository(cwd, spawnGit)
-  const blockTag = { Detect: "detect", "Safety check": "safety-check", Migrate: "migrate" }
-  const watchIndex = async (tag, run) => {
-    const before = tracksIndex ? snapshotStagedPaths({ root: cwd, spawnGit }) : null
-    const result = await run()
-    // A failed or timed-out "before" makes any diff meaningless — skip the
-    // after-snapshot too, rather than risk the same hang twice.
-    if (tracksIndex && before !== null) {
-      const after = snapshotStagedPaths({ root: cwd, spawnGit })
-      if (after !== null) {
-        const drift = diffStagedPaths(before, after)
-        // No fileProblem here: this CLI already prints the block straight to the
-        // agent running it, with no time budget and nothing to lose past a
-        // timeout, unlike the hook path -- the honest `file: not filed:
-        // filer_unavailable` default is the right answer.
-        if (drift.length > 0) io.stdout.write(`${await formatIndexDriftProblem({ kind: "migration block", label: tag, drift })}\n`)
-      }
-    }
-    return result
-  }
-  // No time or output limit: the agent needs every line the migration prints.
-  const run = (section) => watchIndex(`${args.id}:${blockTag[section]}`, () => runBlock(migration.blocks[section], { env: blockEnv, cwd, timeoutMs: 2 ** 31 - 1, outputChars: Infinity, spawn }))
+  const cli = defineCli({
+    name: "migrations",
+    about: ["Runs Desk's own session-start migrations, and names the folders other plugins' migrations are read from."],
+    commands: [
+      defineCommand({
+        name: "run",
+        effect: "private",
+        summary: "Run one of Desk's own migrations with no time limit and print what it did.",
+        output: "{ text, failed? }: what the migration printed",
+        args: [{ name: "id", required: true, description: "The migration's id, as the startup line named it." }],
+        flags: {
+          "tools-root": { type: "string", placeholder: "<path>", description: "The tools root the migration's blocks see as DESK_TOOLS_ROOT." },
+          "tools-person": { type: "string", placeholder: "<alias>", description: "The person alias the migration's blocks see as DESK_TOOLS_PERSON." },
+        },
+        examples: ["run 02-tidy-desk"],
+        text: (result) => result.text,
+        exit: (result) => (result.failed ? "error" : "ok"),
+        run: (input) => runMigration({ id: input.id, toolsRoot: input["tools-root"] ?? "", toolsPerson: input["tools-person"] ?? "" }),
+      }),
+      defineCommand({
+        name: "roots",
+        effect: "private",
+        readOnly: true,
+        summary: "List the folders other plugins' migrations are read from.",
+        output: "{ roots: string[] }",
+        flags: { engine: { type: "string", placeholder: "<engine>", description: "The agent engine whose plugin folders to list (copilot)." } },
+        text: (result) => result.roots.map((root) => `${root}\n`).join(""),
+        run: (input) => ({ roots: agencyMigrationRoots({ home, engine: input.engine ?? "copilot" }) }),
+      }),
+    ],
+  })
 
-  const detect = await run("Detect")
-  if (detect.unavailable) {
-    io.stderr.write("migrations.js: Install bash first: bash is required to run Desk's migrations\n")
-    return 1
-  }
-  if (detect.status !== 0) {
-    const held = /^held: (.+)$/mu.exec(detect.stdout)
-    io.stdout.write(held ? `Migration ${args.id} is on hold because ${oneLine(held[1])}; nothing to do now.\n` : `Migration ${args.id} is not needed; nothing to do.\n`)
-    return 0
-  }
-  if (migration.safety !== "safe") {
-    io.stdout.write(`Migration ${args.id} has safety: ${migration.safety || "(none)"}, which is not implemented; skipping it.\n`)
-    return 0
-  }
-  const safety = await run("Safety check")
-  if (safety.status !== 0) {
-    io.stdout.write(`${safety.stdout}${safety.stderr}`)
-    io.stdout.write(`Migration ${args.id} cannot run yet; resolve the reason above first.\n`)
-    return 1
-  }
-  const migrate = await run("Migrate")
-  io.stdout.write(migrate.stdout)
-  if (migrate.status !== 0) {
-    io.stdout.write(migrate.stderr)
-    io.stdout.write(`Migration ${args.id} failed mid-run; manual intervention needed.\n`)
-    return 1
-  }
-  if (migration.agentWork) {
-    // One line and no steps: the work cannot run this session, and that line
-    // is what to say instead of the announcement.
-    if (migrate.stdout.trim().split("\n").length > 1) {
-      io.stdout.write(`\nAnnounce line, filled in with this run's own counts and commit link:\n${migration.blocks.Announce}\n`)
+  async function runMigration(args) {
+    let out = ""
+    const migration = readMigrations(pluginRoot).find((candidate) => candidate.id === args.id)
+    if (migration === undefined) throw new AxError({ code: "unknown-migration", exit: 2, thing: args.id, problem: `Desk has no migration ${args.id}`, fix: "migrations run <id> with the id of a file in Desk's migrations folder" })
+    const blockEnv = { ...env, DESK_PLUGIN_ROOT: pluginRoot, DESK_TOOLS_ROOT: args.toolsRoot, DESK_TOOLS_PERSON: args.toolsPerson }
+    if (!args.toolsRoot) delete blockEnv.DESK_TOOLS_ROOT
+    if (!args.toolsPerson) delete blockEnv.DESK_TOOLS_PERSON
+    const tracksIndex = typeof cwd === "string" && isGitRepository(cwd, spawnGit)
+    const blockTag = { Detect: "detect", "Safety check": "safety-check", Migrate: "migrate" }
+    const watchIndex = async (tag, run) => {
+      const before = tracksIndex ? snapshotStagedPaths({ root: cwd, spawnGit }) : null
+      const result = await run()
+      // A failed or timed-out "before" makes any diff meaningless — skip the
+      // after-snapshot too, rather than risk the same hang twice.
+      if (tracksIndex && before !== null) {
+        const after = snapshotStagedPaths({ root: cwd, spawnGit })
+        if (after !== null) {
+          const drift = diffStagedPaths(before, after)
+          // No fileProblem here: this CLI already prints the block straight to the
+          // agent running it, with no time budget and nothing to lose past a
+          // timeout, unlike the hook path -- the honest `file: not filed:
+          // filer_unavailable` default is the right answer.
+          if (drift.length > 0) out += `${await formatIndexDriftProblem({ kind: "migration block", label: tag, drift })}\n`
+        }
+      }
+      return result
     }
-    return 0
+    // No time or output limit: the agent needs every line the migration prints.
+    const run = (section) => watchIndex(`${args.id}:${blockTag[section]}`, () => runBlock(migration.blocks[section], { env: blockEnv, cwd, timeoutMs: 2 ** 31 - 1, outputChars: Infinity, spawn }))
+
+    const detect = await run("Detect")
+    if (detect.unavailable) throw new AxError({ code: "bash-missing", exit: 1, thing: "bash", problem: "bash is required to run Desk's migrations", fix: `install bash, then run migrations run ${args.id}` })
+    if (detect.status !== 0) {
+      const held = /^held: (.+)$/mu.exec(detect.stdout)
+      out += held ? `Migration ${args.id} is on hold because ${oneLine(held[1])}; nothing to do now.\n` : `Migration ${args.id} is not needed; nothing to do.\n`
+      return { text: out }
+    }
+    if (migration.safety !== "safe") {
+      out += `Migration ${args.id} has safety: ${migration.safety || "(none)"}, which is not implemented; skipping it.\n`
+      return { text: out }
+    }
+    const safety = await run("Safety check")
+    if (safety.status !== 0) {
+      out += `${safety.stdout}${safety.stderr}`
+      out += `Migration ${args.id} cannot run yet; resolve the reason above first.\n`
+      return { text: out, failed: true }
+    }
+    const migrate = await run("Migrate")
+    out += migrate.stdout
+    if (migrate.status !== 0) {
+      out += migrate.stderr
+      out += `Migration ${args.id} failed mid-run; manual intervention needed.\n`
+      return { text: out, failed: true }
+    }
+    if (migration.agentWork) {
+      // One line and no steps: the work cannot run this session, and that line
+      // is what to say instead of the announcement.
+      if (migrate.stdout.trim().split("\n").length > 1) {
+        out += `\nAnnounce line, filled in with this run's own counts and commit link:\n${migration.blocks.Announce}\n`
+      }
+      return { text: out }
+    }
+    out += `${migration.blocks.Announce}\n`
+    if (migration.needsRestart) out += "Please start a new session so my preamble loads against the migrated paths.\n"
+    return { text: out }
   }
-  io.stdout.write(`${migration.blocks.Announce}\n`)
-  if (migration.needsRestart) io.stdout.write("Please start a new session so my preamble loads against the migrated paths.\n")
-  return 0
+
+  // A failure thrown with its own `migrations:` line would otherwise carry the tool name twice.
+  const stderr = { write: (line) => io.stderr.write(line.replace(/^migrations: migrations: /u, "migrations: ")) }
+  return runCli(cli, argv, { stdout: io.stdout, stderr })
 }
