@@ -169,8 +169,7 @@ export async function runIfMain(importMetaUrl, argv1, run = main, argv = process
     }),
   })
   // A failure from the code underneath is already a whole line of its own; the kit's tool-name prefix would say it twice.
-  const stderr = { write: (line) => process.stderr.write(line.replace(/^(private-view: )+/u, "private-view: ")) }
-  process.exitCode = await runCli(cli, argv, { stdin: process.stdin, stdout: out, stderr }, { env: process.env })
+  process.exitCode = await runCli(cli, argv, { stdin: process.stdin, stdout: out, stderr: process.stderr }, { env: process.env })
   return true
 }
 

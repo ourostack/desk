@@ -297,6 +297,5 @@ function sessionsCli({ script, deps, overrides }) {
 /** Runs the command line; returns the exit code. */
 export async function runSessionsCli({ argv, script = "sessions.js", env = process.env, io = process, deps: overrides = {} }) {
   // A failure from the code underneath is already a whole line of its own; the kit's tool-name prefix would say it twice.
-  const stderr = { write: (line) => io.stderr.write(line.replace(/^sessions: (?=desk: )/u, "")) }
-  return runCli(sessionsCli({ script, deps: { ...defaults(env), ...overrides }, overrides }), argv, { stdout: io.stdout, stderr })
+  return runCli(sessionsCli({ script, deps: { ...defaults(env), ...overrides }, overrides }), argv, { stdout: io.stdout, stderr: io.stderr })
 }

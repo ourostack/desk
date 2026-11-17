@@ -633,8 +633,7 @@ function factoryCli({ env, cwd, git, runner }) {
 /** Dispatches `argv[0]` to its subcommand and writes the JSON result with `write`. Returns the process exit code. */
 export async function main({ argv = process.argv.slice(2), env = process.env, cwd = process.cwd(), git = runGit, runner = undefined, write = (text) => process.stdout.write(text), logError = (text) => process.stderr.write(text) } = {}) {
   // A failure from the code underneath is already a whole line of its own; the kit's tool-name prefix would say it twice.
-  const stderr = { write: (line) => logError(line.replace(/^factory: (?=factory\.js )/u, "")) }
-  return runCli(factoryCli({ env, cwd, git, runner }), argv, { stdout: { write }, stderr })
+  return runCli(factoryCli({ env, cwd, git, runner }), argv, { stdout: { write }, stderr: { write: logError } })
 }
 
 /** True when this module is the process entry point (`node scripts/factory.js ...`), false when merely imported. */

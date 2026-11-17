@@ -139,7 +139,5 @@ function drainsCli({ script, env, now, connect, listProcesses }) {
 }
 
 export async function runDrainsCli({ argv, script, env = process.env, io = process, now = Date.now, connect = connectGithub, listProcesses = psList }) {
-  // A failure from the code underneath is already a whole line of its own; the kit's tool-name prefix would say it twice.
-  const stderr = { write: (line) => io.stderr.write(line.replace(/^drains: drains: /u, "")) }
-  return runCli(drainsCli({ script, env, now, connect, listProcesses }), argv, { stdout: io.stdout, stderr })
+  return runCli(drainsCli({ script, env, now, connect, listProcesses }), argv, { stdout: io.stdout, stderr: io.stderr })
 }

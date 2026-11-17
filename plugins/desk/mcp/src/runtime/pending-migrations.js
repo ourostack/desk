@@ -646,7 +646,5 @@ export async function runMigrationCli({ argv, env = process.env, io, pluginRoot,
     return { text: out }
   }
 
-  // A failure thrown with its own `migrations:` line would otherwise carry the tool name twice.
-  const stderr = { write: (line) => io.stderr.write(line.replace(/^migrations: migrations: /u, "migrations: ")) }
-  return runCli(cli, argv, { stdout: io.stdout, stderr })
+  return runCli(cli, argv, { stdout: io.stdout, stderr: io.stderr })
 }
