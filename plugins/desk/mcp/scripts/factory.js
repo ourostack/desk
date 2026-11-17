@@ -83,18 +83,6 @@ const AUTHOR_ASSOCIATION = /^[A-Z_]{2,40}$/u
 const JOB = /^[0-9a-f]{32}$/u
 const MAX_FINALIZE_JOBS = 8
 
-/** `{ "store": "...", "contribute": "yes" }`-shaped options from `--flag value` pairs, or `null` for a malformed argv. */
-export function parseOptions(argv) {
-  const options = new Map()
-  for (let index = 0; index < argv.length; index += 2) {
-    const flag = argv[index]
-    const value = argv[index + 1]
-    if (typeof flag !== "string" || !flag.startsWith("--") || flag.length <= 2 || typeof value !== "string" || options.has(flag.slice(2))) return null
-    options.set(flag.slice(2), value)
-  }
-  return options
-}
-
 const DERIVE_HARD_DEADLINE_MS = 360000
 
 // The exit code `timeout(1)` uses, so a worker that hit its ceiling is told apart from one that finished (0).
@@ -300,17 +288,9 @@ async function triageActorPermission({ repo, actor, runner, token }) {
   } catch { return undefined }
 }
 
-export async function runValidatePrCommand({ argv, cwd = process.cwd(), git = runGit, runner, env = process.env }) {
-  const options = parseOptions(argv)
-  const base = options?.get("base")
-  const head = options?.get("head")
-  const association = options?.get("author-association")
-  if (options === null || !GIT_REF.test(base) || !GIT_REF.test(head) || !AUTHOR_ASSOCIATION.test(association)) {
-    throw new Error("Usage: factory.js validate-pr --base <base sha> --head <head sha> --author-association <value>; base and head must be full commit SHAs")
-  }
-  if ([...options.keys()].some((key) => !["base", "head", "author-association", "repo", "pr"].includes(key))) {
-    throw new Error("factory.js validate-pr: unknown option")
-  }
+export async function runValidatePrCommand({ base, head, "author-association": association, repo, pr }, { cwd = process.cwd(), git = runGit, runner, env = process.env }) {
+  if (!GIT_REF.test(base) || !GIT_REF.test(head)) throw usageError("validate-pr", "--base and --head must be full commit SHAs", "factory validate-pr --base <base sha> --head <head sha> --author-association <value>")
+  if (!AUTHOR_ASSOCIATION.test(association)) throw usageError("validate-pr", "--author-association is not an association such as NONE or OWNER", "factory validate-pr --author-association <value>")
 
   requireMergeTree({ cwd, git })
   // A pull request head never needs merge commits of its own; refusing them
@@ -329,7 +309,6 @@ export async function runValidatePrCommand({ argv, cwd = process.cwd(), git = ru
   }
   const triageChanges = listed.filter((c) => isTriagePath(c.path))
   let triageAuthority, actor, api
-  const repo = options.get("repo"), pr = options.get("pr")
   const token = env.GH_TOKEN ?? env.GITHUB_TOKEN
   const statuses = triageChanges.length ? triageStatuses({ base, tree, cwd, git }) : new Map()
   if (triageChanges.length && repo !== undefined && pr !== undefined) {
@@ -621,6 +600,7 @@ function factoryCli({ env, cwd, git, runner }) {
       command("andon", { summary: "Open, update, reopen and close the store's andon issues.", flags: ISSUE_FLAGS, exit: noFailures }, runAndonCommand),
       command("reconcile", { summary: "Reconcile a desk's sessions against the store for a time window.", readOnly: true, flags: { desk: { type: "string", required: true, placeholder: "<absolute desk root>", description: "The desk." }, since: { type: "string", required: true, placeholder: "<iso>", description: "Window start, a UTC timestamp." }, until: { type: "string", required: true, placeholder: "<iso>", description: "Window end, a UTC timestamp." }, store: { type: "string", placeholder: "<directory>", description: "The store checkout." }, "person-prefix": { type: "string", placeholder: "desks/<alias>", description: "The person prefix." } }, exit: (r) => exitFor(r.ok !== false) }, runReconcileCommand),
       command("loop", { summary: "Run the improvement steps once for the desk and person given.", flags: { desk: { type: "string", placeholder: "<absolute desk root>", description: "The desk." }, "person-prefix": { type: "string", placeholder: "desks/<alias>", description: "The person prefix." } } }, runLoopCommand),
+      command("validate-pr", { summary: "Validate a store pull request against the facts its merge would leave.", readOnly: true, flags: { base: { type: "string", required: true, placeholder: "<base sha>", description: "The base commit." }, head: { type: "string", required: true, placeholder: "<head sha>", description: "The pull request head commit." }, "author-association": { type: "string", required: true, placeholder: "<value>", description: "The author's association, such as NONE or OWNER." }, repo: { type: "string", placeholder: "<owner/repo>", description: "The store, to read the triage actor." }, pr: { type: "string", placeholder: "<number>", description: "The pull request number." } }, exit: (r) => exitFor(r.ok !== false) }, runValidatePrCommand),
       command("proof", { summary: "Mark an existing local session as a controlled proof.", args: [{ name: "session", required: true, description: "The session id." }], flags: { desk: { type: "string", placeholder: "<absolute desk root>", description: "The desk the session belongs to." } }, exit: (r) => exitFor(["marked", "already_proof"].includes(r.result)) }, runProofCommand),
     ],
   })
@@ -628,24 +608,9 @@ function factoryCli({ env, cwd, git, runner }) {
 
 /** Dispatches `argv[0]` to its subcommand and writes the JSON result with `write`. Returns the process exit code. */
 export async function main({ argv = process.argv.slice(2), env = process.env, cwd = process.cwd(), git = runGit, runner = undefined, write = (text) => process.stdout.write(text), logError = (text) => process.stderr.write(text) } = {}) {
-  const [subcommand, ...rest] = argv
-  const cli = factoryCli({ env, cwd, git, runner })
-  if (cli.commands.some((entry) => entry.name === subcommand)) {
-    // A failure from the code underneath is already a whole line of its own; the kit's tool-name prefix would say it twice.
-    const stderr = { write: (line) => logError(line.replace(/^factory: (?=factory\.js )/u, "")) }
-    return runCli(cli, argv, { stdout: { write }, stderr })
-  }
-  try {
-    if (subcommand !== "validate-pr") {
-      throw new Error(`factory.js: unknown subcommand ${JSON.stringify(subcommand ?? "")} (supported: ${SUPPORTED_COMMANDS.join(", ")})`)
-    }
-    const result = await runValidatePrCommand({ argv: rest, env, cwd, git, runner })
-    write(`${JSON.stringify(result)}\n`)
-    return Number(result.ok === false)
-  } catch (error) {
-    logError(`${error.message}\n`)
-    return 1
-  }
+  // A failure from the code underneath is already a whole line of its own; the kit's tool-name prefix would say it twice.
+  const stderr = { write: (line) => logError(line.replace(/^factory: (?=factory\.js )/u, "")) }
+  return runCli(factoryCli({ env, cwd, git, runner }), argv, { stdout: { write }, stderr })
 }
 
 /** True when this module is the process entry point (`node scripts/factory.js ...`), false when merely imported. */
