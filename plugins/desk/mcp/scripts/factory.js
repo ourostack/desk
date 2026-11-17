@@ -622,26 +622,26 @@ const usageError = (thing, problem, fix) => new AxError({ code: "usage", exit: 2
 const STORE = { type: "string", required: true, placeholder: "<owner/repo>", description: "The store, as owner/repo." }
 const JOB_FLAG = { type: "string", required: true, placeholder: "<job>", description: "The job id." }
 const text = (result) => JSON.stringify(result)
-const failedOf = (result) => (Object(result).failed > 0 ? "error" : "ok")
+const exitFor = (ok) => (ok ? "ok" : "error")
 
-/** The commands defined with Ouro AX; each prints one JSON value on one line, and a failed result exits 1. */
+/** The commands defined with Ouro AX; each prints one JSON value on one line, and a refusal exits 1. */
 function factoryCli({ env, cwd, git, runner }) {
   const ctx = { env, cwd, git, runner }
-  const command = (name, def, run) => defineCommand({ name, effect: "private", output: "one JSON value", text, exit: failedOf, ...def, run: (input) => run(input, ctx) })
+  const command = (name, def, run) => defineCommand({ name, effect: "private", output: "one JSON value", text, ...def, run: (input) => run(input, ctx) })
   return defineCli({
     name: "factory",
     about: "The Desk factory: delivers a machine's session facts to a store and runs the store's pipeline.",
     commands: [
-      command("account", { summary: "Name the signed-in GitHub account that can open intake pull requests on the store.", readOnly: true, flags: { store: STORE }, exit: (r) => (r.result === "account_found" ? "ok" : "error") }, runAccountCommand),
+      command("account", { summary: "Name the signed-in GitHub account that can open intake pull requests on the store.", readOnly: true, flags: { store: STORE }, exit: (r) => exitFor(r.result === "account_found") }, runAccountCommand),
       command("consent", { summary: "Record whether this machine contributes to the store.", flags: { store: STORE, contribute: { type: "enum", values: ["yes", "no"], required: true, description: "Whether to contribute." }, account: { type: "string", placeholder: "<gh login>", description: "The GitHub account to deliver with." } } }, runConsentCommand),
       command("derive", { summary: "Derive facts from one marker file (the detached worker).", flags: { marker: { type: "string", required: true, placeholder: "<file>", description: "The marker file." }, "wait-quiet": { type: "number", min: 0, max: 30000, placeholder: "<milliseconds>", description: "How long to wait for the session to go quiet first." } } }, runDeriveCommand),
       command("status", { summary: "Print the factory's local status.", readOnly: true }, runStatusCommand),
       command("flush", { summary: "Make one delivery attempt to the store.", flags: { store: STORE } }, runFlushCommand),
-      command("context-request", { summary: "Request the task context of one existing job, as the operator.", flags: { store: STORE, job: { ...JOB_FLAG, placeholder: "<public job id>" } }, exit: (r) => (r.ok === false ? "error" : "ok") }, runContextRequestCommand),
+      command("context-request", { summary: "Request the task context of one existing job, as the operator.", flags: { store: STORE, job: { ...JOB_FLAG, placeholder: "<public job id>" } }, exit: (r) => exitFor(r.ok !== false) }, runContextRequestCommand),
       command("finalize", { summary: "Finalize up to eight finished jobs, then start the loop worker when its step is due.", flags: { job: { ...JOB_FLAG, repeat: true } } }, runFinalizeCommand),
       command("build", { summary: "Build the store's reports.", flags: { store: { type: "string", required: true, placeholder: "<directory>", description: "The checked-out store." }, out: { type: "string", required: true, placeholder: "<directory>", description: "Where to write the build." } } }, runBuildCommand),
       command("evaluate-accept", { summary: "Check what the evaluator wrote for a job and move accepted labels into the outbox.", flags: { job: JOB_FLAG } }, runEvaluateAcceptCommand),
-      command("proof", { summary: "Mark an existing local session as a controlled proof.", args: [{ name: "session", required: true, description: "The session id." }], flags: { desk: { type: "string", placeholder: "<absolute desk root>", description: "The desk the session belongs to." } }, exit: (r) => (["marked", "already_proof"].includes(r.result) ? "ok" : "error") }, runProofCommand),
+      command("proof", { summary: "Mark an existing local session as a controlled proof.", args: [{ name: "session", required: true, description: "The session id." }], flags: { desk: { type: "string", placeholder: "<absolute desk root>", description: "The desk the session belongs to." } }, exit: (r) => exitFor(["marked", "already_proof"].includes(r.result)) }, runProofCommand),
     ],
   })
 }
