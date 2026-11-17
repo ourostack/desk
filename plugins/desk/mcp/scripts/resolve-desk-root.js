@@ -17,6 +17,8 @@ import {
   resolveDeskRootWithSource,
 } from "../src/util/paths.js"
 import { claudeStartupDirection } from "../src/util/startup-direction.js"
+import { defineCli, defineCommand } from "../src/lib/ouro-ui/registry/ouro/ax/command.ts"
+import { runCli } from "../src/lib/ouro-ui/registry/ouro/ax/cli.ts"
 import { readSmallText } from "../src/factory/marker.js"
 
 export function resolveHookDeskRoot({ env = process.env, cwd = process.cwd(), hostProjectRoot = env.CLAUDE_PROJECT_DIR } = {}) {
@@ -40,23 +42,49 @@ async function loadBootChecks() {
   return { migrationLine, runBootChecks }
 }
 
-export async function main({ argv = process.argv.slice(2), env = process.env, write = (text) => process.stdout.write(text), loadBoot = loadBootChecks } = {}) {
-  const result = resolveHookDeskRoot({ env })
-  let output = `${JSON.stringify(result)}\n`
-  if (argv.includes("--root-only")) output = result.root ?? ""
-  if (argv.includes("--startup-line")) output = claudeStartupDirection({ env })
-  if (argv.includes("--boot-checks")) {
-    const { migrationLine, runBootChecks } = await loadBoot()
-    // Desk's own migration Detect blocks run alongside the boot checks, and
-    // add one line only when a migration is pending.
-    const migrations = migrationLine({ host: "claude", env })
-    // One agent line only when a boot check has something to say; otherwise the output is unchanged.
-    const line = await runBootChecks({ host: "claude", env })
-    if (line) output += `\n\n${line}`
-    const pending = await migrations
-    if (pending) output += `\n\n${pending}`
-  }
-  write(output)
+const FLAGS = {
+  "root-only": { type: "boolean", description: "Print just the root, with no newline (empty when no desk is bound)." },
+  "startup-line": { type: "boolean", description: "Print the `Desk startup:` line the Claude hook appends." },
+  "boot-checks": { type: "boolean", description: "Append the `Desk boot pre-checks:` line when a boot check has something to say, and the `Desk migrations:` line when one is pending." },
+}
+
+export async function main({ argv = process.argv.slice(2), env = process.env, write = (text) => process.stdout.write(text), loadBoot = loadBootChecks, writeError = (text) => process.stderr.write(text) } = {}) {
+  let output
+  const cli = defineCli({
+    name: "resolve-desk-root",
+    about: ["Prints the desk root Desk's MCP server would bind for this environment, as JSON. Startup hooks call this so they can never disagree with the server."],
+    command: defineCommand({
+      name: "resolve-desk-root",
+      summary: "Print the bound desk root as JSON, or the one line a flag asks for.",
+      effect: "private",
+      readOnly: true,
+      protocol: true,
+      output: "the root's JSON, or the one line a flag asks for",
+      flags: FLAGS,
+      text: () => output,
+      run: async (input) => {
+        const result = resolveHookDeskRoot({ env })
+        output = `${JSON.stringify(result)}\n`
+        if (input["root-only"]) output = result.root ?? ""
+        if (input["startup-line"]) output = claudeStartupDirection({ env })
+        if (input["boot-checks"]) {
+          const { migrationLine, runBootChecks } = await loadBoot()
+          // Desk's own migration Detect blocks run alongside the boot checks, and
+          // add one line only when a migration is pending.
+          const migrations = migrationLine({ host: "claude", env })
+          // One agent line only when a boot check has something to say; otherwise the output is unchanged.
+          const line = await runBootChecks({ host: "claude", env })
+          if (line) output += `\n\n${line}`
+          const pending = await migrations
+          if (pending) output += `\n\n${pending}`
+        }
+        return {}
+      },
+    }),
+  })
+  // The kit ends its output with a newline; the output is read as it is, so only the newline the output itself has stays.
+  const stdout = { write: (text) => write(text.endsWith("\n") && !output.endsWith("\n") ? text.slice(0, -1) : text) }
+  return runCli(cli, argv, { stdin: process.stdin, stdout, stderr: { write: writeError } }, { env })
 }
 
 // Whether this module is the script Node was asked to run. Node gives
@@ -74,5 +102,5 @@ export function isEntrypoint(argv1 = process.argv[1], moduleUrl = import.meta.ur
 }
 
 if (isEntrypoint()) {
-  await main()
+  process.exitCode = await main()
 }
