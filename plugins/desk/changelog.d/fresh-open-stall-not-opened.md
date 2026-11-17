@@ -1,1 +1,0 @@
-A fresh browser whose start stalled past its time budget was sometimes reported as opened, and the next command then failed with "The browser 'desk' is not open". The Playwright CLI exits 0 when Desk stops it mid-start, so Desk now counts its own stop as a failed start and tries once more in a new context, or says the browser did not start.
