@@ -9,6 +9,9 @@ import { promises as fsp } from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { resolveStateHome } from "../util/paths.js"
+import { AxError } from "../lib/ouro-ui/registry/ouro/ax/problem.ts"
+import { defineCli, defineCommand } from "../lib/ouro-ui/registry/ouro/ax/command.ts"
+import { runCli } from "../lib/ouro-ui/registry/ouro/ax/cli.ts"
 
 const DAY = 86_400_000
 const GB = 1_073_741_824
@@ -39,51 +42,45 @@ const QUERIES = {
   knownWorktrees: "select path as v from worktrees",
 }
 
-const BOOLEAN_FLAGS = { "--apply": "apply", "--ceiling": "ceiling", "--json": "json", "--sizes": "sizes", "--verbose": "verbose" }
-const PATH_FLAGS = { "--app-db": "appDb", "--report-dir": "reportDir", "--session-state": "sessionState", "--trash": "trash" }
-const LIST_FLAGS = { "--code-roots": "codeRoots", "--log-dirs": "logDirs", "--state-roots": "stateRoots" }
+const NUMBER = (description) => ({ type: "number", min: 0, description })
+const LIST = (description) => ({ type: "string", placeholder: "<dirs>", description: `${description} Separated by "${path.delimiter}".` })
+const FLAGS = {
+  apply: { type: "boolean", description: "Delete what the dry run lists." },
+  ceiling: { type: "boolean", description: "After the main pass, prune the oldest inactive sessions until agent storage is under --ceiling-gb." },
+  "ceiling-gb": NUMBER("Storage ceiling in GB (60)."),
+  "session-state": { type: "string", placeholder: "<dir>", description: "Copilot session folders (<COPILOT_HOME>/session-state)." },
+  "app-db": { type: "string", placeholder: "<file>", description: "Copilot app database, read only (<COPILOT_HOME>/data.db)." },
+  "code-roots": LIST("Folders holding session worktrees (default: the parents of the worktrees the app database knows)."),
+  "log-dirs": LIST("Log folders pruned by age (<COPILOT_HOME>/logs)."),
+  "state-roots": LIST("Other agent state folders: only old node_modules and unused browser profiles go (none)."),
+  "log-days": NUMBER("Log age to remove (7)."),
+  "artifact-days": NUMBER("Age of screenshots, build folders and browser profiles to remove (3)."),
+  "recent-hours": NUMBER("A session written within this many hours counts as active (24)."),
+  "worktree-depth": NUMBER("How deep to look for worktrees under each code root (3)."),
+  "scan-depth": NUMBER("How deep to look inside a session folder (7)."),
+  "load-limit": NUMBER("Load average above which the scan and deletion slow down (12)."),
+  "gb-per-min": NUMBER("Most GB deleted per minute (3)."),
+  "git-pause-ms": NUMBER("Pause before checking each worktree with Git (1000)."),
+  skip: { type: "string", placeholder: "<list>", description: `Comma-separated parts to skip: ${[...SKIPPABLE].join(", ")}.` },
+  trash: { type: "string", placeholder: "<dir>", description: "Where folders wait to be deleted, on the same volume (<state>/desk/session-retention/trash)." },
+  "report-dir": { type: "string", placeholder: "<dir>", description: "Where the JSON report goes (<state>/desk/session-retention)." },
+  sizes: { type: "boolean", description: "Measure each listed folder with du (slower)." },
+  verbose: { type: "boolean", description: "List every checkout left in place and why." },
+}
+const PATH_FLAGS = { "app-db": "appDb", "report-dir": "reportDir", "session-state": "sessionState", trash: "trash" }
+const LIST_FLAGS = { "code-roots": "codeRoots", "log-dirs": "logDirs", "state-roots": "stateRoots" }
 const NUMBER_FLAGS = {
-  "--artifact-days": "artifactDays", "--ceiling-gb": "ceilingGB", "--gb-per-min": "gbPerMin", "--git-pause-ms": "gitPauseMs",
-  "--load-limit": "loadLimit", "--log-days": "logDays", "--recent-hours": "recentHours", "--scan-depth": "scanDepth", "--worktree-depth": "worktreeDepth",
+  "artifact-days": "artifactDays", "ceiling-gb": "ceilingGB", "gb-per-min": "gbPerMin", "git-pause-ms": "gitPauseMs",
+  "load-limit": "loadLimit", "log-days": "logDays", "recent-hours": "recentHours", "scan-depth": "scanDepth", "worktree-depth": "worktreeDepth",
 }
 
-export const USAGE = `usage: node session-retention.js [--apply] [--ceiling] [options]
-
-Keeps agent session storage bounded. A dry run by default: it lists what it would remove and writes a report. --apply deletes.
-Run it at low priority, for example: nice -n 19 node session-retention.js --apply --ceiling
-
-  --apply                 delete what the dry run lists
-  --ceiling               after the main pass, prune the oldest inactive sessions until agent storage is under --ceiling-gb
-  --ceiling-gb <n>        storage ceiling in GB (60)
-  --session-state <dir>   Copilot session folders (<COPILOT_HOME>/session-state)
-  --app-db <file>         Copilot app database, read only (<COPILOT_HOME>/data.db)
-  --code-roots <dirs>     folders holding session worktrees (default: the parents of the worktrees the app database knows)
-  --log-dirs <dirs>       log folders pruned by age (<COPILOT_HOME>/logs)
-  --state-roots <dirs>    other agent state folders: only old node_modules and unused browser profiles go (none)
-  --log-days <n>          log age to remove (7)
-  --artifact-days <n>     age of screenshots, build folders and browser profiles to remove (3)
-  --recent-hours <n>      a session written within this many hours counts as active (24)
-  --worktree-depth <n>    how deep to look for worktrees under each code root (3)
-  --scan-depth <n>        how deep to look inside a session folder (7)
-  --load-limit <n>        load average above which the scan and deletion slow down (12)
-  --gb-per-min <n>        most GB deleted per minute (3)
-  --git-pause-ms <n>      pause before checking each worktree with Git (1000)
-  --skip <list>           comma-separated parts to skip: logs, sessions, worktrees, state
-  --trash <dir>           where folders wait to be deleted, on the same volume (<state>/desk/session-retention/trash)
-  --report-dir <dir>      where the JSON report goes (<state>/desk/session-retention)
-  --sizes                 measure each listed folder with du (slower)
-  --json                  print the report as JSON
-  --verbose               list every checkout left in place and why
-
-Folder lists are separated by "${path.delimiter}".`
-
-/** Options with their defaults, then the flags in `argv` applied. Returns `{ options }`, `{ help: true }` or `{ error }`. */
-export function parseRetentionArgs(argv, { env = process.env, homeDir = os.homedir() } = {}) {
+/** The options with their defaults, then the flags the command was given applied. */
+export function retentionOptions(input = {}, { env = process.env, homeDir = os.homedir() } = {}) {
   const home = env.HOME || homeDir
   const copilot = env.COPILOT_HOME || path.join(home, ".copilot")
   const state = path.join(resolveStateHome({ ...env, HOME: home }), "desk", "session-retention")
   const options = {
-    apply: false, ceiling: false, json: false, sizes: false, verbose: false,
+    apply: input.apply === true, ceiling: input.ceiling === true, sizes: input.sizes === true, verbose: input.verbose === true,
     sessionState: path.join(copilot, "session-state"),
     appDb: path.join(copilot, "data.db"),
     codeRoots: null,
@@ -96,26 +93,16 @@ export function parseRetentionArgs(argv, { env = process.env, homeDir = os.homed
     skip: new Set(),
     home,
   }
-  for (let i = 0; i < argv.length; i++) {
-    const flag = argv[i]
-    if (flag === "--help" || flag === "-h") return { help: true }
-    if (BOOLEAN_FLAGS[flag]) { options[BOOLEAN_FLAGS[flag]] = true; continue }
-    const value = argv[++i]
-    if (value === undefined) return { code: "retention_flag_needs_value", error: `Pass a value: ${flag} needs a value` }
-    if (PATH_FLAGS[flag]) options[PATH_FLAGS[flag]] = path.resolve(value)
-    else if (LIST_FLAGS[flag]) options[LIST_FLAGS[flag]] = value.split(path.delimiter).filter(Boolean).map((p) => path.resolve(p))
-    else if (NUMBER_FLAGS[flag]) {
-      const n = Number(value)
-      if (value.trim() === "" || !Number.isFinite(n) || n < 0) return { code: "retention_flag_needs_number", error: `Pass a number of zero or more: ${flag} needs a number of zero or more, not ${value}` }
-      options[NUMBER_FLAGS[flag]] = n
-    } else if (flag === "--skip") {
-      const parts = value.split(",").filter(Boolean)
-      const unknown = parts.filter((p) => !SKIPPABLE.has(p))
-      if (unknown.length) return { code: "retention_skip_unknown_name", error: `Pass only the listed names to --skip: --skip takes ${[...SKIPPABLE].join(", ")}, not ${unknown.join(", ")}` }
-      options.skip = new Set(parts)
-    } else return { code: "retention_unknown_option", error: `Remove the unknown option: unknown option ${flag}` }
+  for (const [flag, key] of Object.entries(PATH_FLAGS)) if (input[flag] !== undefined) options[key] = path.resolve(input[flag])
+  for (const [flag, key] of Object.entries(LIST_FLAGS)) if (input[flag] !== undefined) options[key] = input[flag].split(path.delimiter).filter(Boolean).map((p) => path.resolve(p))
+  for (const [flag, key] of Object.entries(NUMBER_FLAGS)) if (input[flag] !== undefined) options[key] = input[flag]
+  if (input.skip !== undefined) {
+    const parts = input.skip.split(",").filter(Boolean)
+    const unknown = parts.filter((p) => !SKIPPABLE.has(p))
+    if (unknown.length) throw new AxError({ code: "skip-unknown-name", exit: 2, thing: "--skip", problem: `it takes ${[...SKIPPABLE].join(", ")}, not ${unknown.join(", ")}`, fix: `session-retention --skip ${[...SKIPPABLE][0]}` })
+    options.skip = new Set(parts)
   }
-  return { options }
+  return options
 }
 
 const DEFAULT_DEPS = {
@@ -647,24 +634,29 @@ function summary(report, o) {
   return `${lines.join("\n")}\n`
 }
 
-/** The CLI: parses `argv`, runs one pass and prints a summary (or JSON). Returns the exit code. */
+/** The CLI: parses `argv` with Ouro AX, runs one pass and prints a summary (or JSON). Returns the exit code. */
 export async function runSessionRetentionCli({ argv, env = process.env, io = process, deps }) {
-  const parsed = parseRetentionArgs(argv, { env })
-  if (parsed.help) {
-    io.stdout.write(`${USAGE}\n`)
-    return 0
-  }
-  if (parsed.error) {
-    io.stderr.write(`session-retention: ${parsed.error}\n${USAGE}\n`)
-    return 2
-  }
-  try {
-    const report = await runRetention(parsed.options, deps)
-    const { plan: _plan, ...brief } = report
-    io.stdout.write(parsed.options.json ? `${JSON.stringify(brief, null, 1)}\n` : summary(report, parsed.options))
-    return 0
-  } catch (error) {
-    io.stderr.write(`session-retention failed: ${error.stack}\n`)
-    return 1
-  }
+  const cli = defineCli({
+    name: "session-retention",
+    about: [
+      "Keeps agent session storage bounded. A dry run by default: it lists what it would remove and writes a report. --apply deletes.",
+      "Run it at low priority, for example: nice -n 19 node session-retention.js --apply --ceiling",
+    ],
+    command: defineCommand({
+      name: "session-retention",
+      effect: "private",
+      summary: "List what is safe to remove from agent session storage and write a report; with --apply, remove it.",
+      output: "the report without its plan",
+      flags: FLAGS,
+      examples: ["--apply --ceiling"],
+      text: (result) => result.text,
+      run: async (input) => {
+        const options = retentionOptions(input, { env })
+        const report = await runRetention(options, deps)
+        const { plan: _plan, ...brief } = report
+        return Object.defineProperty(brief, "text", { value: summary(report, options) })
+      },
+    }),
+  })
+  return runCli(cli, argv, { stdout: io.stdout, stderr: io.stderr })
 }

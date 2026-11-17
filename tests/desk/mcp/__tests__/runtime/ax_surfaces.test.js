@@ -95,8 +95,6 @@ const NOT_ERRORS = {
   "plugins/desk/mcp/src/runtime/newest-release.js#the-download-is-not-a": "an internal label caught by its caller",
   "plugins/desk/mcp/src/runtime/newest-release.js#the-release-download-is-too": "an internal label caught by its caller",
   "plugins/desk/mcp/src/runtime/newest-release.js#the-release-is-larger-than": "an internal label caught by its caller",
-  "plugins/desk/mcp/src/runtime/session-retention.js#session-retention": "carrier of an argument error whose texts are checked themselves",
-  "plugins/desk/mcp/src/runtime/session-retention.js#session-retention-failed": "a stack trace written to the log",
   "plugins/desk/mcp/src/runtime/sync-worker.js#desk-mcp-sync-status-desk": "a log line",
   "plugins/desk/mcp/src/runtime/sync-worker.js#desk-sync-worker-refused-the": "a log line",
   "plugins/desk/mcp/src/runtime/workspace-tidy.js#ambiguous-delivery-push-endpoints": "a reason label the tidy report carries",
