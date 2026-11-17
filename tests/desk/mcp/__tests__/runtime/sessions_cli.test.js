@@ -7,7 +7,7 @@ import { appendFileSync, existsSync, mkdirSync, readdirSync, realpathSync, write
 import { spawnSync } from "node:child_process"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
-import { appSocket, exchange, envelope, nameOf, parentOfProcess, parseSessionsArgs, resolveSession, runSessionsCli, selfSessions, sendThroughApp, tailMessages, whoAmI } from "../../../../../plugins/desk/mcp/src/runtime/sessions-cli.js"
+import { appSocket, exchange, envelope, nameOf, parentOfProcess, resolveSession, runSessionsCli, selfSessions, sendThroughApp, tailMessages, whoAmI } from "../../../../../plugins/desk/mcp/src/runtime/sessions-cli.js"
 import { mkTempRoot } from "../_temp_roots.js"
 
 const A = "0dc4f17b-1111-4222-8333-444455556666"
@@ -106,19 +106,15 @@ test("a missing socket file or a dead owner reads as the app not running", async
   assert.deepEqual(appSocket({ env }), { port: "4001", token: "tok" })
 })
 
-test("the command line parses, and a mistake says the fix and exits 2", async () => {
-  assert.deepEqual(parseSessionsArgs(["tail", "abc", "3"]), { command: "tail", ref: "abc", count: 3 })
-  assert.deepEqual(parseSessionsArgs(["send", "abc", "hello", "there", "--from", "none", "--as-user", "--wait", "5"]), { command: "send", ref: "abc", message: "hello there", from: "none", asUser: true, waitMs: 5000 })
+test("a mistake on the command line is one kit line with its fix and exits 2", async () => {
   for (const bad of [["nope"], ["tail"], ["tail", "a", "0"], ["send", "a"], ["send", "a", "m", "--wait", "x"], ["whoami", "--from", "x"], ["send", "a", "m", "--from"], ["tail", "a", "--x"]]) {
-    const parsed = parseSessionsArgs(bad)
-    assert.match(parsed.error, /Fix: /u, bad.join(" "))
-    assert.match(parsed.error, /friction_add/u)
+    const { out, io } = capture()
+    assert.equal(await runSessionsCli({ argv: bad, io }), 2, bad.join(" "))
+    assert.match(out.stderr, /^sessions: .*Fix: .*\n$/u, bad.join(" "))
   }
   const { out, io } = capture()
-  assert.equal(await runSessionsCli({ argv: ["tail"], io }), 2)
-  assert.match(out.stderr, /^desk: tail needs a session/u)
   assert.equal(await runSessionsCli({ argv: ["--help"], io }), 0)
-  assert.match(out.stdout, /^Usage: sessions\.js whoami/u)
+  assert.match(out.stdout, /^ {2}send {5}Deliver/mu)
 })
 
 test("tail prints a session's messages as JSON, and a session that is not here says where to look", async () => {
@@ -273,7 +269,7 @@ test("a missing session-state folder is named, and the sessions.js script runs e
   appendFileSync(path.join(dir, A, "events.jsonl"), event("user.message", "from the script", "t1"))
   const script = fileURLToPath(new URL("../../../../../plugins/desk/mcp/scripts/sessions.js", import.meta.url))
   const run = (...argv) => spawnSync(process.execPath, [script, ...argv], { encoding: "utf8", env: { ...process.env, COPILOT_HOME: root } })
-  assert.match(run("--help").stdout, /^Usage: sessions\.js whoami/u)
+  assert.match(run("--help").stdout, /^ {2}send {5}Deliver/mu)
   assert.equal(JSON.parse(run("tail", "0dc4f17b-1").stdout).messages[0].text, "from the script")
   assert.equal(run("whoami", "--hint", "nothing like it").status, process.platform === "win32" ? 1 : 0)
   const send = run("send", A, "hello there friend", "--from", "none")

@@ -11,69 +11,17 @@ import { closeSync, fstatSync, openSync, readFileSync, readSync, readdirSync, ex
 import { spawnSync } from "node:child_process"
 import * as os from "node:os"
 import * as path from "node:path"
+import { AxError } from "../lib/ouro-ui/registry/ouro/ax/problem.ts"
+import { defineCli, defineCommand } from "../lib/ouro-ui/registry/ouro/ax/command.ts"
+import { runCli } from "../lib/ouro-ui/registry/ouro/ax/cli.ts"
 import { deskFailure } from "./desk-failure.js"
-
-const USAGE = [
-  "Usage: sessions.js whoami [--hint <text>]",
-  "       sessions.js tail <session> [<count>]",
-  "       sessions.js send <session> <message> [--from <session id>|none] [--as-user] [--wait <seconds>]",
-  "<session> is a full id, an id prefix or an exact name. All of it is about this machine's sessions.",
-  "whoami prints the session this command runs in. With several sessions in one runtime, --hint <text from your own command> picks yours.",
-  "tail prints the last <count> (default 6) user and assistant messages of a session.",
-  "send delivers a message with a header naming the sender and how to reply, then waits (--wait, default 20) for it to show in the target's history.",
-  "--as-user sends the text alone, as the person's own message; use it only for words the person authorized in their voice.",
-  "A send that was accepted but not yet seen is not failed: read the target with tail before sending again.",
-].join("\n")
 
 const UUID = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/iu
 const SEND_WAIT_MS = 120000
 const TAIL_BYTES = 2 << 20
 const MESSAGE_CHARS = 2000
 
-/** Writes a failure line and returns the failing exit code. */
-const fail = (io, message) => {
-  io.stderr.write(`${message}\n`)
-  return 1
-}
-const usageFailure = (code, thing, fix) => deskFailure({ code, thing, probably: "the command line does not match the sessions usage", look: "run sessions.js --help", keepWorking: "nothing was read or sent; fix the command line and run it again", fix })
-const failure = (code, thing, probably, look, fix) => deskFailure({ code, thing, probably, look, keepWorking: "read the session's history with tail, or message it with the app's send_session_message tool", fix })
-
-export function parseSessionsArgs(argv) {
-  const [command, ...args] = argv
-  if (command === undefined || command === "--help" || command === "-h") return { help: true }
-  if (!["whoami", "tail", "send"].includes(command)) return { error: usageFailure("sessions_unknown_command", `unknown command ${JSON.stringify(command)}`, "run sessions.js whoami, tail or send") }
-  const valued = { whoami: ["--hint"], tail: [], send: ["--from", "--wait"] }[command]
-  const bare = command === "send" ? ["--as-user"] : []
-  const flags = {}
-  const positional = []
-  for (let index = 0; index < args.length; index += 1) {
-    const arg = args[index]
-    if (!arg.startsWith("--")) {
-      positional.push(arg)
-      continue
-    }
-    if (bare.includes(arg)) {
-      flags[arg.slice(2)] = true
-      continue
-    }
-    if (!valued.includes(arg)) return { error: usageFailure("sessions_unknown_flag", `${command} does not take ${JSON.stringify(arg)}`, `drop ${arg}${valued.length > 0 ? ` or use ${valued.join(" or ")}` : ""}`) }
-    const value = args[index + 1]
-    if (value === undefined) return { error: usageFailure("sessions_flag_value", `${arg} needs a value`, `pass ${arg} <value>`) }
-    flags[arg.slice(2)] = value
-    index += 1
-  }
-  if (command === "whoami") return { command, flags }
-  if (command === "tail") {
-    const count = positional[1] === undefined ? 6 : Number(positional[1])
-    if (positional[0] === undefined || !Number.isInteger(count) || count < 1 || positional.length > 2) return { error: usageFailure("sessions_tail_args", "tail needs a session and optionally a positive message count", "run sessions.js tail <session> [<count>]") }
-    return { command, ref: positional[0], count }
-  }
-  const message = positional.slice(1).join(" ")
-  if (positional[0] === undefined || message === "") return { error: usageFailure("sessions_send_args", "send needs a session and a message", 'run sessions.js send <session> "<message>"') }
-  const wait = flags.wait === undefined ? 20 : Number(flags.wait)
-  if (!Number.isFinite(wait) || wait < 0) return { error: usageFailure("sessions_wait", "--wait needs a number of seconds", "pass --wait 20") }
-  return { command, ref: positional[0], message, from: flags.from ?? null, asUser: flags["as-user"] === true, waitMs: wait * 1000 }
-}
+const failure = (code, thing, probably, look, fix) => new Error(deskFailure({ code, thing, probably, look, keepWorking: "read the session's history with tail, or message it with the app's send_session_message tool", fix }))
 
 const copilotHome = ({ env, home }) => env.COPILOT_HOME || path.join(home, ".copilot")
 
@@ -278,62 +226,77 @@ async function seenWithin(seen, waitMs, { sleep, now }) {
   return found
 }
 
-async function runSend({ parsed, script, io, deps }) {
-  const target = resolveSession(deps.stateDir, parsed.ref)
+async function runSend({ ref, message, from: fromFlag, asUser, waitMs, script, deps }) {
+  const target = resolveSession(deps.stateDir, ref)
   if (target.reason !== undefined) {
-    return fail(io, failure("sessions_target", `cannot send to ${JSON.stringify(parsed.ref)}`, target.reason, "run sessions.js tail <id or name> to check the session, or ask the person which one is meant", "pass the full session id"))
+    throw failure("sessions_target", `cannot send to ${JSON.stringify(ref)}`, target.reason, "run sessions.js tail <id or name> to check the session, or ask the person which one is meant", "pass the full session id")
   }
   const nonce = deps.nonce()
-  let prompt = parsed.message
+  let prompt = message
   let sender = null
-  if (!parsed.asUser) {
+  if (!asUser) {
     // The first words of the command are in the sender's own history, which picks it out of several sessions in one runtime.
-    const hint = (/^[A-Za-z0-9 ,.:;_!?-]{8,60}/u.exec(parsed.message) ?? [])[0] ?? null
-    const from = parsed.from === "none" ? null : parsed.from ?? whoAmI(deps.stateDir, hint, deps.self).id
+    const hint = (/^[A-Za-z0-9 ,.:;_!?-]{8,60}/u.exec(message) ?? [])[0] ?? null
+    const from = fromFlag === "none" ? null : fromFlag ?? whoAmI(deps.stateDir, hint, deps.self).id
     sender = from
-    prompt = envelope({ nonce, from, name: from === null ? null : nameOf(deps.stateDir, from), host: deps.host, text: parsed.message, script })
+    prompt = envelope({ nonce, from, name: from === null ? null : nameOf(deps.stateDir, from), host: deps.host, text: message, script })
   }
-  const before = new Set(tailMessages(readHistoryTail(deps.stateDir, target.id)?.text ?? "", 20).map((message) => message.at))
+  const before = new Set(tailMessages(readHistoryTail(deps.stateDir, target.id)?.text ?? "", 20).map((entry) => entry.at))
   const socket = deps.socket()
   if (socket.reason !== undefined) {
-    return fail(io, failure("sessions_app_socket", "cannot reach the GitHub Copilot app", socket.reason, "check that the app is open, then run sessions.js tail on the target to see whether the message arrived another way", "start the app and run the same command again"))
+    throw failure("sessions_app_socket", "cannot reach the GitHub Copilot app", socket.reason, "check that the app is open, then run sessions.js tail on the target to see whether the message arrived another way", "start the app and run the same command again")
   }
   const result = await deps.send({ id: target.id, prompt, socket })
-  const matches = (message) => message.role === "user" && (parsed.asUser ? message.text.trim() === parsed.message.trim().slice(0, MESSAGE_CHARS) && !before.has(message.at) : message.text.includes(`[Message ${nonce} `))
-  const delivered = result.accepted && (await seenWithin(() => tailMessages(readHistoryTail(deps.stateDir, target.id)?.text ?? "", 20).some(matches), parsed.waitMs, deps))
+  const matches = (entry) => entry.role === "user" && (asUser ? entry.text.trim() === message.trim().slice(0, MESSAGE_CHARS) && !before.has(entry.at) : entry.text.includes(`[Message ${nonce} `))
+  const delivered = result.accepted && (await seenWithin(() => tailMessages(readHistoryTail(deps.stateDir, target.id)?.text ?? "", 20).some(matches), waitMs, deps))
   if (!result.accepted) {
-    return fail(io, failure("sessions_send_refused", `the app did not accept the message for ${target.id}`, result.error ?? `the app answered ${result.reply}; the session may be archived or not a Copilot app session`, `run sessions.js tail ${target.id} to see the session`, "pass the id of a session that is open in the app"))
+    throw failure("sessions_send_refused", `the app did not accept the message for ${target.id}`, result.error ?? `the app answered ${result.reply}; the session may be archived or not a Copilot app session`, `run sessions.js tail ${target.id} to see the session`, "pass the id of a session that is open in the app")
   }
-  const note = delivered ? undefined : `The app accepted the message but it was not in the history after ${parsed.waitMs / 1000} s. Read it with sessions.js tail ${target.id} before sending again, so it is not sent twice.`
-  io.stdout.write(`${JSON.stringify({ to: target.id, from: sender, nonce: parsed.asUser ? null : nonce, accepted: true, delivered, reply: result.reply, ...(note === undefined ? {} : { note }) }, null, 1)}\n`)
-  return 0
+  const note = delivered ? undefined : `The app accepted the message but it was not in the history after ${waitMs / 1000} s. Read it with sessions.js tail ${target.id} before sending again, so it is not sent twice.`
+  return { to: target.id, from: sender, nonce: asUser ? null : nonce, accepted: true, delivered, reply: result.reply, ...(note === undefined ? {} : { note }) }
+}
+
+const SESSION = { name: "session", required: true, description: "A full id, an id prefix or an exact name of a session on this machine." }
+const text = (result) => JSON.stringify(result, null, 1)
+
+function sessionsCli({ script, deps, overrides }) {
+  const command = (name, def, run) => defineCommand({ name, output: "one JSON value", text, effect: "private", ...def, run })
+  return defineCli({
+    name: "sessions",
+    about: ["Reads and messages the agent sessions on this machine; reach another machine's sessions by running the same command there."],
+    commands: [
+      command("whoami", { readOnly: true, summary: "Print the session this command runs in. With several sessions in one runtime, --hint <text from your own command> picks yours.", flags: { hint: { type: "string", description: "Text from your own command line, which is in your session's history." } } }, (input) => {
+        if (deps.platform === "win32" && overrides.self === undefined) {
+          throw failure("sessions_whoami_platform", "whoami cannot walk process parents here", "this command reads the process tree with ps, which Windows does not have", "read your own session id from the session folder name or the app", "pass --from <your session id> to send instead")
+        }
+        return whoAmI(deps.stateDir, input.hint ?? null, deps.self)
+      }),
+      command("tail", { readOnly: true, summary: "Print the last <count> (default 6) user and assistant messages of a session.", args: [SESSION, { name: "count", description: "How many messages, a positive whole number." }] }, (input) => {
+        const count = input.count === undefined ? 6 : Number(input.count)
+        if (!Number.isInteger(count) || count < 1) throw new AxError({ code: "sessions_tail_count", exit: 2, thing: "tail", problem: `the count must be a positive whole number, not ${JSON.stringify(input.count)}`, fix: "run sessions tail <session> [<count>]" })
+        const target = resolveSession(deps.stateDir, input.session)
+        const history = target.reason !== undefined ? null : readHistoryTail(deps.stateDir, target.id)
+        if (target.reason !== undefined || history === null) {
+          throw failure("sessions_tail_target", `cannot read ${JSON.stringify(input.session)}`, target.reason ?? `session ${target.id} has no events.jsonl here, so it is on another machine or has been removed`, "check the id or name, or run the command on the machine that hosts the session", "pass the full session id")
+        }
+        return { id: target.id, name: nameOf(deps.stateDir, target.id), last_written: history.mtime, messages: tailMessages(history.text, count) }
+      }),
+      command("send", {
+        summary: "Deliver a message with a header naming the sender and how to reply, then wait (--wait, default 20) for it to show in the target's history. A send that was accepted but not yet seen is not failed: read the target with tail before sending again.",
+        args: [SESSION, { name: "message", required: true, rest: true, description: "The message text." }],
+        flags: {
+          from: { type: "string", placeholder: "<session id>|none", description: "The sender's session id, or none; by default this session." },
+          "as-user": { type: "boolean", description: "Send the text alone, as the person's own message; use it only for words the person authorized in their voice." },
+          wait: { type: "number", min: 0, description: "Seconds to wait for the message to show in the target's history (default 20)." },
+        },
+      }, (input) => runSend({ ref: input.session, message: input.message, from: input.from, asUser: input["as-user"] === true, waitMs: (input.wait ?? 20) * 1000, script, deps })),
+    ],
+  })
 }
 
 /** Runs the command line; returns the exit code. */
 export async function runSessionsCli({ argv, script = "sessions.js", env = process.env, io = process, deps: overrides = {} }) {
-  const parsed = parseSessionsArgs(argv)
-  if (parsed.help) {
-    io.stdout.write(`${USAGE}\n`)
-    return 0
-  }
-  if (parsed.error) {
-    io.stderr.write(`${parsed.error}\n${USAGE}\n`)
-    return 2
-  }
-  const deps = { ...defaults(env), ...overrides }
-  if (parsed.command === "whoami") {
-    if (deps.platform === "win32" && overrides.self === undefined) {
-      return fail(io, failure("sessions_whoami_platform", "whoami cannot walk process parents here", "this command reads the process tree with ps, which Windows does not have", "read your own session id from the session folder name or the app", "pass --from <your session id> to send instead"))
-    }
-    io.stdout.write(`${JSON.stringify(whoAmI(deps.stateDir, parsed.flags.hint ?? null, deps.self), null, 1)}\n`)
-    return 0
-  }
-  if (parsed.command === "send") return runSend({ parsed, script, io, deps })
-  const target = resolveSession(deps.stateDir, parsed.ref)
-  const history = target.reason !== undefined ? null : readHistoryTail(deps.stateDir, target.id)
-  if (target.reason !== undefined || history === null) {
-    return fail(io, failure("sessions_tail_target", `cannot read ${JSON.stringify(parsed.ref)}`, target.reason ?? `session ${target.id} has no events.jsonl here, so it is on another machine or has been removed`, "check the id or name, or run the command on the machine that hosts the session", "pass the full session id"))
-  }
-  io.stdout.write(`${JSON.stringify({ id: target.id, name: nameOf(deps.stateDir, target.id), last_written: history.mtime, messages: tailMessages(history.text, parsed.count) }, null, 1)}\n`)
-  return 0
+  // A failure from the code underneath is already a whole line of its own; the kit's tool-name prefix would say it twice.
+  const stderr = { write: (line) => io.stderr.write(line.replace(/^sessions: (?=desk: )/u, "")) }
+  return runCli(sessionsCli({ script, deps: { ...defaults(env), ...overrides }, overrides }), argv, { stdout: io.stdout, stderr })
 }
