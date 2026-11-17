@@ -152,7 +152,6 @@ const NOT_ERRORS = {
   "plugins/desk/mcp/src/factory/pr-green.js#pr-green": "carrier of a code",
   "plugins/desk/mcp/src/factory/release-version.js#release-version": "carrier of a code",
   "plugins/desk/mcp/src/factory/store-issues.js#factory-issues": "carrier of a code",
-  "plugins/desk/mcp/src/tools/desk-save.js#got-a-string-that-is": "carrier of a checked message",
   "plugins/desk/mcp/src/tools/desk-save.js#the-path-holds-a-nul": "reason in a checked refusal",
   "plugins/desk/mcp/src/tools/desk-save.js#the-path-holds-or-a": "reason in a checked refusal",
   "plugins/desk/mcp/src/tools/desk-save.js#the-content-is-over-1": "reason in a checked refusal",

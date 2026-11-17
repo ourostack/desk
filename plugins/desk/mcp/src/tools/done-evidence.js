@@ -21,6 +21,7 @@
 
 import { realpathSync } from "node:fs"
 import * as os from "node:os"
+import { deskFailure } from "../runtime/desk-failure.js"
 import { spawnSync } from "node:child_process"
 import { resolveLocalPath } from "../util/paths.js"
 import { normalizeRemote } from "../factory/binding.js"
@@ -137,10 +138,14 @@ export function prRepoVerdict(repo, prRepo, { spawnGit, homeDir, deskRoot }) {
 }
 
 function repoRefusal(toolName, kind, ref, repos) {
-  return (
-    `${toolName}: \`evidence.ref\` ${JSON.stringify(ref)} is not in this task's repos (${describeRepos(repos)}). ` +
-    `Supply ${kind === "pr" ? "a PR URL" : "a commit URL"} in one of those repos; a pull request from a fork is opened against the upstream repo, so use the upstream's URL.`
-  )
+  return new Error(deskFailure({
+    code: "done_evidence_ref_not_in_repos",
+    thing: `${toolName}: evidence.ref`,
+    probably: `\`evidence.ref\` ${JSON.stringify(ref)} is not in this task's repos (${describeRepos(repos)}), probably because it names a fork or another repo`,
+    look: "read the task's `repos` with desk_status, or call desk_doctor",
+    keepWorking: "the task was not moved, so keep working and call this tool again with the corrected evidence",
+    fix: `supply ${kind === "pr" ? "a PR URL" : "a commit URL"} in one of those repos; a pull request from a fork is opened against the upstream repo, so use the upstream's URL`,
+  }))
 }
 
 function codeRepoUsage(toolName, repos) {
@@ -196,7 +201,7 @@ function checkCommit({ toolName, evidence, repos, deskRoot, spawnGit, homeDir, e
   const ref = evidence.ref.trim()
   const isUrl = ref.startsWith("https://")
   if (isUrl && !matchesRepos(urlRepo(ref, "commit"), repoIdentities(repos, { spawnGit, homeDir, deskRoot }))) {
-    throw new Error(repoRefusal(toolName, "commit", evidence.ref, repos))
+    throw repoRefusal(toolName, "commit", evidence.ref, repos)
   }
   const sha = (isUrl ? SHA_IN_URL : SHA_PREFIX).exec(ref)[isUrl ? 1 : 0]
   const clones = repos.filter((repo) => repo.localPath !== "").map((repo) => ({ repo, dir: resolveLocalPath(repo.localPath, { homeDir, deskRoot }) }))
@@ -248,7 +253,7 @@ export function assertCodeRepoEvidence({ toolName, evidence, repos, deskRoot, sp
   }
   if (evidence.kind === "pr") {
     const identities = repoIdentities(repos, { spawnGit, homeDir, deskRoot })
-    if (!matchesRepos(urlRepo(evidence.ref.trim(), "pr"), identities)) throw new Error(repoRefusal(toolName, "pr", evidence.ref, repos))
+    if (!matchesRepos(urlRepo(evidence.ref.trim(), "pr"), identities)) throw repoRefusal(toolName, "pr", evidence.ref, repos)
     return
   }
   checkCommit({ toolName, evidence, repos, deskRoot, spawnGit, homeDir, existingRepos, created })
