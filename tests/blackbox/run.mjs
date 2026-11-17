@@ -875,8 +875,8 @@ async function bootScript(ctx, world) {
     assert(world.lessonWritten, "no personal lesson was recorded earlier in this run")
     assert(typeof world.bootOutput === "string", "the boot did not run")
     const lesson = "- **Search ranking.** Recency matters more than length."
-    // A Copilot boot run in the desk's folder leaves out an AGENTS.md the host loaded itself, and says so.
-    const hostLoaded = world.bootOutput.includes("Your host already loaded this file into your instructions")
+    // A Copilot boot run in the desk's folder leaves out an AGENTS.md the host loaded itself, and points at it.
+    const hostLoaded = world.bootOutput.includes("; your host loaded it")
     const printed = world.bootOutput.includes(lesson) || (hostLoaded && fs.readFileSync(path.join(world.desk, "AGENTS.md"), "utf8").includes(lesson))
     assert(printed, "the next session start does not print the personal lesson")
   })
