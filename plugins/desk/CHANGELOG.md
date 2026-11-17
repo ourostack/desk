@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.201 — 2026-11-17
+
+Desk's MCP server now vendors Ouro UI v1.3.237, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.200 — 2026-11-17
 
 Desk's MCP server now vendors the action generator from Ouro UI core v0.17.6 and the AX kit from Ouro UI v1.3.233, moved by Ouro Current. The generator's `check --report` now exits with an error when a must claim fails, and `check` ignores the generator's version stamp, so the projections Desk generated with the older generator stay valid.
