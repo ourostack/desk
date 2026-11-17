@@ -59,6 +59,8 @@ warn_other_session() {
   printf '%s\\n' "$input" | while read -r _ _ remote_ref remote_sha; do
     case "$remote_sha" in ""|*[!0]*) ;; *) continue ;; esac
     [ -n "$remote_sha" ] || continue
+    remote_branch=$(printf '%s' "$remote_ref" | sed 's|^refs/heads/||')
+    case "$remote_branch" in main|master) continue ;; esac
     other=$(git log -1 --format='%(trailers:key=Session,valueonly,separator=%x2C)' "$remote_sha" 2>/dev/null | tr -d '\\r\\n')
     [ -n "$other" ] && [ "$other" != "$sid" ] || continue
     echo "Warning: the latest commit on $remote_ref was made by session $other, and this is session $sid. Another session may be working on that branch; check before pushing more commits there." >&2
