@@ -357,7 +357,6 @@ export async function runRecovery({
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
   let recovered
   const cli = recoveryCli(async (options) => (recovered = await runRecovery({ options })).report)
-  // The kit prefixes the tool's name to a message that already starts with it.
   const code = await runCli(cli, process.argv.slice(2), { stdin: process.stdin, stdout: process.stdout, stderr: process.stderr }, { env: process.env })
   process.exitCode = recovered?.exitCode ?? code
 }
