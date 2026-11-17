@@ -62,6 +62,17 @@ async function recordSession({ folder, sessionId, source }) {
   recordCopilotSession({ sessionId, folder: path.resolve(folder), source, activationConfig: resolveActivationConfigPath({ env: process.env }), env: process.env });
 }
 
+// Every commit an agent makes in this repository carries a `Session: <id>` trailer (mcp/src/runtime/session-trailer.js), so a
+// commit on another session's branch can be traced. Quiet and best-effort: a session must start whatever the repository's hooks look like.
+async function installSessionTrailer(folder) {
+  try {
+    const { installSessionTrailerHooks } = await import(pathToFileURL(path.join(pluginRoot, "mcp", "src", "runtime", "session-trailer.js")).href);
+    installSessionTrailerHooks(path.resolve(folder));
+  } catch {
+    // Not installed this time; the next session start tries again.
+  }
+}
+
 // Copilot asks its agent for an AI co-author trailer on commits, and offers it the ask_user question form, unless the operator's
 // Copilot settings turn them off. Desk forbids AI attribution and asks in plain chat (Claude's worker disallows AskUserQuestion), so
 // each setting is turned off once, only when unset (mcp/src/runtime/copilot-commit-trailer.js). One line for each it changed.
@@ -177,6 +188,7 @@ async function startupDirection() {
     const session = await readSessionInput();
     const sessionFolder = session.folder;
     await recordSession(session);
+    await installSessionTrailer(sessionFolder);
     const direction = copilotStartupDirection({ env: process.env, sessionFolder });
     // The boot starts now, before the slower checks below, so it runs while they do.
     const bootResult = bootSection({ folder: sessionFolder, sessionId: session.sessionId, source: session.source });
