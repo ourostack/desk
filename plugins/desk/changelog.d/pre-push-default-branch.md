@@ -1,1 +1,0 @@
-The pre-push hook no longer warns about commits from different sessions when the push goes to the default branch (main or master), where many sessions push by design ([#1162](https://github.com/ourostack/desk/pull/1162)).

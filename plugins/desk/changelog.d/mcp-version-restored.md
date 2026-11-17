@@ -1,0 +1,1 @@
+Desk's MCP server loads its shipped runtime packs again. A version change made by hand had pointed it at `desk-mcp@1.4.0-alpha.7`, which has no packs, so its tools did not start ([#1163](https://github.com/ourostack/desk/issues/1163)).

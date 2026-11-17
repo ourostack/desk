@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.234 — 2026-11-17
+
+The pre-push hook no longer warns about commits from different sessions when the push goes to the default branch (main or master), where many sessions push by design ([#1162](https://github.com/ourostack/desk/pull/1162)).
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.233 — 2026-11-17
 
 The `using-desk` skill every Copilot session loads is down from 6.4 KB to 4.7 KB: the same ten sections in tighter wording, with each rule the behaviour evals pinned kept. The context-budget check now holds it to 4.7 KB.
