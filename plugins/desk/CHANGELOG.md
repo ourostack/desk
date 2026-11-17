@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.229 — 2026-11-17
+
+Desk now finds and recovers a publication pull request that conflicts with main without a human. Settling looks at every open `desk/publish/*` pull request of the repository, not only the saves this machine recorded, so a save left conflicting by another machine or a lost record no longer sits unnoticed. A save whose lines are already on main is closed as superseded with a link to the file on main where they live; an append-only log or card conflict is rebuilt on the newest main and the old pull request is closed with a link to the new one; a conflict in the content itself keeps the pull request open and is named with its files in tool replies, the boot text and `drains status`.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.228 — 2026-11-17
 
 Desk's MCP server now vendors Ouro UI v1.3.266, moved by Ouro Current.
