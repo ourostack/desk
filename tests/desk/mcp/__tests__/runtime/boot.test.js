@@ -25,7 +25,6 @@ import {
   ENV_TOKEN_ACCOUNT,
   commandRunner,
   openPullRequests,
-  parseBootArgs,
   probeHost,
   repoStates,
   resolveTaskQuery,
@@ -1329,7 +1328,7 @@ test("bootOnce: when restoring the runtime dependencies failed, the not-validate
   }
 })
 
-// ── detectAgentHost, parseBootArgs ───────────────────────────────────────
+// ── detectAgentHost ───────────────────────────────────────
 
 test("detectAgentHost: names the covered host from its own variables, unknown otherwise", () => {
   assert.equal(detectAgentHost({ CLAUDE_PLUGIN_ROOT: "/x" }), "claude")
@@ -1341,18 +1340,6 @@ test("detectAgentHost: names the covered host from its own variables, unknown ot
   assert.equal(detectAgentHost({ CLAUDECODE: "1" }), "claude")
 })
 
-test("parseBootArgs: --task takes the next argument; a missing or blank value is no task", () => {
-  assert.deepEqual(parseBootArgs([]), { taskQuery: null, json: false, taskOnly: false, deliverTo: null })
-  assert.deepEqual(parseBootArgs(["--task", "faster-desk"]), { taskQuery: "faster-desk", json: false, taskOnly: false, deliverTo: null })
-  assert.deepEqual(parseBootArgs(["--task"]), { taskQuery: null, json: false, taskOnly: false, deliverTo: null })
-  assert.deepEqual(parseBootArgs(["--task", "  "]), { taskQuery: null, json: false, taskOnly: false, deliverTo: null })
-  assert.deepEqual(parseBootArgs(["--json", "--task", "x"]), { taskQuery: "x", json: true, taskOnly: false, deliverTo: null })
-  assert.deepEqual(parseBootArgs(["--task", "x", "--task-only"]), { taskQuery: "x", json: false, taskOnly: true, deliverTo: null })
-  assert.deepEqual(parseBootArgs(["--deliver", "/a/b.txt"]), { taskQuery: null, json: false, taskOnly: false, deliverTo: "/a/b.txt" })
-  assert.equal(parseBootArgs(["--deliver"]).deliverTo, null, "a missing file is no file")
-  assert.equal(parseBootArgs(["--deliver", "--json"]).deliverTo, null, "a flag is never the file")
-})
-
 test("runBootCli: --task reaches bootOnce as taskQuery", async () => {
   let seen = null
   const io = { stdout: { write: () => {} } }
@@ -1361,6 +1348,20 @@ test("runBootCli: --task reaches bootOnce as taskQuery", async () => {
   assert.equal(seen.taskOnly, false)
   await runBootCli({ argv: ["--task", "x/y", "--task-only"], env: {}, io, bootFn: async (options) => { seen = options; return {} } })
   assert.equal(seen.taskOnly, true)
+  await runBootCli({ argv: [], env: {}, io, bootFn: async (options) => { seen = options; return {} } })
+  assert.equal(seen.taskQuery, null)
+  await runBootCli({ argv: ["--task", "  "], env: {}, io, bootFn: async (options) => { seen = options; return {} } })
+  assert.equal(seen.taskQuery, null, "a blank value is no task")
+})
+
+test("runBootCli: a wrong command line is one stderr line and exit 2, and boots nothing", async () => {
+  let booted = false
+  let err = ""
+  const io = { stdout: { write: () => {} }, stderr: { write: (line) => { err += line } } }
+  const code = await runBootCli({ argv: ["--tsak", "x"], env: {}, io, bootFn: async () => { booted = true; return {} } })
+  assert.equal(code, 2)
+  assert.equal(booted, false)
+  assert.match(err, /^session-boot: .*\. Fix: .*\.\n$/u)
 })
 
 // ── resolveTaskQuery ─────────────────────────────────────────────────────
