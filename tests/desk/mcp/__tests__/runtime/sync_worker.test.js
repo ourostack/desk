@@ -780,6 +780,12 @@ test("runSyncPushCli answers a missing --root or an unknown flag with one usage 
   }
 })
 
+test("runSyncPushCli --help prints the usage on stdout", async () => {
+  const { out, io } = cliIo()
+  assert.equal(await runSyncPushCli({ argv: ["--help"], env: {}, io, runWorker: async () => assert.fail("must not run") }), 0)
+  assert.match(out.stdout, /--root/u)
+})
+
 test("runSyncPushCli parses --root and --debounce-ms and passes them to runWorker", async () => {
   let called = null
   const exitCode = await runSyncPushCli({
