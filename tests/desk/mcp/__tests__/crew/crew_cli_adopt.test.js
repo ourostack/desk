@@ -6,8 +6,9 @@ import { main } from "../../../../../plugins/desk/mcp/scripts/crew.js"
 
 async function run(argv, engine) {
   let out = ""
-  const code = await main({ argv, cwd: "/work/team", write: (text) => { out += text }, engine })
-  return { code, result: JSON.parse(out) }
+  let err = ""
+  const code = await main({ argv, cwd: "/work/team", write: (text) => { out += text }, writeError: (text) => { err += text }, engine })
+  return { code, err, result: out === "" ? null : JSON.parse(out) }
 }
 
 test("join --adopt-existing hands the reviewed commit to the engine; without it the option is absent", async () => {
@@ -22,8 +23,8 @@ test("join --adopt-existing hands the reviewed commit to the engine; without it 
   assert.equal(plain.apply, false)
   const missing = await run(["join", "--adopt-existing"], engine)
   assert.equal(missing.code, 2)
-  assert.match(missing.result.message, /^--adopt-existing needs a value\. usage: crew\.js/u)
+  assert.match(missing.err, /^crew: .*--adopt-existing/u)
   const wrongAction = await run(["status", "--adopt-existing", commit], engine)
   assert.equal(wrongAction.code, 2)
-  assert.match(wrongAction.result.message, /^status does not take --adopt-existing/u)
+  assert.match(wrongAction.err, /^crew: .*--adopt-existing/u)
 })
