@@ -1608,7 +1608,7 @@ export async function runBootCli({ argv = [], env = process.env, io = process, b
       "task-only": { type: "boolean", description: "Check only the named task." },
       deliver: { type: "string", placeholder: "<file>", description: "Write the text to this file, renamed into place, and print nothing." },
     },
-    run: async (input, { json }) => {
+    run: async (input) => {
       applyPublicationMode({}, env)
       const taskQuery = typeof input.task === "string" && input.task.trim() !== "" ? input.task : null
       const taskOnly = input["task-only"] === true
@@ -1639,7 +1639,7 @@ export async function runBootCli({ argv = [], env = process.env, io = process, b
       full = result
       if (deliverTo !== null) {
         quiet = true
-        const output = json ? `${JSON.stringify(structured)}\n` : formatBootText(result)
+        const output = formatBootText(result)
         try {
           deliverText(deliverTo, output)
         } catch (error) {
