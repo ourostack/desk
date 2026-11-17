@@ -147,7 +147,7 @@ function settings(o) {
     profileRoots: o.profileRoots || {},
     installMs: o.installMs || 180000,
     openMs: o.openMs || 120000,
-    firstOpenMs: o.firstOpenMs || 45000,
+    firstOpenMs: o.firstOpenMs || 90000,
     retryMinMs: o.retryMinMs || 30000,
     commandMs: o.commandMs || 120000,
     authDriver: o.authDriver,
