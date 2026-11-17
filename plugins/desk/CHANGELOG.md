@@ -1,5 +1,13 @@
 # desk plugin — changelog
 
+## 3.2.224 — 2026-11-17
+
+The factory command line's `account`, `consent`, `derive`, `status`, `flush`, `context-request`, `finalize`, `build`, `evaluate-accept` and `proof` commands are now defined with Ouro AX: a wrong argument is one stderr line with its fix and exit 2.
+
+Desk's MCP server now vendors Ouro UI v1.3.261, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.223 — 2026-11-17
 
 Corrections and lessons now become checks before prose. The [curator](skills/curator/SKILL.md) tries a new first disposition, `encode-as-check`: remove the cause in code, then a type, then a lint or CI check whose error names the fix (baselined when the pattern is already common), then a test, with prose kept for judgment calls; once a check enforces a prose rule, that rule is deleted. [lesson-capture](skills/lesson-capture/SKILL.md) ships such a check instead of recording a prose line. Borrowed from pstack's `/correct` and `principle-encode-lessons-in-structure`.

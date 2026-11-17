@@ -1,1 +1,0 @@
-The factory command line's `account`, `consent`, `derive`, `status`, `flush`, `context-request`, `finalize`, `build`, `evaluate-accept` and `proof` commands are now defined with Ouro AX: a wrong argument is one stderr line with its fix and exit 2.
