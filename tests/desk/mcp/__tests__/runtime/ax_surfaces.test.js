@@ -145,7 +145,6 @@ const NOT_ERRORS = {
   "plugins/desk/mcp/src/crew/workspace.js#crew-s-desk-adopting": "commit message",
   "plugins/desk/mcp/src/crew/workspace.js#nothing-was-written": "carrier",
   "plugins/desk/mcp/src/crew/workspace.js#nothing-was-written~2": "carrier",
-  "plugins/desk/mcp/src/desk/content-home.js#nothing-was-written-or-committed": "carrier",
   "plugins/desk/mcp/src/desk/resources.js#no-resource-was-changed": "carrier",
   "plugins/desk/mcp/src/desk/steps.js#no-step-was-changed": "carrier",
   "plugins/desk/mcp/src/factory/pipeline/build.js#factory-build": "carrier",

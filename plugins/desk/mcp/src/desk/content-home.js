@@ -14,7 +14,14 @@ const plainObject = (value) => value !== null && typeof value === "object" && !A
 const sha256 = (value) => createHash("sha256").update(value).digest("hex")
 
 function refuse(tool, code, message) {
-  throw new Error(`${tool}: ${code}: ${message}. Nothing was written or committed by this call; preserve the input and existing sources.`)
+  throw new Error(deskFailure({
+    code,
+    thing: `${tool}: ${code}`,
+    probably: message,
+    look: "call desk_doctor, or read the published purpose policy named in the message",
+    keepWorking: "your input and the existing sources are untouched and nothing was written or committed, so keep working and call this tool again once the declaration is corrected",
+    fix: "correct the content_home declaration or the published policy as the message says",
+  }))
 }
 
 /** The Git runner this module uses; a test swaps `spawn` to cut a call off the way a slow machine does. */
