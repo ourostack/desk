@@ -324,13 +324,14 @@ const duringTurn = (event, login, turns) => {
   return event.actor?.login?.toLowerCase() === login.toLowerCase() && turns.some((from) => at >= from - TURN_LEAD_MS && at <= from + TURN_MS)
 }
 
-/** What made a reopen or a label change news, or null: a label outside the drain's namespace, ignored list and ignored patterns, or a reopen that is not the drain claiming the issue (its own `drain:` label change within a minute). A label or reopen by the polling account during the drain's turn is its own work. Closes, assignments and mentions are not news. */
-function newsEvent(event, rules, claims, login) {
+/** What made a reopen or a label change news, or null: a label outside the drain's namespace, ignored list and ignored patterns, or a reopen that is not the drain claiming the issue (its own `drain:` label change within a minute). A label applied within a minute of the issue being opened was part of filing it, and the "new issue" wake shows it. A label or reopen by the polling account during the drain's turn is its own work. Closes, assignments and mentions are not news. */
+function newsEvent(event, rules, claims, login, openedAt) {
   if (event.event === "reopened") {
     const own = event.actor?.login?.toLowerCase() === login.toLowerCase() && claims.some((claim) => claim.actor?.login?.toLowerCase() === login.toLowerCase() && Math.abs(Date.parse(claim.created_at) - Date.parse(event.created_at)) <= CLAIM_SLACK_MS)
     return own || duringTurn(event, login, rules.turns) ? null : "reopened"
   }
   if (event.event !== "labeled" && event.event !== "unlabeled") return null
+  if (event.event === "labeled" && Date.parse(event.created_at) <= openedAt + OPENING_LABEL_MS) return null
   const name = (event.label?.name ?? "").toLowerCase()
   const ignored = name.startsWith(DRAIN_LABEL_PREFIX) || rules.labels.includes(name) || rules.patterns.some((pattern) => pattern.test(name))
   return ignored || duringTurn(event, login, rules.turns) ? null : `${event.event} ${name}`
@@ -352,10 +353,11 @@ async function changedByOthers(api, repo, issue, before, digest, ignored, rules)
   }
   const feed = await api.issueEvents(repo, issue.number)
   const claims = feed.filter(isDrainLabel)
-  const news = feed.filter((event) => event.created_at > since).map((event) => newsEvent(event, rules, claims, api.login)).find(Boolean)
+  const news = feed.filter((event) => event.created_at > since).map((event) => newsEvent(event, rules, claims, api.login, Date.parse(issue.created_at))).find(Boolean)
   return news ?? (await crossReference(api, repo, issue, since))
 }
 
+const OPENING_LABEL_MS = 60_000
 const DRAIN_BRANCH_PREFIXES = ["drain-", "drain/"]
 const escapePattern = (text) => text.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")
 
