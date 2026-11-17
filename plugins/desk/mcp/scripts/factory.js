@@ -303,7 +303,7 @@ export async function runValidatePrCommand(flags, seams) {
     for (let index = 0; index < argv.length; index += 2) {
       const name = typeof argv[index] === "string" && argv[index].startsWith("--") ? argv[index].slice(2) : ""
       if (!VALIDATE_PR_FLAGS.includes(name) || typeof argv[index + 1] !== "string" || Object.hasOwn(named, name)) {
-        throw usageError("validate-pr", `${JSON.stringify(argv[index] ?? "")} is not one of --${VALIDATE_PR_FLAGS.join(", --")} with a value, given once`, "factory validate-pr --base <base sha> --head <head sha> --author-association <value>")
+        throw usageError("validate-pr", `${JSON.stringify(argv[index])} is not one of --${VALIDATE_PR_FLAGS.join(", --")} with a value, given once`, "factory validate-pr --base <base sha> --head <head sha> --author-association <value>")
       }
       named[name] = argv[index + 1]
     }
