@@ -86,7 +86,7 @@ function trackDesk(store) {
 }
 
 async function andon(store, github) {
-  return runAndonCommand({ argv: ["--store", store, "--repo", REPO], env: { GH_TOKEN: TOKEN }, runner: github.runner })
+  return runAndonCommand({ store, repo: REPO }, { env: { GH_TOKEN: TOKEN }, runner: github.runner })
 }
 
 test("andon opens one issue when a release makes tool failures clearly worse, and closes it when a later release recovers", async () => {

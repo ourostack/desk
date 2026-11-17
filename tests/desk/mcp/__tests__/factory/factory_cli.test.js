@@ -503,42 +503,42 @@ test("build writes the deterministic report tree and job-link returns the accept
   assert.deepEqual(await runBuildCommand({ store, out }), { jobs: 2, sessions: 4 })
   assert.equal(JSON.parse(readFileSync(path.join(out, "jobs", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.json"), "utf8")).job, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
   await knownPrivate(env, "ourostack/desk")
-  assert.deepEqual(await runJobLinkCommand({ env, argv: ["--store", "ourostack/factory", "--desk-remote", "git@github.com:OuroStack/Desk.git", "--person-prefix", "", "--track", "factory", "--slug", "store-pipeline"] }), {
+  assert.deepEqual(await runJobLinkCommand({ store: "ourostack/factory", "desk-remote": "git@github.com:OuroStack/Desk.git", "person-prefix": "", track: "factory", slug: "store-pipeline" }, { env }), {
     link: "https://github.com/ourostack/factory/blob/reports/jobs/3e7101c7c7d8774223be31b99495dd7f.md",
   })
-  assert.deepEqual(await runJobLinkCommand({ env, argv: ["--store", "ourostack/factory", "--desk-remote", "git@github.com:OuroStack/Desk.git", "--track", "factory", "--slug", "store-pipeline"] }), {
+  assert.deepEqual(await runJobLinkCommand({ store: "ourostack/factory", "desk-remote": "git@github.com:OuroStack/Desk.git", track: "factory", slug: "store-pipeline" }, { env }), {
     link: "https://github.com/ourostack/factory/blob/reports/jobs/3e7101c7c7d8774223be31b99495dd7f.md",
   })
   await refused(["build", "--store", store])
-  await assert.rejects(runJobLinkCommand({ argv: ["--store", "ourostack/factory"] }), /Usage: factory\.js job-link/u)
+  await refused(["job-link", "--store", "ourostack/factory"])
 }))
 
 test("job-link --this-machine names where this machine's sessions are reported: the plain job on a private desk, the keyed one elsewhere", () => scratch(async (env) => {
-  const argv = (remote) => ["--store", "ourostack/factory", "--desk-remote", remote, "--track", "factory", "--this-machine", "--slug", "store-pipeline"]
+  const flags = (remote) => ({ store: "ourostack/factory", "desk-remote": remote, track: "factory", "this-machine": true, slug: "store-pipeline" })
   await knownPrivate(env, "ourostack/desk")
-  assert.deepEqual(await runJobLinkCommand({ env, argv: argv("git@github.com:OuroStack/Desk.git") }), {
+  assert.deepEqual(await runJobLinkCommand(flags("git@github.com:OuroStack/Desk.git"), { env }), {
     link: "https://github.com/ourostack/factory/blob/reports/jobs/3e7101c7c7d8774223be31b99495dd7f.md",
     keyed: false,
   })
   // A desk whose visibility is not known (absent or expired): no link that might be wrong, keyed or plain.
   const remote = "git@github.com:someone/public-desk.git"
-  assert.deepEqual(await runJobLinkCommand({ env, argv: ["--store", "ourostack/factory", "--desk-remote", remote, "--track", "factory", "--slug", "store-pipeline"] }), { link: null, reason: "visibility_not_known" })
-  assert.deepEqual(await runJobLinkCommand({ env, argv: argv(remote) }), { link: null, reason: "visibility_not_known" })
+  assert.deepEqual(await runJobLinkCommand({ store: "ourostack/factory", "desk-remote": remote, track: "factory", slug: "store-pipeline" }, { env }), { link: null, reason: "visibility_not_known" })
+  assert.deepEqual(await runJobLinkCommand(flags(remote), { env }), { link: null, reason: "visibility_not_known" })
   const expired = new Date(Date.now() - 30 * 24 * 3600 * 1000).toISOString()
   await fs.writeFile(path.join(await factoryStateRoot(env), "visibility.json"), JSON.stringify({ "ourostack/desk": { visibility: "private", checked_at: expired }, "someone/public-desk": { visibility: "public", checked_at: new Date().toISOString() } }))
-  assert.deepEqual(await runJobLinkCommand({ env, argv: argv("git@github.com:OuroStack/Desk.git") }), { link: null, reason: "visibility_not_known" })
+  assert.deepEqual(await runJobLinkCommand(flags("git@github.com:OuroStack/Desk.git"), { env }), { link: null, reason: "visibility_not_known" })
   // A desk known public on a machine that has published nothing keyed: no secret, so no link, and none is created.
   const secretFile = path.join(await factoryStateRoot(env), "machine-secret")
   assert.equal(existsSync(secretFile), false)
-  assert.deepEqual(await runJobLinkCommand({ env, argv: argv(remote) }), { link: null, reason: "no_machine_secret" })
+  assert.deepEqual(await runJobLinkCommand(flags(remote), { env }), { link: null, reason: "no_machine_secret" })
   assert.equal(existsSync(secretFile), false, "job-link never creates the machine secret")
   // Once the machine has its secret, the operator gets this machine's keyed report, with the note that keeps it private.
   const secret = await readMachineSecret(env)
   const keyed = keyedJobId(jobId({ deskRemote: remote, personPrefix: "", track: "factory", slug: "store-pipeline" }), secret)
-  assert.deepEqual(await runJobLinkCommand({ env, argv: argv(remote) }), { link: `https://github.com/ourostack/factory/blob/reports/jobs/${keyed}.md`, keyed: true, note: KEYED_LINK_NOTE })
+  assert.deepEqual(await runJobLinkCommand(flags(remote), { env }), { link: `https://github.com/ourostack/factory/blob/reports/jobs/${keyed}.md`, keyed: true, note: KEYED_LINK_NOTE })
   assert.match(KEYED_LINK_NOTE, /never put it on the task card, in a pull request or anywhere public/u)
-  // The flag takes no value of its own, and the usage line names it.
-  await assert.rejects(runJobLinkCommand({ env, argv: ["--this-machine"] }), /--this-machine\]/u)
+  // The flag takes no value of its own.
+  await refused(["job-link", "--this-machine", "extra"])
 }))
 
 test("job-link resolves the card's birth path first when --desk is given, so a renamed card's link matches the job the task tools already agree on (ourostack/desk#76)", () => scratch(async (env) => {
@@ -563,14 +563,14 @@ test("job-link resolves the card's birth path first when --desk is given, so a r
   assert.notEqual(birthJob, currentJob)
 
   await knownPrivate(env, "ourostack/desk")
-  const withoutDesk = await runJobLinkCommand({ env, argv: ["--store", "ourostack/factory", "--desk-remote", remote, "--track", "track", "--slug", "new-slug"] })
+  const withoutDesk = await runJobLinkCommand({ store: "ourostack/factory", "desk-remote": remote, track: "track", slug: "new-slug" }, { env })
   assert.equal(withoutDesk.link, `https://github.com/ourostack/factory/blob/reports/jobs/${currentJob}.md`, "without --desk, the given (current) path is hashed as-is")
 
-  const withDesk = await runJobLinkCommand({ env, argv: ["--store", "ourostack/factory", "--desk-remote", remote, "--desk", desk, "--track", "track", "--slug", "new-slug"] })
+  const withDesk = await runJobLinkCommand({ store: "ourostack/factory", "desk-remote": remote, desk, track: "track", slug: "new-slug" }, { env })
   assert.equal(withDesk.link, `https://github.com/ourostack/factory/blob/reports/jobs/${birthJob}.md`, "with --desk, the card's birth path is resolved and hashed instead")
 
-  await assert.rejects(runJobLinkCommand({ argv: ["--store", "ourostack/factory", "--desk-remote", remote, "--desk", "relative", "--track", "track", "--slug", "new-slug"] }), /Usage: factory\.js job-link/u, "--desk must be absolute")
-  await assert.rejects(runJobLinkCommand({ argv: ["--store", "ourostack/factory", "--desk-remote", remote, "--desk", path.join(env.HOME, "no-such-desk"), "--track", "track", "--slug", "new-slug"] }), /the desk folder could not be read/u)
+  await assert.rejects(runJobLinkCommand({ store: "ourostack/factory", "desk-remote": remote, desk: "relative", track: "track", slug: "new-slug" }, { env }), /--desk is not an absolute path/u, "--desk must be absolute")
+  await assert.rejects(runJobLinkCommand({ store: "ourostack/factory", "desk-remote": remote, desk: path.join(env.HOME, "no-such-desk"), track: "track", slug: "new-slug" }, { env }), /the desk folder could not be read/u)
 }))
 
 test("validate-pr reads base and head as Git data, enforces facts for contributors, and marks maintainer changes", () => scratch(async (env) => {
@@ -1204,8 +1204,8 @@ test("evaluate computes the task's job as the task tools do and prepares its bri
   const desk = path.join(env.HOME, "desk")
   await fs.mkdir(desk)
   const job = jobId({ deskRemote: `local:${desk}`, personPrefix: "", track: "factory", slug: "evaluator" })
-  assert.deepEqual(await runEvaluateCommand({ argv: ["--pending"], env, pluginVersion: "3.2.0-alpha.40" }), { jobs: [] })
-  assert.deepEqual(await runEvaluateCommand({ argv: ["--desk", desk, "--task", "factory/evaluator"], env, pluginVersion: "3.2.0-alpha.40" }), { result: "not_opted_in", job, briefs: [] })
+  assert.deepEqual(await runEvaluateCommand({ pending: true }, { env, pluginVersion: "3.2.0-alpha.40" }), { jobs: [] })
+  assert.deepEqual(await runEvaluateCommand({ desk, task: "factory/evaluator" }, { env, pluginVersion: "3.2.0-alpha.40" }), { result: "not_opted_in", job, briefs: [] })
   await seedJob(env, job)
   let output = ""
   assert.equal(await main({ argv: ["evaluate", "--desk", desk, "--task", "factory/evaluator"], env, write: (text) => { output += text }, logError: () => assert.fail("evaluate must succeed") }), 0)
@@ -1217,9 +1217,9 @@ test("evaluate computes the task's job as the task tools do and prepares its bri
   assert.equal(brief.evaluator.plugin_version, deskVersion())
 
   const crew = jobId({ deskRemote: `local:${desk}`, personPrefix: "desks/ari", track: "factory", slug: "evaluator" })
-  assert.equal((await runEvaluateCommand({ argv: ["--desk", desk, "--task", "desks/ari/factory/evaluator"], env })).job, crew)
-  assert.equal((await runEvaluateCommand({ argv: ["--desk", desk, "--task", "desks/ ari /factory/evaluator"], env })).job, crew)
-  assert.deepEqual((await runEvaluateCommand({ argv: ["--pending"], env })).jobs.map((entry) => entry.job).sort(), [crew, job].sort())
+  assert.equal((await runEvaluateCommand({ desk, task: "desks/ari/factory/evaluator" }, { env })).job, crew)
+  assert.equal((await runEvaluateCommand({ desk, task: "desks/ ari /factory/evaluator" }, { env })).job, crew)
+  assert.deepEqual((await runEvaluateCommand({ pending: true }, { env })).jobs.map((entry) => entry.job).sort(), [crew, job].sort())
 }))
 
 test("evaluate computes the task's job from its birth path, not its current one (ourostack/desk#76)", () => scratch(async (env) => {
@@ -1236,7 +1236,7 @@ test("evaluate computes the task's job from its birth path, not its current one 
   git("add", "-A")
   git("commit", "-q", "-m", "rename the evaluator task")
   const birthJob = jobId({ deskRemote: `local:${desk}`, personPrefix: "", track: "factory", slug: "origin-evaluator" })
-  const result = await runEvaluateCommand({ argv: ["--desk", desk, "--task", "factory/renamed-evaluator"], env, pluginVersion: "3.2.0-alpha.40" })
+  const result = await runEvaluateCommand({ desk, task: "factory/renamed-evaluator" }, { env, pluginVersion: "3.2.0-alpha.40" })
   assert.equal(result.job, birthJob, "the CLI's evaluate subcommand hashes the birth path, agreeing with the task tools")
 }))
 
@@ -1246,28 +1246,25 @@ test("evaluate uses the desk's origin remote when it has one", () => scratch(asy
   execFileSync("git", ["init", "-q", desk])
   execFileSync("git", ["-C", desk, "remote", "add", "origin", "https://github.com/example/desk.git"])
   const job = jobId({ deskRemote: "https://github.com/example/desk.git", personPrefix: "", track: "factory", slug: "evaluator" })
-  assert.equal((await runEvaluateCommand({ argv: ["--desk", desk, "--task", "factory/evaluator"], env })).job, job)
+  assert.equal((await runEvaluateCommand({ desk, task: "factory/evaluator" }, { env })).job, job)
 }))
 
 test("evaluate refuses malformed options, a relative or missing desk and a malformed task", () => scratch(async (env) => {
   const desk = path.join(env.HOME, "desk")
   await fs.mkdir(desk)
-  for (const argv of [
-    [],
-    ["--desk"],
-    ["--desk", desk],
-    ["--desk", desk, "--task", "factory/evaluator", "--extra", "x"],
-    ["--desk", "relative", "--task", "factory/evaluator"],
-    ["--desk", desk, "--other", "factory/evaluator"],
-    ["--desk", desk, "--task", "factory"],
-    ["--desk", desk, "--task", "a/b/c"],
-    ["--desk", desk, "--task", "desks/ari/factory"],
-    ["--desk", desk, "--task", "factory/_archive"],
-    ["--desk", desk, "--task", "desks/../factory/evaluator"],
+  for (const flags of [
+    {},
+    { desk },
+    { desk: "relative", task: "factory/evaluator" },
+    { desk, task: "factory" },
+    { desk, task: "a/b/c" },
+    { desk, task: "desks/ari/factory" },
+    { desk, task: "factory/_archive" },
+    { desk, task: "desks/../factory/evaluator" },
   ]) {
-    await assert.rejects(runEvaluateCommand({ argv, env }), /Usage: factory\.js evaluate/u)
+    await assert.rejects(runEvaluateCommand(flags, { env }), /^AxError: evaluate: |evaluate: /u)
   }
-  await assert.rejects(runEvaluateCommand({ argv: ["--desk", path.join(env.HOME, "absent"), "--task", "factory/evaluator"], env }), /desk folder could not be read/u)
+  await assert.rejects(runEvaluateCommand({ desk: path.join(env.HOME, "absent"), task: "factory/evaluator" }, { env }), /desk folder could not be read/u)
 }))
 
 test("evaluate-accept checks the evaluator's answer and moves accepted labels into the outbox", () => scratch(async (env) => {
@@ -1304,15 +1301,15 @@ test("kaizen-check reads the store's jobs, checks each open card through gh with
     return { code: 0, stdout: "{}", stderr: "" }
   }
   const tokenEnv = { ...env, GH_TOKEN: "ghs_SENTINEL" }
-  const result = await runKaizenCheckCommand({ argv: ["--store", store, "--repo", "ourostack/factory"], env: tokenEnv, runner })
+  const result = await runKaizenCheckCommand({ store, repo: "ourostack/factory" }, { env: tokenEnv, runner })
   assert.deepEqual(result, { cards: [{ number: 4, status: "too_few_jobs", comment: "created", labels: [] }], failed: 0 })
   assert.ok(calls.every((call) => call.token === "ghs_SENTINEL" && !call.args.includes("ghs_SENTINEL")))
   assert.match(JSON.parse(calls.at(-1).input).body, /Kaizen check: not enough independent jobs yet/u)
-  const withAuthor = await runKaizenCheckCommand({ argv: ["--store", store, "--repo", "ourostack/factory", "--author", "someone"], env: tokenEnv, runner })
+  const withAuthor = await runKaizenCheckCommand({ store, repo: "ourostack/factory", author: "someone" }, { env: tokenEnv, runner })
   assert.equal(withAuthor.cards[0].number, 4)
-  await assert.rejects(runKaizenCheckCommand({ argv: ["--store", store], env: tokenEnv, runner }), /Usage: factory\.js kaizen-check/u)
-  await assert.rejects(runKaizenCheckCommand({ argv: ["--store", store, "--repo", "ourostack/factory", "--extra", "x"], env: tokenEnv, runner }), /Usage: factory\.js kaizen-check/u)
-  await assert.rejects(runKaizenCheckCommand({ argv: ["--store", store, "--repo", "ourostack/factory"], env, runner }), /GH_TOKEN must hold/u)
+  await assert.rejects(runKaizenCheckCommand({ store }, { env: tokenEnv, runner }), /--repo is not an owner\/repo/u)
+  await refused(["kaizen-check", "--store", store, "--repo", "ourostack/factory", "--extra", "x"])
+  await assert.rejects(runKaizenCheckCommand({ store, repo: "ourostack/factory" }, { env, runner }), /GH_TOKEN is empty/u)
   assert.ok(SUPPORTED_COMMANDS.includes("kaizen-check"))
   // A card whose calls fail is reported, and the command exits 1 after checking the rest.
   const failing = async (args, options) => {
@@ -1330,7 +1327,7 @@ test("kaizen-check uses the real gh runner when none is injected", () => scratch
   const store = path.join(env.HOME, "store")
   cpSync(FIXTURE_STORE, store, { recursive: true })
   // An empty PATH means gh cannot start: the stable code, not a crash.
-  await assert.rejects(runKaizenCheckCommand({ argv: ["--store", store, "--repo", "ourostack/factory"], env: { ...env, GH_TOKEN: "ghs_SENTINEL", PATH: "" } }), (error) => error.code === "gh_missing")
+  await assert.rejects(runKaizenCheckCommand({ store, repo: "ourostack/factory" }, { env: { ...env, GH_TOKEN: "ghs_SENTINEL", PATH: "" } }), (error) => error.code === "gh_missing")
 }))
 
 test("andon reads the store's jobs and syncs its alarms through gh with GH_TOKEN", () => scratch(async (env) => {
@@ -1342,16 +1339,16 @@ test("andon reads the store's jobs and syncs its alarms through gh with GH_TOKEN
     routes.push(args[args.indexOf("X-GitHub-Api-Version: 2022-11-28") + 1])
     return { code: 0, stdout: "[]", stderr: "" }
   }
-  const argv = ["--store", store, "--repo", "ourostack/factory"]
+  const flags = { store, repo: "ourostack/factory" }
   const tokenEnv = { ...env, GH_TOKEN: "ghs_SENTINEL" }
   // A store without factory.json tracks no plugin.
-  assert.deepEqual(await runAndonCommand({ argv, env: tokenEnv, runner }), { tracked: [], alarms: [], failed: 0 })
+  assert.deepEqual(await runAndonCommand(flags, { env: tokenEnv, runner }), { tracked: [], alarms: [], failed: 0 })
   assert.deepEqual(routes, ["repos/ourostack/factory/issues?state=all&labels=andon&per_page=100&page=1"])
   await fs.writeFile(path.join(store, "factory.json"), '{"andon":{"plugins":["desk"]}}\n')
-  assert.deepEqual(await runAndonCommand({ argv, env: tokenEnv, runner }), { tracked: ["desk"], alarms: [], failed: 0 })
+  assert.deepEqual(await runAndonCommand(flags, { env: tokenEnv, runner }), { tracked: ["desk"], alarms: [], failed: 0 })
   await fs.writeFile(path.join(store, "factory.json"), '{"andon":{"plugins":"desk"}}\n')
-  await assert.rejects(runAndonCommand({ argv, env: tokenEnv, runner }), /the store's factory\.json is not valid \(invalid_config\)/u)
-  await assert.rejects(runAndonCommand({ argv: ["--repo", "ourostack/factory"], env: { ...env, GH_TOKEN: "x" }, runner }), /Usage: factory\.js andon/u)
+  await assert.rejects(runAndonCommand(flags, { env: tokenEnv, runner }), /the store's factory\.json is not valid \(invalid_config\)/u)
+  await assert.rejects(runAndonCommand({ store, repo: "bad" }, { env: { ...env, GH_TOKEN: "x" }, runner }), /--repo is not an owner\/repo/u)
   assert.ok(SUPPORTED_COMMANDS.includes("andon"))
 }))
 

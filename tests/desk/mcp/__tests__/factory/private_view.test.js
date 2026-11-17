@@ -201,7 +201,7 @@ test("the names agree with factory.js job-link --this-machine, including for a r
   git("mv", "track-a/first", "track-a/renamed")
   git("commit", "-qam", "rename")
   const jobs = await taskNames({ root, env })
-  const link = await runJobLinkCommand({ env, argv: ["--store", "ourostack/factory", "--desk-remote", `local:${root}`, "--desk", root, "--track", "track-a", "--slug", "renamed", "--this-machine"] })
+  const link = await runJobLinkCommand({ store: "ourostack/factory", "desk-remote": `local:${root}`, desk: root, track: "track-a", slug: "renamed", "this-machine": true }, { env })
   assert.ok(link.link.endsWith(`${Object.entries(jobs).find(([, value]) => value.task === "renamed")[0]}.md`))
 }))
 
