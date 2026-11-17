@@ -17,7 +17,6 @@ const NODE_ABI = { type: "string", placeholder: "<ABI>", description: "The Node 
 const text = (result) => result.text
 
 // A failure thrown with its own `<tool>:` line would otherwise carry the tool name twice.
-const quiet = (name, io) => ({ write: (line) => io.stderr.write(line.replace(`${name}: ${name}: `, `${name}: `)) })
 
 export function runRuntimeDependencyPackBuildCli({ argv = process.argv.slice(2), io = process } = {}) {
   const cli = defineCli({
@@ -36,7 +35,7 @@ export function runRuntimeDependencyPackBuildCli({ argv = process.argv.slice(2),
       },
     }),
   })
-  return runCli(cli, argv, { stdout: io.stdout, stderr: quiet(cli.name, io) })
+  return runCli(cli, argv, { stdout: io.stdout, stderr: io.stderr })
 }
 
 export function runRuntimeDependencyPackVerifyCli({ argv = process.argv.slice(2), io = process } = {}) {
@@ -62,5 +61,5 @@ export function runRuntimeDependencyPackVerifyCli({ argv = process.argv.slice(2)
       },
     }),
   })
-  return runCli(cli, argv, { stdout: io.stdout, stderr: quiet(cli.name, io) })
+  return runCli(cli, argv, { stdout: io.stdout, stderr: io.stderr })
 }
