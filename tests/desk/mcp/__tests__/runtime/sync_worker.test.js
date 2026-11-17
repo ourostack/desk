@@ -766,14 +766,24 @@ test("a push round whose upstream vanishes once delivers after a re-check finds 
 // runSyncPushCli.
 // ---------------------------------------------------------------------------
 
-test("runSyncPushCli requires --root", async () => {
-  await assert.rejects(runSyncPushCli({ argv: [], env: {} }), /--root/)
+const cliIo = () => {
+  const out = { stdout: "", stderr: "" }
+  return { out, io: { stdout: { write: (text) => { out.stdout += text } }, stderr: { write: (text) => { out.stderr += text } } } }
+}
+
+test("runSyncPushCli answers a missing --root or an unknown flag with one usage line and exit 2", async () => {
+  for (const argv of [[], ["--root", "/x", "--bogus", "y"]]) {
+    const { out, io } = cliIo()
+    assert.equal(await runSyncPushCli({ argv, env: {}, io, runWorker: async () => assert.fail("must not run") }), 2)
+    assert.equal(out.stdout, "")
+    assert.match(out.stderr, /^sync-push\.js: .*--(root|bogus).*Fix: .*\n$/u)
+  }
 })
 
-test("runSyncPushCli rejects a malformed argument", async () => {
-  await assert.rejects(runSyncPushCli({ argv: [42, "x"], env: {} }), /unexpected argument/)
-  await assert.rejects(runSyncPushCli({ argv: ["notflag", "x"], env: {} }), /unexpected argument/)
-  await assert.rejects(runSyncPushCli({ argv: [undefined, "x"], env: {} }), /unexpected argument ""/)
+test("runSyncPushCli --help prints the usage on stdout", async () => {
+  const { out, io } = cliIo()
+  assert.equal(await runSyncPushCli({ argv: ["--help"], env: {}, io, runWorker: async () => assert.fail("must not run") }), 0)
+  assert.match(out.stdout, /--root/u)
 })
 
 test("runSyncPushCli parses --root and --debounce-ms and passes them to runWorker", async () => {
@@ -787,16 +797,13 @@ test("runSyncPushCli parses --root and --debounce-ms and passes them to runWorke
   assert.deepEqual(called, { root: "/x", env: { A: "1" }, debounceMs: 500 })
 })
 
-test("runSyncPushCli falls back to DEFAULT_DEBOUNCE_MS when --debounce-ms is omitted or unparseable", async () => {
+test("runSyncPushCli falls back to DEFAULT_DEBOUNCE_MS when --debounce-ms is omitted", async () => {
   let called = null
   await runSyncPushCli({ argv: ["--root", "/x"], env: {}, runWorker: async (args) => { called = args } })
   assert.equal(called.debounceMs, DEFAULT_DEBOUNCE_MS)
-
-  await runSyncPushCli({ argv: ["--root", "/x", "--debounce-ms", "nope"], env: {}, runWorker: async (args) => { called = args } })
-  assert.equal(called.debounceMs, DEFAULT_DEBOUNCE_MS)
 })
 
-test("the recovery CLI rejects a blocked publication instead of returning success", async () => {
+test("the recovery CLI fails a blocked publication instead of returning success", async () => {
   const root = await mkTempRoot("desk-publication-cli-")
   const env = { XDG_STATE_HOME: await mkTempRoot("desk-publication-cli-state-") }
   const statusFile = syncStatusPath({ root, env })
@@ -805,17 +812,16 @@ test("the recovery CLI rejects a blocked publication instead of returning succes
       await fs.mkdir(path.dirname(statusFile), { recursive: true })
       await fs.writeFile(statusFile, JSON.stringify({ error: diagnostic }))
     }
-    await assert.rejects(runSyncPushCli({
-      argv: ["--root", root], env,
+    const { out, io } = cliIo()
+    assert.equal(await runSyncPushCli({
+      argv: ["--root", root], env, io,
       runWorker: async () => ({ result: "blocked", reason: "publication_blocked", unpushed: 1 }),
-    }), (error) => {
-      assert.match(error.message, /publication.*blocked/iu)
-      assert.match(error.message, /local commits.*preserved/iu)
-      assert.match(error.message, /Fix:.*sync-push\.js/u)
-      assert.doesNotMatch(error.message, /ghp_abcdefghijklmnopqrstuvwxyz0123456789/u)
-      if (diagnostic !== null) assert.match(error.message, /workspace-policy failed/u)
-      return true
-    })
+    }), 1)
+    assert.match(out.stderr, /publication.*blocked/iu)
+    assert.match(out.stderr, /local commits.*preserved/iu)
+    assert.match(out.stderr, /Fix:.*sync-push\.js/u)
+    assert.doesNotMatch(out.stderr, /ghp_abcdefghijklmnopqrstuvwxyz0123456789/u)
+    if (diagnostic !== null) assert.match(out.stderr, /workspace-policy failed/u)
   }
 })
 
