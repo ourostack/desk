@@ -1,15 +1,16 @@
 // A save that went out as a publication pull request is not on the desk's main until that PR merges. This module keeps the
 // record of those PRs (in the desk's sync status, so every session on the desk and `drains status` read the same one), says
 // loudly which of them has been waiting past ten minutes, and settles them: a PR whose changes are already on main is closed
-// as superseded with the evidence, a PR that conflicts with main is rebuilt on the newest main and published again, and
-// anything else stays open and named.
+// as superseded with the evidence, a PR that conflicts with main is rebuilt on the newest main and published again (append-only
+// logs and cards merge), a conflict in the content itself stays open and is named with its files, and every open desk/publish/*
+// PR of the repository that conflicts is found and settled even when this machine never recorded it.
 
 import { readdirSync, readFileSync } from "node:fs"
 import * as path from "node:path"
 
 import { deliveryPaths, removeWorktree, replay, runner, upstreamOf } from "./deliver.js"
 import { resolveDeskStateDir } from "./last-start.js"
-import { publicationPolicy, publishPullRequest } from "./pr-publication.js"
+import { publicationPolicy, publishPullRequest, repository } from "./pr-publication.js"
 import { readSyncStatus, updateSyncStatus } from "./sync-worker.js"
 
 const STUCK_AFTER_MS = 10 * 60 * 1000
@@ -69,8 +70,20 @@ export function allStuckSaves({ env, now }) {
   }
 }
 
-/** One plain sentence per stuck save, naming its PR link. */
-export const stuckLine = (save) => `Desk save not on main after ${save.minutes} min: ${save.url} (the pull request is still open; Desk rebases it and the merge-when-green relay merges it once its checks are green)`
+/** Notes the files a save's pull request conflicts on with main, which Desk could not merge by itself. */
+function markConflict({ root, env, url, files }) {
+  updateSyncStatus(root, env, (current) => {
+    const list = entries(current)
+    return { [KEY]: [...list.filter((save) => save.url !== url), { ...list.find((save) => save.url === url), conflict: { files } }] }
+  })
+}
+
+const conflictFiles = (save) => save.conflict?.files ?? []
+
+/** One plain sentence per stuck save, naming its PR link, and the files that conflict when Desk could not merge them. */
+export const stuckLine = (save) => conflictFiles(save).length > 0
+  ? `Desk save not on main after ${save.minutes} min: ${save.url} conflicts with main in ${conflictFiles(save).join(", ")}, which Desk cannot merge by itself; open the pull request, resolve the conflict and merge it`
+  : `Desk save not on main after ${save.minutes} min: ${save.url} (the pull request is still open; Desk rebases it and the merge-when-green relay merges it once its checks are green)`
 
 /** `reply` with the stuck saves named, when there are any. A reply that is not an object, or a call with no desk, is returned as it is. */
 export function withStuckSaves(reply, { root, env, now }) {
@@ -79,7 +92,7 @@ export function withStuckSaves(reply, { root, env, now }) {
   if (stuck.length === 0) return reply
   return {
     ...reply,
-    desk_unmerged_saves: stuck.map((save) => ({ pr: save.url, minutes: save.minutes })),
+    desk_unmerged_saves: stuck.map((save) => ({ pr: save.url, minutes: save.minutes, ...(conflictFiles(save).length > 0 ? { conflicts: conflictFiles(save) } : {}) })),
     desk_unmerged_note: `${stuck.map(stuckLine).join("; ")}. Tell the operator this save is not merged yet; do not report it as merged.`,
   }
 }
@@ -92,7 +105,7 @@ const FRONTMATTER_KEY = /^([A-Za-z][\w-]*):(?:\s|$)/u
  * main, when every line the commit adds is on main, or when the commit only sets frontmatter fields that a newer commit on
  * main has since set differently.
  */
-function supersession(git, head, main) {
+function supersession(git, head, main, link) {
   const parent = `${head}^`
   const files = git(["diff-tree", "--root", "-r", "--name-only", "--no-renames", "--no-commit-id", "-z", head]).stdout.split("\0").filter(Boolean)
   const headTime = Number(git(["log", "-1", "--format=%ct", head]).stdout.trim())
@@ -105,18 +118,18 @@ function supersession(git, head, main) {
       if (onMain.status !== 0 && onHead.status !== 0) { evidence.push(`${file} is absent on main, as the save left it`); continue }
       return null
     }
-    if (onMain.stdout === onHead.stdout) { evidence.push(`${file} is identical on main`); continue }
+    if (onMain.stdout === onHead.stdout) { evidence.push(`${file} is identical on main (${link(file)})`); continue }
     const had = new Set(git(["cat-file", "blob", `${parent}:${file}`]).stdout.split("\n"))
     const added = onHead.stdout.split("\n").filter((line) => line.trim() !== "" && !had.has(line))
     const mainLines = onMain.stdout.split("\n")
     const missing = added.filter((line) => !mainLines.includes(line))
-    if (missing.length === 0) { evidence.push(`every line the save adds to ${file} is on main`); continue }
+    if (missing.length === 0) { evidence.push(`every line the save adds to ${file} is already on main (${link(file)})`); continue }
     const newer = Number(git(["log", "-1", "--format=%ct", main, "--", file]).stdout.trim()) > headTime
     const replaced = missing.every((line) => {
       const key = FRONTMATTER_KEY.exec(line)?.[1]
       return key !== undefined && mainLines.some((other) => FRONTMATTER_KEY.exec(other)?.[1] === key)
     })
-    if (newer && replaced) { evidence.push(`${file}: the fields the save sets were set again by newer commits on main`); continue }
+    if (newer && replaced) { evidence.push(`${file}: the fields the save sets were set again by newer commits on main (${link(file)})`); continue }
     return null
   }
   return evidence
@@ -156,12 +169,34 @@ export function settleSaves(options) {
   }
 }
 
+// Open desk/publish/* pull requests against `base` that GitHub reports as conflicting and this desk never recorded (another
+// machine's save, or a record lost): recorded from the time they were opened, so they are as loud as any other waiting save.
+function adoptConflicting({ spawnGit, root, env, repo, base, known }) {
+  const listed = ghRun(spawnGit, root, ["pr", "list", "--repo", repo.full, "--state", "open", "--base", base, "--limit", "200", "--json", "url,headRefName,headRefOid,baseRefName,mergeable,createdAt"])
+  for (const pr of JSON.parse(listed.stdout)) {
+    if (!pr.headRefName.startsWith("desk/publish/") || pr.mergeable !== "CONFLICTING" || known.has(pr.url)) continue
+    updateSyncStatus(root, env, (current) => ({ [KEY]: [...entries(current), { url: pr.url, head: pr.headRefOid, branch: pr.headRefName, base, since: pr.createdAt }] }))
+  }
+}
+
 function settle({ root, env, spawnGit, clock }) {
   const outcome = { closed: [], rebased: [], waiting: [] }
-  const list = entries(readSyncStatus({ root, env }))
-  if (list.length === 0) return outcome
   const git = runner(spawnGit, root)
   const upstream = upstreamOf(git)
+  let list = entries(readSyncStatus({ root, env }))
+  let repo = null
+  if (upstream !== null) {
+    try { repo = repository(git(["remote", "get-url", upstream.remote]).stdout.trim()) } catch { repo = null }
+  }
+  if (repo !== null) {
+    try {
+      adoptConflicting({ spawnGit, root, env, repo, base: upstream.merge.replace(/^refs\/heads\//u, ""), known: new Set(list.map((save) => save.url)) })
+      list = entries(readSyncStatus({ root, env }))
+    } catch {
+      // Finding strays is best effort; the recorded saves are still settled.
+    }
+  }
+  if (list.length === 0) return outcome
   if (upstream === null || git(["fetch", "--quiet", "--no-tags", upstream.remote, `+${upstream.merge}:${upstream.tracking}`], NETWORK_TIMEOUT_MS).status !== 0) {
     outcome.waiting.push(...list.map((save) => save.url))
     return outcome
@@ -175,7 +210,7 @@ function settle({ root, env, spawnGit, clock }) {
     if (view.state !== "OPEN") { clearUnmerged({ root, env, url: save.url }); continue }
     if (git(["cat-file", "-e", `${save.head}^{commit}`]).status !== 0) git(["fetch", "--quiet", "--no-tags", upstream.remote, `refs/heads/${save.branch}`], NETWORK_TIMEOUT_MS)
     if (git(["merge-base", "--is-ancestor", save.head, main]).status === 0) { clearUnmerged({ root, env, url: save.url }); continue }
-    const evidence = supersession(git, save.head, main)
+    const evidence = supersession(git, save.head, main, (file) => `https://${repo?.full ?? ""}/blob/${main}/${file.split("/").map(encodeURIComponent).join("/")}`)
     if (evidence !== null) {
       if (closeSaved({ spawnGit, root, env, url: save.url, comment: supersededComment(main, evidence) })) outcome.closed.push(save.url)
       else outcome.waiting.push(save.url)
@@ -199,6 +234,7 @@ function rebaseSave({ git, spawnGit, root, env, upstream, save, main, clock }) {
   const prefix = git(["rev-parse", "--show-prefix"]).stdout.trim()
   const built = replay({ git, spawnGit, paths, onto: main, commits: [save.head], prefix })
   removeWorktree(git, paths)
+  if (built.skipped.length > 0) markConflict({ root, env, url: save.url, files: [...new Set(built.skipped.flatMap((skip) => skip.paths))] })
   if (built.error !== undefined || built.skipped.length > 0 || !OBJECT_ID.test(built.head) || built.head === main) return "waiting"
   let receipt
   try {

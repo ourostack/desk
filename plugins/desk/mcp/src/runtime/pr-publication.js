@@ -30,7 +30,7 @@ export function publicationPolicy(git, commit) {
   return policy
 }
 
-function repository(remote) {
+export function repository(remote) {
   const scp = /^git@([^:]+):(.+)$/u.exec(remote)
   let host, name
   if (scp !== null) [host, name] = scp.slice(1)
