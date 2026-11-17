@@ -9,7 +9,7 @@ import * as path from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 
 const scripts = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "..", "..", ".github", "scripts")
-const { assignShards, shardFiles, loadDurations, defaultTablePath, WINDOWS_SHARDS } = await import(pathToFileURL(path.join(scripts, "suite-shards.mjs")).href)
+const { assignShards, shardFiles, loadDurations, defaultTablePath, WINDOWS_SHARDS, SHARD_TARGET_SECONDS } = await import(pathToFileURL(path.join(scripts, "suite-shards.mjs")).href)
 const { checkTable, refreshTable } = await import(pathToFileURL(path.join(scripts, "suite-durations.mjs")).href)
 const { suiteFiles } = await import(pathToFileURL(path.join(scripts, "suite-files.mjs")).href)
 const require = createRequire(import.meta.url)
@@ -72,6 +72,17 @@ test("the checked-in table plans the workflow's shards inside the budget: none o
   assert.ok(worst <= mean * 1.1, `the longest shard (${Math.round(worst)} s) is more than 10% above the mean (${Math.round(mean)} s)`)
   // The per-file limit is 30 minutes; a file near it cannot be balanced away and needs its own fix.
   assert.ok(Math.max(...Object.values(real.files)) < 25 * 60, "a single file is near the 30 minute limit")
+})
+
+// Every shard pays about 1.75 minutes of setup the table does not count, so a shard more than the measured times need is waste. A count may sit one above the fewest
+// that meets the target, so deleting a few seconds of tests does not fail an unrelated pull request; past that, cut WINDOWS_SHARDS or refresh the table first.
+test("the workflow runs no more shards than the measured times need to keep each one within the target", () => {
+  const real = loadDurations()
+  const files = suiteFiles(testsRoot)
+  const worst = (total) => Math.max(...assignShards(files, total, real).map((s) => s.seconds))
+  let fewest = 1
+  while (worst(fewest) > SHARD_TARGET_SECONDS && fewest < files.length) fewest += 1
+  assert.ok(WINDOWS_SHARDS <= fewest + 1, `${fewest} shards keep every shard within ${SHARD_TARGET_SECONDS / 60} min by the measured table, but WINDOWS_SHARDS is ${WINDOWS_SHARDS}; set it to ${fewest}, or refresh suite-durations.json from recent runs if the times grew`)
 })
 
 // An entry for a test file that is gone is harmless (the plan only looks up files that exist, and a refresh drops it), so deleting a test needs no edit to this table.
