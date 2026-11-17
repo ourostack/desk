@@ -23,9 +23,18 @@
 import childProcess from "node:child_process"
 import { promises as fsp } from "node:fs"
 import * as path from "node:path"
+import { deskFailure } from "../runtime/desk-failure.js"
 
 const OWNER_DIR_MODE = 0o700
 const OWNER_FILE_MODE = 0o600
+
+// One refusal for every private path that cannot be used; `naming.label` stays out of the line, the code names the case.
+function refusal(naming, code, probably, fix) {
+  return Object.assign(new Error(deskFailure({
+    code, thing: `private ${naming.subject} path`, probably, look: "call desk_doctor and read its factory section",
+    keepWorking: `nothing was written to the ${naming.subject} and the other desk tools carry on`, fix,
+  })), { code })
+}
 
 /** `~` and `~/...` expansion, the same convention `src/util/paths.js` uses. */
 export function expandHome(value, homeDir) {
@@ -36,22 +45,18 @@ export function expandHome(value, homeDir) {
 
 /** `lstat`, or `null` when the path is absent; any other failure (including `EACCES`) is a thrown, labeled error — a permission problem must never read as "not there". */
 export async function lstatIfPresent(target, naming) {
-  const { label, subject } = naming
   try {
     return await fsp.lstat(target)
   } catch (error) {
     if (error.code === "ENOENT") return null
-    throw Object.assign(new Error(`${label}: Check that ${target} can be read, then run again: inspecting the private ${subject} path returned ${error.code}`), { code: "os_protect_check_that_can_be_read" })
+    throw refusal(naming, "os_protect_check_that_can_be_read", `inspecting ${target} returned ${error.code}`, `check that ${target} can be read, then run again`)
   }
 }
 
 /** Refuses when `dir` itself contains a `.git` entry. */
 export async function assertNotGitCheckout(dir, naming) {
-  const { label, subject } = naming
   if ((await lstatIfPresent(path.join(dir, ".git"), naming)) !== null) {
-    throw Object.assign(new Error(
-      `${label}: Point XDG_STATE_HOME at a directory that is not under version control: ` +
-        `refusing to write private ${subject} inside the Git checkout at ${dir}.`), { code: "os_protect_point_xdg_state_home_at" })
+    throw refusal(naming, "os_protect_point_xdg_state_home_at", `${dir} is inside a Git checkout`, "point XDG_STATE_HOME at a directory that is not under version control")
   }
 }
 
@@ -107,13 +112,12 @@ const leafObservationKey = (stat) => `${identityKey(stat)}:${stat.size}:${stat.m
  */
 export function clearExtendedAcl(target, platform, naming) {
   if (platform !== "darwin") return true
-  const { label, subject } = naming
   const options = { encoding: "utf8", timeout: 5000, maxBuffer: 65536 }
   const hasAcl = () => /^\s*\d+:/mu.test(childProcess.execFileSync("/bin/ls", ["-ldeq", target], options))
   if (!hasAcl()) return true
   childProcess.execFileSync("/bin/chmod", ["-N", target], options)
   if (hasAcl()) {
-    throw Object.assign(new Error(`${label}: Remove the extended ACL from ${target}: the private ${subject} path retains an extended ACL`), { code: "os_protect_remove_the_extended_acl_from" })
+    throw refusal(naming, "os_protect_remove_the_extended_acl_from", `${target} keeps an extended ACL after chmod -N`, `remove the extended ACL from ${target}`)
   }
   return false
 }
@@ -137,7 +141,7 @@ export async function primeAclFreeFiles(files, platform, naming) {
       let dir = path.dirname(file)
       while (!ancestors.has(dir)) {
         const stat = await lstatIfPresent(dir, naming)
-        if (stat === null || !stat.isDirectory()) throw new Error("acl_parent_changed")
+        if (stat === null || !stat.isDirectory()) throw refusal(naming, "acl_parent_changed", "a parent folder changed while its ACL was being checked", "run again once nothing else changes that folder")
         ancestors.set(dir, identityKey(stat))
         const parent = path.dirname(dir)
         if (parent === dir) break
@@ -188,7 +192,6 @@ export async function primeAclFreeFiles(files, platform, naming) {
  * step). Returns whether this call created it.
  */
 export async function ensureOwnerOnlyDirectory(dir, platform, naming) {
-  const { label, subject } = naming
   let existing = await lstatIfPresent(dir, naming)
   let created = false
   if (existing === null) {
@@ -201,10 +204,10 @@ export async function ensureOwnerOnlyDirectory(dir, platform, naming) {
     existing = await fsp.lstat(dir)
   }
   if (existing.isSymbolicLink()) {
-    throw Object.assign(new Error(`${label}: Use a real directory instead of ${dir}: the private ${subject} path component is a symlink and will not be used`), { code: "os_protect_use_a_real_directory_instead" })
+    throw refusal(naming, "os_protect_use_a_real_directory_instead", `${dir} is a symlink`, `use a real directory instead of ${dir}`)
   }
   if (!existing.isDirectory()) {
-    throw Object.assign(new Error(`${label}: Use a directory instead of ${dir}: the private ${subject} path component is not a directory`), { code: "os_protect_use_a_directory_instead_of" })
+    throw refusal(naming, "os_protect_use_a_directory_instead_of", `${dir} is not a directory`, `use a directory instead of ${dir}`)
   }
   if (platform !== "win32") {
     clearExtendedAclOnce(dir, existing, platform, naming)
@@ -221,16 +224,15 @@ export async function ensureOwnerOnlyDirectory(dir, platform, naming) {
  * and clears a macOS extended ACL (skipped on Windows).
  */
 export async function protectLeafFile(file, platform, naming) {
-  const { label, subject } = naming
   const stat = await fsp.lstat(file)
   if (stat.isSymbolicLink()) {
-    throw Object.assign(new Error(`${label}: Use a regular file instead of ${file}: the private ${subject} path is a symlink and will not be used`), { code: "os_protect_use_a_regular_file_instead_2" })
+    throw refusal(naming, "os_protect_use_a_regular_file_instead_2", `${file} is a symlink`, `use a regular file instead of ${file}`)
   }
   if (!stat.isFile()) {
-    throw Object.assign(new Error(`${label}: Use a regular file instead of ${file}: the private ${subject} path is not a regular file`), { code: "os_protect_use_a_regular_file_instead" })
+    throw refusal(naming, "os_protect_use_a_regular_file_instead", `${file} is not a regular file`, `use a regular file instead of ${file}`)
   }
   if (stat.nlink !== 1) {
-    throw Object.assign(new Error(`${label}: Use a file with a single link instead of ${file}: the private ${subject} is hard-linked and will not be used`), { code: "os_protect_use_a_file_with_a" })
+    throw refusal(naming, "os_protect_use_a_file_with_a", `${file} is hard-linked`, `use a file with a single link instead of ${file}`)
   }
   if (platform !== "win32") {
     clearExtendedAclOnce(file, stat, platform, naming)
