@@ -642,6 +642,18 @@ async function mergeMethod(hub, origin) {
   return method[0]
 }
 
+// A line that credits an AI tool or a bot in a trailer (`Co-authored-by: ...`): the org rules reject it in a default-branch commit.
+const AI_CREDIT = /^[ \t]*[A-Za-z-]+-by[ \t]*:.*(?:\[bot\]|(?:^|[^A-Za-z0-9])(?:copilot|claude|anthropic|openai|chatgpt|gpt|codex|gemini|cursor|devin|aider)(?:[^A-Za-z]|$))/iu
+
+// The `gh pr merge` arguments that give the commit an explicit message: "<title> (#n)" and the body without credit
+// lines. GitHub's default message copies the branch commits' co-author trailers, which a rule on the default branch
+// can reject. A rebase merge has no message.
+function mergeMessage(method, url, title, body) {
+  if (method === "--rebase") return []
+  const clean = String(body).replace(/\r/gu, "").split("\n").filter((line) => !AI_CREDIT.test(line)).join("\n").replace(/\n{3,}/gu, "\n\n")
+  return ["--subject", `${title} (#${url.split("/").pop()})`, "--body", clean]
+}
+
 // Commits what `write` writes and pushes it to the default branch; when the branch moved, rebuilds on it and pushes
 // again. `write` returns the paths it wrote, or null when the default branch needs nothing from it.
 async function landByPush({ git, base, write, message, created }) {
@@ -750,7 +762,7 @@ async function landByPullRequest({ git, base, origin, write, message, body, pref
         fetchBase(git, base)
         validate(`origin/${base}`)
       }
-      const answer = await hub(["pr", "merge", result.pr, method])
+      const answer = await hub(["pr", "merge", result.pr, method, ...mergeMessage(method, result.pr, message, body)])
       refusal = answer.code === 0 ? "" : firstLine(answer.stderr)
       state = await prView(hub, result.pr)
       // A merge command that succeeded may only have queued the pull request: only GitHub's own state says it merged.

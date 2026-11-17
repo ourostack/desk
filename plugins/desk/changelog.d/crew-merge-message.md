@@ -1,0 +1,1 @@
+Crew now merges its pull requests with an explicit commit message (the pull request title plus its number, and its body without AI or bot credit lines), so GitHub's default message cannot add a `Co-authored-by` trailer that a repository rule rejects. A rebase merge has no message and is unchanged.

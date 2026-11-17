@@ -124,6 +124,11 @@ test("the merge uses a method the repository allows, and says so when it can tel
     const result = await startWorkspace({ repo: repo.clone, spawnGit: repo.spawnGit, gh: fake.gh, wait: noWait, now: NOW, apply: true, tooling: TOOLING })
     assert.equal(result.state, "published", result.message)
     assert.equal(fake.state.method, flag)
+    // GitHub's default message would copy the branch commits' co-author trailers; every merge that has a message sets its own.
+    const pr = fake.state.prs[0]
+    if (flag === "--rebase") assert.deepEqual(fake.state.mergeArgs, [])
+    else assert.deepEqual(fake.state.mergeArgs, ["--subject", `${pr.title} (#${pr.url.split("/").pop()})`, "--body", pr.body])
+    assert.doesNotMatch(fake.state.mergeArgs.join("\n"), /co-authored-by/iu)
   }
   for (const [methods, why] of [[{}, /acme\/team allows no merge method/u], [null, /could not read which merge methods acme\/team allows: HTTP 502: Bad Gateway/u]]) {
     const repo = await teamRepo(CIT_SHAPED)

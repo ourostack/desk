@@ -212,6 +212,7 @@ export function fakeGh(bare, { create = { code: 0 }, merge, view, repos = TOOLIN
     if (a === "pr" && b === "merge") {
       state.merges += 1
       state.method = args[3]
+      state.mergeArgs = args.slice(4)
       if (merge !== undefined) return merge(state)
       const refusal = blocked()
       if (refusal !== null) return { code: 1, stdout: "", stderr: refusal }
