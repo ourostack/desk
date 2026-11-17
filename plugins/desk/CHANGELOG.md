@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.233 — 2026-11-17
+
+The `using-desk` skill every Copilot session loads is down from 6.4 KB to 4.7 KB: the same ten sections in tighter wording, with each rule the behaviour evals pinned kept. The context-budget check now holds it to 4.7 KB.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.232 — 2026-11-17
 
 Content-home refusals now say what probably happened, how to look further, how to file a bug with evidence and how to keep working.

@@ -1,1 +1,0 @@
-The `using-desk` skill every Copilot session loads is down from 6.4 KB to 4.7 KB: the same ten sections in tighter wording, with each rule the behaviour evals pinned kept. The context-budget check now holds it to 4.7 KB.
