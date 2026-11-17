@@ -110,7 +110,7 @@ test("boot does not print a desk AGENTS.md a Copilot host already loaded from th
   assert.equal(loaded.agents_md.text, "Team rule.\n", "the JSON result still carries the file")
   const text = formatBootText(loaded)
   assert.equal(text.split("Team rule.").length - 1, 1, "only the first-line marker names the file's text, not a copy of the file")
-  assert.match(text, /## The desk's AGENTS\.md \(.*AGENTS\.md\); its rules bind this session\n\nYour host already loaded this file into your instructions \(it begins `Team rule\.`\), so it is not printed again here\. If your instructions do not contain it, read it at .*AGENTS\.md before acting\.\n/u)
+  assert.match(text, /AGENTS\.md \(.*AGENTS\.md\) binds this session; your host loaded it \(it begins `Team rule\.`\), else read it\./u)
   assert.match(text, /## Your own AGENTS\.md \(.*\); its rules bind this session\n\nMy rule\.\n/u, "the person's own file is not in the host's instructions, so it is still printed")
   const elsewhere = await boot(root, { env: copilot, cwd: path.join(root, "desks", "ari") })
   assert.equal(elsewhere.agents_md_in_host_instructions, false, "a boot run from another folder cannot tell the host loaded this file")
@@ -121,7 +121,7 @@ test("boot does not print a desk AGENTS.md a Copilot host already loaded from th
   assert.equal(hostLoadsAgentsMd({ agent: "copilot", cwd: root, agentsMd: { path: path.join(root, "gone", "AGENTS.md") } }), false, "a path that cannot be resolved prints the file")
   assert.equal(hostLoadsAgentsMd({ agent: "copilot", cwd: root, agentsMd: null }), false)
   const blank = formatBootText(sampleResult({ agents_md: { path: "/work/desk/AGENTS.md", text: "\n \n", truncated: false, bytes: 3, shownBytes: 3 }, agents_md_in_host_instructions: true }))
-  assert.match(blank, /Your host already loaded this file into your instructions, so it is not printed again here\./u, "a file with no text has no first line to name")
+  assert.match(blank, /your host loaded it, else read it\./u, "a file with no text has no first line to name")
 })
 
 test("boot carries the shelf of lessons beside the person's AGENTS.md, or the desk's own on a solo desk", async () => {
@@ -485,7 +485,7 @@ test("runBootCli prints readable text by default and the one-line JSON with --js
   }
   const text = await run([])
   assert.match(text, /^Desk boot: ready \| desk /u)
-  assert.match(text, /Instructions, in order:\n1\. Use \S+ as the desk path in every command/u)
+  assert.match(text, /Instructions, in order:\n1\. (?:Use \S+ as the desk path in every command|The operator named)|Use \S+ as `\$DESK` in every command/u)
   assert.match(text, /Be brief\./u)
   assert.throws(() => JSON.parse(text))
   const json = JSON.parse(await run(["--json"]))
@@ -553,9 +553,8 @@ test("active_tasks carries each task's next step on one line, whole and redacted
 test("plain-text boot with no named task tells the agent to report every task under Active tasks, without the JSON field names; --json keeps them", () => {
   const noTask = { status: "ready", instructions: [NO_TASK_INSTRUCTION, UNMATCHED_TASK_INSTRUCTION] }
   const text = formatBootText(noTask)
-  assert.match(text, /1\. No task was named: report every task under "Active tasks" above, each with its status and its next step or blocker/u)
-  assert.match(text, /then ask which one to resume or whether to start new\./u)
-  assert.match(text, /2\. The name matches no open task: report every task under "Active tasks" above/u)
+  assert.match(text, /1\. No task was named: report each active task \(status, next step or blocker\)/u)
+  assert.match(text, /2\. The name matches no open task: report each task under "Active tasks"/u)
   assert.doesNotMatch(text, /active_tasks|open_prs|repo_states/u)
   // The structured result keeps the field names for JSON consumers.
   assert.match(NO_TASK_INSTRUCTION, /active_tasks and open_prs/u)

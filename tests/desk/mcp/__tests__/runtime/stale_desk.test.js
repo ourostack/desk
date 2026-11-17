@@ -389,7 +389,7 @@ test("stale prints the notice once", async () => {
   const text = formatBootText(result)
   assert.equal(text.split(result.stale_desk.line).length, 2, "the notice appears exactly once")
   assert.equal(formatBootText(result).split("\n")[1], result.stale_desk.line)
-  for (const phrase of ["loaded", "3.2.98", "3.2.101", "worktree session", "agency copilot", "restart the Copilot app at a quiet moment"]) {
+  for (const phrase of ["3.2.98", "3.2.101", "worktree session", "agency copilot", "restart the Copilot app at a quiet moment"]) {
     assert.match(text, new RegExp(phrase, "u"))
   }
 })

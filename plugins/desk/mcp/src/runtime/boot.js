@@ -91,7 +91,7 @@ import { checkStaleDesk } from "./stale-desk.js"
 import { checkPluginUpdate } from "./plugin-update.js"
 import { checkReleaseAlert } from "./release-alert.js"
 import { planStaleRefresh, startStaleRefresh, startedLine } from "./stale-desk-refresh.js"
-import { deferredToolsHint } from "../util/deferred-tools.js"
+import { deferredToolsHint, deferredToolsHintShort } from "../util/deferred-tools.js"
 import { recordUnsigned, signoffInstructions } from "../desk/unsigned-deliveries.js"
 import { noteSignoffListed } from "./signoff-listed.js"
 import { stuckSaves } from "./unmerged-saves.js"
@@ -1169,7 +1169,7 @@ function buildInstructionItems(ctx) {
   }
   add(
     `Use the absolute path ${root.path} for the desk in every command and tool call. Each shell call starts fresh, so an exported \`$DESK\` would not persist; where a Desk skill says \`$DESK\`, it means this path.`,
-    `Use ${root.path} as the desk path in every command and tool call; where a Desk skill says \`$DESK\`, it means this path.`,
+    `Use ${root.path} as \`$DESK\` in every command and tool call.`,
   )
   if (ctx.notes) add(notesInstruction(ctx.notes))
   for (const [name, check] of Object.entries(prereqResults)) {
@@ -1183,7 +1183,7 @@ function buildInstructionItems(ctx) {
   }
   // The named task's push routes. The text boot prints each route on its task instead, so these are `--json`-only.
   for (const line of pushLines(pushAccounts)) add(line, null)
-  add(deferredToolsHint(agentHost))
+  add(deferredToolsHint(agentHost), deferredToolsHintShort(agentHost))
   if (taskQuery !== null) {
     body.push(...namedTaskInstructions({ task, repoStateList, root, host, noninteractive, blocked: namedBlockers.length > 0 }))
   } else {
@@ -1202,7 +1202,12 @@ function buildInstructions(ctx) {
 }
 
 // The three closing rules that `--json` carries as separate lines, as one instruction, plus the step-heading rule.
-const CLOSING_RULES = "In every reply: if the next step needs something that is not on this machine (a branch, a file, a clone), say what is missing and stop, and never recreate or simulate it; never clone or fetch to look for something the card says is on another machine, never clone inside the desk folder, and clone a missing repo only where an instruction above says to, at the path it gives; give each task's real status and say 'done' only for a task whose status is done; do not print Desk skill step headings."
+const CLOSING_RULES = "If the next step needs something not on this machine, say so and stop: never recreate, clone or fetch it. Report real status only."
+
+// What the plain-text boot says before its instructions: what Desk is, where its RFC is and the two boundaries.
+function introInstruction(pluginRoot) {
+  return `Desk lets people and agents delegate outcomes; RFC: ${path.join(pluginRoot, "docs", "agentic-engineering-v3-rfc.md")}. Never do anything irreversibly destructive or contact anyone without the operator's approval.`
+}
 
 // The plain-text wording of the same instructions, in the order the text boot prints them: the closing rules last.
 function buildTextInstructions(ctx) {
@@ -1577,6 +1582,7 @@ export async function bootOnce({
     needs_operator: needsOperator(instructionContext),
     // Only for the plain-text boot (`runBootCli` leaves it out of `--json`).
     text_instructions: buildTextInstructions(instructionContext),
+    text_intro: introInstruction(instructionContext.pluginRoot),
     unsigned_deliveries: unsigned,
   }
 }
@@ -1635,7 +1641,7 @@ export async function runBootCli({ argv = [], env = process.env, io = process, b
         // The release notice already says how to pick the release up, so a started refresh does not replace it.
         result = { ...result, stale_desk: { ...finding, auto_refresh: started ? "started" : prepared.state, line: started && finding.channel !== "release" ? startedLine(finding, prepared.plan) : finding.line } }
       }
-      const { text_instructions: _textOnly, ...structured } = result
+      const { text_instructions: _textOnly, text_intro: _introOnly, ...structured } = result
       full = result
       if (deliverTo !== null) {
         quiet = true

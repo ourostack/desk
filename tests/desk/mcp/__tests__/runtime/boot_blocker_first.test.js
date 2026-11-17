@@ -92,10 +92,10 @@ test("rule 5 is scoped: no clone or fetch to look for what the card says is on a
   const root = await deskWithTask(CARD)
   const result = await bootNamed(root, [state({ present: true })])
   const scoped = ["never clone or fetch to look for something the card says is on another machine", "never clone inside the desk folder", "clone a missing repo only where an instruction above says to, at the path it gives"]
-  const text = result.text_instructions.find((line) => line.startsWith("In every reply:"))
   const json = result.instructions.find((line) => line.includes("never clone inside the desk folder"))
-  for (const piece of scoped) for (const line of [text, json]) assert.ok(line?.toLowerCase().includes(piece), `${piece} in ${line}`)
-  assert.ok(!text.includes("to look for it"), "no unscoped 'never clone' left to contradict the missing-clone instruction")
+  for (const piece of scoped) assert.ok(json?.toLowerCase().includes(piece), `${piece} in ${json}`)
+  const text = result.text_instructions.find((line) => line.startsWith("If the next step needs something not on this machine"))
+  assert.ok(text?.includes("never recreate, clone or fetch it"), "the text boot keeps the short form of the rule")
 })
 
 test("the ask-then-hand-off instruction is number 1 in text and JSON, before the desk path and the tool names", async () => {
@@ -103,7 +103,7 @@ test("the ask-then-hand-off instruction is number 1 in text and JSON, before the
   const result = await bootNamed(root, [state({})])
   for (const list of [result.instructions, result.text_instructions]) {
     assert.ok(list[0].includes("ask the operator one question and stop until they answer"), list[0].slice(0, 80))
-    assert.ok(list.findIndex((line) => line.includes("as the desk path")) > 0 || list.findIndex((line) => line.includes("the absolute path")) > 0)
+    assert.ok(list.findIndex((line) => line.includes("as the desk path") || line.includes("as `$DESK`")) > 0 || list.findIndex((line) => line.includes("the absolute path")) > 0)
     assert.equal(list.filter((line) => line.includes("only then hand off")).length, 1)
   }
   assert.match(formatBootText(result), /Instructions, in order:\n1\. The operator named a task/u)

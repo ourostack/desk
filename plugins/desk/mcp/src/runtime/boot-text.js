@@ -270,17 +270,18 @@ function namedTaskLines(task) {
 // A boot that names no task checks no repo state and no push route (they cost a network call per repo and matter only
 // once a task is picked), so the instruction says how to get them for the task the operator picks.
 const PICKED_TASK_SENTENCE = " When the operator picks one, call task_focus for it before working on it: its reply carries the task's push route, repos and instructions."
+const PICKED_TASK_SENTENCE_TEXT = " When the operator picks one, task_focus it first."
 export const NO_TASK_INSTRUCTION = "No task was named: build the status block from active_tasks and open_prs, then ask which task to resume or whether to start new." + PICKED_TASK_SENTENCE
-export const NO_TASK_INSTRUCTION_TEXT = "No task was named: report every task under \"Active tasks\" above, each with its status and its next step or blocker (and any open pull requests that matter), then ask which one to resume or whether to start new. Those lines are copied from the cards, so do not open a card just to report on it." + PICKED_TASK_SENTENCE
+export const NO_TASK_INSTRUCTION_TEXT = "No task was named: report each active task (status, next step or blocker), ask which to resume or start." + PICKED_TASK_SENTENCE_TEXT
 export const UNMATCHED_TASK_INSTRUCTION = "The name matches no open task: show the active_tasks status block and ask what to resume or start."
-export const UNMATCHED_TASK_INSTRUCTION_TEXT = "The name matches no open task: report every task under \"Active tasks\" above, each with its status and its next step or blocker, then ask what to resume or start."
+export const UNMATCHED_TASK_INSTRUCTION_TEXT = "The name matches no open task: report each task under \"Active tasks\" with its status and next step, then ask what to resume or start."
 // A first message that describes new work is the answer to "resume or start new", and the boot had no line for it: a session ran the
 // boot and went straight to design, with no Desk tool call and no task card (cold dry run, 2026-10-12). It follows both instructions
 // that ask the operator which task to take up.
 // The task alone read as the go when the first message left a choice to the agent ("how it shows them is up to you"): three of three
 // sessions then changed the repository with no alignment, and three of three with the last sentence aligned and waited (2026-10-12).
-const NEW_WORK_GO_SENTENCE = " Creating the task is not the go: after it, state your assumptions and what done means, and wait for the operator's go before any change, even when they left a choice to you."
-export const NEW_WORK_INSTRUCTION = "If the operator's first message already describes new work rather than naming a task, that is their answer: skip the report and do not ask which task to resume. Before any design, plan or code, create its task with task_create and `focus: true` (or declare an open task it belongs to with task_focus), as desk:start-task says." + NEW_WORK_GO_SENTENCE + " A question or a request for status is not new work. A child agent with a bounded brief skips this."
+export const NEW_WORK_GO_SENTENCE = " Creating the task is not the go: state your assumptions and what done means, then wait for the operator's go."
+export const NEW_WORK_INSTRUCTION = "If the first message describes new work, skip the report: before any design, plan or code, task_create it with `focus: true` (desk:start-task)." + NEW_WORK_GO_SENTENCE + " A question is not new work."
 // A session with no operator has nobody to give the go, so it gets the instruction without that sentence.
 export const NEW_WORK_INSTRUCTION_UNATTENDED = NEW_WORK_INSTRUCTION.replace(NEW_WORK_GO_SENTENCE, "")
 
@@ -439,7 +440,7 @@ export function formatBootText(result) {
   if ((result.open_prs ?? []).length > 0) middle.push("", "Open pull requests:", ...result.open_prs.map(prLine))
   if ((result.repo_states ?? []).length > 0) middle.push("", "Repos of open tasks:", ...result.repo_states.map(repoLine))
   const instructions = result.text_instructions ?? (result.instructions ?? []).map((instruction) => PLAIN_TEXT_INSTRUCTIONS.get(instruction) ?? instruction)
-  const tail = instructions.length > 0 ? ["", "Instructions, in order:", ...instructions.map((instruction, index) => `${index + 1}. ${instruction}`)] : []
+  const tail = instructions.length > 0 ? ["", ...(result.text_intro ? [result.text_intro] : []), "", "Instructions, in order:", ...instructions.map((instruction, index) => `${index + 1}. ${instruction}`)] : []
   const hostHasDeskFile = result.agents_md_in_host_instructions === true && Boolean(result.agents_md)
   const files = [[hostHasDeskFile ? null : result.agents_md, "The desk's AGENTS.md"], [result.person_agents_md, "Your own AGENTS.md"]].filter(([md]) => md)
   const size = (list) => list.reduce((total, line) => total + line.length + 1, 0)
@@ -467,7 +468,7 @@ export function formatBootText(result) {
   // The host's own copy of the desk's file is already in the model's instructions: say so in a line, not a second copy. The first line lets the model check that it really is there (a host can be started without custom instructions).
   if (hostHasDeskFile) {
     const first = (result.agents_md.text.split(/\r?\n/u).find((line) => line.trim() !== "") ?? "").trim().slice(0, 80)
-    lines.push("", `## The desk's AGENTS.md (${result.agents_md.path}); its rules bind this session`, "", `Your host already loaded this file into your instructions${first ? ` (it begins \`${first}\`)` : ""}, so it is not printed again here. If your instructions do not contain it, read it at ${result.agents_md.path} before acting.`)
+    lines.push("", `AGENTS.md (${result.agents_md.path}) binds this session; your host loaded it${first ? ` (it begins \`${first}\`)` : ""}, else read it.`)
   }
   // Only when even the status, instructions and AGENTS.md files do not fit are the files cut, and that is said too.
   let left = BOOT_TEXT_MAX_CHARS - size(lines) - size(shelfLines) - BOOT_NOTE_CHARS - files.reduce((total, [md, name]) => total + frame(md, name), 0)

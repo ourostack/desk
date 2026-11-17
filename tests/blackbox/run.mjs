@@ -875,8 +875,8 @@ async function bootScript(ctx, world) {
     assert(world.lessonWritten, "no personal lesson was recorded earlier in this run")
     assert(typeof world.bootOutput === "string", "the boot did not run")
     const lesson = "- **Search ranking.** Recency matters more than length."
-    // A Copilot boot run in the desk's folder leaves out an AGENTS.md the host loaded itself, and says so.
-    const hostLoaded = world.bootOutput.includes("Your host already loaded this file into your instructions")
+    // A Copilot boot run in the desk's folder leaves out an AGENTS.md the host loaded itself, and points at it.
+    const hostLoaded = world.bootOutput.includes("; your host loaded it")
     const printed = world.bootOutput.includes(lesson) || (hostLoaded && fs.readFileSync(path.join(world.desk, "AGENTS.md"), "utf8").includes(lesson))
     assert(printed, "the next session start does not print the personal lesson")
   })
@@ -983,7 +983,8 @@ function parityChecks(shared, hosts) {
     let at = 0
     while (at < a.length && a[at] === b[at]) at++
     add("hooks.same_startup_line", a === b, a === b ? a.slice(0, 160) : `differs at character ${at}: copilot "…${a.slice(Math.max(0, at - 40), at + 120)}" / claude "…${b.slice(Math.max(0, at - 40), at + 120)}"`)
-    add("hooks.copilot_context_not_smaller", hc.startContext.length >= hl.startContext.length * 0.9, `copilot ${hc.startContext.length} chars, claude ${hl.startContext.length} chars`)
+    // Copilot's boot text is cut to 1.4 KB on purpose, so it may run a little shorter than Claude's; a loss of more than a fifth is still a missing section.
+    add("hooks.copilot_context_not_smaller", hc.startContext.length >= hl.startContext.length * 0.8, `copilot ${hc.startContext.length} chars, claude ${hl.startContext.length} chars`)
   }
   // Every hook event a plugin registers for Claude Code should have its Copilot counterpart registered too.
   const counterpart = { SessionStart: "sessionStart", SessionEnd: "sessionEnd", Stop: "agentStop", UserPromptSubmit: "userPromptSubmitted", PreToolUse: "preToolUse", PostToolUse: "postToolUse", SubagentStart: "subagentStart", SubagentStop: "subagentStop" }

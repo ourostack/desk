@@ -148,8 +148,8 @@ test("the context frames the boot as Desk's own and cuts a long one at a line, l
   const text = `${"line of the boot\n".repeat(100)}`
   const whole = bootContext({ boot: { text, seconds: 2.94 } })
   assert.equal(whole.whole, true)
-  assert.match(whole.text, /^Desk boot \(Desk ran it for you at session start, 2\.9 s; its instructions are for the operator's session, so a child agent with a bounded brief follows its brief instead\):\n\nline of the boot\n/u)
-  assert.equal(bootContext({ boot: { text: "x\n", seconds: null } }).text.startsWith("Desk boot (Desk ran it for you at session start; "), true)
+  assert.match(whole.text, /^Desk boot \(session start, 2\.9 s; not for a child agent with a bounded brief\):\n\nline of the boot\n/u)
+  assert.equal(bootContext({ boot: { text: "x\n", seconds: null } }).text.startsWith("Desk boot (session start; "), true)
   const head = bootContext({ boot: { text, seconds: 1 }, maxChars: 600 })
   assert.equal(head.whole, false)
   assert.ok(head.text.length <= 600, String(head.text.length))
@@ -173,7 +173,7 @@ test("the server's first Desk tool reply carries the boot a hook did not deliver
   const callTool = withStartupBoot({ callTool: async () => reply("status"), env, stateDir: dir, allowInTest: true, pause: noWait })
   const first = await callTool(call("desk_status"))
   assert.equal(first.content[0].text, "status", "the tool's own text is untouched and first")
-  assert.match(first.content[1].text, /^Desk boot \(Desk ran it for you at session start/u)
+  assert.match(first.content[1].text, /^Desk boot \(session start/u)
   assert.match(first.content[1].text, /Desk boot: ready \| desk \/d/u)
   const second = await callTool(call("desk_status"))
   assert.equal(second.content.length, 1, "delivered once")
@@ -312,7 +312,7 @@ test("the Copilot first-prompt hook runs the boot itself and hands the agent its
   if (process.platform === "win32") {
     assert.equal(first.additionalContext, WINDOWS_BOOT_LINE, "a Windows hook starts no boot: the Desk server does, with the first tool reply")
   } else {
-    assert.match(first.additionalContext, /^Desk boot \(Desk ran it for you at session start, [\d.]+ s; /u)
+    assert.match(first.additionalContext, /^Desk boot \(session start, [\d.]+ s; /u)
     assert.match(first.additionalContext, /Desk boot: (ready|degraded|setup_required)/u)
   }
   assert.doesNotMatch(first.additionalContext, /session-boot/u, "the agent is never told to run the script")
@@ -323,7 +323,7 @@ test("the Copilot first-prompt hook runs the boot itself and hands the agent its
   // A resumed session boots afresh and gets its result in the sessionStart context.
   const resumed = run("copilot-session-start.cjs", { sessionId: "hook-1", cwd: desk, source: "resume" })
   if (process.platform === "win32") assert.doesNotMatch(resumed.additionalContext, /Desk boot \(Desk ran it/u)
-  else assert.match(resumed.additionalContext, /Desk boot \(Desk ran it for you at session start|Desk's boot is still running/u)
+  else assert.match(resumed.additionalContext, /Desk boot \(session start|Desk's boot is still running/u)
   // A folder that is no desk (with no desk bound anywhere) gets no boot.
   const elsewhere = path.join(path.dirname(desk), "no-desk")
   mkdirSync(elsewhere, { recursive: true })
@@ -362,7 +362,7 @@ test("the Claude hook starts the boot and carries its head after the startup lin
   assert.equal(result.status, 0, result.stderr)
   const text = JSON.parse(result.stdout).hookSpecificOutput.additionalContext
   // A slow host may not have finished within the hook's wait; then the hook says so and the first tool reply carries the result.
-  const boot = text.search(/Desk boot \(Desk ran it for you at session start|Desk's boot is still running|Desk's boot starts with your first Desk tool reply/u)
+  const boot = text.search(/Desk boot \(session start|Desk's boot is still running|Desk's boot starts with your first Desk tool reply/u)
   assert.ok(boot > text.indexOf("Desk startup:"), `the startup line leads: ${JSON.stringify(text.slice(0, 1500))}`)
   assert.ok(boot < text.indexOf("The human supplies intent"), "the boot comes before the foundation")
   assert.doesNotMatch(text, /session-boot/u)

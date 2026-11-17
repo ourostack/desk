@@ -1632,8 +1632,8 @@ test("bootOnce: a healthy boot lists instructions (export line, MCP check, statu
   // Plain text names the printed section; the structured instructions keep the field names.
   assert.ok(result.instructions.some((line) => /from active_tasks and open_prs/u.test(line) && /call task_focus for it/u.test(line)))
   const printed = formatBootText(result)
-  assert.match(printed, /No task was named: report every task under "Active tasks" above/u)
-  assert.match(printed, /call task_focus for it before working on it/u)
+  assert.match(printed, /No task was named: report each active task/u)
+  assert.match(printed, /task_focus it first/u)
   assert.doesNotMatch(printed, /active_tasks, open_prs|repo_states/u)
   await fs.writeFile(path.join(root, "AGENTS.md"), "rules\n")
   const withAgents = await healthyBoot(root)
@@ -1840,10 +1840,10 @@ test("bootOnce: the text boot folds the rules into short closing wording, drops 
   const result = await healthyBoot(root, { env: { DESK: root, COPILOT_AGENT_SESSION_ID: "s" } })
   const plain = result.text_instructions
   assert.ok(plain.length < result.instructions.length, "fewer instructions in the text boot")
-  assert.match(plain[0], new RegExp(`^Use ${root.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")} as the desk path in every command and tool call`, "u"))
-  assert.ok(plain.some((line) => /`desk-task_update`/u.test(line)), "the host's tool names stay")
+  assert.match(plain[0], new RegExp(`^Use ${root.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")} as \`\\$DESK\` in every command and tool call`, "u"))
+  assert.ok(plain.some((line) => /`desk-<name>`/u.test(line)), "the host's tool naming stays")
   assert.ok(!plain.some((line) => /hosts/u.test(line)))
-  assert.match(plain.at(-1), /^In every reply: if the next step needs something that is not on this machine .* say what is missing and stop, and never recreate or simulate it; .* say 'done' only for a task whose status is done; do not print Desk skill step headings\.$/u)
+  assert.match(plain.at(-1), /^If the next step needs something not on this machine, say so and stop: never recreate, clone or fetch it\. Report real status only\./u)
 })
 
 test("bootOnce: a sync that outlives the budget is pending, not a hang", async () => {
