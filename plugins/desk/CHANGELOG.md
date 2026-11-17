@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.228 — 2026-11-17
+
+Desk's MCP server now vendors Ouro UI v1.3.266, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.227 — 2026-11-17
 
 Linux x64 now has native runtime packs for Node 24 (ABI 137) and Node 26 (ABI 147), so a Linux machine whose Node is 24 or 26 gets Desk's task tools instead of `no_compatible_node` ([#1144](https://github.com/ourostack/desk/issues/1144)).
