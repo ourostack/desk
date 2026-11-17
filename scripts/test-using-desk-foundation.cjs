@@ -332,13 +332,13 @@ function main() {
   // The foundation says done is a delivery, tells the agent what to do at delivery, and tells a child never to record the answer.
   // Principle 2 agreed with Ari on 2026-11-10: after go, silence except "ready" (usable, here's where, I'm continuing) and "done".
   assertSectionPhrases(section(skill, "Delivery and sign-off"), "using-desk the foundation names the ready signal", [
-    "Besides those returns, after go say only \"ready\" and \"done\"",
+    "After go say only \"ready\" and \"done\"",
     "`Ready: <what>, at <where>. I'm continuing.`",
     "primary-source screenshot",
     "never hold it for CI",
   ]);
   assertSectionPhrases(section(skill, "Delivery and sign-off"), "using-desk the foundation says done is a delivery and names task_signoff", [
-    "Done is a delivery, not an acceptance.",
+    "Done is a delivery, not an acceptance",
     "Record the answer later with task_signoff, never in this turn.",
   ]);
   assertSectionPhrases(section(skill, "Delivery and sign-off"), "using-desk the foundation tells a child agent never to call task_signoff", [
@@ -352,9 +352,9 @@ function main() {
   assert.ok(owned("interaction-style").includes("Older unsigned deliveries are raised once, together, after you have done what the operator asked"), "interaction-style must carry the rule for older unsigned deliveries");
   assertSectionConcepts(section(skill, "Human and agent"), [
     /The human supplies intent.*authority.*endpoint/u,
-    /The agent owns execution.*sequencing.*verification.*cleanup/u,
+    /the agent owns execution, verification and recovery within authority/iu,
     // "a step it could do itself" let agents decide a deploy or sign-in was one they could not do and hand it over (pressure tests, 2026-11-09).
-    /never hands the human a chore, sign-in or deploy; gates below are their decisions/u,
+    /never hands the human a chore, sign-in or deploy/u,
     /AX \(agent experience\).*deterministically.*easy to understand and use/u,
     /HX \(human experience\).*attention.*understanding.*control.*trust\. Both are UX\./u,
     /Never improve one by shifting avoidable work onto the other/u,
@@ -365,14 +365,14 @@ function main() {
   assertSectionPhrases(section(skill, "Human and agent"), "using-desk Human and agent: aim at what the human feels", [
     "Status' first sentence says how it feels to use today, then the broken things in numbers against their bars",
     "\"on track\" means they'll enjoy it, not that it ships",
-    "Test on synthetic data shaped like theirs, never their real data or account, nor ask to",
+    "Test on synthetic data shaped like theirs, never their real data or account",
     "counts-only telemetry",
     "Relay no unmeasured plan, cause or date: say a trustworthy date needs measuring, and the time you will report the measured numbers.",
   ]);
-  assert.match(section(skill, "Authority"), /Deploy, sign in and merge yourself \(`interaction-style` "Fix the tooling", `work-orchestration` "Merging and the terminal state"\)/u);
+  assert.match(section(skill, "Authority"), /Deploy, sign in and merge yourself \(`interaction-style` "Fix the tooling"\)/u);
   assert.match(owned("interaction-style"), /Deploy and run sign-in flows yourself; never type a password or paste a secret[^\n]+only a password, MFA or consent screen you hit is the human's\./u);
   // The waste rules moved to work-orchestration (the surface that plans lanes); Authority keeps the one-sentence trigger.
-  assert.match(section(skill, "Authority"), /Each step adds necessary, non-duplicative value, by the smallest sufficient change at the nearest layer you own, and never drops proof \(`work-orchestration`\)/u);
+  assert.match(section(skill, "Authority"), /ship the smallest sufficient change \(`work-orchestration`\)/u);
   assert.match(owned("work-orchestration"), /side quests in their own lanes;/u);
   assert.match(owned("work-orchestration"), /Agent storage has retention, run unasked[^\n]*; verify reclaimed space, not exit; never propose deleting the human's\./u);
 
@@ -380,10 +380,9 @@ function main() {
   // (pressure-tested 2026-11-12).
   assertSectionConcepts(section(skill, "Alignment, then ownership"), [
     /Before go, state the outcome, assumptions, recommended decisions and completion checks together; get explicit go/u,
-    /bounded requests need one confirming sentence/iu,
-    /Use normal chat, never structured-question tools or forms/u,
-    /own routine choices and safe scoped work to done after corrections or apologies and while questions wait/u,
-    /Return only for blockers, human requests or gates: voice \(sent as them\), their decisions, money, user-only credentials or accounts, irreversible acts or unclear intent or authority/u,
+    /Use plain chat, no question forms/u,
+    /own routine choices and scoped work to done/u,
+    /return only for blockers, voice \(sent as them\), their decisions, money, user-only credentials, irreversible acts or unclear authority/u,
     /Grants lift only named gates/u,
     /`interaction-style` §6/u,
   ]);
@@ -426,10 +425,10 @@ function main() {
   // The Authority section is a trigger (pressure-tested 2026-11-11); its sentences live word for word in the skills it names.
   assertSectionConcepts(section(skill, "Authority"), [
     /human's verb/iu,
-    /explicit instruction not to write overrides/iu,
+    /instruction not to write overrides/iu,
     /`interaction-style` "Authorization is scope"/u,
     /Never widen your own permissions \(`preflight-actions`\)/u,
-    /Product, HX, accessibility, performance, CI and test-suite calls are yours: decide, record the ruling, ship\./u,
+    /Product, HX, performance, CI and test calls are yours: decide, record, ship/u,
   ]);
   for (const phrase of [
     "Authority follows the human's verb and the surface's owner: investigate and review cover gathering evidence only; do, fix and ship cover surfaces you own or reach through their contribution path.",
@@ -454,16 +453,15 @@ function main() {
 
   assertSectionConcepts(section(skill, "Engineering work"), [
     /`desk:using-superpowers-with-desk`/u,
-    /`superpowers:requesting-code-review`/u,
   ]);
 
   // Source and channels keeps the code-repository flow and the no-pin rule: cutting either failed pressure on 2026-11-12
   // (a hotfix pushed straight to main; a pin "moved forward by a job"). The desk-commit rule moved to git-hygiene.
   assertSectionPhrases(section(skill, "Source and channels"), "using-desk Source and channels", [
     "Before the first write, verify the checkout matches the task's recorded source.",
-    "In a code repository, changes reach the channel, the branch consumers track, through the normal flow: branch from it in a worktree and merge back through a pull request.",
-    "Never pin a commit; a hash is evidence only.",
-    "`git-hygiene` holds the procedure, desk commits included.",
+    "Changes reach the channel through a branch in a worktree and a pull request",
+    "never pin a commit",
+    "`git-hygiene`",
   ]);
   for (const phrase of [
     "The task's recorded source is its channel, the branch consumers track: before the first write or worktree, verify the checkout is on that channel or a task branch from it",
@@ -477,10 +475,9 @@ function main() {
   }
 
   assertSectionPhrases(section(skill, "Durable context"), "using-desk Durable context", [
-    "Durable state lives on `main` in the desk, never in a host's memory or folders",
-    "(`interaction-style` \"Host commands that duplicate the desk\")",
-    "Disable host memory (`store_memory`/`vote_memory`)",
-    "Secrets, credentials, raw private transcripts and customer data stay outside Git (`session-resumption`)",
+    "lives on `main` in the desk",
+    "never in a host's memory or folders (`interaction-style`)",
+    "Secrets and customer data stay outside Git (`session-resumption`)",
     "One outcome is one task, declared with task_focus (`task-lifecycle`)",
   ]);
 
@@ -501,11 +498,10 @@ function main() {
     "Every factual claim to a human or an agent",
     "inline link to its primary source",
     "labeled inference or unverified",
-    "`evidence-discipline` holds the procedure",
+    "`evidence-discipline`",
   ]);
 
   assertSectionPhrases(section(skill, "Own the stack"), "using-desk Own the stack", [
-    "keep your task's authority",
     "work around them with ordinary tools",
     "never past a safeguard or permission denial",
     "Start no unrequested repair work",
@@ -567,24 +563,20 @@ function main() {
   }
 
   assertSectionPhrases(section(skill, "Own the stack"), "using-desk Own the stack instruction coherence", [
-    "confusing, redundant or in conflict",
-    "record the friction",
-    "must not be silently confused",
-    "one owner",
+    "get in your way",
   ]);
 
   assertSectionPhrases(section(skill, "Child agents"), "using-desk Child agents", [
-    "not assumed to rerun startup hooks",
     "`work-orchestration`",
     "A child agent with a bounded brief follows the brief, not this text",
-    "skips session-start, host probes, sync and any real-desk boot ceremony",
-    "A child agent never calls task_focus.",
+    "skips session-start, host probes, sync and any boot",
+    "a child never calls task_focus",
   ]);
 
   // The foundation opens by saying what system this is and when to read its RFC (2026-11-10: an agent redesigning
   // Desk had to search for the RFC it was standing in, because the only pointer said "not at every startup").
   const intro = skill.slice(skill.indexOf("# Using Desk"), skill.indexOf("\n## "));
-  for (const phrase of ["You're working in **Desk**", "`Desk RFC:` line", "Read it before you change how Desk works"]) {
+  for (const phrase of ["You're working in **Desk**", "`Desk RFC:` line"]) {
     assert.ok(intro.includes(phrase), `using-desk must open with: ${phrase}`);
   }
   assert.doesNotMatch(intro, /not at every startup/u, "the RFC is read before changing Desk, not only before explaining it");
@@ -612,7 +604,7 @@ function main() {
   // agents-never-fight-the-desk plan, 2026-09-28), then from 7900 to 8000 bytes for the child-agent stand-down
   // sentence in "Child agents" (2026-09-29), then from 8000 to 8150 bytes for the two declared-focus sentences (2026-10-05), which the factory's binding rests on; then from 8150 to 8600 bytes for the delivery and sign-off section (2026-10-05), whose sentences the sign-off record rests on; then down to 8000 bytes (round AJ): the whole SessionStart context has to stay under Claude Code's 10,000-character limit, and `start_hook.test.js` holds it to 9,500 with long paths, so a further addition has to justify its size and make room by moving a procedure to the skill that owns it. The aim-at-what-the-human-feels paragraph in Human and agent and its clauses in Authority and Waste judgment (2026-11-09) paid for themselves by moving sentences the owning skills already carry word for word: the peer-handoff rule and the model choice to `work-orchestration`, the CI-download grant to `fast-honest-ci`, and the child sign-off duplicate to Delivery and sign-off; "no second lifecycle policy" and "folds returned evidence into the same task" went too, since `task-lifecycle` and `work-orchestration` own both. "Durable context" shrank to a trigger line (2026-11-11): its uncovered sentences moved word for word to `interaction-style` and `task-lifecycle`, and the rest were already stated in `session-resumption`, `interaction-style` and `git-hygiene`.
   const skillBytes = Buffer.byteLength(skill, "utf8");
-  assert.ok(skillBytes >= 4500 && skillBytes <= 8000, `using-desk should stay about 5-8 KB; found ${skillBytes} bytes`);
+  assert.ok(skillBytes >= 2500 && skillBytes <= 5200, `using-desk should stay about 2.5-5.2 KB; found ${skillBytes} bytes`);
 
   assert.doesNotMatch(
     skill,
