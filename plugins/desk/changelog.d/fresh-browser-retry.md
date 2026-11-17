@@ -1,1 +1,0 @@
-A fresh browser whose start stalls with no output is stopped after 45 seconds and tried once more within the same two-minute budget, and if the second try fails too, the message names both tries ([#763](https://github.com/ourostack/desk/issues/763)).

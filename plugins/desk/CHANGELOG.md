@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.218 — 2026-11-17
+
+A fresh browser whose start stalls with no output is stopped after 45 seconds and tried once more within the same two-minute budget, and if the second try fails too, the message names both tries ([#763](https://github.com/ourostack/desk/issues/763)).
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.217 — 2026-11-17
 
 Desk's MCP server now vendors Ouro UI v1.3.255, moved by Ouro Current.
