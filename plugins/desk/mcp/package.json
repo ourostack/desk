@@ -8,6 +8,9 @@
     "desk-mcp": "./index.js"
   },
   "main": "./index.js",
+  "imports": {
+    "#ouro-ax/*": "./src/lib/ouro-ui/registry/ouro/ax/*"
+  },
   "scripts": {
     "test": "node --import ../../../tests/desk/mcp/__tests__/_isolated_env.mjs --test \"../../../tests/desk/mcp/__tests__/**/*.test.js\"",
     "test:coverage": "node ../../../tools/desk-build/scripts/run-coverage.js",
