@@ -123,7 +123,9 @@ const finishCli = ({ spawnGit, env }) => defineCli({
 
 /** Runs the command line and returns its exit code: 0 done, 3 ready, 4 held, 5 unknown, 2 usage (one line on stderr). */
 export function runFinishCommitCli(argv = process.argv.slice(2), { spawnGit = spawnSync, env = process.env, out = process.stdout, err = process.stderr } = {}) {
-  return runCli(finishCli({ spawnGit, env }), argv, { stdout: out, stderr: err })
+  // The kit names the tool twice for a command named like it.
+  const stderr = { write: (line) => err.write(line.replace(/^finish-commit: finish-commit: /u, "finish-commit: ")) }
+  return runCli(finishCli({ spawnGit, env }), argv, { stdout: out, stderr })
 }
 
 /**
