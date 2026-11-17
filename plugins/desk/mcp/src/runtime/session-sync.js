@@ -16,6 +16,8 @@ import { catchUpBehind, classifyPullFailure, undeliveredCommits, upstreamOf } fr
 import { remoteIdentityEnv } from "./remote-identity.js"
 import { applyPublicationMode } from "./publication-mode.js"
 import { commitWaitingLogs } from "./append-lane.js"
+import { defineCli, defineCommand } from "../lib/ouro-ui/registry/ouro/ax/command.ts"
+import { runCli } from "../lib/ouro-ui/registry/ouro/ax/cli.ts"
 
 const GIT_TIMEOUT_MS = 10_000
 // The whole sequence's own wall-clock budget: session start cannot afford an unbounded sync step, so each git call gets
@@ -216,16 +218,6 @@ async function runSync({
 // The CLI surface (`mcp/scripts/session-sync.js`).
 // ---------------------------------------------------------------------------
 
-function parseSessionSyncArgs(argv) {
-  const options = new Map()
-  for (let index = 0; index < argv.length; index += 2) {
-    const key = argv[index]
-    if (typeof key !== "string" || !key.startsWith("--")) throw Object.assign(new Error(`session-sync.js: Remove the unexpected argument: unexpected argument ${JSON.stringify(key ?? "")}`), { code: "session_sync_session_sync_js_remove_the" })
-    options.set(key.slice(2), argv[index + 1])
-  }
-  return options
-}
-
 /**
  * Session-start's own CLI entry point, kept here so it is unit-tested
  * directly rather than through a subprocess -- the script itself is one
@@ -235,15 +227,35 @@ function parseSessionSyncArgs(argv) {
  * `syncFn` is a test seam.
  */
 export async function runSessionSyncCli({ argv = process.argv.slice(2), env = process.env, io = process, syncFn = syncWorkspace } = {}) {
-  const options = parseSessionSyncArgs(argv)
-  applyPublicationMode({ publication: options.get("publication") }, env)
-  const root = options.get("root") ?? env.DESK
-  if (typeof root !== "string" || root === "") {
-    io.stderr.write("session-sync.js: Pass --root <path>: --root <path> (or the DESK env var) is required\n")
-    return 0
-  }
-  const result = await syncFn({ root, env })
-  if (result.state === "unresolved") io.stdout.write(`${result.diagnostic}\n`)
-  return 0
+  let lines = ""
+  const cli = defineCli({
+    name: "session-sync.js",
+    about: ["Pulls the desk's remote into the bound desk at session start and prints a Desk problem block when it cannot."],
+    command: defineCommand({
+      name: "session-sync.js",
+      summary: "Sync the desk with its remote; print the diagnostic when the sync does not resolve. Always exits 0 for a sync outcome.",
+      effect: "private",
+      output: "nothing when synced, else the diagnostic block",
+      flags: {
+        root: { type: "string", description: "The desk to sync; the DESK env var when left out." },
+        publication: { type: "string", description: "How commits reach the remote; `deferred` leaves the push for later." },
+      },
+      text: () => lines,
+      run: async (input) => {
+        applyPublicationMode({ publication: input.publication }, env)
+        const root = input.root ?? env.DESK
+        if (typeof root !== "string" || root === "") {
+          io.stderr.write("session-sync.js: Pass --root <path>: --root <path> (or the DESK env var) is required\n")
+          return {}
+        }
+        const result = await syncFn({ root, env })
+        if (result.state === "unresolved") lines = `${result.diagnostic}\n`
+        return {}
+      },
+    }),
+  })
+  // A sync that resolved prints nothing; the kit would end it with an empty line.
+  const stdout = { write: (text) => (lines === "" && text === "\n" ? true : io.stdout.write(text)) }
+  const code = await runCli(cli, argv, { stdin: process.stdin, stdout, stderr: io.stderr }, { env })
+  return code === 2 ? 2 : 0
 }
-

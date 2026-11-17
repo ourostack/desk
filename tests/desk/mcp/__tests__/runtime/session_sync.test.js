@@ -223,10 +223,12 @@ test("runSessionSyncCli requires --root (or the DESK env var) and never throws w
   assert.match(io.err[0], /--root.*DESK/u)
 })
 
-test("runSessionSyncCli's argument parser rejects a malformed flag shape (a bad launch site is a bug in the caller)", async () => {
-  await assert.rejects(runSessionSyncCli({ argv: [42, "x"], env: {} }), /unexpected argument/u)
-  await assert.rejects(runSessionSyncCli({ argv: ["notflag", "x"], env: {} }), /unexpected argument/u)
-  await assert.rejects(runSessionSyncCli({ argv: [undefined, "x"], env: {} }), /unexpected argument ""/u)
+test("runSessionSyncCli answers an unknown flag with one usage line and exit 2, without syncing", async () => {
+  const io = fakeIo()
+  const code = await runSessionSyncCli({ argv: ["--bogus", "x"], env: {}, io, syncFn: async () => { throw new Error("must not be called") } })
+  assert.equal(code, 2)
+  assert.equal(io.out.length, 0)
+  assert.match(io.err[0], /^session-sync\.js: .*--bogus.*Fix: .*\n$/u)
 })
 
 test("runSessionSyncCli treats an explicit empty --root the same as a missing one", async () => {

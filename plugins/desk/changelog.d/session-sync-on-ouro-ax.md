@@ -1,0 +1,1 @@
+The `session-sync.js` command line is now defined with Ouro AX instead of a hand-written argument parser: `--help` is generated from the definition and an unknown flag is one line naming the fix (exit 2). A sync still always exits 0 and prints nothing unless it did not resolve.
