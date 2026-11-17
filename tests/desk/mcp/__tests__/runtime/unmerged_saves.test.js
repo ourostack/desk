@@ -11,7 +11,7 @@ import { spawnSync } from "node:child_process"
 import { mkTempRoot } from "../_temp_roots.js"
 import { runner } from "../../../../../plugins/desk/mcp/src/runtime/deliver.js"
 import { publishPullRequest } from "../../../../../plugins/desk/mcp/src/runtime/pr-publication.js"
-import { abandonedComment, allStuckSaves, savesFor, settleSaves, stuckSaves, withStuckSaves } from "../../../../../plugins/desk/mcp/src/runtime/unmerged-saves.js"
+import { abandonedComment, allStuckSaves, savesFor, settleSaves, stuckLine, stuckSaves, withStuckSaves } from "../../../../../plugins/desk/mcp/src/runtime/unmerged-saves.js"
 import { resolveDeskStateDir } from "../../../../../plugins/desk/mcp/src/runtime/last-start.js"
 import { formatBootText } from "../../../../../plugins/desk/mcp/src/runtime/boot-text.js"
 import { runDrainsCli } from "../../../../../plugins/desk/mcp/src/runtime/drains-cli.js"
@@ -73,6 +73,9 @@ function fakeGh(origin, options = {}) {
     const byBranch = (branch) => [...prs.values()].find((pr) => pr.branch === branch)
     const byRef = (ref) => [...prs.values()].find((pr) => pr.url === ref || String(pr.number) === ref)
     if (args[0] === "label") return ok("")
+    if (args[0] === "pr" && args[1] === "list" && !args.includes("--head")) {
+      return ok([...prs.values()].filter((pr) => pr.state === "OPEN").map((pr) => ({ ...view(pr), headRefName: pr.branch, createdAt: new Date(Date.now() - 480 * 60_000).toISOString() })))
+    }
     if (args[0] === "pr" && args[1] === "list") return ok(byBranch(args[args.indexOf("--head") + 1]) ? [view(byBranch(args[args.indexOf("--head") + 1]))] : [])
     if (args[0] === "pr" && args[1] === "create") {
       const branch = args[args.indexOf("--head") + 1]
@@ -163,7 +166,7 @@ test("a save already on main is closed as superseded with the evidence", async (
   assert.deepEqual(outcome.closed, ["https://github.example/team/workspace/pull/1"])
   assert.equal(gh.prs.get(1).state, "CLOSED")
   assert.match(gh.prs.get(1).closedWith, /Superseded: this save is already on main/u)
-  assert.match(gh.prs.get(1).closedWith, /every line the save adds to log\.md is on main/u)
+  assert.match(gh.prs.get(1).closedWith, /every line the save adds to log\.md is already on main/u)
   assert.equal(gh.prs.size, 1, "no new pull request is opened for it")
   assert.deepEqual(stuckSaves({ root: desk, env, now: () => Date.now() + 60 * MINUTE }), [])
 })
@@ -381,4 +384,69 @@ test("a conflict Desk cannot resolve leaves the save waiting", async () => {
   git(seed, ["push", "-q", "origin", "HEAD:main"])
   assert.deepEqual(settleSaves({ root: desk, env, spawnGit: gh, clock: clockOf() }).waiting, ["https://github.example/team/workspace/pull/1"])
   assert.equal(gh.prs.size, 1, "no second pull request is opened for a save that cannot be rebuilt")
+})
+
+// A pull request this desk never recorded (another machine's save, or a lost record) is found by looking at the repository.
+async function unrecordedConflict(label, { mine, theirs }) {
+  const { origin, seed, desk, env } = await world(label)
+  const gh = fakeGh(origin, { pending: true, conflicting: true })
+  const onto = git(desk, ["rev-parse", "HEAD"])
+  const head = await mine(desk)
+  assert.throws(() => publish({ desk, env, gh, head, onto, track: false }), /checks still missing or pending/u)
+  await theirs(seed)
+  git(seed, ["push", "-q", "origin", "HEAD:main"])
+  assert.deepEqual(stuckSaves({ root: desk, env, now: () => Date.now() + 60 * MINUTE }), [], "nothing on this machine knows the pull request")
+  return { origin, desk, env, gh, url: "https://github.example/team/workspace/pull/1" }
+}
+
+test("a conflicting log append nobody recorded is found, rebuilt on main and its old pull request closed", async () => {
+  const { origin, desk, env, gh, url } = await unrecordedConflict("sweep-append", {
+    mine: (desk) => appendTo(desk, "- mine", "save"),
+    theirs: (seed) => appendTo(seed, "- theirs", "another save"),
+  })
+  const green = fakeGh(origin, { conflicting: true })
+  green.prs.set(1, gh.prs.get(1))
+  const outcome = settleSaves({ root: desk, env, spawnGit: green, clock: clockOf() })
+  assert.deepEqual(outcome.rebased, [url])
+  assert.equal(green.prs.get(1).state, "CLOSED")
+  assert.match(green.prs.get(1).closedWith, /Rebased onto .* as https:\/\/github\.example\/team\/workspace\/pull\/2/u)
+  const log = git(origin, ["show", "refs/heads/main:log.md"])
+  assert.match(log, /- theirs\n- mine$/u, "both entries are on main")
+})
+
+test("a duplicate save nobody recorded is closed as superseded with a link to where its content lives", async () => {
+  const { origin, desk, env, gh, url } = await unrecordedConflict("sweep-duplicate", {
+    mine: (desk) => appendTo(desk, "- same entry", "save"),
+    theirs: async (seed) => { await appendTo(seed, "- same entry", "the same entry, saved elsewhere"); await appendTo(seed, "- later", "later") },
+  })
+  const outcome = settleSaves({ root: desk, env, spawnGit: gh, clock: clockOf() })
+  assert.deepEqual(outcome.closed, [url])
+  assert.equal(gh.prs.get(1).state, "CLOSED")
+  const main = git(origin, ["rev-parse", "refs/heads/main"])
+  assert.match(gh.prs.get(1).closedWith, new RegExp(`Superseded.*https://github\\.example/team/workspace/blob/${main}/log\\.md`, "u"))
+  assert.equal(gh.prs.size, 1, "no replacement is opened")
+})
+
+test("a real content conflict nobody recorded stays open and is reported with its file", async () => {
+  const { desk, env, gh, url } = await unrecordedConflict("sweep-content", {
+    mine: async (desk) => {
+      await fs.writeFile(path.join(desk, "app.json"), "{\"a\":1}\n")
+      git(desk, ["add", "."])
+      git(desk, ["commit", "-q", "-m", "save"])
+      return git(desk, ["rev-parse", "HEAD"])
+    },
+    theirs: async (seed) => {
+      await fs.writeFile(path.join(seed, "app.json"), "{\"b\":2}\n")
+      git(seed, ["add", "."])
+      git(seed, ["commit", "-q", "-m", "other"])
+    },
+  })
+  assert.deepEqual(settleSaves({ root: desk, env, spawnGit: gh, clock: clockOf() }).waiting, [url])
+  assert.equal(gh.prs.get(1).state, "OPEN")
+  assert.equal(gh.prs.size, 1)
+  const [stuck] = stuckSaves({ root: desk, env, now: Date.now })
+  assert.equal(stuck.url, url)
+  assert.match(stuckLine(stuck), /conflicts with main in app\.json/u)
+  const reply = withStuckSaves({}, { root: desk, env, now: Date.now })
+  assert.deepEqual(reply.desk_unmerged_saves[0].conflicts, ["app.json"])
 })
