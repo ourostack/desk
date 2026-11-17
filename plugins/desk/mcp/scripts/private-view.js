@@ -22,6 +22,7 @@ import * as os from "node:os"
 import * as path from "node:path"
 import { pathToFileURL } from "node:url"
 
+import { deskFailure } from "../src/runtime/desk-failure.js"
 import { jobId } from "../src/factory/binding.js"
 import { factoryStateDir } from "../src/factory/boot-check.js"
 import { readDeskRemote, resolveJobIdentity } from "../src/factory/desk-repo.js"
@@ -63,11 +64,11 @@ const inside = (child, parent) => child === parent || child.startsWith(parent + 
 
 /** Refuses a folder that is a symlink, inside a Git work tree, or inside the factory's state folder. */
 export function checkViewDir(dir, env) {
-  if (existsSync(dir) && lstatSync(dir).isSymbolicLink()) throw new Error(`private-view: ${dir} is a symbolic link; remove it and run again`)
+  if (existsSync(dir) && lstatSync(dir).isSymbolicLink()) throw new Error(deskFailure({ code: "private_view_dir_symlink", thing: "private-view", probably: `${dir} is a symbolic link`, look: "run `ls -l` on that path", keepWorking: "the desk itself is unaffected, so keep working on the task", fix: "remove the link and run private-view again" }))
   const real = resolved(dir)
-  if (inside(real, resolved(factoryStateDir(env)))) throw new Error(`private-view: ${dir} is inside the factory's state folder`)
+  if (inside(real, resolved(factoryStateDir(env)))) throw new Error(deskFailure({ code: "private_view_dir_in_state", thing: "private-view", probably: `${dir} is inside the factory's state folder`, look: "print the folder with `echo $XDG_STATE_HOME`", keepWorking: "the desk itself is unaffected, so keep working on the task", fix: "choose a view folder outside the factory state folder" }))
   for (let up = real; up !== path.dirname(up); up = path.dirname(up)) {
-    if (existsSync(path.join(up, ".git"))) throw new Error(`private-view: ${dir} is inside the Git work tree ${up}`)
+    if (existsSync(path.join(up, ".git"))) throw new Error(deskFailure({ code: "private_view_dir_in_git", thing: "private-view", probably: `${dir} is inside the Git work tree ${up}`, look: "run `git -C <folder> rev-parse --show-toplevel`", keepWorking: "the desk itself is unaffected, so keep working on the task", fix: "choose a view folder outside every Git work tree" }))
   }
 }
 
@@ -75,10 +76,10 @@ export function checkViewDir(dir, env) {
 export async function taskNames({ root, env }) {
   const deskRemote = readDeskRemote({ deskRoot: root }) || `local:${root}`
   const published = publishedJobId({ env, deskRemote, job: "0".repeat(32) })
-  if (published.reason === "visibility_not_known") throw new Error("private-view: this desk's visibility is not known yet, so its job IDs cannot be derived; run a factory flush first")
+  if (published.reason === "visibility_not_known") throw new Error(deskFailure({ code: "private_view_visibility_unknown", thing: "private-view", probably: "this desk's visibility is not known yet, so its job IDs cannot be derived", look: "run `factory status` and read its visibility line", keepWorking: "the desk itself is unaffected, so keep working on the task", fix: "run a factory flush, then run private-view again" }))
   const known = published.job !== null
   const secretFile = path.join(factoryStateDir(env), "machine-secret")
-  if (!known && !existsSync(secretFile)) throw new Error("private-view: this desk's job IDs are keyed with this machine's secret, which does not exist yet; run a factory flush first")
+  if (!known && !existsSync(secretFile)) throw new Error(deskFailure({ code: "private_view_secret_missing", thing: "private-view", probably: "this desk's job IDs are keyed with this machine's secret, which does not exist yet", look: "run `factory status` and read its machine-secret line", keepWorking: "the desk itself is unaffected, so keep working on the task", fix: "run a factory flush, then run private-view again" }))
   const secret = known ? null : await readMachineSecret(env)
   const jobs = {}
   for (const track of folders(root).filter((name) => !name.startsWith("_") && !name.startsWith(".") && name !== "desks")) {
@@ -93,7 +94,7 @@ export async function taskNames({ root, env }) {
         const birth = resolveJobIdentity({ deskRoot: root, track, slug })
         plain = jobId({ deskRemote, personPrefix: "", track: birth.track, slug: birth.slug })
       } catch (error) {
-        throw new Error(`private-view: the job ID of ${track}/${slug} cannot be derived (${error.message})`)
+        throw new Error(deskFailure({ code: "private_view_job_id_underivable", thing: "private-view", probably: `the job ID of ${track}/${slug} cannot be derived (${error.message})`, look: "open the task folder named above and check its track and slug", keepWorking: "the desk itself is unaffected, so keep working on the task", fix: "fix that task folder, then run private-view again" }))
       }
       const title = parseFrontmatterLite(readFileSync(card, "utf8")).data.title
       jobs[known ? plain : keyedJobId(plain, secret)] = { title: typeof title === "string" && title !== "" ? title : slug, track, task: slug }
@@ -128,7 +129,7 @@ export function serve(dir) {
 /** Builds the view, then serves it. Resolves `{ server, url }`. */
 export async function main({ env, fetchFile = fetchText, log }) {
   const { root, error } = resolveHookDeskRoot({ env })
-  if (root === null) throw new Error(`private-view: no desk is bound on this machine (${error})`)
+  if (root === null) throw new Error(deskFailure({ code: "private_view_no_desk", thing: "private-view", probably: `no desk is bound on this machine (${error})`, look: "run `desk_doctor` and read the desk line", keepWorking: "the desk itself is unaffected, so keep working on the task", fix: "bind a desk with desk_start, then run private-view again" }))
   const real = realpathSync(root)
   const dir = viewDir(env)
   checkViewDir(dir, env)
