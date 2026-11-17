@@ -641,7 +641,7 @@ export async function main({ argv = process.argv.slice(2), env = process.env, cw
     }
     const result = await runValidatePrCommand({ argv: rest, env, cwd, git, runner })
     write(`${JSON.stringify(result)}\n`)
-    return result.ok === false ? 1 : 0
+    return Number(result.ok === false)
   } catch (error) {
     logError(`${error.message}\n`)
     return 1
