@@ -449,4 +449,30 @@ test("a real content conflict nobody recorded stays open and is reported with it
   assert.match(stuckLine(stuck), /conflicts with main in app\.json/u)
   const reply = withStuckSaves({}, { root: desk, env, now: Date.now })
   assert.deepEqual(reply.desk_unmerged_saves[0].conflicts, ["app.json"])
+  assert.match(formatBootText({ unmerged_saves: [stuck] }), /not on main after \d+ min, conflicting with main in app\.json\./u)
+})
+
+test("a pull request list GitHub cannot give, a non-GitHub remote and other pull requests leave the sweep harmless", async () => {
+  const { origin, desk, env, gh, url } = await unrecordedConflict("sweep-quiet", {
+    mine: (desk) => appendTo(desk, "- mine", "save"),
+    theirs: (seed) => appendTo(seed, "- theirs", "another save"),
+  })
+  gh.prs.set(9, { number: 9, branch: "feature/x", url: "https://github.example/team/workspace/pull/9", state: "OPEN", labels: [], head: gh.prs.get(1).head })
+  const unlisted = (command, args, options) => (command === "gh" && args[1] === "list" ? { status: 1, stdout: "", stderr: "" } : gh(command, args, options))
+  assert.deepEqual(settleSaves({ root: desk, env, spawnGit: unlisted, clock: clockOf() }), { closed: [], rebased: [], waiting: [] })
+  // Only the desk/publish branch is taken up, not another pull request that conflicts.
+  const local = (command, args, options) => (command === "git" && args.includes("get-url") ? { status: 0, stdout: `${origin}\n`, stderr: "" } : gh(command, args, options))
+  assert.deepEqual(settleSaves({ root: desk, env, spawnGit: local, clock: clockOf() }).rebased, [])
+  assert.deepEqual(settleSaves({ root: desk, env, spawnGit: gh, clock: clockOf() }).rebased, [url])
+  assert.equal(gh.prs.get(9).state, "OPEN")
+})
+
+test("a duplicate save is closed as superseded even when the remote is not a GitHub address", async () => {
+  const { origin, desk, env, gh, url } = await unrecordedConflict("local-remote", {
+    mine: (desk) => appendTo(desk, "- same entry", "save"),
+    theirs: (seed) => appendTo(seed, "- same entry", "the same entry, saved elsewhere"),
+  })
+  savesFor({ root: desk, env, now: Date.now }).record({ url, head: gh.prs.get(1).head, branch: gh.prs.get(1).branch, base: "main" })
+  const local = (command, args, options) => (command === "git" && args.includes("get-url") ? { status: 0, stdout: `${origin}\n`, stderr: "" } : gh(command, args, options))
+  assert.deepEqual(settleSaves({ root: desk, env, spawnGit: local, clock: clockOf() }).closed, [url])
 })

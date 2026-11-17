@@ -70,16 +70,12 @@ export function allStuckSaves({ env, now }) {
   }
 }
 
-/** Notes the files a save's pull request conflicts on with main, which Desk could not merge by itself. Never throws. */
+/** Notes the files a save's pull request conflicts on with main, which Desk could not merge by itself. */
 function markConflict({ root, env, url, files }) {
-  try {
-    updateSyncStatus(root, env, (current) => ({ [KEY]: entries(current).map((save) => (save.url === url ? { ...save, conflict: { files } } : save)) }))
-  } catch {
-    // See recordUnmerged.
-  }
+  updateSyncStatus(root, env, (current) => ({ [KEY]: entries(current).map((save) => (save.url === url ? { ...save, conflict: { files } } : save)) }))
 }
 
-const conflictFiles = (save) => (Array.isArray(save.conflict?.files) ? save.conflict.files.filter((file) => typeof file === "string") : [])
+const conflictFiles = (save) => save.conflict?.files ?? []
 
 /** One plain sentence per stuck save, naming its PR link, and the files that conflict when Desk could not merge them. */
 export const stuckLine = (save) => conflictFiles(save).length > 0
@@ -172,14 +168,10 @@ export function settleSaves(options) {
 
 // Open desk/publish/* pull requests against `base` that GitHub reports as conflicting and this desk never recorded (another
 // machine's save, or a record lost): recorded from the time they were opened, so they are as loud as any other waiting save.
-function adoptConflicting({ git, spawnGit, root, env, repo, base, known }) {
+function adoptConflicting({ spawnGit, root, env, repo, base, known }) {
   const listed = ghRun(spawnGit, root, ["pr", "list", "--repo", repo.full, "--state", "open", "--base", base, "--limit", "200", "--json", "url,headRefName,headRefOid,baseRefName,mergeable,createdAt"])
-  let prs
-  try { prs = JSON.parse(listed.stdout) } catch { return }
-  if (listed.status !== 0 || !Array.isArray(prs)) return
-  for (const pr of prs) {
-    if (typeof pr?.url !== "string" || typeof pr.headRefName !== "string" || !pr.headRefName.startsWith("desk/publish/") || pr.baseRefName !== base) continue
-    if (pr.mergeable !== "CONFLICTING" || known.has(pr.url) || !OBJECT_ID.test(String(pr.headRefOid)) || Number.isNaN(Date.parse(pr.createdAt))) continue
+  for (const pr of JSON.parse(listed.stdout)) {
+    if (!pr.headRefName.startsWith("desk/publish/") || pr.mergeable !== "CONFLICTING" || known.has(pr.url)) continue
     updateSyncStatus(root, env, (current) => ({ [KEY]: [...entries(current), { url: pr.url, head: pr.headRefOid, branch: pr.headRefName, base, since: pr.createdAt }] }))
   }
 }
@@ -191,13 +183,11 @@ function settle({ root, env, spawnGit, clock }) {
   let list = entries(readSyncStatus({ root, env }))
   let repo = null
   if (upstream !== null) {
-    let remote = git(["remote", "get-url", upstream.remote])
-    if (remote.status !== 0 || remote.stdout.trim() === "") remote = git(["ls-remote", "--get-url", upstream.remote])
-    try { repo = repository(remote.stdout.trim()) } catch { repo = null }
+    try { repo = repository(git(["remote", "get-url", upstream.remote]).stdout.trim()) } catch { repo = null }
   }
   if (repo !== null) {
     try {
-      adoptConflicting({ git, spawnGit, root, env, repo, base: upstream.merge.replace(/^refs\/heads\//u, ""), known: new Set(list.map((save) => save.url)) })
+      adoptConflicting({ spawnGit, root, env, repo, base: upstream.merge.replace(/^refs\/heads\//u, ""), known: new Set(list.map((save) => save.url)) })
       list = entries(readSyncStatus({ root, env }))
     } catch {
       // Finding strays is best effort; the recorded saves are still settled.
