@@ -1,5 +1,5 @@
 #!/usr/bin/env node
 
-import { runRuntimeDependencyPackVerifyCli } from "../src/runtime/runtime-deps.js"
+import { runRuntimeDependencyPackVerifyCli } from "../src/runtime/runtime-deps-cli.js"
 
-process.exitCode = runRuntimeDependencyPackVerifyCli()
+process.exitCode = await runRuntimeDependencyPackVerifyCli()

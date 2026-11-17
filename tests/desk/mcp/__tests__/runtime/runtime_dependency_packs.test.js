@@ -2354,10 +2354,9 @@ test("runtime dependency pack builder handles long paths and CLI argument edge c
     collectProductionDependencyClosure,
     deriveRuntimeDependencyPackPaths,
     productionDependencyLockHash,
-    runRuntimeDependencyPackBuildCli,
-    runRuntimeDependencyPackVerifyCli,
     verifyRuntimeDependencyPack,
   } = await loadRuntimeDeps()
+  const { runRuntimeDependencyPackBuildCli, runRuntimeDependencyPackVerifyCli } = await import("../../../../../plugins/desk/mcp/src/runtime/runtime-deps-cli.js")
   assert.match(
     productionDependencyLockHash({
       packageJson: {},
@@ -2474,15 +2473,14 @@ test("runtime dependency pack builder handles long paths and CLI argument edge c
       /runtime dependency archive path is too long for tar header/u,
     )
 
-    assert.equal(runRuntimeDependencyPackBuildCli({ argv: ["-h"], io }), 0)
+    assert.equal(await runRuntimeDependencyPackBuildCli({ argv: ["-h"], io }), 0)
     assert.match(stdout.join(""), /Build a runtime dependency pack/u)
     assert.equal(stderr.join(""), "")
     resetIo()
 
     assert.equal(
-      runRuntimeDependencyPackBuildCli({
+      await runRuntimeDependencyPackBuildCli({
         argv: [
-          "ignored-positional",
           "--output-root",
           cliOutputRoot,
           "--platform",
@@ -2490,6 +2488,7 @@ test("runtime dependency pack builder handles long paths and CLI argument edge c
           "--arch",
           process.arch,
           "--node-abi",
+          targetNodeAbi,
         ],
         io,
       }),
@@ -2499,7 +2498,7 @@ test("runtime dependency pack builder handles long paths and CLI argument edge c
     assert.equal(stderr.join(""), "")
     resetIo()
 
-    assert.equal(runRuntimeDependencyPackVerifyCli({ argv: ["--help"], io }), 0)
+    assert.equal(await runRuntimeDependencyPackVerifyCli({ argv: ["--help"], io }), 0)
     assert.match(stdout.join(""), /Verify a runtime dependency pack/u)
     assert.equal(stderr.join(""), "")
     resetIo()
@@ -2512,7 +2511,7 @@ test("runtime dependency pack builder handles long paths and CLI argument edge c
       arch: process.arch,
       nodeAbi: process.versions.modules,
     })
-    const defaultVerifyStatus = runRuntimeDependencyPackVerifyCli({ argv: [], io })
+    const defaultVerifyStatus = await runRuntimeDependencyPackVerifyCli({ argv: [], io })
     if (existsSync(defaultPackPaths.packDir)) {
       assert.equal(defaultVerifyStatus, 0)
       assert.match(stdout.join(""), /runtime dependency pack verified/u)
@@ -2525,9 +2524,8 @@ test("runtime dependency pack builder handles long paths and CLI argument edge c
     resetIo()
 
     assert.equal(
-      runRuntimeDependencyPackVerifyCli({
+      await runRuntimeDependencyPackVerifyCli({
         argv: [
-          "ignored-positional",
           "--pack-dir",
           cliInvalidPackDir,
           "--platform",
