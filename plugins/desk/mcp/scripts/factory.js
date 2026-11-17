@@ -52,6 +52,7 @@ import { existsSync, readFileSync, realpathSync } from "node:fs"
 import * as path from "node:path"
 import { pathToFileURL } from "node:url"
 
+import { deskFailure } from "../src/runtime/desk-failure.js"
 import { AxError } from "../src/lib/ouro-ui/registry/ouro/ax/problem.ts"
 import { defineCli, defineCommand } from "../src/lib/ouro-ui/registry/ouro/ax/command.ts"
 import { runCli } from "../src/lib/ouro-ui/registry/ouro/ax/cli.ts"
@@ -144,7 +145,7 @@ function runGit(args, { cwd, encoding = "utf8", maxBuffer = 32 * 1024 * 1024 }) 
   try {
     return execFileSync("git", args, { windowsHide: true, cwd, encoding, maxBuffer, stdio: ["ignore", "pipe", "pipe"] })
   } catch (error) {
-    const failure = new Error("factory.js validate-pr: Git data could not be read")
+    const failure = gitDataError()
     failure.status = typeof error?.status === "number" ? error.status : null
     throw failure
   }
@@ -154,12 +155,15 @@ function runGit(args, { cwd, encoding = "utf8", maxBuffer = 32 * 1024 * 1024 }) 
 // version that cannot be read, fails closed.
 const MERGE_TREE_MINIMUM = [2, 38]
 
+const gitDataError = () => new Error(deskFailure({ code: "validate_pr_git_data_unreadable", thing: "factory.js validate-pr", probably: "Git data could not be read, usually because the working directory is not the checkout of this PR", look: "run `git status` in the directory validate-pr ran from", keepWorking: "validate-pr cannot check this PR here, so leave it to CI and keep working on the task", fix: "run validate-pr from the PR's checkout" }))
+const gitChangeListError = () => new Error(deskFailure({ code: "validate_pr_change_list_malformed", thing: "factory.js validate-pr", probably: "Git change list is malformed, so `git diff` printed something validate-pr does not parse", look: "run the same `git diff --name-status -z` command and read its output", keepWorking: "validate-pr cannot check this PR here, so leave it to CI and keep working on the task", fix: "update Git or report the output with friction_add" }))
+
 function requireMergeTree({ cwd, git }) {
   const match = /^git version (\d+)\.(\d+)/u.exec(git(["version"], { cwd }))
   const major = match === null ? 0 : Number(match[1])
   const minor = match === null ? 0 : Number(match[2])
   if (major < MERGE_TREE_MINIMUM[0] || (major === MERGE_TREE_MINIMUM[0] && minor < MERGE_TREE_MINIMUM[1])) {
-    throw new Error("factory.js validate-pr: git_too_old (merge-tree needs Git 2.38 or later)")
+    throw new Error(deskFailure({ code: "git_too_old", thing: "factory.js validate-pr", probably: "this Git is older than 2.38, and merge-tree needs Git 2.38 or later", look: "run `git version` in the same shell", keepWorking: "validate-pr cannot check this PR here, so leave it to CI and keep working on the task", fix: "install Git 2.38 or later and run validate-pr again" }))
   }
 }
 
@@ -172,10 +176,10 @@ function mergeResultTree({ base, head, cwd, git }) {
     output = git(["merge-tree", "--write-tree", "--no-messages", base, head], { cwd })
   } catch (error) {
     if (error.status === 1) return null
-    throw new Error("factory.js validate-pr: merge_tree_unavailable")
+    throw new Error(deskFailure({ code: "merge_tree_unavailable", thing: "factory.js validate-pr", probably: "`git merge-tree` failed for a reason other than a merge conflict (a missing base or head commit is the usual cause)", look: "run `git merge-tree --write-tree <base> <head>` yourself and read its stderr", keepWorking: "validate-pr cannot check this PR here, so leave it to CI and keep working on the task", fix: "fetch both the base and head commits, then run validate-pr again" }))
   }
   const tree = output.split("\n")[0]
-  if (!GIT_REF.test(tree)) throw new Error("factory.js validate-pr: Git data could not be read")
+  if (!GIT_REF.test(tree)) throw gitDataError()
   return tree
 }
 
@@ -189,7 +193,7 @@ function changedPaths({ base, tree, cwd, git }) {
   for (let index = 0; index < fields.length; index += 2) {
     const status = fields[index]
     const filePath = fields[index + 1]
-    if (filePath === undefined) throw new Error("factory.js validate-pr: Git change list is malformed")
+    if (filePath === undefined) throw gitChangeListError()
     changes.push({
       path: filePath,
       status: status === "A" ? "added" : status === "M" ? "modified" : status === "D" ? "removed" : "unknown",
@@ -242,10 +246,10 @@ function triageStatuses({ base, tree, cwd, git }) {
   const statuses = new Map()
   for (let i = 0; i < fields.length;) {
     const code = fields[i++], from = fields[i++]
-    if (from === undefined) throw new Error("factory.js validate-pr: Git change list is malformed")
+    if (from === undefined) throw gitChangeListError()
     if (/^[RC][0-9]+$/u.test(code)) {
       const to = fields[i++]
-      if (to === undefined) throw new Error("factory.js validate-pr: Git change list is malformed")
+      if (to === undefined) throw gitChangeListError()
       const status = code.startsWith("R") ? "renamed" : "copied"
       if (isTriagePath(from)) statuses.set(from, status)
       if (isTriagePath(to)) statuses.set(to, status)
@@ -449,7 +453,7 @@ export async function runJobLinkCommand({ store, "desk-remote": deskRemote, trac
     try {
       root = realpathSync(desk)
     } catch {
-      throw new Error("factory.js job-link: the desk folder could not be read")
+      throw new Error(deskFailure({ code: "job_link_desk_unreadable", thing: "factory.js job-link", probably: "the desk folder could not be read, so --desk is probably misspelled or was removed", look: "check that the --desk path exists with `ls`", keepWorking: "run this command again once the path is right; other factory commands are unaffected", fix: "pass --desk <absolute desk root>" }))
     }
     const birth = resolveJobIdentity({ deskRoot: root, personPrefix, track, slug })
     track = birth.track
@@ -498,7 +502,7 @@ export async function runEvaluateCommand({ desk, task, pending = false }, { env,
   try {
     root = realpathSync(desk)
   } catch {
-    throw new Error("factory.js evaluate: the desk folder could not be read")
+    throw new Error(deskFailure({ code: "evaluate_desk_unreadable", thing: "factory.js evaluate", probably: "the desk folder could not be read, so --desk is probably misspelled or was removed", look: "check that the --desk path exists with `ls`", keepWorking: "run this command again once the path is right; other factory commands are unaffected", fix: "pass --desk <absolute desk root>" }))
   }
   let job
   try {
@@ -550,7 +554,7 @@ export async function runAndonCommand(flags, ctx) {
   const context = await storeIssueContext(flags, ctx, "andon")
   const configPath = path.join(flags.store, "factory.json")
   const config = parseStoreConfig(existsSync(configPath) ? readFileSync(configPath, "utf8") : null)
-  if (!config.ok) throw new Error(`factory.js andon: the store's factory.json is not valid (${config.code})`)
+  if (!config.ok) throw new Error(deskFailure({ code: "andon_store_config_invalid", thing: "factory.js andon", probably: `the store's factory.json is not valid (${config.code})`, look: "open factory.json in the --store checkout and compare it with the code above", keepWorking: "the other factory commands are unaffected, so keep working on the task", fix: "correct factory.json in the store and run andon again" }))
   // Other plugins are named only when public by the publishing rule (M3-12).
   return syncAndon({ ...context, plugins: config.plugins, publicPlugins: storePublicPlugins(flags.store) })
 }
