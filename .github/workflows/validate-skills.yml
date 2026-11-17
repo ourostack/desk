@@ -52,6 +52,9 @@ jobs:
       - name: Validate skill eval contracts
         run: node scripts/test-skill-evals.cjs && node scripts/skill-evals.cjs validate
 
+      - name: Check the always-on context budget
+        run: node scripts/check-context-budget.mjs
+
       - name: Validate Plain Language
         run: node scripts/test-plain-language-plugin.cjs && node scripts/test-plain-language-hook.cjs
 
