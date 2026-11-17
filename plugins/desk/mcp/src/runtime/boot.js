@@ -53,6 +53,8 @@ import * as os from "node:os"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 
+import { defineCli, defineCommand } from "../lib/ouro-ui/registry/ouro/ax/command.ts"
+import { runCli } from "../lib/ouro-ui/registry/ouro/ax/cli.ts"
 import { normalizeRemote } from "../factory/binding.js"
 import { ghRunner, chooseAccount, signedInAccounts } from "../factory/flush.js"
 import { PATTERNS } from "../factory/schema.js"
@@ -1579,25 +1581,6 @@ export async function bootOnce({
   }
 }
 
-/** `--task <query>`, `--json` and `--task-only` from the command line: the named task or null, whether to print the structured result, and whether to check only the named task. */
-export function parseBootArgs(argv) {
-  const index = argv.indexOf("--task")
-  // `--task --json` names no task: a flag is never the query.
-  const value = index === -1 ? undefined : argv[index + 1]
-  return {
-    taskQuery: typeof value === "string" && value.trim() !== "" && !value.startsWith("--") ? value : null,
-    json: argv.includes("--json"),
-    taskOnly: argv.includes("--task-only"),
-    deliverTo: deliverTarget(argv),
-  }
-}
-
-// `--deliver <file>`: the startup boot's mode (runtime/startup-boot.js). The text goes to that file, renamed into place, and nothing is printed.
-function deliverTarget(argv) {
-  const value = argv[argv.indexOf("--deliver") + 1]
-  return argv.includes("--deliver") && typeof value === "string" && value !== "" && !value.startsWith("--") ? value : null
-}
-
 function deliverText(file, text) {
   mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
   const temp = `${file}.${process.pid}.tmp`
@@ -1606,48 +1589,74 @@ function deliverText(file, text) {
 }
 
 /**
- * The CLI entrypoint: prints `bootOnce`'s result as readable text (or, with `--json`, as one line of JSON for tools and
- * tests) and always exits 0 — a boot script must never block session start.
+ * The CLI entrypoint, defined with Ouro AX: prints `bootOnce`'s result as readable text (or, with `--json`, as JSON for tools and
+ * tests). A boot never fails on what it finds -- a failed boot is a degraded result -- so the exit code is 0 unless the command line is
+ * wrong (one stderr line and exit 2).
  */
 export async function runBootCli({ argv = [], env = process.env, io = process, bootFn = bootOnce, refreshOptions = {} }) {
-  applyPublicationMode({}, env)
-  const { taskQuery, json, taskOnly, deliverTo } = parseBootArgs(argv)
-  let result
-  try {
-    result = await bootFn({ env, taskQuery, taskOnly })
-  } catch (error) {
-    result = emptyResult({
-      status: "degraded",
-      degraded: [`boot: ${error.message}`],
-      pending: [],
-      instructions: ["The boot script failed unexpectedly: check `gh --version`, `jq --version` and `gh auth status` by hand, and record the failure as friction."],
-      root: null,
-      host: null,
-    })
-  }
-  const finding = result.stale_desk ?? null
-  // A stale Desk is refreshed on its own host, but only after the boot output is written, and by a detached runner: boot never waits for it.
-  const options = { finding, env, pluginRoot: DESK_PLUGIN_ROOT, agentHost: result.host?.agent, root: result.root?.path ?? null, ...refreshOptions }
-  const prepared = finding === null ? { state: "unavailable" } : planStaleRefresh(options)
-  if (finding !== null) {
-    const started = prepared.state === "ready"
-    // The release notice already says how to pick the release up, so a started refresh does not replace it.
-    result = { ...result, stale_desk: { ...finding, auto_refresh: started ? "started" : prepared.state, line: started && finding.channel !== "release" ? startedLine(finding, prepared.plan) : finding.line } }
-  }
-  const { text_instructions: _textOnly, ...structured } = result
-  const output = json ? `${JSON.stringify(structured)}\n` : formatBootText(result)
-  if (deliverTo === null) io.stdout.write(output)
-  else {
-    try {
-      deliverText(deliverTo, output)
-    } catch (error) {
+  let quiet = false
+  let full = null
+  let refresh = null
+  const command = defineCommand({
+    name: "boot",
+    summary: "Run the session-start boot: migrations, host, prerequisites, workspace sync, active tasks, push accounts and open PRs.",
+    effect: "private",
+    readOnly: true,
+    output: "the boot result",
+    flags: {
+      task: { type: "string", placeholder: "<name>", description: "The task to open; a blank name is no task." },
+      "task-only": { type: "boolean", description: "Check only the named task." },
+      deliver: { type: "string", placeholder: "<file>", description: "Write the text to this file, renamed into place, and print nothing." },
+    },
+    run: async (input, { json }) => {
+      applyPublicationMode({}, env)
+      const taskQuery = typeof input.task === "string" && input.task.trim() !== "" ? input.task : null
+      const taskOnly = input["task-only"] === true
+      const deliverTo = typeof input.deliver === "string" && input.deliver !== "" ? input.deliver : null
+      let result
       try {
-        deliverText(deliverTo, `Desk boot: its result could not be written (${String(error.message).split("\n")[0].slice(0, 120)}). desk_status reports the desk's state.\n`)
-      } catch {
-        // The waiting reader sees the boot end without a result and says so.
+        result = await bootFn({ env, taskQuery, taskOnly })
+      } catch (error) {
+        result = emptyResult({
+          status: "degraded",
+          degraded: [`boot: ${error.message}`],
+          pending: [],
+          instructions: ["The boot script failed unexpectedly: check `gh --version`, `jq --version` and `gh auth status` by hand, and record the failure as friction."],
+          root: null,
+          host: null,
+        })
       }
-    }
-  }
-  if (prepared.state === "ready") startStaleRefresh({ ...options, prepared })
-  return 0
+      const finding = result.stale_desk ?? null
+      // A stale Desk is refreshed on its own host, but only after the boot output is written, and by a detached runner: boot never waits for it.
+      const options = { finding, env, pluginRoot: DESK_PLUGIN_ROOT, agentHost: result.host?.agent, root: result.root?.path ?? null, ...refreshOptions }
+      const prepared = finding === null ? { state: "unavailable" } : planStaleRefresh(options)
+      if (finding !== null) {
+        const started = prepared.state === "ready"
+        // The release notice already says how to pick the release up, so a started refresh does not replace it.
+        result = { ...result, stale_desk: { ...finding, auto_refresh: started ? "started" : prepared.state, line: started && finding.channel !== "release" ? startedLine(finding, prepared.plan) : finding.line } }
+      }
+      const { text_instructions: _textOnly, ...structured } = result
+      full = result
+      if (deliverTo !== null) {
+        quiet = true
+        const output = json ? `${JSON.stringify(structured)}\n` : formatBootText(result)
+        try {
+          deliverText(deliverTo, output)
+        } catch (error) {
+          try {
+            deliverText(deliverTo, `Desk boot: its result could not be written (${String(error.message).split("\n")[0].slice(0, 120)}). desk_status reports the desk's state.\n`)
+          } catch {
+            // The waiting reader sees the boot end without a result and says so.
+          }
+        }
+      }
+      if (prepared.state === "ready") refresh = { ...options, prepared }
+      return structured
+    },
+    text: () => formatBootText(full),
+  })
+  const stdout = { write: (chunk) => (quiet ? undefined : io.stdout.write(chunk)) }
+  const code = await runCli(defineCli({ name: "session-boot", about: "The one-call session-start boot.", command }), argv, { stdout, stderr: io.stderr ?? process.stderr })
+  if (refresh !== null) startStaleRefresh(refresh)
+  return code
 }

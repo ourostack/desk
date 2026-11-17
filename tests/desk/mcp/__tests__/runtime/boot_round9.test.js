@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url"
 import { mkTempRoot } from "../_temp_roots.js"
 import { osEnv } from "../_os_env.js"
 import { recordPullOutcome } from "../../../../../plugins/desk/mcp/src/runtime/sync-worker.js"
-import { bootOnce, hostLoadsAgentsMd, parseBootArgs, repoStates, runBootCli } from "../../../../../plugins/desk/mcp/src/runtime/boot.js"
+import { bootOnce, hostLoadsAgentsMd, repoStates, runBootCli } from "../../../../../plugins/desk/mcp/src/runtime/boot.js"
 import { BOOT_TEXT_MAX_CHARS, TASKS_SHOWN_CAP, AGENTS_MD_CAP_BYTES, NO_TASK_INSTRUCTION, UNMATCHED_TASK_INSTRUCTION, formatBootText, lastSyncedAt, readAgentsMd, syncSummary, syncWords } from "../../../../../plugins/desk/mcp/src/runtime/boot-text.js"
 import { PERSON_AGENTS_MIN_BYTES } from "../../../../../plugins/desk/mcp/src/runtime/agents-md.js"
 import { activeTasks } from "../../../../../plugins/desk/mcp/src/desk/active-tasks.js"
@@ -509,13 +509,6 @@ test("the shipped script prints text by default and JSON with --json", async () 
 })
 
 // ── Review fixes ────────────────────────────────────────────────────────
-
-test("parseBootArgs: a flag after --task is never the task name", () => {
-  assert.deepEqual(parseBootArgs(["--task", "--json"]), { taskQuery: null, json: true, taskOnly: false, deliverTo: null })
-  assert.deepEqual(parseBootArgs(["--json", "--task", "flash"]), { taskQuery: "flash", json: true, taskOnly: false, deliverTo: null })
-  assert.deepEqual(parseBootArgs(["--task"]), { taskQuery: null, json: false, taskOnly: false, deliverTo: null })
-  assert.deepEqual(parseBootArgs(["--task", "  "]), { taskQuery: null, json: false, taskOnly: false, deliverTo: null })
-})
 
 test("boot hands every card to the local-only recorder, and a recorder that throws never degrades the boot", async () => {
   const root = await desk()
