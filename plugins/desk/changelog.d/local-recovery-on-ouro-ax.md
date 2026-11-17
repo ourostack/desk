@@ -1,0 +1,1 @@
+The `local-recovery` command line is now defined with Ouro AX instead of a hand-written argument parser: `--help` is generated from the definition and a wrong argument is one line naming the fix (exit 2); the JSON report and its exit codes are unchanged.

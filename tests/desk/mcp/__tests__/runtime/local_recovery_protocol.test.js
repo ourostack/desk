@@ -626,3 +626,14 @@ test("a synchronous transport write failure clears its request without mutation"
   assert.equal(result.report.code, "recovery_error")
   assert.equal(result.report.effects.mutation, "not_dispatched")
 })
+
+test("the command line answers a wrong argument with one usage line and --help with its definition", () => {
+  const script = path.resolve("../../../plugins/desk/mcp/scripts/local-recovery.js")
+  const wrong = spawnSync(process.execPath, [script, "--root", root, "--operation", "nope"], { encoding: "utf8" })
+  assert.equal(wrong.status, 2)
+  assert.match(wrong.stderr, /^local-recovery: --operation .* Fix: .*\n$/u)
+  assert.equal(wrong.stdout, "")
+  const help = spawnSync(process.execPath, [script, "--help"], { encoding: "utf8" })
+  assert.equal(help.status, 0)
+  assert.match(help.stdout, /--operation/u)
+})
