@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.208 — 2026-11-17
+
+Desk's MCP server now vendors Ouro UI v1.3.246, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.207 — 2026-11-17
 
 Desk's MCP server now vendors Ouro UI v1.3.244, with the two kit files its AX surfaces and X-ray modules import and the `#ouro-ax/*` import alias that resolves them.
