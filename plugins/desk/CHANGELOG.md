@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.232 — 2026-11-17
+
+Content-home refusals now say what probably happened, how to look further, how to file a bug with evidence and how to keep working.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.231 — 2026-11-17
 
 The Copilot boot text is down from about 3 KB to under 1.4 KB. It says what Desk is, where its RFC is and the two boundaries (nothing irreversibly destructive, no contacting anyone without the operator's approval), then keeps one short line each for the desk path, the tools, the task report, new work and a missing thing. The `--json` boot keeps its full wording. The `scripts/check-context-budget.mjs` check holds the boot text to its budget in CI.
