@@ -1341,7 +1341,7 @@ test("a start that hangs past its budget says it timed out", async () => {
 const retryOptions = (options) => ({ ...options, openMs: 1000, firstOpenMs: 600, retryMinMs: 500 })
 const openCount = (calls) => calls().filter((call) => call.args[1] === "open").length
 
-test("a fresh start that stalls with no output is stopped, and tried once more in a new context", async () => {
+test("a fresh start that stalls is stopped, and tried once more in a new context", async () => {
   const { options, tmp, root, calls } = await setup({ mode: "open-stall-once" })
   const controller = web.createController(retryOptions(options))
   const opened = json(await controller.call("browser_context", { action: "open", browser: "fresh" }))
@@ -1371,7 +1371,7 @@ test("a fresh start that stalls on both tries says so, and leaves nothing behind
   const controller = web.createController(retryOptions(options))
   const stalled = await controller.call("browser_context", { action: "open", browser: "fresh" })
   assert.equal(stalled.isError, true)
-  assert.equal(text(stalled), "The browser did not start: the first try stalled with no output for 0.6 seconds, and the second try did not start within 0.5 seconds and was stopped. Try again, or use a fresh browser.")
+  assert.equal(text(stalled), "The browser did not start: the first try did not start within 0.6 seconds and was stopped, and the second try did not start within 0.5 seconds and was stopped. Try again, or use a fresh browser.")
   assert.equal(openCount(calls), 2)
   assert.deepEqual(fs.readdirSync(tmp), [])
   assert.deepEqual(fakesRunning(root), [])
@@ -1382,16 +1382,17 @@ test("a stalled first try and a failed second try are both reported", async () =
   const controller = web.createController(retryOptions(options))
   const failed = await controller.call("browser_context", { action: "open", browser: "fresh" })
   assert.equal(failed.isError, true)
-  assert.equal(text(failed), "The browser did not start: the first try stalled with no output for 0.6 seconds, and the second try failed. Try again, or use a fresh browser. Details: Browser failed\nline two")
+  assert.equal(text(failed), "The browser did not start: the first try did not start within 0.6 seconds and was stopped, and the second try failed. Try again, or use a fresh browser. Details: Browser failed\nline two")
   assert.equal(openCount(calls), 2)
   assert.deepEqual(fs.readdirSync(tmp), [])
 })
 
-test("a fresh start that times out with output, or exits with an error, is not tried again", async () => {
+test("a fresh start that times out while printing is tried again, and one that exits with an error is not", async () => {
+  // Chrome prints warnings while it hangs (D-Bus on Linux), so output is no sign of progress (#763).
   const loud = await setup({ mode: "open-hang-loud" })
   const talker = web.createController(retryOptions(loud.options))
-  assert.equal(text(await talker.call("browser_context", { action: "open", browser: "fresh" })), "The browser did not start within 0.6 seconds and was stopped. Try again, or use a fresh browser. Details: Waiting for the browser")
-  assert.equal(openCount(loud.calls), 1)
+  assert.equal(text(await talker.call("browser_context", { action: "open", browser: "fresh" })), "The browser did not start: the first try did not start within 0.6 seconds and was stopped, and the second try did not start within 0.5 seconds and was stopped. Try again, or use a fresh browser. Details: Waiting for the browser")
+  assert.equal(openCount(loud.calls), 2)
   assert.deepEqual(fs.readdirSync(loud.tmp), [])
   const failing = await setup({ mode: "open-fail" })
   const failer = web.createController(retryOptions(failing.options))
