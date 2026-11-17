@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.230 — 2026-11-17
+
+[fast-honest-ci](skills/fast-honest-ci/SKILL.md) now carries four cost lessons from [OpenClaw's CI write-up](https://vincent.build/openclaw-ci-cost-reduction/): a push run skips a suite whose git tree a pull request or queue run already passed, not only the same commit; a job that has nothing to do is skipped in its `if:` before a runner starts, since a skipped job still satisfies a required check; a pull request's macOS jobs wait behind a cheap check that the commit is still the head, and review fixes go out in one push; and the budget guard caps a run's runner-minutes as well as its critical path.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.229 — 2026-11-17
 
 Desk now finds and recovers a publication pull request that conflicts with main without a human. Settling looks at every open `desk/publish/*` pull request of the repository, not only the saves this machine recorded, so a save left conflicting by another machine or a lost record no longer sits unnoticed. A save whose lines are already on main is closed as superseded with a link to the file on main where they live; an append-only log or card conflict is rebuilt on the newest main and the old pull request is closed with a link to the new one; a conflict in the content itself keeps the pull request open and is named with its files in tool replies, the boot text and `drains status`.
