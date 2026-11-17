@@ -1,1 +1,1 @@
-A fresh browser start again gets the full 120 seconds in one try. The 45-second first try from 3.2.218 cut off real starts that were only slow ([#1096](https://github.com/ourostack/desk/issues/1096)).
+A fresh browser start again gets the full 120 seconds in one try. The 45-second first try added in the previous release cut off real starts that were only slow ([#1096](https://github.com/ourostack/desk/issues/1096)).
