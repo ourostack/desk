@@ -72,14 +72,17 @@ export function allStuckSaves({ env, now }) {
 
 /** Notes the files a save's pull request conflicts on with main, which Desk could not merge by itself. */
 function markConflict({ root, env, url, files }) {
-  updateSyncStatus(root, env, (current) => ({ [KEY]: entries(current).map((save) => (save.url === url ? { ...save, conflict: { files } } : save)) }))
+  updateSyncStatus(root, env, (current) => {
+    const list = entries(current)
+    return { [KEY]: [...list.filter((save) => save.url !== url), { ...list.find((save) => save.url === url), conflict: { files } }] }
+  })
 }
 
 const conflictFiles = (save) => save.conflict?.files ?? []
 
 /** One plain sentence per stuck save, naming its PR link, and the files that conflict when Desk could not merge them. */
 export const stuckLine = (save) => conflictFiles(save).length > 0
-  ? `Desk save not on main after ${save.minutes} min: ${save.url} conflicts with main in ${conflictFiles(save).join(", ")}, which Desk cannot merge by itself; open the pull request, resolve ${conflictFiles(save).length === 1 ? "that file" : "those files"} and merge it`
+  ? `Desk save not on main after ${save.minutes} min: ${save.url} conflicts with main in ${conflictFiles(save).join(", ")}, which Desk cannot merge by itself; open the pull request, resolve the conflict and merge it`
   : `Desk save not on main after ${save.minutes} min: ${save.url} (the pull request is still open; Desk rebases it and the merge-when-green relay merges it once its checks are green)`
 
 /** `reply` with the stuck saves named, when there are any. A reply that is not an object, or a call with no desk, is returned as it is. */
