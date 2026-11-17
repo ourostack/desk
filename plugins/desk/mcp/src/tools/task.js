@@ -77,7 +77,7 @@ const DONE_EVIDENCE_EXAMPLE = '{"kind": "pr", "ref": "https://github.com/org/rep
 const DONE_EVIDENCE_USAGE =
   "`evidence.kind` is one of pr, commit, ci_run, non_code, steps; `evidence.ref` is a reference in that " +
   "kind's own checkable shape -- a PR URL for pr, a commit sha or commit URL for commit, an " +
-  "https URL for ci_run, or an https URL or desk-relative path for non_code. A card with a `## Steps` table closes only with `{ kind: \"steps\" }` (no `ref`) once every step is delivered or dropped."
+  "https URL for ci_run, or an https URL or desk-relative path for non_code, which also needs `evidence.screenshot`. A card with a `## Steps` table closes only with `{ kind: \"steps\" }` (no `ref`) once every step is delivered or dropped."
 
 // Per-kind ref shape, checkable without a network call (2026-09-29 review of
 // #106): a reviewer pointed out that an unconstrained `ref` string let
@@ -109,6 +109,19 @@ async function isDeskRelativeProofPath(ref, deskRoot) {
   if (!isPathContained(deskRoot, candidate)) return false
   return pathExists(candidate)
 }
+
+const SCREENSHOT_EXT = /\.(?:png|jpe?g|gif|webp)$/iu
+
+// Non-code work has no pull request or run to read, so its proof is a screenshot of the primary source: an https URL, or an image file inside the desk.
+async function assertScreenshot(screenshot, deskRoot, toolName) {
+  const ok = typeof screenshot === "string" && screenshot.trim() !== "" && (HTTPS_URL_REF.test(screenshot.trim()) || (SCREENSHOT_EXT.test(screenshot.trim()) && (await isDeskRelativeProofPath(screenshot.trim(), deskRoot))))
+  if (ok) return
+  throw Object.assign(new Error(
+    `${toolName}: Pass \`evidence.screenshot\`: non_code evidence needs \`screenshot\`, a screenshot of the primary source, either an https URL or a desk-relative path to an existing .png, .jpg, .jpeg, .gif or .webp file in the desk (got ${JSON.stringify(screenshot)}). ` +
+      `Example: {"kind": "non_code", "ref": "https://example.com/proof", "screenshot": "my-track/my-task/proof.png"}.`), { code: "task_pass_evidence_screenshot_non_code" })
+}
+
+const screenshotField = (evidence) => (evidence.kind === "non_code" ? { screenshot: evidence.screenshot.trim() } : {})
 
 const DONE_EVIDENCE_REF_CHECKS = {
   pr: {
@@ -200,6 +213,7 @@ async function assertDoneEvidence(evidence, deskRoot, toolName, card) {
           "For kind \"non_code\", point at a separate proof (a file or folder in the desk that holds the outcome, or an https URL to it)."), { code: "task_point_evidence_ref_at_a" })
     }
   }
+  if (evidence.kind === "non_code") await assertScreenshot(evidence.screenshot, deskRoot, toolName)
   assertCodeRepoEvidence({ toolName, evidence, repos, deskRoot, spawnGit: card.spawnGit, homeDir: card.homeDir, existingRepos: card.existingRepos, created: card.created })
   // A pull request whose repo ships through a release is delivered only once the release has carried it (`delivery-gate.js`).
   return card.delivery ?? checkDelivery({ toolName, evidence, env: card.env, fetchFn: card.fetchFn })
@@ -1153,7 +1167,7 @@ export async function task_update({ deskRoot, input, person = null, search, stat
       existingRepos: existing.data.repos, created: existing.data.created,
       files: [filePath], spawnGit, homeDir: env.HOME, env, fetchFn,
     })
-    merged.evidence = { kind: evidence.kind, ref: stepsNow === null ? evidence.ref : stepsRef(stepsNow.rows), recorded_at: merged.updated }
+    merged.evidence = { kind: evidence.kind, ref: stepsNow === null ? evidence.ref : stepsRef(stepsNow.rows), ...screenshotField(evidence), recorded_at: merged.updated }
     delivered = deliveryAnswer({ data: merged, slug, ref: merged.evidence.ref })
     report = await factoryReportFor({ deskRoot, person, track, slug, env })
   } else if (Object.hasOwn(existing.data, "factory_report_unavailable")) {
@@ -1534,7 +1548,7 @@ export async function task_archive({ deskRoot, input, person = null, search, sta
         const live = await readMarkdown(srcFile)
         const steps = stepsView(applyRefresh(live.content, refresh.derived).body, refresh)
         await assertDoneEvidence(evidence, deskRoot, "task_archive", { repos: live.data.repos, existingRepos: live.data.repos, created: live.data.created, files: [srcFile, archivedFile], spawnGit, homeDir: env.HOME, env, fetchFn, steps })
-        archiveBump = { status: "done", evidence: { kind: evidence.kind, ref: steps === null ? evidence.ref : stepsRef(steps.rows) }, derived: refresh.derived }
+        archiveBump = { status: "done", evidence: { kind: evidence.kind, ref: steps === null ? evidence.ref : stepsRef(steps.rows), ...screenshotField(evidence) }, derived: refresh.derived }
       }
       // The record the bump writes is worked out here, before the folder moves: a card whose record cannot be read refuses the archive
       // with the folder untouched, never after a move it would leave unpatched and uncommitted.

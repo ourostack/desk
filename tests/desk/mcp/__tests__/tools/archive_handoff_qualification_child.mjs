@@ -555,7 +555,7 @@ export async function requests(fixture) {
 }
 export async function complete(fixture, search) {
   return task_update(options(fixture, { search, input: { track: "t", slug: SLUG, status: "done",
-    evidence: { kind: "non_code", ref: "proof.md" }, note: "Owned outcome delivered; acceptance is still pending." } }))
+    evidence: { kind: "non_code", screenshot: "https://example.invalid/shot.png", ref: "proof.md" }, note: "Owned outcome delivered; acceptance is still pending." } }))
 }
 export const readCard = (file) => readMarkdown(file)
 export function errorData(error) {

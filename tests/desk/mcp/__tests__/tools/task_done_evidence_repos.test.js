@@ -111,7 +111,7 @@ test("non_code and ci_run evidence cannot finish a task that names code repos, a
   const root = await codeTask([{ name: "acme/widgets", local_path: clone, mode: "local" }])
   await fs.writeFile(path.join(root, "t", "proof.md"), "proof\n")
   await assert.rejects(
-    done(root, { kind: "non_code", ref: "t/proof.md" }),
+    done(root, { kind: "non_code", screenshot: "https://example.invalid/shot.png", ref: "t/proof.md" }),
     /`non_code` evidence cannot complete a task that names code repos.*kind: "pr".*kind: "commit".*a repo Desk recorded as local-only.*A commit in the desk itself does not count.*leave it at `validating` and tell the operator the commit sha/s,
   )
   await assert.rejects(done(root, { kind: "ci_run", ref: "https://ci.example.invalid/1" }), /`ci_run` evidence cannot complete a task that names code repos/)
@@ -242,7 +242,7 @@ function root0() { return path.join("/", "definitely-not-here") }
 test("a call cannot drop the card's repos to skip the check, in one call or across two", async () => {
   const root = await codeTask([{ name: "acme/widgets", local_path: "", mode: "remote" }])
   const update = (frontmatter, extra = {}) => task_update({ deskRoot: root, input: { track: "t", slug: "ship-it", frontmatter, ...extra } })
-  const proof = { kind: "non_code", ref: "https://example.invalid/x" }
+  const proof = { kind: "non_code", screenshot: "https://example.invalid/shot.png", ref: "https://example.invalid/x" }
   await assert.rejects(update({ status: "done", repos: [] }, { evidence: proof }), /would remove every repo from a card that names code repos.*status: "cancelled"/s)
   await assert.rejects(update({ repos: [] }), /would remove every repo/)
   await assert.rejects(update({ repos: [{ name: " " }, null] }), /would remove every repo/)
@@ -262,7 +262,7 @@ test("a call cannot drop the card's repos to skip the check, in one call or acro
 test("a card whose repos are plain names counts as having repos", async () => {
   const root = await codeTask(["widgets"])
   await fs.writeFile(path.join(root, "t", "proof.md"), "proof\n")
-  await assert.rejects(done(root, { kind: "non_code", ref: "t/proof.md" }), /`non_code` evidence cannot complete a task that names code repos.*\(widgets \(no local clone recorded\)\)/s)
+  await assert.rejects(done(root, { kind: "non_code", screenshot: "https://example.invalid/shot.png", ref: "t/proof.md" }), /`non_code` evidence cannot complete a task that names code repos.*\(widgets \(no local clone recorded\)\)/s)
   assert.equal((await done(root, { kind: "pr", ref: "https://github.com/acme/widgets/pull/4" })).status, "updated")
 })
 
@@ -337,7 +337,7 @@ test("a call that adds repos while finishing the task is checked against them to
 test("task_archive applies the same rule when it bumps a card with repos to done", async () => {
   const root = await codeTask([{ name: "acme/widgets", local_path: "", mode: "remote" }])
   await assert.rejects(
-    task_archive({ deskRoot: root, input: { track: "t", slug: "ship-it", evidence: { kind: "non_code", ref: "https://example.invalid/x" } } }),
+    task_archive({ deskRoot: root, input: { track: "t", slug: "ship-it", evidence: { kind: "non_code", screenshot: "https://example.invalid/shot.png", ref: "https://example.invalid/x" } } }),
     /task_archive: Use evidence that names a code repository: `non_code` evidence cannot complete a task that names code repos/,
   )
   const ok = await task_archive({ deskRoot: root, input: { track: "t", slug: "ship-it", evidence: { kind: "pr", ref: "https://github.com/acme/widgets/pull/2" } } })
@@ -348,18 +348,18 @@ test("a card with no repos is unchanged, but a non_code ref may not be the task 
   const root = await mkTempDeskRoot()
   await task_create({ deskRoot: root, input: { track: "t", slug: "ship-it", title: "T", status: "processing" } })
   await assert.rejects(
-    done(root, { kind: "non_code", ref: "t/ship-it/task.md" }),
+    done(root, { kind: "non_code", screenshot: "https://example.invalid/shot.png", ref: "t/ship-it/task.md" }),
     /is the task card itself.*point at a separate proof/s,
   )
-  await assert.rejects(done(root, { kind: "non_code", ref: "t/../t/ship-it/task.md" }), /is the task card itself/)
+  await assert.rejects(done(root, { kind: "non_code", screenshot: "https://example.invalid/shot.png", ref: "t/../t/ship-it/task.md" }), /is the task card itself/)
   await fs.writeFile(path.join(root, "t", "ship-it", "outcome.md"), "the outcome\n")
-  assert.equal((await done(root, { kind: "non_code", ref: "t/ship-it/outcome.md" })).status, "updated")
+  assert.equal((await done(root, { kind: "non_code", screenshot: "https://example.invalid/shot.png", ref: "t/ship-it/outcome.md" })).status, "updated")
 })
 
 test("task_archive also refuses the card itself as non_code proof", async () => {
   const root = await mkTempDeskRoot()
   await task_create({ deskRoot: root, input: { track: "t", slug: "ship-it", title: "T", status: "processing" } })
-  await assert.rejects(task_archive({ deskRoot: root, input: { track: "t", slug: "ship-it", evidence: { kind: "non_code", ref: "t/ship-it/task.md" } } }), /is the task card itself/)
+  await assert.rejects(task_archive({ deskRoot: root, input: { track: "t", slug: "ship-it", evidence: { kind: "non_code", screenshot: "https://example.invalid/shot.png", ref: "t/ship-it/task.md" } } }), /is the task card itself/)
 })
 
 test("recordedRepos reads only usable entries and treats anything else as no repos", () => {
@@ -374,7 +374,7 @@ test("recordedRepos reads only usable entries and treats anything else as no rep
 })
 
 test("assertCodeRepoEvidence does nothing without repos, and survives odd git results and remotes", () => {
-  assertCodeRepoEvidence({ toolName: "t", evidence: { kind: "non_code", ref: "x" }, repos: [], deskRoot: "/d" })
+  assertCodeRepoEvidence({ toolName: "t", evidence: { kind: "non_code", screenshot: "https://example.invalid/shot.png", ref: "x" }, repos: [], deskRoot: "/d" })
   const repos = [{ name: "acme/widgets", localPath: "/c", mode: "local" }]
   const odd = (outputs) => (cmd, args) => (args.includes("config") ? outputs.config : outputs.other)
   // No result at all, a nonzero status and a non-string stdout all read as "git said nothing".
@@ -404,7 +404,7 @@ test("resolveLocalPath expands ~, resolves a relative path against the desk root
 test("removing every repo needs a repos_removed_reason, is recorded on the card, and never finishes the task in the same call", async () => {
   const root = await codeTask([{ name: "acme/widgets", local_path: "", mode: "remote" }, { name: "acme/other", local_path: "", mode: "remote" }])
   const update = (input) => task_update({ deskRoot: root, input: { track: "t", slug: "ship-it", ...input } })
-  const proof = { kind: "non_code", ref: "https://example.invalid/x" }
+  const proof = { kind: "non_code", screenshot: "https://example.invalid/shot.png", ref: "https://example.invalid/x" }
   await assert.rejects(update({ frontmatter: { repos: [] } }), /repos_removed_reason: "<one line on why>".*separate call.*status: "cancelled".*task-lifecycle/s)
   await assert.rejects(update({ frontmatter: { repos: [] }, repos_removed_reason: "   " }), /repos_removed_reason/)
   await assert.rejects(update({ frontmatter: { repos: [] }, repos_removed_reason: 7 }), /repos_removed_reason/)
@@ -420,9 +420,9 @@ test("removing every repo needs a repos_removed_reason, is recorded on the card,
   assert.deepEqual(data.repos_removed.map((entry) => [entry.name, entry.reason]), [["acme/widgets", "the work was docs only"], ["acme/other", "the work was docs only"]])
   assert.match(data.repos_removed[0].at, /^\d{4}-\d{2}-\d{2}T/)
   // Finishing is a separate call; non_code works now, but not the card itself.
-  await assert.rejects(update({ frontmatter: { status: "done" }, evidence: { kind: "non_code", ref: "t/ship-it/task.md" } }), /is the task card itself/)
+  await assert.rejects(update({ frontmatter: { status: "done" }, evidence: { kind: "non_code", screenshot: "https://example.invalid/shot.png", ref: "t/ship-it/task.md" } }), /is the task card itself/)
   await fs.writeFile(path.join(root, "t", "outcome.md"), "outcome\n")
-  assert.equal((await update({ frontmatter: { status: "done" }, evidence: { kind: "non_code", ref: "t/outcome.md" } })).status, "updated")
+  assert.equal((await update({ frontmatter: { status: "done" }, evidence: { kind: "non_code", screenshot: "https://example.invalid/shot.png", ref: "t/outcome.md" } })).status, "updated")
 })
 
 test("an earlier repos_removed list is kept when a later removal appends to it", async () => {

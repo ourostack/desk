@@ -447,7 +447,7 @@ scenario("08-preflight-and-archived-resource-policy-preserve-records", async () 
   const original = await io.readFile(f.card)
   const wrong = await attempt(() => archiveOwned(f, { person: "bob", input: { track: "t", slug: SLUG } }))
   const badEvidence = await attempt(() => archiveOwned(f, { input: { track: "t", slug: SLUG,
-    evidence: { kind: "non_code", ref: "does-not-exist.md" } } }))
+    evidence: { kind: "non_code", screenshot: "https://example.invalid/shot.png", ref: "does-not-exist.md" } } }))
   const untouched = original.equals(await io.readFile(f.card)) && !exists(f.dst)
   await complete(f)
   await archiveOwned(f, { input: { track: "t", slug: SLUG } })

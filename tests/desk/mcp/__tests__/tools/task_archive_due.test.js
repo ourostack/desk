@@ -12,7 +12,7 @@ import { archiveFixture, git } from "./_archive_state_helpers.js"
 import { beforeLanding } from "../_index_commit_seam.js"
 
 const target = {track:"t",slug:"owned-work"}
-const evidence = {kind:"non_code",ref:"https://example.invalid/owned-proof"}
+const evidence = {kind: "non_code", screenshot: "https://example.invalid/shot.png", ref:"https://example.invalid/owned-proof"}
 const noPush = () => {}
 
 async function fixture(person = null) {

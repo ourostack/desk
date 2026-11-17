@@ -178,16 +178,16 @@ test("kind steps is refused on a card with no steps table, which keeps today's g
   const plain = await mkTempDeskRoot()
   await task_create({ deskRoot: plain, input: { track: "t", slug: "plain", title: "P", body: "## Outcome\n\nx\n" } })
   await assert.rejects(update(plain, { ...DONE, evidence: { kind: "steps" } }, undefined, "plain"), /needs a card with a readable `## Steps` table, and this card has none/u)
-  await update(plain, { ...DONE, evidence: { kind: "non_code", ref: "https://example.com/proof" } }, undefined, "plain")
+  await update(plain, { ...DONE, evidence: { kind: "non_code", screenshot: "https://example.invalid/shot.png", ref: "https://example.com/proof" } }, undefined, "plain")
   const empty = await newCard("", { repos: [] }, "empty")
   await assert.rejects(update(empty.root, { ...DONE, evidence: { kind: "steps" } }, undefined, "empty"), /has none/u)
-  await update(empty.root, { ...DONE, evidence: { kind: "non_code", ref: "https://example.com/proof" } }, undefined, "empty")
+  await update(empty.root, { ...DONE, evidence: { kind: "non_code", screenshot: "https://example.invalid/shot.png", ref: "https://example.com/proof" } }, undefined, "empty")
   assert.equal((await readFront(empty.file)).data.status, "done")
 })
 
 test("a Steps heading over a table Desk cannot read refuses the done move, through task_update and task_archive", async () => {
   const { root, file } = await newCard(`| a | nobody | — | pending | — |`, { repos: [] }, "broken")
-  const proof = { kind: "non_code", ref: "https://example.com/proof" }
+  const proof = { kind: "non_code", screenshot: "https://example.invalid/shot.png", ref: "https://example.com/proof" }
   for (const evidence of [proof, { kind: "steps" }]) {
     await assert.rejects(update(root, { ...DONE, evidence }, undefined, "broken"), /has a `## Steps` table Desk cannot read, because step "a" depends on "nobody", which is not a step/u)
   }

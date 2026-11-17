@@ -134,6 +134,7 @@ const TASK_DONE_EVIDENCE = {
   properties: {
     kind: { type: "string", enum: ["pr", "commit", "ci_run", "non_code", "steps"], description: "What kind of reference this is. `steps` closes a card that has a `## Steps` table and needs no `ref`." },
     ref: text("Not needed for `steps`. A PR URL for pr; a 7-40 character hex commit sha (optionally with repo/branch) or commit URL for commit; the run's https URL for ci_run; an https URL or desk-relative path to the proof for non_code."),
+    screenshot: text("Required for non_code: a screenshot of the primary source, an https URL or a desk-relative path to an existing .png, .jpg, .jpeg, .gif or .webp file in the desk."),
   },
   required: ["kind"],
   description: "Required when this call moves a task into `done` (task_update), or archives one not already `done` or `cancelled` without `outcome: \"cancelled\"` (task_archive). A card with `## Steps` finishes only with `{ kind: \"steps\" }`; one listing `repos` only with `pr` or a pushed `commit` (task-card-format has the rules). A refusal says what to supply.",

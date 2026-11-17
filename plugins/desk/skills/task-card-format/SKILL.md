@@ -35,6 +35,7 @@ factory_report_unavailable: desk_not_private  # set by the task tools instead of
 evidence:                               # required by task_update, or by task_archive archiving a non-terminal task without outcome: cancelled; see task-lifecycle "Resuming a task"
   kind: pr                              # pr | commit | ci_run | non_code | steps
   ref: https://github.com/<org>/<repo>/pull/123
+  screenshot: <https URL or desk path to a .png/.jpg/.gif/.webp>  # required with kind: non_code: a screenshot of the primary source
   recorded_at: 2026-04-21T09:00:00Z     # set by task_update; never hand-write
 
 # Optional: adoption signals
