@@ -21,13 +21,25 @@ import { storeAcceptsContext } from "./context-capability.js"
 import { readCopilotConversation } from "./copilot-turn-index.js"
 import { localRecordsPath } from "./copilot-usage.js"
 import { normalizeTimestamp } from "./time.js"
+import { deskFailure } from "../runtime/desk-failure.js"
+
+const contextFailure = (code, thing, probably, fix) => new Error(deskFailure({
+  code, thing, probably, look: "call desk_doctor and read its factory section for the task's context folder",
+  keepWorking: "nothing was published from it and the other tasks carry on", fix,
+}))
+const invalidState = () => contextFailure("context_state_invalid", "task context state", "the state file is damaged or was edited by hand", "delete that task's state.json so the next run prepares it again")
+const invalidDiscovery = () => contextFailure("context_discovery_invalid", "context discovery cursor", "discovery.json is damaged or was edited by hand", "delete that task's discovery.json so discovery starts over")
+const invalidPreparation = () => contextFailure("context_preparation_cursor_invalid", "context preparation cursor", "preparation.json is damaged or was edited by hand", "delete that task's preparation.json so preparation starts over")
+const invalidPublicationCursor = () => contextFailure("context_publication_cursor_invalid", "context publication cursor", "the publication cursor file is damaged or was edited by hand", "delete that cursor file so publication starts over")
+const invalidReceipt = () => contextFailure("context_publication_receipt_invalid", "context publication receipt", "the recorded receipt no longer matches the published record", "run the publication again so a fresh receipt is written")
+const invalidPlanning = () => contextFailure("context_planning_state_invalid", "context planning state", "context_planning in the factory status is not a prepare or publish turn", "remove context_planning from the factory status file")
 
 const STATE = "desk.factory.context-state/1"
 const INDEXED_STATE = "desk.factory.context-state/2"
 const INPUT = "desk.factory.context-input/1"
 const PREPARATION_MS = 2000
 const CARD_LIMIT = 1000
-const deferred = () => Object.assign(new Error("context_preparation_deferred"), { code: "context_preparation_deferred" })
+const deferred = () => Object.assign(contextFailure("context_preparation_deferred", "context preparation", "it used up its time budget", "run again; it resumes where it stopped"), { code: "context_preparation_deferred" })
 const withinBudget = (deadline, clock) => { if (clock() >= deadline) throw deferred() }
 // `deadline` is absolute, in `clock` units. The Git timeout is the budget left, floored so a nearly spent or fake clock still lets a slow process start finish. The deadline still caps each call inside `readDeskRemote` and `resolveJobIdentity`.
 const GIT_TIMEOUT_FLOOR_MS = 2000
@@ -92,18 +104,18 @@ async function stateOf(env, store, job) {
   const bytes = await readTaskContextFile(env, store, job, "state.json")
   if (bytes === null) return null
   let value
-  try { value = JSON.parse(bytes.toString("utf8")) } catch { throw new Error("context_state_invalid") }
+  try { value = JSON.parse(bytes.toString("utf8")) } catch { throw invalidState() }
   if (!isPlainObject(value) || ![STATE, INDEXED_STATE].includes(value.schema) || value.job !== job ||
       !/^[0-9a-f]{64}$/u.test(value.basis) || !["candidate", "privacy", "ready", "refused"].includes(value.phase) ||
-      value.input !== `input-${value.basis}.json`) throw new Error("context_state_invalid")
+      value.input !== `input-${value.basis}.json`) throw invalidState()
   return value
 }
 
 async function inputOf(env, store, state, { current = true } = {}) {
   const bytes = await readTaskContextFile(env, store, state.job, state.input)
-  if (bytes === null) throw new Error("context_input_missing")
+  if (bytes === null) throw contextFailure("context_input_missing", "context input", "the input file the state names is gone", "delete that task's state.json so the next run prepares it again")
   let value
-  try { value = JSON.parse(bytes.toString("utf8")) } catch { throw new Error("context_input_invalid") }
+  try { value = JSON.parse(bytes.toString("utf8")) } catch { throw contextFailure("context_input_invalid", "context input", "the input file is not valid JSON", "delete that task's state.json so the next run prepares it again") }
   if (!isPlainObject(value) || value.schema !== INPUT || value.job !== state.job || value.basis !== state.basis ||
       !Array.isArray(value.sources) || !Array.isArray(value.private_evidence) || !sameStore(value.store, store)) return null
   if (value.task_card_status !== undefined &&
@@ -224,7 +236,7 @@ function groupsOf(entries, store) {
     for (const mapping of entry.localJobs) {
       if (!PATTERNS.jobId.test(mapping.local) || !entry.facts.jobs.some((job) => job.job === mapping.published)) continue
       const group = groups.get(mapping.published) ?? { job: mapping.published, local_job: mapping.local, desk_root: entry.deskRoot, person_prefix: entry.personPrefix, entries: [] }
-      if (group.desk_root !== entry.deskRoot || group.local_job !== mapping.local) throw new Error("context_identity_ambiguous")
+      if (group.desk_root !== entry.deskRoot || group.local_job !== mapping.local) throw contextFailure("context_identity_ambiguous", "task identity", "two desks claim the same published task", "keep one desk bound to the task and unbind the other")
       group.entries.push(entry)
       groups.set(mapping.published, group)
     }
@@ -236,24 +248,24 @@ function groupsOf(entries, store) {
 async function discoveryCursor(env, store, job) {
   const bytes = await readTaskContextFile(env, store, job, "discovery.json")
   if (bytes === null) return 0
-  if (bytes.length > 256) throw new Error("context_discovery_invalid")
+  if (bytes.length > 256) throw invalidDiscovery()
   let value
-  try { value = JSON.parse(bytes.toString("utf8")) } catch { throw new Error("context_discovery_invalid") }
+  try { value = JSON.parse(bytes.toString("utf8")) } catch { throw invalidDiscovery() }
   if (!isPlainObject(value) || Object.keys(value).sort().join() !== "cursor,schema" ||
       value.schema !== "desk.factory.context-discovery/1" || !Number.isSafeInteger(value.cursor) ||
-      value.cursor < 0 || value.cursor >= CARD_LIMIT) throw new Error("context_discovery_invalid")
+      value.cursor < 0 || value.cursor >= CARD_LIMIT) throw invalidDiscovery()
   return value.cursor
 }
 
 async function preparationCursor(env, store, job) {
   const bytes = await readTaskContextFile(env, store, job, "preparation.json")
   if (bytes === null) return null
-  if (bytes.length > 256) throw new Error("context_preparation_cursor_invalid")
+  if (bytes.length > 256) throw invalidPreparation()
   let value
-  try { value = JSON.parse(bytes.toString("utf8")) } catch { throw new Error("context_preparation_cursor_invalid") }
+  try { value = JSON.parse(bytes.toString("utf8")) } catch { throw invalidPreparation() }
   if (!isPlainObject(value) || Object.keys(value).sort().join() !== "next,schema" ||
       value.schema !== "desk.factory.context-preparation/1" || typeof value.next !== "string" || !PATTERNS.jobId.test(value.next))
-    throw new Error("context_preparation_cursor_invalid")
+    throw invalidPreparation()
   return value.next
 }
 
@@ -394,7 +406,7 @@ async function prepareContextGroups(env, {
       const bytes = await readTaskContextFile(env, store, group.job, evidence.conversation.file)
       if (bytes === null) await writeTaskContextFile(env, store, group.job, evidence.conversation.file, conversationProjection(observedEvidence[index]))
       else if (createHash("sha256").update(bytes).digest("hex") !== evidence.conversation.projection_sha256)
-        throw Object.assign(new Error("context_projection_changed"), { code: "context_projection_changed" })
+        throw Object.assign(contextFailure("context_projection_changed", "conversation projection", "the stored projection differs from what the card now yields", "delete that task's conversation projection file so it is written again"), { code: "context_projection_changed" })
     }
     const before = await stateOf(env, store, group.job)
     within()
@@ -645,7 +657,7 @@ async function trustedPublication(env, state) {
 }
 async function changePublication(env, store, job, mutate) {
   const before = await stateOf(env, store, job)
-  if (before === null || !await trustedPublication(env, before)) throw new Error("context_publication_receipt_invalid")
+  if (before === null || !await trustedPublication(env, before)) throw invalidReceipt()
   const fields = mutate(publication(before))
   const proof = await seal(env, "publication", job, fields)
   return updateTaskContextState(env, store, job, (state) => stableStringify(publication(state)) !== stableStringify(publication(before)) ? state : {
@@ -663,9 +675,9 @@ async function planningTurn(env, store) {
   let first
   await updateStatus(env, (status) => {
     const turns = status.context_planning
-    if (turns !== undefined && !isPlainObject(turns)) throw new Error("context_planning_state_invalid")
+    if (turns !== undefined && !isPlainObject(turns)) throw invalidPlanning()
     first = turns?.[store] ?? "prepare"
-    if (turns?.[store] === null || !["prepare", "publish"].includes(first)) throw new Error("context_planning_state_invalid")
+    if (turns?.[store] === null || !["prepare", "publish"].includes(first)) throw invalidPlanning()
     return { ...status, context_planning: { ...turns, [store]: first === "prepare" ? "publish" : "prepare" } }
   })
   return first
@@ -688,12 +700,12 @@ export async function planContextPublication(env, { store, entries, pluginVersio
   if (cursorJob !== undefined) {
     const bytes = await readTaskContextFile(env, store, cursorJob, "publication.json")
     if (bytes !== null) {
-      if (bytes.length > 256) throw new Error("context_publication_cursor_invalid")
+      if (bytes.length > 256) throw invalidPublicationCursor()
       let value
-      try { value = JSON.parse(bytes.toString("utf8")) } catch { throw new Error("context_publication_cursor_invalid") }
+      try { value = JSON.parse(bytes.toString("utf8")) } catch { throw invalidPublicationCursor() }
       if (!isPlainObject(value) || Object.keys(value).sort().join() !== "cursor,schema" ||
           value.schema !== "desk.factory.context-publication-cursor/1" || !Number.isSafeInteger(value.cursor) ||
-          value.cursor < 0 || value.cursor >= CARD_LIMIT) throw new Error("context_publication_cursor_invalid")
+          value.cursor < 0 || value.cursor >= CARD_LIMIT) throw invalidPublicationCursor()
       start = value.cursor % jobs.length
     }
   }
@@ -724,7 +736,7 @@ export async function planContextPublication(env, { store, entries, pluginVersio
     let state = await stateOf(env, store, job)
     next = (index + 1) % jobs.length
     if (state === null) continue
-    if (!await trustedPublication(env, state)) throw new Error("context_publication_receipt_invalid")
+    if (!await trustedPublication(env, state)) throw invalidReceipt()
     if (state.phase !== "ready" && state.published_sha === null && state.pr === null && state.sent_sha === null) {
       unfinished ||= ["candidate", "privacy"].includes(state.phase)
       states.push({ state, withdrawn: false })
@@ -805,7 +817,7 @@ export async function prepareContextPublication(env, { store, plan, client, ref,
   for (const entry of pending.length > 0 ? pending : plan.states) {
     let state = await stateOf(env, store, entry.state.job)
     if (state === null || (await readConsent(env)).stores[store]?.contribute !== true) continue
-    if (!await trustedPublication(env, state)) throw new Error("context_publication_receipt_invalid")
+    if (!await trustedPublication(env, state)) throw invalidReceipt()
     const input = await inputOf(env, store, state, { current: false })
     if (input === null) continue
     const route = declared(input.desk_root)
@@ -849,7 +861,7 @@ export async function saveContextRefused(env, store, plan, code, now) {
   for (const job of (await listTaskContextJobs(env, store)).slice(0, CARD_LIMIT)) {
     const before = await stateOf(env, store, job)
     if (before === null || !refusedPrs.has(before.pr)) continue
-    if (!await trustedPublication(env, before)) throw new Error("context_publication_receipt_invalid")
+    if (!await trustedPublication(env, before)) throw invalidReceipt()
     const fields = { ...publication(before), pr: null }
     const proof = await seal(env, "publication", job, fields)
     const after = await updateTaskContextState(env, store, job, (state) => {
@@ -859,7 +871,7 @@ export async function saveContextRefused(env, store, plan, code, now) {
       const refusals = (Number.isSafeInteger(state.refusals) ? state.refusals : 0) + 1
       return { ...cleared, refusals, hold_until: now + DAY_MS, ...(refusals >= 3 ? { phase: "refused", record: null } : {}) }
     })
-    if (refusedPrs.has(after.pr)) throw new Error("context_publication_changed")
+    if (refusedPrs.has(after.pr)) throw contextFailure("context_publication_changed", "context publication", "another run changed the record while this refusal was being saved", "run again so the refusal is saved against the current record")
   }
   await publicationStatus(env, store, { code, hold_until: now + DAY_MS })
 }
