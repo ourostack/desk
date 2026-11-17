@@ -190,6 +190,25 @@ for (const [name, comments, events] of [
   })
 }
 
+for (const [name, label, minutes, woken] of [
+  ["a label applied seconds after the issue was opened", "site-alert", 0.5, 0],
+  ["a label applied minutes after the issue was opened", "site-alert", 5, 1],
+]) {
+  test(`${name} ${woken ? "still wakes" : "folds into the new-issue wake"}`, async () => {
+    const opened = Date.parse(T(0))
+    const filed = { ...issue(1, T(0)), created_at: T(0) }
+    const w = await world([], { events: { 1: [labelEvent(new Date(opened + minutes * 60_000).toISOString(), label)] } })
+    await w.poll()
+    w.issues.push(filed)
+    await w.poll(NOW)
+    assert.equal(w.sent.length, 1)
+    assert.match(w.sent[0][1], /new issue/u)
+    w.issues[0] = { ...filed, updated_at: T(5) }
+    await w.poll(NOW + 1000)
+    assert.equal(w.sent.length, 1 + woken)
+  })
+}
+
 test("never wakes for a closed issue the drain handled, and drops its waiting event", async () => {
   const w = await world([issue(1, T(0)), issue(2, T(0))])
   await w.poll()

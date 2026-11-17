@@ -1,0 +1,1 @@
+The drain poller no longer wakes a drain a second time for a label an issue already had when it was opened. A `labeled` event within 60 seconds of the issue being created is dropped, because the "new issue" wake already shows the labels. A label added later still wakes the drain.
