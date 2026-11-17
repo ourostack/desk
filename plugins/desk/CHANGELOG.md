@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.237 — 2026-11-17
+
+Desk's command-line tools hand their stderr straight to Ouro AX, which now prints a failure that already starts with its tool name as it is, so the eight copies of the doubled-prefix filter are gone.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.236 — 2026-11-17
 
 Desk's MCP server now vendors Ouro UI v1.3.267, moved by Ouro Current.
