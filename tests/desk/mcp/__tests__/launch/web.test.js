@@ -49,6 +49,8 @@ if (verb === "open" && mode === "open-hang-loud") { process.stderr.write("Waitin
 const openCalls = verb === "open" ? fs.readFileSync(path.join(__dirname, "calls.log"), "utf8").trim().split("\\n").filter((line) => JSON.parse(line).args[1] === "open").length : 0
 if (verb === "open" && mode === "open-stall-once" && openCalls === 1) setTimeout(() => {}, 10000)
 if (verb === "open" && mode === "open-stall-then-fail" && openCalls === 1) setTimeout(() => {}, 10000)
+// "open-stall-exit-zero" is the real CLI: it traps SIGTERM while it starts its daemon, then exits 0 when stopped.
+if (verb === "open" && mode === "open-stall-exit-zero" && openCalls === 1) { process.on("SIGTERM", () => process.exit(0)); setTimeout(() => {}, 10000) }
 if (verb === "open" && mode === "open-stall-then-fail" && openCalls === 2) { process.stderr.write("Browser failed\\nline two\\n"); process.exit(1) }
 if (verb === "snapshot" && mode === "web-option") process.stdout.write('- button "Open app" [ref=e3]\\n- link "Join from browser" [ref=e4] [cursor=pointer]:\\n')
 else if (verb === "snapshot") process.stdout.write("- generic [ref=e1]\\n")
@@ -1350,6 +1352,16 @@ test("a fresh start that stalls with no output is stopped, and tried once more i
   assert.equal(fs.existsSync(path.join(tmp, path.basename(first.cwd))), false, "the stalled try's folder is gone")
   assert.deepEqual(fs.readdirSync(tmp), [path.basename(second.cwd)], "only the opened context's folder is left")
   assert.deepEqual(fakesRunning(root), [])
+  await controller.closeAll()
+  assert.deepEqual(fs.readdirSync(tmp), [])
+})
+
+test("a fresh start stopped for stalling is not taken for opened when the CLI exits 0 on the stop", async () => {
+  const { options, tmp, calls } = await setup({ mode: "open-stall-exit-zero" })
+  const controller = web.createController(retryOptions(options))
+  const opened = json(await controller.call("browser_context", { action: "open", browser: "fresh" }))
+  assert.equal(opened.retried, true, "the stopped try is tried again, not reported as the open browser")
+  assert.equal(openCount(calls), 2)
   await controller.closeAll()
   assert.deepEqual(fs.readdirSync(tmp), [])
 })
