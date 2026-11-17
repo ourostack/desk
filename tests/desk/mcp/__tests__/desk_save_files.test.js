@@ -201,7 +201,7 @@ test("desk_save refuses a `files` path through a symbolic link loop", async () =
 test("desk_save refuses malformed `files` entries", async () => {
   const root = await gitDesk()
   for (const files of ["not json", [], [{ path: "a.md" }], [{ path: "a.md", content: 3 }], [{ path: 4, content: "x" }], ["a.md"], [{ path: "a.md", content: "x" }, { path: "a.md", content: "y" }]]) {
-    await assert.rejects(save(root, { files, message: "bad" }), /^Error: desk_save: /u, JSON.stringify(files))
+    await assert.rejects(save(root, { files, message: "bad" }), /^Error: (desk: )?desk_save: /u, JSON.stringify(files))
   }
   assert.equal(await exists(path.join(root, "a.md")), false)
 })
