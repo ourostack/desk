@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.209 — 2026-11-17
+
+Every commit an agent makes now carries a `Session: <id>` trailer, so a commit on another session's branch can be traced to the session that made it. Desk's Copilot session start installs a `prepare-commit-msg` hook that adds it from `COPILOT_AGENT_SESSION_ID` (else `AGENCY_SESSION_ID`), once, without touching merges, squashes or fixup commits, and a person's commit with neither variable set is unchanged. A `pre-push` hook prints one warning, and still pushes, when the branch's latest remote commit carries a different session's trailer. See [the session trailer](README.md#the-session-trailer).
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.208 — 2026-11-17
 
 Desk's MCP server now vendors Ouro UI v1.3.246, moved by Ouro Current.
