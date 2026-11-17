@@ -1,0 +1,1 @@
+The pre-push session warning no longer fires on a push to the default branch (main or master), where it only got in the way. The Desk MCP package version is back at 1.4.0-alpha.6, the version whose runtime dependency packs exist.
