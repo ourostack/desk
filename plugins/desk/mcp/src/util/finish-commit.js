@@ -36,6 +36,9 @@ import { TOOL_COMMIT_ENV } from "../desk/card-commit-guard.js"
 import { commitCaptured, git, headOf, held, operationAnswer, same, treeLines } from "./cas-commit.js"
 import { readCaptureRecord, removeCaptureRecord } from "./capture-record.js"
 import { resolveDeskStateDir } from "../runtime/last-start.js"
+import { defineExitCodes, BASE_EXIT_CODES } from "../lib/ouro-ui/registry/ouro/ax/exit-codes.ts"
+import { defineCli, defineCommand } from "../lib/ouro-ui/registry/ouro/ax/command.ts"
+import { runCli } from "../lib/ouro-ui/registry/ouro/ax/cli.ts"
 
 /**
  * Where a captured change stands, and with `commit: true` the one commit that finishes it. `root` is the folder the paths are
@@ -77,31 +80,50 @@ export function finishCommit({ root, paths, expected, before, branch, message, c
   return commitCaptured({ root, paths, wanted, head, branch, message, spawnGit, env: recorded ? { ...env, [TOOL_COMMIT_ENV]: "1" } : env, toolCommit: recorded })
 }
 
-/** Exit codes the route's steps branch on: done (committed or finished), ready (read-only run, nothing changed), held, unknown, bad usage. */
-const FINISH_EXIT = { done: 0, ready: 3, held: 4, unknown: 5, usage: 2 }
+/** Exit codes the route's steps branch on: done is 0 (committed or finished), ready (read-only run, nothing changed), held, unknown, and 2 for bad usage. */
+const EXITS = defineExitCodes([
+  ...BASE_EXIT_CODES,
+  { code: 3, name: "ready", short: "ready", meaning: "ready: a read-only run found the change finishable; nothing was changed" },
+  { code: 4, name: "held", short: "held", meaning: "held: a check failed, so nothing was committed; only a person can say what is right" },
+  { code: 5, name: "unknown", short: "unknown", meaning: "unknown: where the change stands could not be read" },
+])
+const EXIT_OF = { committed: "ok", finished: "ok", ready: "ready", held: "held" }
 
-/** `--root R --branch B --before H --message M --path P... --entry "mode sha<TAB>path"... [--commit]`, or `--root R --capture-id ID --message M --path P... [--commit]` for Desk's recorded change: prints the answer as JSON and returns its exit code. */
-export function runFinishCommitCli(argv = process.argv.slice(2), { spawnGit = spawnSync, env = process.env, out = process.stdout } = {}) {
-  const options = { paths: [], expected: [], commit: false }
-  for (let i = 0; i < argv.length; i += 1) {
-    const flag = argv[i]
-    if (flag === "--commit") { options.commit = true; continue }
-    const value = argv[i + 1]
-    if (value === undefined) { out.write(`${JSON.stringify({ state: "usage", reason: `${flag} needs a value` })}\n`); return FINISH_EXIT.usage }
-    i += 1
-    if (flag === "--root") options.root = value
-    else if (flag === "--branch") options.branch = value
-    else if (flag === "--before") options.before = value
-    else if (flag === "--message") options.message = value
-    else if (flag === "--capture-id") options.captureId = value
-    else if (flag === "--path") options.paths.push(value)
-    else if (flag === "--entry") options.expected.push(value)
-    else { out.write(`${JSON.stringify({ state: "usage", reason: `unknown option ${flag}` })}\n`); return FINISH_EXIT.usage }
-  }
-  if (!options.root) { out.write(`${JSON.stringify({ state: "usage", reason: "--root is required" })}\n`); return FINISH_EXIT.usage }
-  const answer = options.captureId === undefined ? finishCommit({ ...options, spawnGit, env }) : finishRecorded(options, { spawnGit, env })
-  out.write(`${JSON.stringify(answer)}\n`)
-  return answer.state === "committed" || answer.state === "finished" ? FINISH_EXIT.done : FINISH_EXIT[answer.state]
+const finishCli = ({ spawnGit, env }) => defineCli({
+  name: "finish-commit",
+  about: ["Finishes a commit Desk could not finish, from the captured change a route carries: reads where it stands and, with --commit, commits exactly it once. Prints the answer as one JSON value."],
+  exits: EXITS,
+  command: defineCommand({
+    name: "finish-commit",
+    summary: "Read where a captured change stands and, with --commit and only when every check passes, commit exactly it once.",
+    effect: "private",
+    output: "one JSON value",
+    text: (answer) => JSON.stringify(answer),
+    exit: (answer) => EXIT_OF[answer.state] ?? "unknown",
+    flags: {
+      root: { type: "string", required: true, placeholder: "<checkout>", description: "The checkout the change was made in." },
+      branch: { type: "string", placeholder: "<branch>", description: "The branch the change was committed on." },
+      before: { type: "string", placeholder: "<HEAD>", description: "The HEAD the change was made on." },
+      message: { type: "string", description: "The commit message." },
+      "capture-id": { type: "string", placeholder: "<id>", description: "Desk's record of the change, instead of --branch, --before and --entry; --path and --message must match it." },
+      path: { type: "string", repeat: true, description: "A path of the change." },
+      entry: { type: "string", repeat: true, placeholder: "<mode sha<TAB>path>", description: "A captured index entry, as `mode sha<TAB>path`." },
+      commit: { type: "boolean", description: "Commit the change; without it nothing is changed." },
+    },
+    run: (input) => {
+      const options = { root: input.root, branch: input.branch, before: input.before, message: input.message, captureId: input["capture-id"], paths: input.path ?? [], expected: input.entry ?? [], commit: input.commit === true }
+      try {
+        return options.captureId === undefined ? finishCommit({ ...options, spawnGit, env }) : finishRecorded(options, { spawnGit, env })
+      } catch (error) {
+        return { state: "unknown", reason: error.message }
+      }
+    },
+  }),
+})
+
+/** Runs the command line and returns its exit code: 0 done, 3 ready, 4 held, 5 unknown, 2 usage (one line on stderr). */
+export function runFinishCommitCli(argv = process.argv.slice(2), { spawnGit = spawnSync, env = process.env, out = process.stdout, err = process.stderr } = {}) {
+  return runCli(finishCli({ spawnGit, env }), argv, { stdout: out, stderr: err })
 }
 
 /**
