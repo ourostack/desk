@@ -37,7 +37,7 @@ for each open friction entry in `$DESK/<track>/_friction/` (or `$DESK/_meta/fric
 
 ### Triage the governing rule before encoding
 
-Before choosing `encode-in-skill`, find the rule that should already have covered the card. If it exists, the defect is loading, placement, enforcement, or missing regression evidence; fix that instead of writing the rule twice.
+Before choosing any encode disposition, find the rule that should already have covered the card. If it exists, the defect is loading, placement, enforcement, or missing regression evidence; fix that instead of writing the rule twice.
 
 If existing rules conflict, consolidate them under one owner. If instruction volume buried the rule, cut or simplify before adding prose. Group repeated cards by root cause and fix the governing defect instead of accumulating exceptions.
 
@@ -53,7 +53,7 @@ when a card is about a human-intervention point in a skill (a sign-off gate, an 
 2. **read each card end-to-end** before picking a disposition. don't skim. reactive edits without reading the full entry produce churn.
 3. **decide disposition.** name the target file or rationale.
 4. **batch decisions.** present dispositions to operator in one message with a clear table (entry → disposition → target). wait for signoff. don't walk the operator through one card at a time (`interaction-style` §1).
-5. **Encode in a single authorized PR** against the plugin repo (a check goes to the repository it guards), one unit per card with acceptance checks. Invoke `desk:using-superpowers-with-desk` for the needed Superpowers planning and implementation skills.
+5. **Encode in one authorized PR per repository**: the plugin repo, and for a check the repository it guards; one unit per card with acceptance checks. Invoke `desk:using-superpowers-with-desk` for the needed Superpowers planning and implementation skills.
 6. **take landed cards down** in the same motion they shipped: update the `Status:` line to name the PR and merge SHA, move the entry to `_friction/_archive/`. see the `friction-management` skill.
 
 ## Engine-agnostic constraint
@@ -98,6 +98,6 @@ no-op is appropriate when: the content is structurally incompatible with the plu
 
 after all dispositions are decided and operator has signed off:
 
-- Encoded entries become units of a single authorized PR. Use the existing approval and selected method through `desk:using-superpowers-with-desk`.
+- Encoded entries become units of those PRs. Use the existing approval and selected method through `desk:using-superpowers-with-desk`.
 - no-op entries get their `Status:` line updated in-place. they stay pinned because the ask is not resolved, just redirected out of plugin scope — they do not move to `_archive/`.
 - curator is done when the corkboard has zero undecided open cards.
