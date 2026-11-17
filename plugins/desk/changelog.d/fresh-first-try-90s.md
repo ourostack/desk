@@ -1,0 +1,1 @@
+A fresh browser start gets 90 seconds on its first try, up from 45, because real cold starts on Linux CI take up to about a minute; a start that stalls with no output still gets one more try within the same two minutes ([#763](https://github.com/ourostack/desk/issues/763)).
