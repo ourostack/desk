@@ -1411,9 +1411,9 @@ test("an agent's shell resolves the desk from its working folder, so a hold it w
 })
 
 test("--defer needs a reason and --refresh-identity needs a root", async () => {
-  assert.deepEqual(await cli(["--defer"]), { code: 2, stdout: "", stderr: "tidy-status: tidy-status: --defer needs a value. Fix: tidy-status --defer <reason>.\n" })
-  assert.deepEqual(await cli(["--defer", " "]), { code: 2, stdout: "", stderr: "tidy-status: tidy-status: --defer needs a one-line reason. Fix: tidy-status --defer <reason>.\n" })
-  assert.deepEqual(await cli(["--refresh-identity"]), { code: 2, stdout: "", stderr: "tidy-status: tidy-status: --refresh-identity needs --root. Fix: tidy-status --refresh-identity --root <root>.\n" })
+  assert.deepEqual(await cli(["--defer"]), { code: 2, stdout: "", stderr: "tidy-status: --defer needs a value. Fix: tidy-status --defer <reason>.\n" })
+  assert.deepEqual(await cli(["--defer", " "]), { code: 2, stdout: "", stderr: "tidy-status: --defer needs a one-line reason. Fix: tidy-status --defer <reason>.\n" })
+  assert.deepEqual(await cli(["--refresh-identity"]), { code: 2, stdout: "", stderr: "tidy-status: --refresh-identity needs --root. Fix: tidy-status --refresh-identity --root <root>.\n" })
 })
 
 test("an unknown argument is refused with exit code 2 and one line naming the flags", async () => {
