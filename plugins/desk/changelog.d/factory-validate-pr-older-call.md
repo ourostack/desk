@@ -1,1 +1,0 @@
-Factory's validate-pr still answers a store's older `({ argv, runner, env })` call, which a store's default branch keeps running until it moves to the flags object: factory's merge and validate workflows ran the older call against Desk main and got no answer, so no pull request that needed Desk could merge or be rejected.

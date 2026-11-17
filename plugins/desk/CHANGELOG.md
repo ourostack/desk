@@ -1,5 +1,21 @@
 # desk plugin — changelog
 
+## 3.2.235 — 2026-11-17
+
+Derive run's invalid session marker failure now says what probably happened, where to look, how to file a bug with evidence and how to keep working.
+
+The drain poller no longer wakes a drain a second time for a label an issue already had when it was opened. A `labeled` event within 60 seconds of the issue being created is dropped, because the "new issue" wake already shows the labels. A label added later still wakes the drain.
+
+Factory's validate-pr still answers a store's older `({ argv, runner, env })` call, which a store's default branch keeps running until it moves to the flags object: factory's merge and validate workflows ran the older call against Desk main and got no answer, so no pull request that needed Desk could merge or be rejected.
+
+Desk's MCP server loads its shipped runtime packs again. A version change made by hand had pointed it at `desk-mcp@1.4.0-alpha.7`, which has no packs, so its tools did not start ([#1163](https://github.com/ourostack/desk/issues/1163)).
+
+Private path protection failures now say what probably happened, where to look, how to file a bug with evidence and how to keep working.
+
+Errors from the lesson, done-evidence, task, move, desk_save and task_signoff tools now say what probably happened, how to look further, how to file a bug with evidence and how to keep working.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.234 — 2026-11-17
 
 The pre-push hook no longer warns about commits from different sessions when the push goes to the default branch (main or master), where many sessions push by design ([#1162](https://github.com/ourostack/desk/pull/1162)).
