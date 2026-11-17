@@ -251,7 +251,7 @@ test("factoryStateRoot is idempotent and repairs a mode that drifted", () => scr
 test("factoryStateRoot refuses a state root inside a Git checkout", () => scratch(async (env) => {
   mkdirSync(env.XDG_STATE_HOME, { recursive: true })
   mkdirSync(path.join(env.HOME, ".git"), { recursive: true })
-  await assert.rejects(() => factoryStateRoot(env), /refusing to write private factory state inside the Git checkout/u)
+  await assert.rejects(() => factoryStateRoot(env), /is inside a Git checkout/u)
 }))
 
 test("factoryStateRoot refuses a symlinked ancestor of XDG_STATE_HOME before creating anything (resolved via realpath)", () => scratch(async (env, base) => {

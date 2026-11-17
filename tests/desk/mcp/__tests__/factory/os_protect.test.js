@@ -56,7 +56,7 @@ test("lstatIfPresent rethrows a non-ENOENT failure as a labeled error, rather th
     await fs.writeFile(file, "not a directory")
     await assert.rejects(
       () => lstatIfPresent(path.join(file, "child"), NAMING),
-      /desk_test: Check that .* can be read, then run again: inspecting the private test thing path returned ENOTDIR/u,
+      /desk: private test thing path: inspecting .* returned ENOTDIR.*check that .* can be read, then run again/u,
     )
   })
 })
@@ -67,7 +67,7 @@ test("assertNotGitCheckout refuses a directory that directly contains .git and p
     await fs.mkdir(path.join(base, ".git"))
     await assert.rejects(
       () => assertNotGitCheckout(base, NAMING),
-      /desk_test: Point XDG_STATE_HOME at a directory that is not under version control: refusing to write private test thing inside the Git checkout at/u,
+      /desk: private test thing path: .* is inside a Git checkout.*point XDG_STATE_HOME at a directory that is not under version control/u,
     )
   })
 })
@@ -485,7 +485,7 @@ test("clearExtendedAcl refuses when the native provider fails or an ACL survives
       if (outcome === "unavailable") {
         assert.throws(() => clearExtendedAcl("/x", "darwin", NAMING), (error) => error === failure)
       } else {
-        assert.throws(() => clearExtendedAcl("/x", "darwin", NAMING), /retains an extended ACL/u)
+        assert.throws(() => clearExtendedAcl("/x", "darwin", NAMING), /keeps an extended ACL after chmod -N/u)
       }
     } finally {
       mocked.mock.restore()
@@ -607,8 +607,8 @@ test("a retained ACL is refused on every call and never remembered as proved (da
     await fs.writeFile(file, "{}", { mode: 0o600 })
     const mocked = t.mock.method(childProcess, "execFileSync", (command) => (command === "/bin/ls" ? "x\n 0: group:everyone allow read\n" : ""))
     try {
-      await assert.rejects(() => protectLeafFile(file, "darwin", NAMING), /retains an extended ACL/u)
-      await assert.rejects(() => protectLeafFile(file, "darwin", NAMING), /retains an extended ACL/u)
+      await assert.rejects(() => protectLeafFile(file, "darwin", NAMING), /keeps an extended ACL after chmod -N/u)
+      await assert.rejects(() => protectLeafFile(file, "darwin", NAMING), /keeps an extended ACL after chmod -N/u)
     } finally {
       mocked.mock.restore()
     }
