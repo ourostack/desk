@@ -528,7 +528,8 @@ function open(s, kind) {
   var begun = Date.now();
   var firstMs = Math.min(s.firstOpenMs, s.openMs);
   return startFresh(s, kind, browser, firstMs).then(function (first) {
-    if (!first.result.timedOut) return finishFresh(s, kind, browser, first, firstMs);
+    // Only a first try that left part of the budget unused is retried, so a start never runs past its budget.
+    if (!first.result.timedOut || firstMs >= s.openMs) return finishFresh(s, kind, browser, first, firstMs);
     // A start that stalls is stopped and tried once more, within the same overall budget. Chrome prints warnings (D-Bus on Linux)
     // even while it hangs, so output does not mean progress (#763).
     return close(s, first.id).then(function () {
