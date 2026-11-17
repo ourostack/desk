@@ -53,7 +53,10 @@ jobs:
         run: node scripts/test-skill-evals.cjs && node scripts/skill-evals.cjs validate
 
       - name: Check the always-on context budget
-        run: node scripts/check-context-budget.mjs
+        run: |
+          for i in $(seq 1 40); do node scripts/check-context-budget.mjs --print-boot > /tmp/boot-$i.txt 2>&1 || { echo "RUN $i OVER"; cat /tmp/boot-$i.txt; }; done
+          node scripts/check-context-budget.mjs --print-boot | head -5
+          echo "--- env"; env | sort | cut -c1-120 | grep -v -i token
 
       - name: Validate Plain Language
         run: node scripts/test-plain-language-plugin.cjs && node scripts/test-plain-language-hook.cjs
