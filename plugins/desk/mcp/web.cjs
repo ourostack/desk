@@ -495,7 +495,7 @@ function startFresh(s, kind, browser, budgetMs) {
   });
 }
 
-// Replies with the opened context, or closes the failed one and throws. retry is { firstMs } when an earlier try stalled with no output.
+// Replies with the opened context, or closes the failed one and throws. retry is { firstMs } when an earlier try timed out.
 function finishFresh(s, kind, browser, attempt, budgetMs, retry) {
   var result = attempt.result;
   if (result.code === 0) {
@@ -509,7 +509,7 @@ function finishFresh(s, kind, browser, attempt, budgetMs, retry) {
   var details = result.text ? " Details: " + result.text.slice(-1500) : "";
   var message;
   if (retry) {
-    var stalled = "the first try stalled with no output for " + retry.firstMs / 1000 + " seconds, and the second try ";
+    var stalled = "the first try did not start within " + retry.firstMs / 1000 + " seconds and was stopped, and the second try ";
     message = result.timedOut ? "The browser did not start: " + stalled + "did not start within " + budgetMs / 1000 + " seconds and was stopped. Try again, or use a fresh browser." + details :
       "The browser did not start: " + stalled + "failed. Try again, or use a fresh browser. Details: " + result.text.slice(-1500);
   } else {
@@ -528,8 +528,9 @@ function open(s, kind) {
   var begun = Date.now();
   var firstMs = Math.min(s.firstOpenMs, s.openMs);
   return startFresh(s, kind, browser, firstMs).then(function (first) {
-    if (!first.result.timedOut || first.result.text) return finishFresh(s, kind, browser, first, firstMs);
-    // A start that stalls with no output is stopped and tried once more, within the same overall budget.
+    if (!first.result.timedOut) return finishFresh(s, kind, browser, first, firstMs);
+    // A start that stalls is stopped and tried once more, within the same overall budget. Chrome prints warnings (D-Bus on Linux)
+    // even while it hangs, so output does not mean progress (#763).
     return close(s, first.id).then(function () {
       var secondMs = Math.max(s.retryMinMs, s.openMs - (Date.now() - begun));
       return startFresh(s, kind, browser, secondMs).then(function (second) {
