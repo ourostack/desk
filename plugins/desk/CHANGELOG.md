@@ -1,5 +1,17 @@
 # desk plugin — changelog
 
+## 3.2.231 — 2026-11-17
+
+The Copilot boot text is down from about 3 KB to under 1.4 KB. It says what Desk is, where its RFC is and the two boundaries (nothing irreversibly destructive, no contacting anyone without the operator's approval), then keeps one short line each for the desk path, the tools, the task report, new work and a missing thing. The `--json` boot keeps its full wording. The `scripts/check-context-budget.mjs` check holds the boot text to its budget in CI.
+
+Context outbox failures now say what probably happened, where to look, how to file a bug with evidence and how to keep working.
+
+Context run and capture flush failures now say what probably happened, where to look, how to file a bug with evidence and how to keep working.
+
+A blocked workspace publication from sync-push now says what probably happened, how to look further, how to file a bug with evidence and how to keep working.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.230 — 2026-11-17
 
 [fast-honest-ci](skills/fast-honest-ci/SKILL.md) now carries four cost lessons from [OpenClaw's CI write-up](https://vincent.build/openclaw-ci-cost-reduction/): a push run skips a suite whose git tree a pull request or queue run already passed, not only the same commit; a job that has nothing to do is skipped in its `if:` before a runner starts, since a skipped job still satisfies a required check; a pull request's macOS jobs wait behind a cheap check that the commit is still the head, and review fixes go out in one push; and the budget guard caps a run's runner-minutes as well as its critical path.
