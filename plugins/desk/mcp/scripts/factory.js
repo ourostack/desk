@@ -288,7 +288,31 @@ async function triageActorPermission({ repo, actor, runner, token }) {
   } catch { return undefined }
 }
 
-export async function runValidatePrCommand({ base, head, "author-association": association, repo, pr }, { cwd = process.cwd(), git = runGit, runner, env = process.env }) {
+const VALIDATE_PR_FLAGS = ["base", "head", "author-association", "repo", "pr"]
+
+/**
+ * Validates a store pull request: `flags` is `{ base, head, "author-association", repo?, pr? }` and `seams` the
+ * runner, git, cwd and env. A store's workflows import this from Desk main and run their default branch's own
+ * caller, which can still pass the older `({ argv, runner, env })` call (ourostack/factory#1020 moves factory off
+ * it). That call still works: its `--flag value` list becomes the flags, and a malformed or unknown flag is a usage error.
+ */
+export async function runValidatePrCommand(flags, seams) {
+  if (seams === undefined && Array.isArray(flags?.argv)) {
+    const { argv, ...rest } = flags
+    const named = {}
+    for (let index = 0; index < argv.length; index += 2) {
+      const name = typeof argv[index] === "string" && argv[index].startsWith("--") ? argv[index].slice(2) : ""
+      if (!VALIDATE_PR_FLAGS.includes(name) || typeof argv[index + 1] !== "string" || Object.hasOwn(named, name)) {
+        throw usageError("validate-pr", `${JSON.stringify(argv[index])} is not one of --${VALIDATE_PR_FLAGS.join(", --")} with a value, given once`, "factory validate-pr --base <base sha> --head <head sha> --author-association <value>")
+      }
+      named[name] = argv[index + 1]
+    }
+    return validatePrRequest(named, rest)
+  }
+  return validatePrRequest(flags, seams)
+}
+
+async function validatePrRequest({ base, head, "author-association": association, repo, pr }, { cwd = process.cwd(), git = runGit, runner, env = process.env }) {
   if (!GIT_REF.test(base) || !GIT_REF.test(head)) throw usageError("validate-pr", "--base and --head must be full commit SHAs", "factory validate-pr --base <base sha> --head <head sha> --author-association <value>")
   if (!AUTHOR_ASSOCIATION.test(association)) throw usageError("validate-pr", "--author-association is not an association such as NONE or OWNER", "factory validate-pr --author-association <value>")
 

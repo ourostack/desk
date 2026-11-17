@@ -15,6 +15,7 @@ import { setImmediate as nextTurn } from "node:timers/promises"
 import { fileURLToPath, pathToFileURL } from "node:url"
 
 import { validatePrCommand as runValidatePrCommand } from "./_validate_pr_command.js"
+import { runValidatePrCommand as validatePrExport } from "../../../../../plugins/desk/mcp/scripts/factory.js"
 import {
   KEYED_LINK_NOTE,
   SUPPORTED_COMMANDS,
@@ -192,6 +193,30 @@ function mergeGit(handler, { version = "git version 2.54.0\n", merges = "", tree
     return handler(gitArgs, options)
   }
 }
+
+  test("validate-pr still answers a store's older ({ argv, runner, env }) call as the flags call does, and refuses a malformed flag in it", async () => {
+    const base = "a".repeat(40), head = "b".repeat(40)
+    const batchPath = "triage/0123456789abcdef.json"
+    const value = JSON.parse(readFileSync(new URL("./fixtures/v12-triage.json", import.meta.url))).public
+    const argv = ["--base",base,"--head",head,"--author-association","OWNER","--repo","example/project","--pr","1"]
+    const git = mergeGit((args) => {
+      if (args[0] === "diff") return `A\0${batchPath}\0`
+      if (args[0] === "ls-tree") return args[2] === base ? "" : `100644 blob ${"c".repeat(40)}\t${batchPath}\0`
+      if (args[0] === "show") return Buffer.from(JSON.stringify(value))
+      assert.fail(`unexpected Git call: ${args}`)
+    })
+    const runner = (permission) => async (args) => args[1] === "repos/example/project/pulls/1"
+      ? { code: 0, stdout: JSON.stringify({ head: { sha: head }, user: { login: "synthetic-actor" } }) }
+      : { code: 0, stdout: JSON.stringify({ permission }) }
+    for (const permission of ["write", "read"]) {
+      const older = await validatePrExport({ argv, git, runner: runner(permission), env: {} })
+      assert.deepEqual(older, await runValidatePrCommand({ argv, git, runner: runner(permission), env: {} }), permission)
+    }
+    assert.equal((await validatePrExport({ argv, git, runner: runner("read"), env: {} })).ok, false)
+    for (const bad of [[...argv, "--extra", "x"], [...argv, "--pr", "2"], argv.slice(0, 5), ["base", base]]) {
+      await assert.rejects(validatePrExport({ argv: bad, git, runner: runner("write"), env: {} }), (error) => error.name === "AxError" && error.exit === 2 && error.message.startsWith("validate-pr: "), JSON.stringify(bad))
+    }
+  })
 
   test("validate-pr classifies triage as authenticated data and pins current API actor", async () => {
     const base = "a".repeat(40), head = "b".repeat(40)
