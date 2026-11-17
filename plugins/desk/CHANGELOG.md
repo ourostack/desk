@@ -1,5 +1,13 @@
 # desk plugin — changelog
 
+## 3.2.226 — 2026-11-17
+
+The factory command line's validate-pr command, and its command dispatch, now use Ouro AX: a wrong or unknown command or argument is one stderr line with its fix and exit 2.
+
+Desk's MCP server now vendors Ouro UI v1.3.264, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.225 — 2026-11-17
 
 The factory command line's evaluate, job-link, kaizen-check, andon, reconcile and loop commands now take their arguments and report usage errors through Ouro AX; a bad argument is one stderr line with exit 2.
