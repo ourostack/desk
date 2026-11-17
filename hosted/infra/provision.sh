@@ -106,7 +106,7 @@ STAGE="${STAGE:-prod}"
 case "$STAGE" in
   prod)
     APP=ouro-desk-hosted IDENTITY_ENV=prod DESK_REPO=arimendelow/desk
-    MIN_REPLICAS=1 CPU=2.0 MEMORY=4Gi
+    MIN_REPLICAS=0 CPU=2.0 MEMORY=4Gi
     PULL_IDENTITY=$PROD_PULL_IDENTITY PULL_IDENTITY_GROUP=$RESOURCE_GROUP
     ;;
   staging)
