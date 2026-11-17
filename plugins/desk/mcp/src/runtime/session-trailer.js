@@ -15,7 +15,7 @@ import { spawnSync } from "node:child_process"
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs"
 import * as path from "node:path"
 
-export const SESSION_MARKER = "# desk-session-trailer"
+const SESSION_MARKER = "# desk-session-trailer"
 const HOOK_VERSION = 1
 const CHAINED_SUFFIX = ".desk-chained"
 const GIT_TIMEOUT_MS = 5000
@@ -36,7 +36,7 @@ ${SESSION_MARKER} ${name} v${HOOK_VERSION}
 `
 
 /** The `prepare-commit-msg` hook text. */
-export function prepareCommitMsgScript() {
+function prepareCommitMsgScript() {
   return `${header("prepare-commit-msg")}${SESSION_ID}
 add_session() {
   [ -n "$sid" ] || return 0
@@ -51,7 +51,7 @@ ${chainTail("prepare-commit-msg", false)}`
 }
 
 /** The `pre-push` hook text. */
-export function prePushScript() {
+function prePushScript() {
   return `${header("pre-push")}${SESSION_ID}
 input=$(cat)
 warn_other_session() {

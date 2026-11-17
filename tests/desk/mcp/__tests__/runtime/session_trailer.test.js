@@ -126,6 +126,11 @@ test("a tracked core.hooksPath is left alone and outside a repository nothing ha
   assert.equal(installSessionTrailerHooks(path.dirname(dir)).state, "skipped")
 })
 
+test("a git that cannot run is reported as failed, never thrown", () => {
+  const result = installSessionTrailerHooks(".", { spawnGit: () => { throw new Error("no git") } })
+  assert.deepEqual(result, { state: "failed", reason: "no git" })
+})
+
 async function pushFixture() {
   const dir = await repo()
   const remote = path.join(path.dirname(dir), "remote.git")
