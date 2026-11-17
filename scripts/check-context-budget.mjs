@@ -46,10 +46,17 @@ export async function cleanBootText() {
       jq,
       syncFn: async () => ({ state: "synced" }),
       factoryStatusFn: () => null,
+      // Findings that depend on the network, the machine or the latest release are not Desk's static wording.
+      migrationsFn: async () => [],
+      staleDeskFn: async () => null,
+      pluginUpdateFn: () => null,
+      otherSessionsFn: async () => null,
+      releaseAlertFn: async () => null,
     })
     const text = bootContext({ boot: { text: formatBootText(result), seconds: null } }).text
     return text
       .split(root).join(FIXED_ROOT)
+      .split(pluginRoot).join(FIXED_PLUGIN)
       .replace(/^Desk boot: .*\n(?:.*\n)*?\n(?=Active tasks)/mu, `${FIXED_STATUS}\n\n`)
   } finally {
     await fs.rm(root, { recursive: true, force: true })
@@ -84,6 +91,7 @@ const rows = Object.entries(parts).map(([name, value]) => {
   return over ? `${name} is ${value} B, over its ${budget} B budget` : null
 }).filter(Boolean)
 if (rows.length > 0) {
+  if (!process.argv.includes("--print-boot")) console.error(`\nThe boot text as measured:\n${boot}`)
   console.error(`\nThe always-on context grew: ${rows.join("; ")}.\nCut it, or move what is not needed in every session into a skill that loads on demand. Raise scripts/context-budget.json only with an eval that shows the text earns its place.`)
   process.exit(1)
 }
