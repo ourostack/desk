@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.239 — 2026-11-17
+
+Desk's MCP server now vendors Ouro UI v1.3.269, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.238 — 2026-11-17
 
 The factory and private-view scripts now report their refusals as Desk failures that say what probably happened, how to look further, how to file a bug with evidence, and how to keep working.
