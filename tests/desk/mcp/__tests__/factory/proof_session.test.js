@@ -240,8 +240,8 @@ test("a write that finds the mark already set is reported as already marked", ()
 test("the proof command rejects a missing id, a relative desk root or an unknown option with a usage line", () => scratch(async (ctx) => {
   for (const argv of [["proof"], ["proof", "--desk", ctx.base], ["proof", sessionId(1), "--desk"], ["proof", sessionId(1), "--desk", "relative/desk"], ["proof", sessionId(1), "--mode", "x"]]) {
     const err = []
-    assert.equal(await main({ argv, env: ctx.env, write: () => {}, logError: (text) => err.push(text) }), 1)
-    assert.match(err.join(""), /Usage: factory\.js proof <session id>/)
+    assert.equal(await main({ argv, env: ctx.env, write: () => {}, logError: (text) => err.push(text) }), 2)
+    assert.match(err.join(""), /^factory: proof: .*\. Fix: .*\.\n$/u)
   }
 }))
 

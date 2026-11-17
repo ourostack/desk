@@ -26,7 +26,7 @@ test("I1 direct, sweep and status refuse an external marker directory without re
   for (const run of [
     () => readMarker(ctx.env, path.join(root, "markers", name)),
     () => sweep(ctx.env),
-    () => runStatusCommand({ env: ctx.env, argv: [] }),
+    () => runStatusCommand({}, { env: ctx.env }),
   ]) await assert.rejects(run, /symlink/u)
   assert.deepEqual(JSON.parse(await fs.readFile(path.join(external, name), "utf8")), marker)
   assert.equal(await fs.readFile(stale, "utf8"), "{")

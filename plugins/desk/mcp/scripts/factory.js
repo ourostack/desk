@@ -52,6 +52,9 @@ import { existsSync, readFileSync, realpathSync } from "node:fs"
 import * as path from "node:path"
 import { pathToFileURL } from "node:url"
 
+import { AxError } from "../src/lib/ouro-ui/registry/ouro/ax/problem.ts"
+import { defineCli, defineCommand } from "../src/lib/ouro-ui/registry/ouro/ax/command.ts"
+import { runCli } from "../src/lib/ouro-ui/registry/ouro/ax/cli.ts"
 import { jobId } from "../src/factory/binding.js"
 import { readDeskRemote, resolveJobIdentity } from "../src/factory/desk-repo.js"
 import { acceptEvaluations, evaluatePending, evaluateTask } from "../src/factory/evaluate-run.js"
@@ -74,8 +77,6 @@ import { contextPathParts, factsPathsForSession, isCapturePath, isFactsPath, lab
 import { isTriagePath } from "../src/factory/triage-schema.js"
 
 export const SUPPORTED_COMMANDS = Object.freeze(["account", "consent", "derive", "status", "flush", "context-request", "finalize", "validate-pr", "build", "job-link", "evaluate", "evaluate-accept", "kaizen-check", "andon", "reconcile", "loop", "proof"])
-const CONSENT_OPTIONS = new Set(["store", "contribute", "account"])
-const CONTRIBUTE_VALUES = new Set(["yes", "no"])
 const MAINTAINER_ASSOCIATIONS = new Set(["OWNER", "MEMBER", "COLLABORATOR"])
 const GIT_REF = /^[0-9a-f]{40}$/u
 const AUTHOR_ASSOCIATION = /^[A-Z_]{2,40}$/u
@@ -99,13 +100,7 @@ const DERIVE_HARD_DEADLINE_MS = 360000
 // The exit code `timeout(1)` uses, so a worker that hit its ceiling is told apart from one that finished (0).
 const DERIVE_DEADLINE_EXIT = 124
 
-export async function runDeriveCommand({ argv, env, deadlineMs = DERIVE_HARD_DEADLINE_MS, exit = process.exit, warn = console.error }) {
-  const options = parseOptions(argv)
-  if (options === null || !options.has("marker") || [...options.keys()].some((key) => !["marker", "wait-quiet"].includes(key))) {
-    throw new Error("Usage: factory.js derive --marker <file> [--wait-quiet <milliseconds>]")
-  }
-  const raw = options.get("wait-quiet") ?? "0"
-  if (!/^\d{1,6}$/u.test(raw) || Number(raw) > 30000) throw new Error("factory.js derive: wait-quiet must be 0..30000")
+export async function runDeriveCommand({ marker, "wait-quiet": waitQuiet = 0 }, { env, deadlineMs = DERIVE_HARD_DEADLINE_MS, exit = process.exit, warn = console.error }) {
   const { deriveFile } = await import("../src/factory/derive-run.js")
   // A hard ceiling on the detached worker's life: the quiet wait is capped at five minutes, and derivation after it gets one more minute. A worker still alive then is stuck, so it ends itself.
   const ceiling = setTimeout(() => {
@@ -114,18 +109,16 @@ export async function runDeriveCommand({ argv, env, deadlineMs = DERIVE_HARD_DEA
   }, deadlineMs)
   ceiling.unref()
   try {
-    return await deriveFile(env, options.get("marker"), { quietMs: Number(raw) })
+    return await deriveFile(env, marker, { quietMs: waitQuiet })
   } finally {
     clearTimeout(ceiling)
   }
 }
 
 /** `flush --store <owner/repo>`: one delivery attempt; prints `{ result, pr?, stale_retries?, rejections_unmatched? }`. */
-export async function runFlushCommand({ argv, env, runner }) {
-  const options = parseOptions(argv)
-  if (options === null || options.size !== 1 || !options.has("store")) throw new Error("Usage: factory.js flush --store <owner/repo>")
+export async function runFlushCommand({ store }, { env, runner }) {
   const { flush, ghRunner } = await import("../src/factory/flush.js")
-  return flush(env, { store: options.get("store"), runner: runner ?? ghRunner({ env }) })
+  return flush(env, { store, runner: runner ?? ghRunner({ env }) })
 }
 
 /**
@@ -133,15 +126,10 @@ export async function runFlushCommand({ argv, env, runner }) {
  * derived the finished jobs' sessions, so it then starts the loop worker when the evaluator step is due (`kickLoop`, `evaluate-kick.js`): a
  * job's evaluation starts at the end of the turn that finished it. A kick that fails changes nothing printed. `kick` is a seam for tests.
  */
-export async function runFinalizeCommand({ argv, env, runner, kick = kickLoop }) {
-  const jobs = []
-  let malformed = argv.length === 0
-  for (let index = 0; index < argv.length; index += 2) {
-    const value = argv[index + 1]
-    if (argv[index] !== "--job" || typeof value !== "string" || !JOB.test(value) || jobs.includes(value)) malformed = true
-    else jobs.push(value)
+export async function runFinalizeCommand({ job: jobs }, { env, runner, kick = kickLoop }) {
+  if (jobs.length > MAX_FINALIZE_JOBS || new Set(jobs).size !== jobs.length || !jobs.every((job) => JOB.test(job))) {
+    throw usageError("finalize", `--job takes up to ${MAX_FINALIZE_JOBS} distinct 32-hex job ids`, "factory finalize --job <32 hex> [--job <32 hex> ...]")
   }
-  if (malformed || jobs.length > MAX_FINALIZE_JOBS) throw new Error(`Usage: factory.js finalize --job <32 hex> [--job <32 hex> ...] (at most ${MAX_FINALIZE_JOBS} distinct jobs)`)
   const { finalize, ghRunner } = await import("../src/factory/flush.js")
   const results = {}
   for (const job of jobs) results[job] = await finalize(env, { job, runner: runner ?? ghRunner({ env }) })
@@ -154,18 +142,12 @@ export async function runFinalizeCommand({ argv, env, runner, kick = kickLoop })
 }
 
 /** `proof <session id> [--desk <absolute desk root>]`: marks an existing local session as a controlled proof (`proof-session.js`); prints `{ result, reason? }`. */
-export async function runProofCommand({ argv, env }) {
-  const [sessionId, ...rest] = argv
-  const options = parseOptions(rest)
-  const desk = options?.get("desk") ?? null
-  if (typeof sessionId !== "string" || sessionId.startsWith("--") || options === null || [...options.keys()].some((key) => key !== "desk") || (desk !== null && !path.isAbsolute(desk))) {
-    throw new Error("Usage: factory.js proof <session id> [--desk <absolute desk root>]")
-  }
+export async function runProofCommand({ session: sessionId, desk = null }, { env }) {
+  if (desk !== null && !path.isAbsolute(desk)) throw usageError("proof", "--desk must be an absolute desk root", "factory proof <session id> --desk <absolute desk root>")
   return markProofSession(env, { sessionId, desk })
 }
 
-export async function runStatusCommand({ argv, env }) {
-  if (argv.length) throw new Error("Usage: factory.js status")
+export async function runStatusCommand(_input, { env }) {
   const status = await readStatus(env)
   return { ...status, orphan_pass: orphanPassLine(status.orphans, Date.now(), { version: ownVersion() }), retention: retentionLine(status), capture_check: captureCheckLines(status), markers: (await listMarkers(env)).length, finalize: (await listFinalizeRequests(env)).length }
 }
@@ -427,12 +409,8 @@ export async function runValidatePrCommand({ argv, cwd = process.cwd(), git = ru
   return { ...result, maintenance: result.ok && maintenance && trustedMaintainer }
 }
 
-export async function runBuildCommand({ argv }) {
-  const options = parseOptions(argv)
-  if (options === null || options.size !== 2 || !options.has("store") || !options.has("out")) {
-    throw new Error("Usage: factory.js build --store <directory> --out <directory>")
-  }
-  return build({ storeDir: options.get("store"), outDir: options.get("out") })
+export async function runBuildCommand({ store, out }) {
+  return build({ storeDir: store, outDir: out })
 }
 
 const JOB_LINK_USAGE = "Usage: factory.js job-link --store <owner/repo> --desk-remote <url> [--person-prefix <prefix>] [--desk <desk root>] --track <track> --slug <slug> [--this-machine]"
@@ -546,20 +524,16 @@ export async function runEvaluateCommand({ argv, env, pluginVersion = deskVersio
 }
 
 /** Runs `evaluate-accept`: checks each written answer for the job and moves accepted labels into the outbox. */
-export async function runEvaluateAcceptCommand({ argv, env, pluginVersion = deskVersion() }) {
-  const options = parseOptions(argv)
-  if (options === null || options.size !== 1 || !PATTERNS.jobId.test(options.get("job") ?? "")) {
-    throw new Error("Usage: factory.js evaluate-accept --job <job>")
-  }
-  return acceptEvaluations(env, { job: options.get("job"), pluginVersion })
+export async function runEvaluateAcceptCommand({ job }, { env, pluginVersion = deskVersion() }) {
+  if (!PATTERNS.jobId.test(job)) throw usageError("evaluate-accept", "--job is not a job id", "factory evaluate-accept --job <job>")
+  return acceptEvaluations(env, { job, pluginVersion })
 }
 
 /** `account --store <owner/repo>`: the signed-in account that can open intake pull requests there (`chooseAccount`). */
-export async function runAccountCommand({ argv, env, runner }) {
-  const options = parseOptions(argv)
-  if (options === null || options.size !== 1 || !PATTERNS.prRepo.test(options.get("store") ?? "")) throw new Error("Usage: factory.js account --store <owner/repo>")
+export async function runAccountCommand({ store }, { env, runner }) {
+  if (!PATTERNS.prRepo.test(store)) throw usageError("account", "--store is not an owner/repo", "factory account --store <owner/repo>")
   const { chooseAccount, ghRunner } = await import("../src/factory/flush.js")
-  return chooseAccount({ store: options.get("store"), runner: runner ?? ghRunner({ env }) })
+  return chooseAccount({ store, runner: runner ?? ghRunner({ env }) })
 }
 
 const STORE_ISSUE_OPTIONS = ["store", "repo", "author"]
@@ -620,11 +594,9 @@ export async function runReconcileCommand({ argv, env, git = "git" }) {
 const LOOP_USAGE = "Usage: factory.js loop --desk <absolute desk root> [--person-prefix desks/<alias>]"
 
 /** An explicit operator request owns one existing source-bound job, never a background budget override. */
-export async function runContextRequestCommand({ argv, env, run = runRequestedTaskContext }) {
-  const options = parseOptions(argv)
-  if (options === null || options.size !== 2 || !PATTERNS.prRepo.test(options.get("store") ?? "") ||
-      !JOB.test(options.get("job") ?? "")) throw new Error("Usage: factory.js context-request --store <owner/repo> --job <public job id>")
-  return run(env, { store: options.get("store"), job: options.get("job") })
+export async function runContextRequestCommand({ store, job }, { env, run = runRequestedTaskContext }) {
+  if (!PATTERNS.prRepo.test(store) || !JOB.test(job)) throw usageError("context-request", "--store must be an owner/repo and --job a 32-hex public job id", "factory context-request --store <owner/repo> --job <public job id>")
+  return run(env, { store, job })
 }
 
 /** Runs `loop`: one run of the improvement steps for the desk and person given (`src/factory/loop-worker.js`); returns codes and integers only. `impls`, `pluginVersion` and the rest of `extra` are test seams. */
@@ -639,53 +611,66 @@ export async function runLoopCommand({ argv, env, pluginVersion = deskVersion(),
   return runLoopWorker(env, { deskRoot: options.get("desk") ?? null, personPrefix: person, pluginVersion, impls, clock, alive, budgetMs, ceilingMs, exit, readStatusImpl })
 }
 
-const CONSENT_USAGE = "Usage: factory.js consent --store <owner/repo> --contribute yes|no [--account <gh login>]"
-
-/** Runs the `consent` subcommand and returns the JSON-ready result: validates `argv` and calls `setConsent`. */
-export async function runConsentCommand({ argv, env }) {
-  const options = parseOptions(argv)
-  const store = options?.get("store")
-  const contribute = options?.get("contribute")
-  if (options === null || store === undefined || !CONTRIBUTE_VALUES.has(contribute)) {
-    throw new Error(CONSENT_USAGE)
-  }
-  for (const key of options.keys()) {
-    if (!CONSENT_OPTIONS.has(key)) throw new Error(`factory.js consent: unknown option --${key}`)
-  }
-  const account = options.has("account") ? options.get("account") : null
+/** Runs the `consent` subcommand and returns the JSON-ready result: calls `setConsent`. */
+export async function runConsentCommand({ store, contribute, account = null }, { env }) {
   const consent = await setConsent(env, { store, contribute: contribute === "yes", account })
   return { store, ...consent.stores[store] }
+}
+
+const usageError = (thing, problem, fix) => new AxError({ code: "usage", exit: 2, thing, problem, fix })
+
+const STORE = { type: "string", required: true, placeholder: "<owner/repo>", description: "The store, as owner/repo." }
+const JOB_FLAG = { type: "string", required: true, placeholder: "<job>", description: "The job id." }
+const text = (result) => JSON.stringify(result)
+const failedOf = (result) => (Object(result).failed > 0 ? "error" : "ok")
+
+/** The commands defined with Ouro AX; each prints one JSON value on one line, and a failed result exits 1. */
+function factoryCli({ env, cwd, git, runner }) {
+  const ctx = { env, cwd, git, runner }
+  const command = (name, def, run) => defineCommand({ name, effect: "private", output: "one JSON value", text, exit: failedOf, ...def, run: (input) => run(input, ctx) })
+  return defineCli({
+    name: "factory",
+    about: "The Desk factory: delivers a machine's session facts to a store and runs the store's pipeline.",
+    commands: [
+      command("account", { summary: "Name the signed-in GitHub account that can open intake pull requests on the store.", readOnly: true, flags: { store: STORE }, exit: (r) => (r.result === "account_found" ? "ok" : "error") }, runAccountCommand),
+      command("consent", { summary: "Record whether this machine contributes to the store.", flags: { store: STORE, contribute: { type: "enum", values: ["yes", "no"], required: true, description: "Whether to contribute." }, account: { type: "string", placeholder: "<gh login>", description: "The GitHub account to deliver with." } } }, runConsentCommand),
+      command("derive", { summary: "Derive facts from one marker file (the detached worker).", flags: { marker: { type: "string", required: true, placeholder: "<file>", description: "The marker file." }, "wait-quiet": { type: "number", min: 0, max: 30000, placeholder: "<milliseconds>", description: "How long to wait for the session to go quiet first." } } }, runDeriveCommand),
+      command("status", { summary: "Print the factory's local status.", readOnly: true }, runStatusCommand),
+      command("flush", { summary: "Make one delivery attempt to the store.", flags: { store: STORE } }, runFlushCommand),
+      command("context-request", { summary: "Request the task context of one existing job, as the operator.", flags: { store: STORE, job: { ...JOB_FLAG, placeholder: "<public job id>" } }, exit: (r) => (r.ok === false ? "error" : "ok") }, runContextRequestCommand),
+      command("finalize", { summary: "Finalize up to eight finished jobs, then start the loop worker when its step is due.", flags: { job: { ...JOB_FLAG, repeat: true } } }, runFinalizeCommand),
+      command("build", { summary: "Build the store's reports.", flags: { store: { type: "string", required: true, placeholder: "<directory>", description: "The checked-out store." }, out: { type: "string", required: true, placeholder: "<directory>", description: "Where to write the build." } } }, runBuildCommand),
+      command("evaluate-accept", { summary: "Check what the evaluator wrote for a job and move accepted labels into the outbox.", flags: { job: JOB_FLAG } }, runEvaluateAcceptCommand),
+      command("proof", { summary: "Mark an existing local session as a controlled proof.", args: [{ name: "session", required: true, description: "The session id." }], flags: { desk: { type: "string", placeholder: "<absolute desk root>", description: "The desk the session belongs to." } }, exit: (r) => (["marked", "already_proof"].includes(r.result) ? "ok" : "error") }, runProofCommand),
+    ],
+  })
 }
 
 /** Dispatches `argv[0]` to its subcommand and writes the JSON result with `write`. Returns the process exit code. */
 export async function main({ argv = process.argv.slice(2), env = process.env, cwd = process.cwd(), git = runGit, runner = undefined, write = (text) => process.stdout.write(text), logError = (text) => process.stderr.write(text) } = {}) {
   const [subcommand, ...rest] = argv
+  const cli = factoryCli({ env, cwd, git, runner })
+  if (cli.commands.some((entry) => entry.name === subcommand)) {
+    // A failure from the code underneath is already a whole line of its own; the kit's tool-name prefix would say it twice.
+    const stderr = { write: (line) => logError(line.replace(/^factory: (?=factory\.js )/u, "")) }
+    return runCli(cli, argv, { stdout: { write }, stderr })
+  }
   try {
     if (!SUPPORTED_COMMANDS.includes(subcommand)) {
       throw new Error(`factory.js: unknown subcommand ${JSON.stringify(subcommand ?? "")} (supported: ${SUPPORTED_COMMANDS.join(", ")})`)
     }
     const command = {
-      account: runAccountCommand,
-      consent: runConsentCommand,
-      derive: runDeriveCommand,
-      status: runStatusCommand,
-      flush: runFlushCommand,
-      "context-request": runContextRequestCommand,
-      finalize: runFinalizeCommand,
       "validate-pr": runValidatePrCommand,
-      build: runBuildCommand,
       "job-link": runJobLinkCommand,
       evaluate: runEvaluateCommand,
-      "evaluate-accept": runEvaluateAcceptCommand,
       "kaizen-check": runKaizenCheckCommand,
       andon: runAndonCommand,
       reconcile: runReconcileCommand,
       loop: runLoopCommand,
-      proof: runProofCommand,
     }[subcommand]
     const result = await command({ argv: rest, env, cwd, git, runner })
     write(`${JSON.stringify(result)}\n`)
-    const failed = ((subcommand === "validate-pr" || subcommand === "reconcile" || subcommand === "context-request") && result.ok === false) || (subcommand === "proof" && !["marked", "already_proof"].includes(result.result)) || (subcommand === "account" && result.result !== "account_found") || Object(result).failed > 0
+    const failed = ((subcommand === "validate-pr" || subcommand === "reconcile") && result.ok === false) || Object(result).failed > 0
     return failed ? 1 : 0
   } catch (error) {
     logError(`${error.message}\n`)

@@ -152,13 +152,10 @@ test("gh failures while choosing are one stable result each", async () => {
 })
 
 test("factory.js account refuses a malformed store and, with the real runner and no gh on PATH, reports gh_missing", () => scratch(async ({ env, base }) => {
-  let error = ""
-  assert.equal(await factoryCli({ argv: ["account", "--store", "nope"], env, write: () => {}, logError: (text) => { error += text } }), 1)
-  assert.match(error, /Usage: factory\.js account --store/u)
-  for (const argv of [["account"], ["account", "--store"], ["account", "--repo", STORE], ["account", "--store", STORE, "--extra", "x"]]) {
-    error = ""
-    assert.equal(await factoryCli({ argv, env, write: () => {}, logError: (text) => { error += text } }), 1)
-    assert.match(error, /Usage: factory\.js account --store/u, argv.join(" "))
+  for (const argv of [["account", "--store", "nope"], ["account"], ["account", "--store"], ["account", "--repo", STORE], ["account", "--store", STORE, "--extra", "x"]]) {
+    let error = ""
+    assert.equal(await factoryCli({ argv, env, write: () => {}, logError: (text) => { error += text } }), 2)
+    assert.match(error, /^factory: account: .*\. Fix: factory account.*\.\n$/u, argv.join(" "))
   }
   let out = ""
   const code = await factoryCli({ argv: ["account", "--store", STORE], env: { ...env, PATH: base }, write: (text) => { out += text }, logError: () => {} })
