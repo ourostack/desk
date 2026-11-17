@@ -336,6 +336,8 @@ for (const failure of ["removed", "untrusted", "unreadable"]) {
     assert.equal(f.handle.session.context.root.root, f.b)
     assert.equal(f.handle.session.context.root.source, "activation-config")
     await f.status()
+    // An admission that read B's association before the loss may still start B's search engine after it, so it settles first.
+    await f.handle.admission.idle({ waitMs: 15000 })
     const heads = [f.a, f.b].map((root) => git(root, "rev-parse", "HEAD"))
     const cards = [f.a, f.b].map((root) => readFileSync(f.card(root), "utf8"))
     const record = copilotSessionFile(path.join(f.env.XDG_STATE_HOME, "ouroboros-skills", "desk"), f.env.COPILOT_AGENT_SESSION_ID)
@@ -360,7 +362,10 @@ for (const failure of ["removed", "untrusted", "unreadable"]) {
     assert.deepEqual([f.a, f.b].map((root) => git(root, "rev-parse", "HEAD")), heads)
     assert.deepEqual([f.a, f.b].map((root) => readFileSync(f.card(root), "utf8")), cards)
     assertAThenOnlyB(f, "no A authority or search engine is acquired after losing B")
-    assert.equal(f.connectedRoots.length, connectionsWhileLost, "no search engine is started while B's association is lost")
+    assert.equal(f.connectedRoots.length, connectionsWhileLost, JSON.stringify({
+      message: "no search engine is started while B's association is lost", connected: f.connectedRoots,
+      resolution: f.resolutionTrace, dispatch: f.dispatchTrace, admission: f.handle.admission.snapshot(), phase: f.handle.session.context.phase,
+    }))
     const status = payload(await f.call("desk_status", { detail: true }))
     assert.equal(status.code, "root_unavailable")
     assert.equal(status.write_scope, undefined, "no cached B ownership survives failed resolution")
