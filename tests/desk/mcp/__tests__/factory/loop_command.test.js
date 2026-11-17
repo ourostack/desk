@@ -302,13 +302,20 @@ test("the child ids the evaluator step reports are listed in the lock while they
   process.kill = (...args) => { signals.push(args); return true }
   try {
     impls.evaluate = async (env, { onChild, onChildExit, now }) => {
+      // The worker queues each lock write without waiting for it, so the test waits until the write has landed (#1140).
+      const lockWith = async (children) => {
+        const until = Date.now() + 10000
+        for (;;) {
+          const record = JSON.parse(await fs.readFile(lockFile, "utf8"))
+          if (JSON.stringify(record.children) === JSON.stringify(children) || Date.now() > until) return record
+          await new Promise((resolve) => setTimeout(resolve, 20))
+        }
+      }
       onChild(4321)
       onChild(4322)
-      await new Promise((resolve) => setTimeout(resolve, 60))
-      seen.push(JSON.parse(await fs.readFile(lockFile, "utf8")))
+      seen.push(await lockWith([4321, 4322]))
       onChildExit(4321)
-      await new Promise((resolve) => setTimeout(resolve, 60))
-      seen.push(JSON.parse(await fs.readFile(lockFile, "utf8")))
+      seen.push(await lockWith([4322]))
       onChild(4323)
       await recordStep(env, "evaluate", { ok: true, result: "ran", now })
       return { ok: true, result: "ran" }
