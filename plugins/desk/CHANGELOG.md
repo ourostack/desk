@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.250 — 2026-11-18
+
+A pull on a big desk now takes well under a second, and Desk's own commit and push hooks start fewer programs. A pull used to start about twenty Git processes (and refresh the whole index first), which took seconds on a busy machine. It now reads the branch, its upstream and the fetched commit straight from `.git`, answers at once when the desk is already at its upstream, skips the fetch when one finished in the last 15 seconds, and refreshes the index only when Git refuses the move because of it. The delivery worker reads the same facts from `.git` instead of asking Git. The `prepare-commit-msg` and `pre-push` hooks use shell built-ins instead of `head`, `grep`, `sed`, `tr`, `cat` and `dirname`, so each now starts at most one program (they are rewritten on the next session start).
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.249 — 2026-11-18
 
 Desk's MCP server now vendors Ouro UI v1.3.281, moved by Ouro Current.
