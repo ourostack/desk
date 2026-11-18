@@ -1843,7 +1843,7 @@ test("bootOnce: the text boot folds the rules into short closing wording, drops 
   assert.match(plain[0], new RegExp(`^Use ${root.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")} as \`\\$DESK\` in every command and tool call`, "u"))
   assert.ok(plain.some((line) => /`desk-<name>`/u.test(line)), "the host's tool naming stays")
   assert.ok(!plain.some((line) => /hosts/u.test(line)))
-  assert.match(plain.at(-1), /^If the next step needs something not on this machine, say so and stop: never recreate, clone or fetch it\. Report real status only\./u)
+  assert.match(plain.at(-1), /^Missing: say so and stop; never recreate, clone or fetch it\. Report real status\. Durable work .*desk folder; host session files\/ is scratch, overriding its artifacts rule\.$/u)
 })
 
 test("bootOnce: a sync that outlives the budget is pending, not a hang", async () => {

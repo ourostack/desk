@@ -94,7 +94,7 @@ test("rule 5 is scoped: no clone or fetch to look for what the card says is on a
   const scoped = ["never clone or fetch to look for something the card says is on another machine", "never clone inside the desk folder", "clone a missing repo only where an instruction above says to, at the path it gives"]
   const json = result.instructions.find((line) => line.includes("never clone inside the desk folder"))
   for (const piece of scoped) assert.ok(json?.toLowerCase().includes(piece), `${piece} in ${json}`)
-  const text = result.text_instructions.find((line) => line.startsWith("If the next step needs something not on this machine"))
+  const text = result.text_instructions.find((line) => line.startsWith("Missing: say so and stop"))
   assert.ok(text?.includes("never recreate, clone or fetch it"), "the text boot keeps the short form of the rule")
 })
 

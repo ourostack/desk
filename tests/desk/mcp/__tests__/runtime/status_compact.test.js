@@ -26,14 +26,14 @@ const ready = {
 test("a ready desk whose detail is still loading says so in the summary and flags detail_pending, keeping state ready", () => {
   const compact = compactStatus({ status: "ok", state: "ready", detail_pending: true, status_detail: "unavailable: the runtime status did not answer; call desk_status again shortly", admission: { summary: "ok", blockers: [] } })
   assert.equal(compact.state, "ready")
-  assert.match(compact.summary, /^Desk is ready, but its details .* are still loading.*Call desk_status again shortly\.$/u)
+  assert.match(compact.summary, /^Desk is ready, but its details .* are still loading.*task_focus .* task_create .*desk folder\. Call desk_status again shortly\.$/u)
   assert.equal(compact.detail_pending, true)
   assert.deepEqual(compact.root, { path: null, source: null })
   assert.match(compact.status_detail, /^unavailable: /u)
   // The session's own first answer already names the desk it admitted, and its summary no longer calls the root empty.
   const rooted = compactStatus({ status: "ok", state: "ready", detail_pending: true, root: { path: "/d", source: "activation-config" }, admission: { summary: "ok", blockers: [] } })
   assert.deepEqual(rooted.root, { path: "/d", source: "activation-config" })
-  assert.equal(rooted.summary, "Desk is ready, but its details (search, sync) are still loading, so the empty fields below are not a fault. Call desk_status again shortly.")
+  assert.equal(rooted.summary, "Desk is ready, but its details (search, sync) are still loading, so the empty fields below are not a fault. Do not wait on it: task_focus the task you are on, or task_create one with focus: true (desk:start-task), so your work has a desk folder. Call desk_status again shortly.")
   assert.equal(rooted.detail_pending, true)
   assert.ok(!("detail_pending" in compactStatus(ready)), "a complete status has no detail_pending")
   assert.equal(compactStatus({ ...ready, detail_pending: true, status: "admitting", state: "admitting" }).detail_pending, undefined, "only a ready desk is called ready")
