@@ -1,5 +1,13 @@
 # desk plugin — changelog
 
+## 3.2.269 — 2026-11-18
+
+### Session hooks no longer wait on a timed-out migration check's cleanup
+
+On Windows, a session-start hook that timed out a pending-migration check could wait up to 30 s for `taskkill` to end that check's process tree, past the hook's 10 s limit when a runner was loaded. A read-only check now stops waiting 1 s after its timeout and reports as not checked, while the cleanup carries on in the background.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.268 — 2026-11-18
 
 Desk's MCP server now vendors Ouro UI v1.3.294, moved by Ouro Current.
