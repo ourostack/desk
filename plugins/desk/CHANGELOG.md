@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.282 — 2026-11-18
+
+The `merge-when-green` [relay](docs/relays.md) takes an optional `strict` block for repositories with no branch protection. A labelled pull request then merges only when every job of each required workflow finished green on its head (advisory jobs and workflows named in the block are ignored and shown as warnings in the status comment), and when the head contains its base: a head that is behind is brought up to date once with `update-branch`, and the relay waits for the new head's checks. The status comment and `why` say what the relay is waiting on, and a bad `strict` field fails the config loudly. Relays without `strict` behave as before.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.281 — 2026-11-18
 
 ### A Desk server that restarts after idling now runs the newest installed Desk
