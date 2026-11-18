@@ -236,6 +236,8 @@ test("the background fetch repeats on a timer, once per root, and stops when ask
   const fetchFn = async ({ root }) => { calls.push(root) }
   const root = mkTempRoot("fast-refs-timer-")
   assert.equal(typeof startBackgroundFetch({ root, env: { NODE_TEST_CONTEXT: "child" }, fetchFn }), "function")
+  startBackgroundFetch({ root })()
+  startBackgroundFetch({ root, env: { NODE_TEST_CONTEXT: "child" }, intervalMs: 5 })()
   const stop = startBackgroundFetch({ root, env: {}, intervalMs: 5, fetchFn })
   startBackgroundFetch({ root, env: {}, intervalMs: 5, fetchFn })()
   for (let waited = 0; calls.length < 2 && waited < 5000; waited += 10) await new Promise((resolve) => setTimeout(resolve, 10))
