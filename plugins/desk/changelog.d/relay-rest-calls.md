@@ -1,3 +1,0 @@
-Relays now spend far fewer REST calls on a busy work account. A labelled pull request still waiting on checks is read at most once a minute (growing to once every four minutes as it waits) instead of on every poll, because each read of running checks is a full answer that counts against the hourly quota. A `merge-when-green` relay with nothing labelled polls up to four times less often. Each relay now records the calls it spent (counted and free `304`s), and `relays status` shows the current hour's total, so a relay's cost is read instead of guessed.
-
-A rate-limit 403 or 429 in the issue drains now says it is rate limited, not "check gh auth".
