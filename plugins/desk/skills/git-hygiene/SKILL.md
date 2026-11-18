@@ -125,6 +125,8 @@ It means every repo in the current investigation, code repos most of all when th
 
 Every `git push` that carries code changes is a CI-parity boundary. The agent reproduces every routine gate the CI pipelines will run, locally, **before** the push — not after, not in parallel, not optimistically. Explicit final-candidate expensive gates use the exact-SHA exception below.
 
+**One push rule.** Push a branch with `git push -u origin HEAD`, never a bare `git push`: a branch with no upstream makes a bare push print nothing and send nothing. Then confirm `git rev-parse HEAD` equals the sha in `git ls-remote origin refs/heads/<branch>`. If they differ, the push failed; say so and fix it, never report a silent success, and never wait on CI for a commit the remote does not have. Never pass `--delete-branch` to `gh pr merge`: GitHub retargets stacked pull requests only when it deletes the head branch itself (the repo setting "Automatically delete head branches"), and a client-side delete closes them. Rely on that setting, or run `gh pr edit <n> --base <base>` on each dependent first.
+
 Before a task's first push in a session, know its push route: the `Push routes` line for that repo, which the `task_focus` reply for the task carries. The startup boot checks no routes, so if this session has none, call `task_focus` for the task first, and push only as the account and route it names.
 
 Three layers, all mandatory, all green:
@@ -190,7 +192,7 @@ The working tree may still show "M"; that is cosmetic. Resolve real semantic con
 
 ## Never leave state behind
 
-Before the session ends, persist task-owned changes through the recorded contribution path. In a desk, commit your own paths to `main` (`git pull --rebase --autostash`, `git commit <paths>`, `git push`), and use a branch only to coordinate writers working at the same time. In a code repository, commit and push only when authorized; a no-push or local-handoff endpoint must preserve the exact commits and required worktree instead. Preserve unfinished source through `desk:session-resumption` when it is not ready to commit, without sweeping unrelated files. Apply this to canonical task/progress state and code changes through their respective owners; persistence is not authority to publish or delete.
+Before the session ends, persist task-owned changes through the recorded contribution path. In a desk, commit your own paths to `main` (`git pull --rebase --autostash`, `git commit <paths>`, `git push origin main`, then the readback above), and use a branch only to coordinate writers working at the same time. In a code repository, commit and push only when authorized; a no-push or local-handoff endpoint must preserve the exact commits and required worktree instead. Preserve unfinished source through `desk:session-resumption` when it is not ready to commit, without sweeping unrelated files. Apply this to canonical task/progress state and code changes through their respective owners; persistence is not authority to publish or delete.
 
 At session start, if git status in any repo shows unexpected uncommitted changes, surface them to the operator before doing anything else — they may represent orphaned work from a previous session.
 
