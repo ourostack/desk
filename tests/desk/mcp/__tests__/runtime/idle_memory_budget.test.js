@@ -37,7 +37,15 @@ function rssMb(pid) {
 
 function memoryDetail(pid) {
   try {
-    return readFileSync(`/proc/${pid}/status`, "utf8").split("\n").filter((line) => /^(VmRSS|RssAnon|RssFile|Threads)/u.test(line)).join(" ").replace(/\s+/gu, " ")
+    const status = readFileSync(`/proc/${pid}/status`, "utf8").split("\n").filter((line) => /^(VmRSS|RssAnon|RssFile|Threads)/u.test(line)).join(" ").replace(/\s+/gu, " ")
+    const byMapping = new Map()
+    let name = ""
+    for (const line of readFileSync(`/proc/${pid}/smaps`, "utf8").split("\n")) {
+      if (/^[0-9a-f]+-[0-9a-f]+ /u.test(line)) name = line.split(/\s+/u)[5] ?? "[anon]"
+      else if (line.startsWith("Rss:")) byMapping.set(name, (byMapping.get(name) ?? 0) + Number(line.split(/\s+/u)[1]))
+    }
+    const top = [...byMapping].sort((a, b) => b[1] - a[1]).slice(0, 5).map(([mapping, kb]) => `${mapping} ${kb} kB`).join(", ")
+    return `${status}; ${top}`
   } catch {
     return ""
   }
