@@ -674,7 +674,7 @@ export async function connectGithub(account, { spawn = spawnSync, fetchImpl = fe
     if (token) break
     const said = String(result.stderr ?? "").trim().split("\n")[0]
     // Only gh's own "no oauth token" (or a clean empty answer) means the account is not signed in; a timeout, a signal, a keyring that is busy or locked, or any other message is a read that failed and is tried again.
-    transient = result.status === null || (result.status !== 0 && said && !NO_TOKEN.test(said)) ? (said || result.error?.message || `gh stopped (${result.signal ?? "no status"})`) : ""
+    transient = (result.status === null && result.error?.code !== "ENOENT") || (result.status !== 0 && said && !NO_TOKEN.test(said)) ? (said || result.error?.message || `gh stopped (${result.signal ?? "no status"})`) : ""
     if (!transient) break
     if (attempt < TOKEN_TRIES) await sleep(TOKEN_PAUSE_MS * attempt)
   }
