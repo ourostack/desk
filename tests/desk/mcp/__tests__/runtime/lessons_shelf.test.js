@@ -24,44 +24,22 @@ test("withoutLesson removes one exact line from the section, folds the blank lin
   assert.equal(withoutLesson("- **A.** a\n", "- **A.** a"), "- **A.** a\n", "a line outside any Lessons section is left alone")
 })
 
-test("shelve keeps a lesson that fits where it is and touches no shelf", () => {
-  const result = shelve({ agents: "", shelf: "", line: entry("New", "2026-10-29"), topic: "New", cap: 1000 })
-  assert.deepEqual([result.tier, result.moved, result.shelf, result.replaced], ["session_start", [], "", false])
-  assert.equal(result.agents, `## Lessons\n\n${entry("New", "2026-10-29")}\n`)
-})
-
-test("shelve rotates the oldest by date, not by place, and only as many as the new lesson needs", () => {
-  const agents = `## Lessons\n\n${entry("Mid", "2026-02-01")}\n${entry("Oldest", "2026-01-01")}\n${entry("Newer", "2026-03-01")}\n`
-  const line = entry("New", "2026-10-29")
-  const cap = Buffer.byteLength(agents) + Buffer.byteLength(line) + 1 - 10
-  const result = shelve({ agents, shelf: "", line, topic: "New", cap })
-  assert.equal(result.tier, "session_start")
-  assert.deepEqual(result.moved.map((moved) => moved.topic), ["Oldest"])
+test("shelve records the lesson on the shelf and leaves AGENTS.md as it is", () => {
+  const agents = "# Desk\n\nRules.\n"
+  const result = shelve({ agents, shelf: "", line: entry("New", "2026-10-29"), topic: "New" })
+  assert.equal(result.agents, agents)
   assert.ok(result.shelf.startsWith(SHELF_HEADER))
-  assert.deepEqual(lessonEntries(result.agents).map((kept) => kept.topic), ["Mid", "Newer", "New"])
+  assert.deepEqual(lessonEntries(result.shelf).map((each) => each.line), [entry("New", "2026-10-29")])
+  assert.equal(result.replaced, false)
 })
 
-test("shelve rotates lessons of the same date in the order they stand", () => {
-  // Equal lengths, so taking out either older lesson makes exactly enough room.
-  const agents = `## Lessons\n\n${entry("Aaaa", "2026-01-01")}\n${entry("Bbbb", "2026-01-01")}\n`
-  const result = shelve({ agents, shelf: "", line: entry("Cccc", "2026-10-29"), topic: "Cccc", cap: Buffer.byteLength(agents) })
-  assert.equal(result.tier, "session_start")
-  assert.deepEqual(result.moved.map((moved) => moved.topic), ["Aaaa"])
-})
-
-test("shelve leaves the printed lessons alone, and adds no empty section, when the new lesson cannot fit anyway", () => {
-  const agents = `${"x".repeat(50)}\n`
-  const result = shelve({ agents, shelf: "", line: entry("New", "2026-10-29"), topic: "New", cap: 40 })
-  assert.deepEqual([result.tier, result.agents, result.moved], ["shelf", agents, []])
-  assert.deepEqual(lessonEntries(result.shelf).map((kept) => kept.topic), ["New"])
-  const withLessons = `## Lessons\n\n${entry("Kept", "2026-01-01")}\n\n${"x".repeat(500)}\n`
-  const kept = shelve({ agents: withLessons, shelf: "", line: entry("New", "2026-10-29"), topic: "New", cap: 60 })
-  assert.equal(kept.tier, "shelf")
-  assert.equal(kept.agents, withLessons, "the lesson session start prints stays, since moving it would not make room")
-  const replaced = shelve({ agents: `## Lessons\n\n${entry("New", "2026-01-01", "Old words.")}\n${"x".repeat(500)}\n`, shelf: "", line: entry("New", "2026-10-29"), topic: "New", cap: 5 })
-  assert.equal(replaced.tier, "shelf")
-  assert.equal(replaced.agents.includes("Old words"), false, "the topic's old line leaves AGENTS.md")
-  assert.equal(replaced.replaced, true)
+test("shelve replaces a shelved line on the same topic, and takes an older AGENTS.md line on it off", () => {
+  const agents = `# Desk\n\n## Lessons\n\n${entry("Same", "2026-01-01", "Old.")}\n${entry("Other", "2026-01-02")}\n`
+  const shelf = `${SHELF_HEADER}\n## Lessons\n\n${entry("Same", "2026-01-03", "Shelved.")}\n`
+  const result = shelve({ agents, shelf, line: entry("Same", "2026-10-29", "New."), topic: "Same" })
+  assert.deepEqual(lessonEntries(result.agents).map((each) => each.topic), ["Other"])
+  assert.deepEqual(lessonEntries(result.shelf).map((each) => each.line), [entry("Same", "2026-10-29", "New.")])
+  assert.equal(result.replaced, true)
 })
 
 test("readShelf and shelfIndex read a shelf's lessons, and give null for none", async () => {
@@ -88,20 +66,7 @@ test("shelfForTask puts the lessons sharing words with the task first, then the 
   assert.deepEqual(shelfForTask(entries, "with that this every", 1_000_000).shown[0], entries[1].line, "common words do not count as shared")
 })
 
-test("shelve never lets a moved lesson overwrite a shelved line that shares its topic", () => {
-  const shelf = `${SHELF_HEADER}\n## Lessons\n\n${entry("Deploys", "2026-09-01", "Newer rule B.")}\n`
-  const agents = `## Lessons\n\n${entry("Deploys", "2026-01-01", "Old rule A.")}\n${entry("Tests", "2026-01-02", "Run X.")}\n${entry("Tests", "2026-01-03", "Never Y.")}\n`
-  const line = entry("New", "2026-10-29")
-  const result = shelve({ agents, shelf, line, topic: "New", cap: Buffer.byteLength(`## Lessons\n\n${line}\n`) })
-  assert.equal(result.tier, "session_start")
-  const shelved = lessonEntries(result.shelf).map((kept) => kept.line)
-  for (const kept of [entry("Deploys", "2026-09-01", "Newer rule B."), entry("Deploys", "2026-01-01", "Old rule A."), entry("Tests", "2026-01-02", "Run X."), entry("Tests", "2026-01-03", "Never Y.")]) assert.ok(shelved.includes(kept), kept)
-  assert.equal(result.moved.length, 3)
-})
-
-test("shelve reads a CRLF file's last printed line as printed, so it shelves the lesson that was actually cut", () => {
-  const agents = `## Lessons\r\n\r\n${entry("Seen", "2026-01-01")}\r\n${entry("Cut", "2026-01-02")}\r\n`
-  const cap = Buffer.byteLength(`## Lessons\r\n\r\n${entry("Seen", "2026-01-01")}\r\n`) + 5
-  const result = shelve({ agents, shelf: "", line: entry("Seen", "2026-01-01"), topic: "Seen", cap })
-  assert.deepEqual(result.moved.map((moved) => moved.topic), ["Cut"])
+test("shelfForTask puts a later line first among lessons dated the same day", () => {
+  const entries = lessonEntries(`## Lessons\n\n${entry("First", "2026-02-01")}\n${entry("Second", "2026-02-01")}\n`)
+  assert.deepEqual(shelfForTask(entries, "").shown, [entries[1].line, entries[0].line])
 })

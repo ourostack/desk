@@ -296,14 +296,14 @@ test("lesson_add: a commit Desk cannot read back is unknown, and its route reads
 
 test("lesson_add: a file that held another session's edit gets a route that keeps that edit out of the commit", async () => {
   const root = await repo()
-  await fs.writeFile(path.join(root, "AGENTS.md"), "# Desk\n", "utf8")
-  git(root, ["add", "AGENTS.md"])
+  await fs.writeFile(path.join(root, "LESSONS.md"), "# Shelved lessons\n", "utf8")
+  git(root, ["add", "LESSONS.md"])
   git(root, ["commit", "-q", "-m", "init"])
-  await fs.writeFile(path.join(root, "AGENTS.md"), "# Desk\n\nAnother session's edit.\n", "utf8")
+  await fs.writeFile(path.join(root, "LESSONS.md"), "# Shelved lessons\n\nAnother session's edit.\n", "utf8")
   const result = await lesson({ deskRoot: root, schedulePush: () => assert.fail("no push") })
   assert.equal(result.in_effect, false)
   assertRoute(result.route_around)
-  assert.match(result.route_around.never, /Never commit AGENTS\.md whole/u)
+  assert.match(result.route_around.never, /Never commit LESSONS\.md whole/u)
 })
 
 // ── the other callers of the shared commit helper ──────────────────────────

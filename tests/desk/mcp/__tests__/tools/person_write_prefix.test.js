@@ -219,24 +219,24 @@ test("friction_add cross-cutting person:null → byte-identical _meta/friction.m
 
 // ── lesson_add ────────────────────────────────────────────────────────────────
 
-test("lesson_add person:ari → desks/ari/AGENTS.md", async () => {
+test("lesson_add person:ari → desks/ari/LESSONS.md", async () => {
   const root = await mkTempDeskRoot()
   const res = await lesson_add({
     deskRoot: root,
     person: "ari",
     input: { scope: "personal", topic: "EMU push auth", body: "use the personal token" },
   })
-  assert.equal(res.path, path.posix.join("desks", "ari", "AGENTS.md"))
-  assert.ok(await exists(path.join(root, "desks", "ari", "AGENTS.md")))
+  assert.equal(res.path, path.posix.join("desks", "ari", "LESSONS.md"))
+  assert.ok(await exists(path.join(root, "desks", "ari", "LESSONS.md")))
 })
 
-test("lesson_add person:null → byte-identical AGENTS.md at the root (OFF)", async () => {
+test("lesson_add person:null → LESSONS.md at the root (OFF)", async () => {
   const root = await mkTempDeskRoot()
   const res = await lesson_add({
     deskRoot: root,
     input: { scope: "personal", topic: "EMU push auth", body: "x" },
   })
-  assert.equal(res.path, "AGENTS.md")
+  assert.equal(res.path, "LESSONS.md")
 })
 
 // ── empty / whitespace person → OFF (treated as null) ─────────────────────────

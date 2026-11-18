@@ -17,7 +17,6 @@ import { writeCardCommitted } from "../../../../../plugins/desk/mcp/src/tools/_c
 import { commitRoute } from "../../../../../plugins/desk/mcp/src/util/route-around.js"
 import { resolveDeskStateDir } from "../../../../../plugins/desk/mcp/src/runtime/last-start.js"
 import { mkTempDeskRoot } from "./_helpers.js"
-import { AGENTS_MD_CAP_BYTES } from "../../../../../plugins/desk/mcp/src/runtime/agents-md.js"
 import { assertRoute, readsOnly } from "./_route_around.js"
 
 const SOLO = async () => ({ status: "ok", personPrefix: "" })
@@ -218,22 +217,21 @@ const capturesLeft = () => {
   return existsSync(dir) ? readdirSync(dir).filter((name) => name.endsWith(".json")) : []
 }
 
-async function heldLesson({ staged = false, shelf = false } = {}) {
+async function heldLesson({ staged = false } = {}) {
   const { root, origin } = await repoWithOrigin()
-  const old = Array.from({ length: 5 }, (_, index) => `- **Old ${index}.** ${"w".repeat(60)} (2026-01-0${index + 1})`)
-  const agents = shelf ? `# Desk\n\n${"x".repeat(AGENTS_MD_CAP_BYTES - 300)}\n\n## Lessons\n\n${old.join("\n")}\n` : "# Desk\n"
-  await fs.writeFile(path.join(root, "AGENTS.md"), agents, "utf8")
-  git(root, ["add", "AGENTS.md"])
+  const shelf = "# Shelved lessons\n"
+  await fs.writeFile(path.join(root, "LESSONS.md"), shelf, "utf8")
+  git(root, ["add", "LESSONS.md"])
   git(root, ["commit", "-q", "-m", "init"])
   git(root, ["push", "-q"])
   // Another session's edit: a staged line, and an unstaged one after it.
   if (staged) {
-    await fs.writeFile(path.join(root, "AGENTS.md"), agents.replace("# Desk\n", "# Desk\n\nAnother session's staged edit.\n"), "utf8")
-    git(root, ["add", "AGENTS.md"])
+    await fs.writeFile(path.join(root, "LESSONS.md"), shelf.replace("# Shelved lessons\n", "# Shelved lessons\n\nAnother session's staged edit.\n"), "utf8")
+    git(root, ["add", "LESSONS.md"])
   }
-  const current = await fs.readFile(path.join(root, "AGENTS.md"), "utf8")
-  await fs.writeFile(path.join(root, "AGENTS.md"), current.replace("# Desk\n", "# Desk\n\nAnother session's edit.\n"), "utf8")
-  const before = indexState(root, ["AGENTS.md", "LESSONS.md"])
+  const current = await fs.readFile(path.join(root, "LESSONS.md"), "utf8")
+  await fs.writeFile(path.join(root, "LESSONS.md"), current.replace("# Shelved lessons\n", "# Shelved lessons\n\nAnother session's edit.\n"), "utf8")
+  const before = indexState(root, ["LESSONS.md"])
   const result = await lesson({ deskRoot: root, schedulePush: () => assert.fail("no push") })
   return { root, origin, result, before }
 }
@@ -258,16 +256,16 @@ test("the route for a file that held another session's staged and unstaged edit 
   const { root, result } = await heldLesson({ staged: true })
   const route = result.route_around
   assertRoute(route)
-  const index = git(root, ["ls-files", "-s", "--", "AGENTS.md"])
-  const cached = git(root, ["diff", "--cached", "--", "AGENTS.md"])
-  const text = await fs.readFile(path.join(root, "AGENTS.md"), "utf8")
+  const index = git(root, ["ls-files", "-s", "--", "LESSONS.md"])
+  const cached = git(root, ["diff", "--cached", "--", "LESSONS.md"])
+  const text = await fs.readFile(path.join(root, "LESSONS.md"), "utf8")
   const shown = runArgv(route.steps[0].argv)
   for (const ran of shown) assert.equal(ran.status, 0, ran.stderr)
   assert.match(shown[0].stdout, /Another session's staged edit/u, "step 1 shows the other session's work, so the route stops here")
   await followRoute(route, { desk_save: async () => {} })
-  assert.equal(git(root, ["ls-files", "-s", "--", "AGENTS.md"]), index, "the staged entry is unchanged")
-  assert.equal(git(root, ["diff", "--cached", "--", "AGENTS.md"]), cached, "the staged selection is unchanged")
-  assert.equal(await fs.readFile(path.join(root, "AGENTS.md"), "utf8"), text, "the working tree is unchanged")
+  assert.equal(git(root, ["ls-files", "-s", "--", "LESSONS.md"]), index, "the staged entry is unchanged")
+  assert.equal(git(root, ["diff", "--cached", "--", "LESSONS.md"]), cached, "the staged selection is unchanged")
+  assert.equal(await fs.readFile(path.join(root, "LESSONS.md"), "utf8"), text, "the working tree is unchanged")
   assert.match(cached, /Another session's staged edit/u)
 })
 
@@ -275,42 +273,17 @@ test("the route for a file that held another session's edit commits this change 
   const { root, origin, result } = await heldLesson()
   const route = result.route_around
   assertRoute(route)
-  assert.match(route.never, /Never commit AGENTS\.md whole/u)
+  assert.match(route.never, /Never commit LESSONS\.md whole/u)
   // The other session settles its edit (here, drops it); then step 1 shows only the lesson and desk_save commits it.
-  const text = await fs.readFile(path.join(root, "AGENTS.md"), "utf8")
-  await fs.writeFile(path.join(root, "AGENTS.md"), text.replace("\nAnother session's edit.\n", ""), "utf8")
+  const text = await fs.readFile(path.join(root, "LESSONS.md"), "utf8")
+  await fs.writeFile(path.join(root, "LESSONS.md"), text.replace("\nAnother session's edit.\n", ""), "utf8")
   assert.doesNotMatch(runArgv(route.steps[0].argv)[0].stdout, /Another session's edit/u)
   await followRoute(route, { desk_save: async (args) => assert.equal((await desk_save({ deskRoot: root, input: args, schedulePush: () => {} })).status, "committed") })
   const local = runArgv(route.committed_locally_when.argv)
   assert.equal(local[0].status, 0, local[0].stdout)
   assert.equal(local[1].stdout.trim(), result.route_around.steps[1].arguments.message)
   for (const ran of runArgv(route.published_when.argv)) assert.equal(ran.status, 0, `published: ${ran.stdout}${ran.stderr}`)
-  assert.match(remoteShow(origin, "AGENTS.md").stdout, /Do it\./u, "the lesson is on the remote")
-})
-
-// R7 (0972 on #625): a lesson that moves older topics to a new LESSONS.md shelf is one change across both files. The route reads
-// both (the new file too), names the whole change, and commits both together once they hold nothing else.
-test("the route for a held lesson that opens a new shelf file reads both files and commits the whole change, the new shelf included", async () => {
-  const { root, origin, result } = await heldLesson({ shelf: true })
-  const route = result.route_around
-  assertRoute(route)
-  assert.deepEqual(route.steps[1].arguments.paths.sort(), ["AGENTS.md", "LESSONS.md"])
-  assert.match(route.steps[1].step, /LESSONS\.md/u, "the change names the shelf")
-  assert.match(route.steps[1].step, /moved from AGENTS\.md to LESSONS\.md/u, "the change names the move")
-  const moved = route.steps[1].step.match(/Old \d/gu)
-  assert.ok(moved?.length, "the change names the moved topics")
-  const shown = runArgv(route.steps[0].argv)
-  for (const ran of shown) assert.equal(ran.status, 0, ran.stderr)
-  assert.match(shown[1].stdout, /\?\? LESSONS\.md/u, "step 1 shows the new shelf file")
-  // 0972 on ae1395e4: neither read shows a new file's content, so step 1 says so and names the file to read whole.
-  assert.match(route.steps[0].step, /`\?\?` is new/u, "step 1 says a file marked ?? is new and has no diff")
-  for (const name of ["AGENTS.md", "LESSONS.md"]) assert.ok(route.steps[0].step.includes(path.join(root, name)), `step 1 names ${name} to read whole`)
-  const text = await fs.readFile(path.join(root, "AGENTS.md"), "utf8")
-  await fs.writeFile(path.join(root, "AGENTS.md"), text.replace("\nAnother session's edit.\n", ""), "utf8")
-  await followRoute(route, { desk_save: async (args) => assert.equal((await desk_save({ deskRoot: root, input: args, schedulePush: () => {} })).status, "committed") })
-  for (const ran of runArgv(route.published_when.argv)) assert.equal(ran.status, 0, `published: ${ran.stdout}${ran.stderr}`)
-  for (const topic of moved) assert.match(remoteShow(origin, "LESSONS.md").stdout, new RegExp(topic, "u"), "the shelf is on the remote")
-  assert.match(remoteShow(origin, "AGENTS.md").stdout, /Do it\./u, "the lesson is on the remote")
+  assert.match(remoteShow(origin, "LESSONS.md").stdout, /Do it\./u, "the lesson is on the remote")
 })
 
 test("a route without a captured change is held and only reads, whether the commit did not land or Desk cannot tell", () => {
@@ -343,27 +316,6 @@ test("desk_save on a detached HEAD, which the tool refuses, gets a held route th
   else assert.notEqual(result.status, "committed")
 })
 
-// A held lesson that lands on the shelf itself, moving exactly one older lesson: the route names the whole change in the
-// singular, the shelf as where the line went, and both files.
-test("the route for a held lesson that goes to the shelf and moves one older lesson names that one lesson and the shelf", async () => {
-  const root = await repo()
-  const agents = `# Desk\n\n${"x".repeat(AGENTS_MD_CAP_BYTES - 20)}\n\n## Lessons\n\n- **Hidden.** ${"w".repeat(40)} (2026-01-01)\n`
-  await fs.writeFile(path.join(root, "AGENTS.md"), agents, "utf8")
-  git(root, ["add", "AGENTS.md"])
-  git(root, ["commit", "-q", "-m", "init"])
-  await fs.writeFile(path.join(root, "AGENTS.md"), agents.replace("# Desk\n", "# Desk\n\nAnother session's edit.\n"), "utf8")
-  const before = indexState(root, ["AGENTS.md", "LESSONS.md"])
-  const result = await lesson({ deskRoot: root, schedulePush: () => assert.fail("no push") })
-  assert.equal(result.tier, "shelf")
-  assert.deepEqual(result.shelved?.topics, ["Hidden"])
-  const route = result.route_around
-  assertRoute(route)
-  assert.match(route.steps[1].step, /the lesson line .* on LESSONS\.md, and the older lesson on Hidden moved from AGENTS\.md to LESSONS\.md/u)
-  assert.deepEqual(route.steps[1].arguments.paths.sort(), ["AGENTS.md", "LESSONS.md"])
-  const { head, ...rest } = indexState(root, ["AGENTS.md", "LESSONS.md"])
-  assert.deepEqual({ head, index: rest.index, cached: rest.cached }, { head: before.head, index: before.index, cached: before.cached }, "nothing staged, committed or reset")
-})
-
 // A commit Desk cannot read back, written for a desk session start cannot place: both are said, joined, and in_effect is
 // false because the not-loaded half is known.
 test("lesson_add: an unknown commit for a lesson session start would not print says both, and is not in effect", async () => {
@@ -371,7 +323,7 @@ test("lesson_add: an unknown commit for a lesson session start would not print s
   const result = await lesson({ deskRoot: root, spawnGit: unreadable(), personOf: async () => ({ status: "unknown", reason: "no person" }), schedulePush: () => assert.fail("no push for an unknown commit") })
   assert.equal(result.in_effect, false)
   assert.equal(result.commit.status, "unknown")
-  assert.match(result.message, /^Written to AGENTS\.md, but not in effect: session start on this desk cannot tell whose desk this is \(no person\).*; and Desk cannot tell whether the commit landed/u)
+  assert.match(result.message, /^Written to LESSONS\.md, but not in effect: session start on this desk cannot tell whose desk this is \(no person\).*; and Desk cannot tell whether the commit landed/u)
 })
 
 // stageAndCommitCard named with only the file, the message and git: it commits that one file, names no live card, and roots

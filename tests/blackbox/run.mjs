@@ -651,8 +651,15 @@ async function deskTools(ctx, world, session, shared, options) {
     const added = await call("lesson_add", { scope: "personal", topic: "Search ranking", body: "Recency matters more than length." })
     assert(!added.isError, added.text.slice(0, 300))
     assert(added.json?.in_effect === true, `lesson_add did not say the lesson is in effect: ${added.text.slice(0, 300)}`)
-    assert(exists("AGENTS.md") && read("AGENTS.md").includes("- **Search ranking.** Recency matters"), "lesson_add did not write the lesson into AGENTS.md")
+    assert(exists("LESSONS.md") && read("LESSONS.md").includes("- **Search ranking.** Recency matters"), "lesson_add did not write the lesson onto the LESSONS.md shelf")
+    assert(!exists("AGENTS.md") || !read("AGENTS.md").includes("Search ranking"), "lesson_add wrote a personal lesson into AGENTS.md")
     world.lessonWritten = true
+  })
+  await check(ctx, "lesson_add.read_through_task_focus", "tools", async () => {
+    const focused = await call("task_focus", { track: "search-quality", slug: "rank-recent-cards-higher" })
+    assert(!focused.isError, focused.text.slice(0, 300))
+    assert(focused.text.includes("Recency matters more than length"), "task_focus did not return the shelved personal lesson")
+    await call("task_focus", { clear: true })
   })
   await check(ctx, "lesson_add.desk_needs_owner", "tools", async () => {
     const refused = await call("lesson_add", { scope: "desk", topic: "Search ranking", body: "Recency matters more than length." })
@@ -870,15 +877,11 @@ async function bootScript(ctx, world) {
     world.bootOutput = output
     assert(lines.length <= 200 && output.length <= 20000, `the boot output floods: ${lines.length} lines, ${output.length} characters`)
   })
-  // The boot above is the next session's start: a personal lesson recorded earlier in this run must be in what it prints.
-  await check(ctx, "boot.prints_personal_lesson", "boot", async () => {
+  // Personal lessons are not printed at boot; they are read on demand through task_focus's shelved_lessons.
+  await check(ctx, "boot.leaves_personal_lessons_to_task_focus", "boot", async () => {
     assert(world.lessonWritten, "no personal lesson was recorded earlier in this run")
     assert(typeof world.bootOutput === "string", "the boot did not run")
-    const lesson = "- **Search ranking.** Recency matters more than length."
-    // A Copilot boot run in the desk's folder leaves out an AGENTS.md the host loaded itself, and points at it.
-    const hostLoaded = world.bootOutput.includes("; your host loaded it")
-    const printed = world.bootOutput.includes(lesson) || (hostLoaded && fs.readFileSync(path.join(world.desk, "AGENTS.md"), "utf8").includes(lesson))
-    assert(printed, "the next session start does not print the personal lesson")
+    assert(!world.bootOutput.includes("Recency matters more than length"), "the boot prints a personal lesson")
   })
 }
 
