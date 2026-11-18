@@ -141,6 +141,9 @@ const RELAY_FAILURE = /execvpe\(.*\) failed/iu
 
 // Hosted Windows runners start PowerShell in up to about 7 s at p99 and 20 s at worst, so a timed-out block's tree gets this long to end.
 const WINDOWS_TREE_BUDGET_MS = 30_000
+// A hook that only reads (Detect blocks) may not wait on that: the session start hook has 10 s in all. It stops waiting this long after
+// a block timed out and reports it as not checked, while taskkill carries on ending the tree on its own.
+const DETECT_TREE_WAIT_MS = 1_000
 
 function windowsTaskkill() {
   const root = ["systemroot", "windir"].map((name) => {
@@ -150,7 +153,7 @@ function windowsTaskkill() {
   return path.win32.join(root, "System32", "taskkill.exe")
 }
 
-export function runBlock(block, { env, cwd, timeoutMs, outputChars = OUTPUT_MAX_CHARS * 4, spawn = spawnChild, execFile = execFileChild, platform = process.platform, bash = resolveBash({ platform }), treeBudgetMs = WINDOWS_TREE_BUDGET_MS }) {
+export function runBlock(block, { env, cwd, timeoutMs, outputChars = OUTPUT_MAX_CHARS * 4, spawn = spawnChild, execFile = execFileChild, platform = process.platform, bash = resolveBash({ platform }), treeBudgetMs = WINDOWS_TREE_BUDGET_MS, treeWaitMs = treeBudgetMs }) {
   return new Promise((resolve) => {
     if (bash === null) {
       resolve({ status: null, stdout: "", stderr: "", timedOut: false, unavailable: true })
@@ -248,7 +251,7 @@ export function runBlock(block, { env, cwd, timeoutMs, outputChars = OUTPUT_MAX_
         return
       }
       treeEnding = true
-      budget = setTimeout(unqualified, treeBudgetMs)
+      budget = setTimeout(unqualified, Math.min(treeWaitMs, treeBudgetMs))
       endTree()
     }, Math.max(1, Math.floor(timeoutMs)))
     child.once("error", onError)
@@ -326,7 +329,7 @@ export async function pendingMigrations({
   // waits for the slowest, not their sum.
   const detects = await watchIndex("detect", () => Promise.all(migrations.map((migration) => (left() < 1
     ? { timedOut: true }
-    : runBlock(migration.blocks.Detect, { env: blockEnv, cwd, timeoutMs: limit(), spawn })))))
+    : runBlock(migration.blocks.Detect, { env: blockEnv, cwd, timeoutMs: limit(), spawn, treeWaitMs: DETECT_TREE_WAIT_MS })))))
   for (const [index, migration] of migrations.entries()) {
     const { id, blocks } = migration
     const detect = detects[index]
