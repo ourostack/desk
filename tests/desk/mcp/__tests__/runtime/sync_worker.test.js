@@ -635,7 +635,7 @@ test("a push the remote keeps rejecting is retried a bounded number of times, th
     }
     return spawnSync(cmd, args, opts)
   }
-  const result = await runPushWorker({ root: cloneA, env: process.env, clock: instantClock, spawnGit, fileProblem: () => assert.fail("not a Desk defect") })
+  const result = await runPushWorker({ root: cloneA, env: process.env, clock: instantClock, retryDelaysMs: [], spawnGit, fileProblem: () => assert.fail("not a Desk defect") })
   assert.deepEqual(result, { result: "blocked", reason: "push_rejected", unpushed: 1 })
   assert.equal(pushCalls, 3)
   const status = readSyncStatus({ root: cloneA, env: process.env })

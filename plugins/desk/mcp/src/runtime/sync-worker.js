@@ -571,6 +571,8 @@ const REAL_CLOCK = { sleep: (ms) => new Promise((resolve) => setTimeout(resolve,
 const DELIVERED_CAP = 5000
 // A delivery that reports success while the same commits stay undelivered is a defect, not a reason to spin.
 const MAX_ROUNDS = 10
+const RETRY_DELAYS_MS = [2000, 5000, 15000, 60000]
+const RETRYABLE = new Set(["unreachable", "fetch_failed", "push_rejected", "deadline"])
 
 function deliveredSoFar(root, env) {
   const recorded = readSyncStatus({ root, env })?.delivered
@@ -642,6 +644,17 @@ function recordBlocked({ root, env, spawnGit, fileProblem, pushedAt, reason, pat
  * `fileProblem`, `stderr`, `quietMs` and `maxWaitMs` are test seams.
  */
 export async function runPushWorker(options) {
+  const delays = options.retryDelaysMs ?? RETRY_DELAYS_MS
+  const sleep = (options.clock ?? REAL_CLOCK).sleep
+  for (let attempt = 0; ; attempt += 1) {
+    const result = await pushRounds(options)
+    // A network or contention failure may clear by itself: the worker waits (backing off, outside the lock) and tries again, so a save is never left waiting for the next write to retry it. Conflicts and auth failures need a person and are not retried.
+    if (result?.result !== "blocked" || !RETRYABLE.has(result.reason) || attempt >= delays.length) return result
+    await sleep(delays[attempt])
+  }
+}
+
+async function pushRounds(options) {
   for (let round = 0; ; round += 1) {
     // Only the first round waits out the debounce.
     const { result, logs } = await pushRound(round === 0 ? options : { ...options, debounceMs: 0 })
@@ -756,6 +769,16 @@ export async function runSyncPushCli({ argv = process.argv.slice(2), env = proce
       run: async (input) => {
         const root = input.root
         const outcome = await runWorker({ root, env, debounceMs: input["debounce-ms"] ?? DEFAULT_DEBOUNCE_MS })
+        if (outcome?.result !== undefined && !["ok", "busy", "skipped", "test_isolation_refused", "blocked"].includes(outcome.result)) {
+          throw new Error(redactCredentialLikeText(deskFailure({
+            code: "sync_push_unexpected_result",
+            thing: "sync-push.js: the sync worker ended in a state it does not know",
+            probably: `the worker reported "${outcome.result}"`,
+            look: "call desk_status for the blocked reason and the unpushed count",
+            keepWorking: "local commits are preserved and nothing was forced, so keep working in the workspace",
+            fix: `run ${publicationRecovery(root)}`,
+          })))
+        }
         if (outcome?.result === "blocked") {
           const detail = text(readSyncStatus({ root, env })?.error) ?? outcome.reason
           throw new Error(redactCredentialLikeText(deskFailure({
