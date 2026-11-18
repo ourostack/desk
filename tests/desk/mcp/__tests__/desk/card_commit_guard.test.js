@@ -92,7 +92,7 @@ test("install writes an executable hook once and is idempotent", () => {
     assert.equal(installCardGuard(root).state, "current")
     if (process.platform !== "win32") assert.equal(statSync(first.path).mode & 0o111, 0o111, "an installed hook that lost its execute bit gets it back")
   } finally {
-    rmSync(root, { recursive: true, force: true })
+    rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
   }
 })
 
@@ -107,7 +107,7 @@ test("an older Desk hook is rewritten in place", () => {
     assert.equal(readFileSync(file, "utf8"), hookScript())
     assert.equal(existsSync(path.join(root, ".git", "hooks", CHAINED_NAME)), false)
   } finally {
-    rmSync(root, { recursive: true, force: true })
+    rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
   }
 })
 
@@ -126,7 +126,7 @@ test("a hand commit that edits a live card is refused, with a message that names
     const log = sh(root, ["log", "--oneline"]).stdout.trim().split("\n")
     assert.equal(log.length, 1, "nothing was committed")
   } finally {
-    rmSync(root, { recursive: true, force: true })
+    rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
   }
 })
 
@@ -138,7 +138,7 @@ test("a commit with no card change, or with a change to the card's other files, 
     writeFileSync(path.join(root, "greenhouse", "watering-api", "notes.md"), "notes\n")
     assert.equal(commitAll(root).status, 0)
   } finally {
-    rmSync(root, { recursive: true, force: true })
+    rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
   }
 })
 
@@ -175,7 +175,7 @@ test("a new card, a card under desks/<alias>, and a rename that edits the card a
     assert.equal(sh(root, ["mv", "greenhouse/watering-api-3", "greenhouse/_archive/watering-api-3"]).status, 0)
     assert.equal(sh(root, ["commit", "-q", "-m", "archive"]).status, 0, "an archive move passes")
   } finally {
-    rmSync(root, { recursive: true, force: true })
+    rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
   }
 })
 
@@ -186,7 +186,7 @@ test("deleting a card passes", () => {
     rmSync(path.join(root, "greenhouse", "watering-api"), { recursive: true })
     assert.equal(commitAll(root).status, 0)
   } finally {
-    rmSync(root, { recursive: true, force: true })
+    rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
   }
 })
 
@@ -200,7 +200,7 @@ test("Desk's own commit path (commitPaths) sets the marker, so a card it commits
     assert.deepEqual(result, { ok: true, stderr: result.stderr })
     assert.match(sh(root, ["log", "-1", "--format=%s"]).stdout, /task_update: greenhouse\/watering-api/)
   } finally {
-    rmSync(root, { recursive: true, force: true })
+    rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
   }
 })
 
@@ -216,7 +216,7 @@ test("a partial commit (git commit -- <paths>) is judged by what it commits, not
     assert.equal(sh(root, ["status", "--porcelain"]).stdout.trim(), "M  greenhouse/watering-api/task.md", "the card stays staged")
     assert.notEqual(sh(root, ["commit", "-q", "-m", "card", "--", "greenhouse/watering-api/task.md"]).status, 0)
   } finally {
-    rmSync(root, { recursive: true, force: true })
+    rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
   }
 })
 
@@ -231,7 +231,7 @@ test("a repository that is not a desk is not guarded by a shared hook", () => {
     writeFileSync(cardPath(root), CARD)
     assert.equal(commitAll(root).status, 0, "_meta without _archive or desks: not a desk")
   } finally {
-    rmSync(root, { recursive: true, force: true })
+    rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
   }
 })
 
@@ -262,7 +262,7 @@ test("a hook that was there before is kept as pre-commit.desk-chained and runs a
     assert.notEqual(commitAll(root).status, 0, "Desk's check comes first")
     assert.equal(existsSync(log), false, "the chained hook did not run for a refused card change")
   } finally {
-    rmSync(root, { recursive: true, force: true })
+    rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
   }
 })
 
@@ -285,7 +285,7 @@ test("a foreign tool that rewrites pre-commit later (husky regeneration) replace
     writeFileSync(cardPath(root), CARD.replace("processing", "validating"))
     assert.notEqual(commitAll(root).status, 0)
   } finally {
-    rmSync(root, { recursive: true, force: true })
+    rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
   }
 })
 
@@ -312,7 +312,7 @@ test("the pre-commit framework moving Desk's hook to pre-commit.legacy does not 
     writeFileSync(path.join(root, "README.md"), "changed twice\n")
     assert.equal(commitAll(root).status, 0, "re-entry exits 0 rather than looping")
   } finally {
-    rmSync(root, { recursive: true, force: true })
+    rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
   }
 })
 
@@ -328,7 +328,7 @@ test("a chained file that carries the Desk marker is never run", () => {
     assert.equal(commitAll(root).status, 0)
     assert.equal(existsSync(log), false)
   } finally {
-    rmSync(root, { recursive: true, force: true })
+    rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
   }
 })
 
@@ -358,7 +358,7 @@ test("a merge, cherry-pick or revert in progress passes: resolving a card confli
       assert.equal(sh(root, ["-c", "core.editor=true", "cherry-pick", "--continue"]).status, 0)
     }
   } finally {
-    rmSync(root, { recursive: true, force: true })
+    rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
   }
 })
 
@@ -376,7 +376,7 @@ test("a card whose staged frontmatter does not parse can be repaired by hand; th
     assert.doesNotMatch(refused.stderr, /DESK_TOOL_COMMIT/, "the refusal never tells an agent about the override")
     assert.match(refused.stderr, /call task_update for (?:it|the card)/)
   } finally {
-    rmSync(root, { recursive: true, force: true })
+    rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
   }
 })
 
@@ -395,7 +395,7 @@ test("a core.hooksPath that holds tracked files is left alone with a remedy; uni
     assert.equal(readFileSync(path.join(root, ".githooks", "pre-commit"), "utf8"), "#!/bin/sh\nexit 0\n")
     assert.equal(sh(root, ["status", "--porcelain"]).stdout, "")
   } finally {
-    rmSync(root, { recursive: true, force: true })
+    rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
   }
 })
 
@@ -423,7 +423,7 @@ test("uninstallCardGuard removes Desk's hook and puts a chained hook back; absen
     }
     assert.equal(uninstallCardGuard(root, { spawnGit: () => { throw new Error("boom") } }).state, "failed")
   } finally {
-    rmSync(root, { recursive: true, force: true })
+    rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
   }
 })
 
@@ -437,7 +437,7 @@ test("the hook text uses LF endings, and an installed copy with CRLF endings is 
     assert.equal(installCardGuard(root).state, "updated")
     assert.equal(readFileSync(file, "utf8"), hookScript())
   } finally {
-    rmSync(root, { recursive: true, force: true })
+    rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
   }
 })
 
@@ -449,7 +449,7 @@ test("a path with spaces or non-ASCII characters in a card folder is guarded", (
     writeFileSync(path.join(root, "caf\u00e9 track", "my-task", "task.md"), CARD)
     assert.notEqual(commitAll(root).status, 0)
   } finally {
-    rmSync(root, { recursive: true, force: true })
+    rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
   }
 })
 
@@ -465,7 +465,7 @@ test("a symlinked foreign hook is chained too", () => {
     assert.equal(lstatSync(path.join(hooks, CHAINED_NAME)).isSymbolicLink(), true)
     assert.equal(lstatSync(path.join(hooks, "pre-commit")).isSymbolicLink(), false)
   } finally {
-    rmSync(root, { recursive: true, force: true })
+    rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
   }
 })
 
@@ -480,7 +480,7 @@ test("a core.hooksPath is respected: the hook goes there, and .git/hooks is left
     writeFileSync(cardPath(root), CARD.replace("processing", "validating"))
     assert.notEqual(commitAll(root).status, 0)
   } finally {
-    rmSync(root, { recursive: true, force: true })
+    rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
   }
 })
 
@@ -494,7 +494,7 @@ test("the deliberate override is out of scope: the marker or --no-verify lets a 
     assert.equal(sh(root, ["add", "-A"]).status, 0)
     assert.equal(sh(root, ["commit", "-q", "-m", "skip", "--no-verify"]).status, 0)
   } finally {
-    rmSync(root, { recursive: true, force: true })
+    rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
   }
 })
 
@@ -530,7 +530,7 @@ test("install reports a failure when git cannot say where hooks live, or the hoo
     assert.equal(blocked.state, "failed")
     assert.equal(typeof blocked.reason, "string")
   } finally {
-    rmSync(root, { recursive: true, force: true })
+    rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
   }
 })
 
@@ -543,6 +543,6 @@ test("install treats a top-level it cannot resolve as different from the desk", 
     const same = installCardGuard(gone, { spawnGit: () => ({ status: 0, stdout: `${gone}\n`, stderr: "" }) })
     assert.notEqual(same.state, "skipped", "unresolvable paths compare as written")
   } finally {
-    rmSync(root, { recursive: true, force: true })
+    rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
   }
 })
