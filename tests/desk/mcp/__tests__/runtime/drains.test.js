@@ -1667,3 +1667,11 @@ test("an archived-session error for a drain no longer in the config is still rec
   ackWake({ paths: w.paths, repo: DRAIN.repo, wake: wakeId(DRAIN.repo, w.state().pending), error: ARCHIVED, now: NOW })
   assert.match(w.state().targetGone.error, /archived/u)
 })
+
+test("startSuccessor adopts the session the app created even though it answered too late", () => {
+  const recent = new Date().toISOString()
+  const spawn = (_program, args) => args.includes("sessions")
+    ? { status: 0, stdout: JSON.stringify({ sessions: [{ id: "old", name: "Drain: a/b", created_at: recent }, { id: "other", name: "Drain: c/d", created_at: recent }, { id: "stale", name: "Drain: a/b", created_at: "2020-01-01T00:00:00Z" }, { id: "new", name: "Drain: a/b", created_at: recent }] }) }
+    : { status: 1, stdout: '{"ok":false,"error":"the app did not answer in time"}' }
+  assert.deepEqual(startSuccessor({ repo: "a/b", predecessor: "old" }, { env: { DESK_DRAINS_SHEPHERD: "shep" }, spawn }), { ok: true, session: "new" })
+})

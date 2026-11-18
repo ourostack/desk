@@ -629,6 +629,14 @@ export function startSuccessor({ repo, predecessor, account }, { spawn = spawnSy
     out = JSON.parse(String(result.stdout))
   } catch {}
   if (out?.session_id) return { ok: true, session: String(out.session_id) }
+  // On a loaded Mac the app can create the session and still answer too late, so look for it before reporting a failure that would start a second one.
+  const name = `Drain: ${repo}`
+  const listed = spawn(program, [...lead, "sessions", "--json"], { encoding: "utf8", timeout: SHEPHERD_MS, env, windowsHide: true })
+  let found = null
+  try {
+    found = JSON.parse(String(listed.stdout)).sessions.find((entry) => entry.name === name && entry.id !== predecessor && Date.parse(entry.created_at) > Date.now() - RECOVER_RETRY_MS)
+  } catch {}
+  if (found) return { ok: true, session: String(found.id) }
   const why = out?.error || String(result.stderr).trim().split("\n")[0] || result.error?.message || "shepherd create printed no session"
   return { ok: false, error: String(why).slice(0, 200) }
 }
