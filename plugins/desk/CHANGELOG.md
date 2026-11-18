@@ -1,5 +1,21 @@
 # desk plugin — changelog
 
+## 3.2.277 — 2026-11-18
+
+### Durable work goes on the desk, not in the host's session folder
+
+The GitHub Copilot app tells agents to write plans and notes in the session's `files/` folder, and its image tool saves to the session's `images/` folder. Both vanish with the session and nobody else can find them, so a lane wrote an inventory, a generated test and reference images there and handed the person host paths. Three changes:
+
+The boot text's last rule now says durable work (reports, evidence, images others must find) goes in the focused task's desk folder and the host's session `files/` is scratch, overriding the host's artifacts instruction. It replaces wording in place, so the boot text stays within its 1.4 KB budget.
+
+A new Copilot `preToolUse` hook, [`hooks/copilot-durable-files.cjs`](hooks/copilot-durable-files.cjs), watches `create`, `edit` and the image tools. When one targets a durable-looking file (`.md`, an image, `.svg`, `.pdf`, `.csv`, `.json`, `.html`) under `~/.copilot/session-state/*/files` or `*/images`, it allows the call and adds a note naming the focused task's folder, or telling the agent to run start-task first when no task is focused. It never blocks and fails open.
+
+`desk_status`'s "details are still loading" answer now says what to do meanwhile: `task_focus` the task or `task_create` one with `focus: true`, so the work has a desk folder.
+
+An idle Desk MCP server now gives its memory back. A host keeps one server per hosted Copilot session, and each held 200 to 460 MB (33 of them took 15 GB on the Mac mini, which then swapped). `bootstrap.cjs` now runs the server under [`mcp/idle-proxy.cjs`](mcp/idle-proxy.cjs), a process of about 50 MB that passes the MCP stream through. After 3 minutes with no traffic and no call waiting, it closes the server's stdin and the server's memory is released; the next message starts a new server, replays the handshake and delivers the message, so the host sees one server throughout. The first call after a release takes about a second longer; calls on a running server are unchanged. `DESK_MCP_IDLE_MS` sets the idle time in milliseconds, and `0` keeps the server running as before. See the [MCP README](mcp/README.md).
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.276 — 2026-11-18
 
 Desk's MCP server now vendors Ouro UI v1.3.301, moved by Ouro Current.

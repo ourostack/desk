@@ -24,6 +24,13 @@
         "bash": "node \"${PLUGIN_ROOT}/hooks/copilot-lane-model.cjs\"",
         "powershell": "node \"${PLUGIN_ROOT}/hooks/copilot-lane-model.cjs\"",
         "timeoutSec": 5
+      },
+      {
+        "type": "command",
+        "matcher": "create|edit|[a-z_]*image[a-z_]*",
+        "bash": "node \"${PLUGIN_ROOT}/hooks/copilot-durable-files.cjs\"",
+        "powershell": "node \"${PLUGIN_ROOT}/hooks/copilot-durable-files.cjs\"",
+        "timeoutSec": 5
       }
     ],
     "sessionEnd": [
