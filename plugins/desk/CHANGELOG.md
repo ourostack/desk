@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.266 — 2026-11-18
+
+A drains relay configured without an `account` now uses the signed-in GitHub CLI account that can read the repositories it watches and acts on, and remembers the choice in the relay's state. Before, it polled as the CLI's active account and reported `Check gh auth status ... HTTP 403` when that account could not reach the repository. If GitHub later refuses the remembered account, the relay chooses again on its next poll; if no signed-in account can reach the repository, the relay's error names it and says to set `account` in `relays.json`.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.265 — 2026-11-18
 
 A save whose commit fails or is cut off now answers `commit_failed` or `commit_unknown`, with a route to finish it, and never `nothing_to_commit`. `nothing_to_commit` now means only that there was nothing to commit. The sync worker fetches every 60 seconds instead of 10, and a pull fetches for itself when the last fetch is older than 15 seconds. A save starts 17 git processes or fewer (was 19) because the content home, handoff and tool-commit lookups read `.git` files instead of asking git.
