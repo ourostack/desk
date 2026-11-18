@@ -929,3 +929,46 @@ test("merge-when-green: its status comment is found on a later page of comments,
   assert.equal(none.world.reads.filter((read) => read.route.includes("/comments")).length, 5)
   assert.deepEqual(comments(none.world).map((write) => write.method), ["POST"])
 })
+
+test("a relay with no account uses the signed-in account that can reach its repository, and remembers it", async () => {
+  const w = await setup([MERGE])
+  mergeWorld(w.world)
+  const asked = []
+  const connect = async (account) => {
+    const api = await w.world.connect()
+    return { ...api, get: async (route, options) => { asked.push([account, route]); if (account === "wrong" && /^\/repos\/o\/pages$/u.test(route)) throw Object.assign(new Error("403"), { status: 403 }); return api.get(route, options) } }
+  }
+  const poll = (at) => pollRelays({ paths: w.paths, drainFiles: w.drainFiles, connect, now: at, signedIn: () => ["wrong", "right"] })
+  const first = await poll(NOW)
+  assert.deepEqual(first.errors, [])
+  assert.equal(w.state("pages merge").resolvedAccount, "right")
+  assert.deepEqual(asked.filter(([, route]) => route === "/repos/o/pages").map(([account]) => account), ["wrong", "right", "right"])
+  asked.length = 0
+  await poll(NOW + 10 * MIN)
+  assert.ok(!asked.some(([account]) => account === "wrong"), "the remembered account is used without probing again")
+})
+
+test("a relay with no account that no signed-in account can reach reports a message naming it", async () => {
+  const w = await setup([MERGE])
+  const connect = async () => ({ ...(await w.world.connect()), get: async () => { throw Object.assign(new Error("403"), { status: 403 }) } })
+  const polled = await pollRelays({ paths: w.paths, drainFiles: w.drainFiles, connect, now: NOW, signedIn: () => ["a", "b"] })
+  assert.match(polled.errors[0].error, /^Set "account" on relay pages merge in relays\.json: none of the signed-in GitHub accounts \(a, b\) can reach o\/pages$/u)
+})
+
+test("a remembered account that GitHub starts refusing is chosen again", async () => {
+  const w = await setup([MERGE])
+  mergeWorld(w.world)
+  let refuse = false
+  const connect = async (account) => {
+    const api = await w.world.connect()
+    return { ...api, get: async (route, options) => { if (refuse && account === "old") throw Object.assign(new Error("Check gh auth status: HTTP 403"), { status: 403 }); return api.get(route, options) } }
+  }
+  const poll = (at, list) => pollRelays({ paths: w.paths, drainFiles: w.drainFiles, connect, now: at, signedIn: () => list })
+  await poll(NOW, ["old", "new"])
+  assert.equal(w.state("pages merge").resolvedAccount, "old")
+  refuse = true
+  await poll(NOW + 10 * MIN, ["old", "new"])
+  assert.equal(w.state("pages merge").resolvedAccount, undefined)
+  await poll(NOW + 20 * MIN, ["old", "new"])
+  assert.equal(w.state("pages merge").resolvedAccount, "new")
+})

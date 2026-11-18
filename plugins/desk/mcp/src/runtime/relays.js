@@ -514,9 +514,10 @@ const RUNNERS = { dispatch: runDispatch, "merge-when-green": runMerge }
 
 // ── Poll ──
 
-function accountOf(relay, drains) {
-  const repos = relay.type === "dispatch" ? [relay.watch.repo, relay.fire.repo] : [relay.repo]
-  return relay.account ?? repos.map((repo) => drains.find((drain) => drain.repo === repo)?.account).find(Boolean)
+const reposOf = (relay) => (relay.type === "dispatch" ? [relay.watch.repo, relay.fire.repo] : [relay.repo])
+
+function accountOf(relay, drains, states = {}) {
+  return relay.account ?? reposOf(relay).map((repo) => drains.find((drain) => drain.repo === repo)?.account).find(Boolean) ?? states[relay.name]?.resolvedAccount
 }
 
 function freshest(readings) {
@@ -532,10 +533,12 @@ function safely(read, fallback) {
 }
 
 /**
- * Poll every due relay once. A relay's account is its own `account`, else the one its repository has in the drains config.
+ * Poll every due relay once. A relay's account is its own `account`, else the one its repository has in the drains config,
+ * else the signed-in account (from `signedIn()`, active first) that can read every repository the relay uses. That choice is kept
+ * in the relay's state until GitHub refuses it. With no account to pick from, the relay uses the CLI's active account.
  * The state is written before this returns, and again right after each fire or merge, so a restart never repeats either.
  */
-export async function pollRelays({ paths, drainFiles, connect, now }) {
+export async function pollRelays({ paths, drainFiles, connect, now, signedIn = () => [] }) {
   const relays = readRelayConfig(paths.config)
   const stored = readRelayStates(paths.state)
   const states = Object.fromEntries(relays.map((relay) => [relay.name, stored[relay.name]?.type === relay.type ? stored[relay.name] : { type: relay.type, cache: {}, history: [], ...(relay.type === "merge-when-green" ? { prs: {} } : {}) }]))
@@ -547,13 +550,40 @@ export async function pollRelays({ paths, drainFiles, connect, now }) {
     if (!connections.has(account ?? "")) connections.set(account ?? "", connect(account, account ? { login: account } : {}))
     return connections.get(account ?? "")
   }
+  let candidates = null
+  const accountsToTry = async () => (candidates ??= Promise.resolve().then(signedIn).then((list) => list ?? [], () => []))
+  // The first signed-in account that can read every repository the relay uses; undefined when there is no choice to make.
+  const resolveAccount = async (relay) => {
+    const accounts = await accountsToTry()
+    if (accounts.length === 0) return undefined
+    for (const login of accounts) {
+      try {
+        const api = await connectOnce(login)
+        for (const repo of reposOf(relay)) await api.get(`/repos/${repo}`)
+        return login
+      } catch {
+        // This account cannot reach the repository; try the next one.
+      }
+    }
+    throw Object.assign(new Error(`Set "account" on relay ${relay.name} in relays.json: none of the signed-in GitHub accounts (${accounts.join(", ")}) can reach ${reposOf(relay).join(" and ")}`), { code: "relays_set_account_on_relay" })
+  }
   await Promise.all(relays.map(async (relay) => {
     const state = states[relay.name]
     if (state.lastPollAt && now - Date.parse(state.lastPollAt) < relay.everySeconds * 1000 - DUE_SLACK_MS) return
-    const account = accountOf(relay, drains)
+    if (!accountOf(relay, drains, states)) {
+      try {
+        const login = await resolveAccount(relay)
+        if (login) state.resolvedAccount = login
+      } catch (error) {
+        state.lastError = error.message
+        state.lastPollAt = new Date(now).toISOString()
+        return
+      }
+    }
+    const account = accountOf(relay, drains, states)
     const readings = [
       ...drains.filter((drain) => drain.account === account).map((drain) => drainStates[drain.repo]?.quota),
-      ...relays.filter((other) => accountOf(other, drains) === account).map((other) => states[other.name].quota),
+      ...relays.filter((other) => accountOf(other, drains, states) === account).map((other) => states[other.name].quota),
     ]
     const hold = quotaHold(freshest(readings), state.lastPollAt, now)
     if (hold) {
@@ -571,6 +601,8 @@ export async function pollRelays({ paths, drainFiles, connect, now }) {
       delete state.lastError
     } catch (error) {
       state.lastError = error.message
+      // A refusal means the remembered account cannot reach the repository (any more): choose again next poll.
+      if (state.resolvedAccount && [401, 403, 404].includes(error.status)) delete state.resolvedAccount
     }
     if (api?.quota()) state.quota = api.quota()
     state.lastPollAt = new Date(now).toISOString()
