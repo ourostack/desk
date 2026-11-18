@@ -19,6 +19,7 @@ import {
   HOME_FALLBACK,
   OVERLAY_HOME_FALLBACK,
   resolveActivationConfigPath,
+  REPO_OWNER_DESK,
   resolveDeskRootWithSource,
 } from "./paths.js"
 import { redactCredentialLikeText } from "./redact.js"
@@ -59,6 +60,7 @@ function sourceLabel(source) {
   if (source === "activation-config") return "the saved desk binding"
   if (source === "env:DESK") return "the DESK environment variable"
   if (source === HOME_FALLBACK) return "a home-folder fallback"
+  if (source === REPO_OWNER_DESK) return "the desk matching the session's repository owner"
   if (source === OVERLAY_HOME_FALLBACK) return "the home-folder desk of a work overlay loaded in this session"
   return "the root passed to Desk"
 }

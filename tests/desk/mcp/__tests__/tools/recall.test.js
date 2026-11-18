@@ -20,6 +20,7 @@ test("desk_recall routes semantic recall requests through the public query route
   })
 
   assert.deepEqual(result, {
+    desk_searched: { root: "/tmp/desk", name: "desk" },
     routed: true,
     request: {
       deskRoot: "/tmp/desk",
@@ -34,5 +35,5 @@ test("desk_recall routes semantic recall requests through the public query route
 
 test("without a query router, desk_recall asks the session's search engine", async () => {
   const engine = { lexical: async () => ({}), semantic: async (request) => ({ engine: true, kind: request.kind }) }
-  assert.deepEqual(await desk_recall({ deskRoot: "/tmp/desk", input: { topic: "alpha" }, search: engine }), { engine: true, kind: "recall" })
+  assert.deepEqual(await desk_recall({ deskRoot: "/tmp/desk", input: { topic: "alpha" }, search: engine }), { engine: true, kind: "recall", desk_searched: { root: "/tmp/desk", name: "desk" } })
 })

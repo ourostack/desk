@@ -20,6 +20,8 @@
 //   5. $DESK env var
 //   5a. The launch folder, when no host project folder is known, only when it
 //       is itself a personal desk (weaker than an established association)
+//   5b. The desk whose kind (personal or work) matches the owner of the Git repository the session
+//       was opened in (util/desk-owner.js), when exactly one desk matches
 //   6. A loaded work overlay's home-folder desk: $HOME/ms-desk/, only while the
 //      ms-desk overlay is loaded in the same Agency session as this Desk
 //   7. $HOME/desk/
@@ -44,6 +46,7 @@ import { accessSync, constants as fsConstants, existsSync, readFileSync, statSyn
 import { fileURLToPath } from "node:url"
 import { agencySessionPluginParents } from "./agency-session.cjs"
 import { isCrewWorkspace } from "../desk/crew-roster.js"
+import { deskForRepoOwner, repoOwnerOf } from "./desk-owner.js"
 
 // Raised only when no source names a desk at all, as opposed to an explicit
 // root that is wrong. Hosts may treat it as "no desk yet" and start setup.
@@ -57,6 +60,8 @@ const ACTIVATION_CONFIG_INVALID = "ACTIVATION_CONFIG_INVALID"
 export const HOME_FALLBACK = "home_fallback"
 // The source of a loaded work overlay's home-folder desk ($HOME/ms-desk).
 export const OVERLAY_HOME_FALLBACK = "overlay_home_fallback"
+// The source of the desk matching the owner of the repository the session was opened in.
+export const REPO_OWNER_DESK = "repo_owner_desk"
 
 /**
  * A path under the desk, spelled with `/` on every platform. A desk is a Git repository, its docs are named with `/` in
@@ -205,6 +210,18 @@ export function resolveDeskRootWithSource({
     const resolved = resolveRootPath(projectRootHint, { cwd, homeDir })
     tried.push({ source: "host-project", path: resolved })
     if (isDeskWorkspace(resolved)) return { root: resolved, source: "host-project", hint: true, tried }
+  }
+
+  // The desk that matches the owner of the repository the session was opened in, before any home-folder guess: a session in a
+  // personal repository means the personal desk even when a work overlay is loaded, and the reverse.
+  const sessionFolder = hasText(hostProjectRoot) ? hostProjectRoot : hasText(projectRootHint) ? projectRootHint : null
+  if (sessionFolder !== null) {
+    const folder = resolveRootPath(sessionFolder, { cwd, homeDir })
+    const desk = deskForRepoOwner(repoOwnerOf(folder), { homeDir })
+    if (desk !== null) {
+      tried.push({ source: REPO_OWNER_DESK, path: desk.root })
+      return { root: desk.root, source: REPO_OWNER_DESK, tried }
+    }
   }
 
   // Home-folder fallbacks. A session that loads a work overlay tries only that
