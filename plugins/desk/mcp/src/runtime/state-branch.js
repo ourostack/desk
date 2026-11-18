@@ -16,6 +16,7 @@
 import { execFile } from "node:child_process"
 import { existsSync } from "node:fs"
 import * as path from "node:path"
+import { fastGitAnswer } from "./fast-refs.js"
 
 export const STATE_BRANCH_REPAIR = "switch_state_branch"
 const OPERATION_MARKERS = ["MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "BISECT_LOG", "rebase-merge", "rebase-apply"]
@@ -31,6 +32,9 @@ export function isStateBranchName(value) {
 
 /** Run one git command in `cwd` without blocking. Never rejects: a missing git or a failed command is `{ ok: false }`. */
 export function runGit({ cwd, args, execFileImpl = execFile, env = process.env }) {
+  // Branch and ref questions on a plain checkout are answered from `.git`; a process costs 100-250 ms on a loaded machine.
+  const quick = execFileImpl === execFile && env === process.env ? fastGitAnswer(cwd, args) : null
+  if (quick !== null) return Promise.resolve({ ok: quick.status === 0, stdout: String(quick.stdout).trim(), stderr: "" })
   const childEnv = { ...env, GIT_OPTIONAL_LOCKS: "0", GIT_TERMINAL_PROMPT: "0", LC_ALL: "C" }
   for (const name of GIT_LOCATION_VARIABLES) delete childEnv[name]
   return new Promise((resolve) => {

@@ -96,6 +96,9 @@ test("fastGitAnswer answers branch, commit and path questions from files", async
     assert.equal(out(["symbolic-ref", "--short", "-q", "HEAD"]), "main\n")
     assert.equal(out(["symbolic-ref", "--quiet", "--short", "HEAD"]), "main\n")
     for (const args of [["rev-parse", "--verify", "-q", "HEAD"], ["rev-parse", "HEAD"], ["rev-parse", "--verify", "HEAD^{commit}"]]) assert.equal(out(args), `${A}\n`)
+    assert.equal(out(["rev-parse", "--verify", "-q", "refs/heads/main"]), `${A}\n`)
+    assert.equal(fastGitAnswer(root, ["rev-parse", "--verify", "-q", "refs/heads/nope"]), null)
+    assert.equal(fastGitAnswer(root, ["rev-parse", "--verify", "-q", "refs/heads/a..b"]), null)
     assert.equal(out(["rev-parse", "--is-inside-work-tree"]), "true\n")
     assert.equal(out(["rev-parse", "--show-toplevel"]), `${root.replaceAll("\\", "/")}\n`)
     assert.equal(out(["rev-parse", "--show-prefix"]), "\n")
@@ -115,6 +118,13 @@ test("fastGitAnswer answers branch, commit and path questions from files", async
     writeFileSync(path.join(git, "config"), '[include]\n\tpath = x\n[remote "origin"]\n\turl = u\n')
     assert.equal(fastGitAnswer(root, ["config", "--get", "remote.origin.url"]), null)
   })
+})
+
+test("runGit answers a branch question from files and asks Git for the rest", async () => {
+  const { runGit } = await import("../../../../../plugins/desk/mcp/src/runtime/state-branch.js")
+  const { root } = checkout()
+  assert.deepEqual(await runGit({ cwd: root, args: ["symbolic-ref", "--quiet", "--short", "HEAD"] }), { ok: true, stdout: "main", stderr: "" })
+  assert.equal((await runGit({ cwd: root, args: ["rev-parse", "--verify", "--quiet", "refs/remotes/origin/zzz"] })).ok, false)
 })
 
 test("origin/HEAD, detached HEAD, a missing ref and a broken path hand the question to Git", async () => {

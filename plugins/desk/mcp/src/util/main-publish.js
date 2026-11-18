@@ -19,6 +19,7 @@ import { rmSync } from "node:fs"
 import * as path from "node:path"
 
 import { gitEnv } from "../runtime/deliver.js"
+import { fastGitAnswer } from "../runtime/fast-refs.js"
 import { publicationPolicy, publishPullRequest } from "../runtime/pr-publication.js"
 import { savesFor, settleSaves } from "../runtime/unmerged-saves.js"
 
@@ -31,7 +32,7 @@ const REJECTED = /rejected|non-fast-forward|fetch first|failed to push/iu
 
 function runner(spawnGit, cwd, env) {
   return (args, timeout = GIT_TIMEOUT_MS) => {
-    const result = spawnGit("git", ["-C", cwd, ...args], { windowsHide: true, encoding: "utf8", timeout, env, maxBuffer: 64 * 1024 * 1024 })
+    const result = (spawnGit === spawnSync ? fastGitAnswer(cwd, args) : null) ?? spawnGit("git", ["-C", cwd, ...args], { windowsHide: true, encoding: "utf8", timeout, env, maxBuffer: 64 * 1024 * 1024 })
     return {
       status: result.status,
       stdout: typeof result.stdout === "string" ? result.stdout : "",

@@ -16,7 +16,7 @@ import { existsSync, readFileSync, realpathSync, writeFileSync } from "node:fs"
 import * as path from "node:path"
 
 import { fastGitAnswer } from "../runtime/fast-refs.js"
-import { budgeted, commitCaptured, operationAnswer } from "./cas-commit.js"
+import { budgeted, commitCaptured, operationAnswer, treeLines } from "./cas-commit.js"
 import { defaultBranchForPublication, publishCardCommit } from "./main-publish.js"
 import { recordToolCommit } from "./tool-commits.js"
 
@@ -183,6 +183,7 @@ function nulList(result) {
 
 /** The entries `commit`'s tree holds at `relPaths`, as sorted `mode sha\tpath` lines, or null when Git cannot say. */
 function treeEntries(root, commit, relPaths, spawnGit) {
+  if (spawnGit === spawnSync) return treeLines(spawnGit, root, commit, relPaths)
   const tree = run(spawnGit, root, ["ls-tree", "-r", "-z", commit, "--", ...relPaths])
   if (tree?.status !== 0) return null
   return nulList(tree).map((record) => {
@@ -386,8 +387,7 @@ function sparsePatternFile(root, spawnGit) {
  * `mode sha\tpath` lines, when the working tree there matches the index (the case for every Desk caller, which stages first). Null when it does not or
  * Git cannot say: then the commit would take working-tree bytes this read did not hash, so a read-back can never call it committed. Reads only.
  */
-function capturedPaths(root, relPaths, spawnGit) {
-  const entries = indexEntries(root, relPaths, spawnGit)
+function capturedPaths(root, relPaths, spawnGit, entries) {
   if (entries === null || entries.some((entry) => entry.stage !== "0")) return null
   const differs = run(spawnGit, root, ["diff", "--quiet", "--", ...relPaths])
   return differs?.status === 0 ? entryLines(entries) : null
@@ -415,10 +415,10 @@ export function commitPaths(root, relPaths, message, spawnGit, stateBranch) {
   if (refusal !== null) return { ok: false, stderr: refusal, readback: "absent" }
   const before = headOf(root, spawnGit)
   const branch = branchOf(root, spawnGit)
-  const expected = capturedPaths(root, relPaths, spawnGit)
+  const entries = indexEntries(root, relPaths, spawnGit)
+  const expected = capturedPaths(root, relPaths, spawnGit, entries)
   // A real run whose paths are staged and clean commits on a private index with the post-commit hook (Git LFS's whole-tree walk) detached, so a save on a big repository returns at once.
   if (spawnGit === spawnSync && expected !== null && relPaths.every(plainRelative)) {
-    const entries = indexEntries(root, relPaths, spawnGit)
     // Only when every path is one file the index holds: a folder or a deletion keeps the commit it always had.
     if (entries !== null && relPaths.every((p) => entries.some((entry) => entry.path === p))) return commitIndexPaths(root, relPaths, entries, message, spawnGit, stateBranch)
   }

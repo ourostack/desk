@@ -171,6 +171,10 @@ export function fastGitAnswer(root, args, input) {
       const sha = branch === undefined ? null : refValue(dirs.commonDir, `refs/heads/${branch}`)
       return sha === null ? null : answer(sha)
     }
+    if (args.length === 4 && args[0] === "rev-parse" && args[1] === "--verify" && args[2] === "-q" && /^refs\/heads\/[A-Za-z0-9._\/-]+$/u.test(args[3]) && !args[3].includes("..")) {
+      const sha = refValue(dirs.commonDir, args[3])
+      return sha === null ? null : answer(sha)
+    }
     if (same(args, "stripspace") && typeof input === "string") return { ...answer(""), stdout: stripspace(input) }
     if (same(args, "symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD")) {
       const target = /^ref: refs\/remotes\/(origin\/.+?)\s*$/u.exec(readText(path.join(dirs.commonDir, "refs/remotes/origin/HEAD")))?.[1]
