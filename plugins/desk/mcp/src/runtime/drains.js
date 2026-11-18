@@ -637,7 +637,7 @@ export function startSuccessor({ repo, predecessor, account }, { spawn = spawnSy
     found = JSON.parse(String(listed.stdout)).sessions.find((entry) => entry.name === name && entry.id !== predecessor && Date.parse(entry.created_at) > Date.now() - RECOVER_RETRY_MS)
   } catch {}
   if (found) return { ok: true, session: String(found.id) }
-  const why = out?.error || String(result.stderr).trim().split("\n")[0] || result.error?.message || "shepherd create printed no session"
+  const why = out?.error || String(result.stderr ?? "").trim().split("\n")[0] || result.error?.message || "shepherd create printed no session"
   return { ok: false, error: String(why).slice(0, 200) }
 }
 
