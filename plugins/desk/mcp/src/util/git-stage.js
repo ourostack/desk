@@ -15,6 +15,7 @@ import { spawnSync } from "node:child_process"
 import { existsSync, readFileSync, realpathSync, writeFileSync } from "node:fs"
 import * as path from "node:path"
 
+import { fastGitAnswer } from "../runtime/fast-refs.js"
 import { budgeted, commitCaptured, operationAnswer } from "./cas-commit.js"
 import { defaultBranchForPublication, publishCardCommit } from "./main-publish.js"
 import { recordToolCommit } from "./tool-commits.js"
@@ -69,6 +70,8 @@ function sleepSync(ms) {
 }
 
 function run(spawnGit, root, args, extra = {}) {
+  const fast = spawnGit === spawnSync || spawnGit.real === spawnSync ? fastGitAnswer(root, args) : null
+  if (fast !== null) return fast
   const once = () => spawnGit("git", ["-C", root, ...args], { windowsHide: true, encoding: "utf8", timeout: GIT_TIMEOUT_MS, ...extra })
   let result = once()
   if (!["symbolic-ref", "rev-parse", "diff", "ls-files"].includes(args[0]) || result?.error || yieldsGitLock()) return result
@@ -82,7 +85,7 @@ function run(spawnGit, root, args, extra = {}) {
 
 /** True when another Git process holds `root`'s index lock right now. False when Git cannot say. */
 export function indexLockHeld(root, spawnGit) {
-  const result = spawnGit("git", ["-C", root, "rev-parse", "--git-path", "index.lock"], { windowsHide: true, encoding: "utf8", timeout: GIT_TIMEOUT_MS })
+  const result = (spawnGit === spawnSync ? fastGitAnswer(root, ["rev-parse", "--git-path", "index.lock"]) : null) ?? spawnGit("git", ["-C", root, "rev-parse", "--git-path", "index.lock"], { windowsHide: true, encoding: "utf8", timeout: GIT_TIMEOUT_MS })
   return result.status === 0 && existsSync(path.resolve(root, String(result.stdout).trim()))
 }
 

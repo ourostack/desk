@@ -11,7 +11,7 @@ import { spawn, spawnSync } from "node:child_process"
 
 import { commandArgument } from "./pr-publication.js"
 import { deskFailure } from "./desk-failure.js"
-import { hasRemoteConfigured, readSyncStatus, recordPullOutcome, schedulePush, updateSyncStatus } from "./sync-worker.js"
+import { clearLogsPending, hasRemoteConfigured, logsMayBePending, readSyncStatus, recordPullOutcome, schedulePush, updateSyncStatus } from "./sync-worker.js"
 import { readUpstreamRefs } from "./fast-refs.js"
 import { catchUpBehind, classifyPullFailure, undeliveredCommits, upstreamOf } from "./deliver.js"
 import { remoteIdentityEnv } from "./remote-identity.js"
@@ -43,7 +43,8 @@ function run(spawnGit, root, args, timeoutMs) {
   return spawnGit("git", ["-C", root, ...args], { windowsHide: true,
     encoding: "utf8",
     timeout: timeoutMs,
-    env: remoteIdentityEnv({ root, args, env: gitEnv(), spawn: spawnGit }),
+    // The async fetch cannot answer the identity lookup's synchronous reads (each answered nothing and still cost three processes), so it runs on the plain environment.
+    env: spawnGit === spawnGitAsync ? gitEnv() : remoteIdentityEnv({ root, args, env: gitEnv(), spawn: spawnGit }),
   })
 }
 
@@ -147,6 +148,9 @@ function unresolved({ root, reason, cause, failed, paths = [], spawnGit, timeout
   return { state: "unresolved", reason, diagnostic, cause, remote, error, conflicted: paths }
 }
 
+// Desk roots whose waiting task logs this process has already looked for once.
+const logsChecked = new Set()
+
 /**
  * `{ root, env, spawnGit? }` -> `{ state: "synced", nothingToSync? } | { state: "unresolved", reason, cause, diagnostic,
  * conflicted }`. Never throws.
@@ -169,7 +173,11 @@ function unresolved({ root, reason, cause, failed, paths = [], spawnGit, timeout
 export async function syncWorkspace(options) {
   // Task log entries a server wrote and never committed (one that ended before its push worker committed them, or an older
   // Desk that committed them in-process) are committed first, so the pull carries them and the delivery below pushes them.
-  commitWaitingLogs(options.root)
+  // Only when a log was written here since, or this is the process's first pull: a whole-tree Git call is not paid on every pull.
+  if (!logsChecked.has(options.root) || logsMayBePending({ root: options.root, env: options.env })) {
+    logsChecked.add(options.root)
+    if (["committed", "empty"].includes(commitWaitingLogs(options.root))) clearLogsPending({ root: options.root, env: options.env })
+  }
   const result = await runSync(options)
   // `desk_status` reads this back, so its health word carries a failed sync the way boot's does.
   recordPullOutcome({ root: options.root, env: options.env, result })
@@ -189,6 +197,54 @@ function withDelivery({ root, env, spawnGit = spawnSync, scheduleDelivery = sche
   const reason = recorded?.blocked === true ? recorded.reason ?? null : offline ? result.cause : null
   const paths = recorded?.blocked === true && Array.isArray(recorded.paths) ? recorded.paths : []
   return { ...result, unpushed: { count: left.length, delivering: !offline, reason, paths } }
+}
+
+/**
+ * One fetch of the checked-out branch's upstream, off the thread that answers the host, so that the next pull finds it fresh
+ * and only has to fast-forward the files. Records when it ran (`fetchedAt`) and, when the checkout is behind, that its HEAD
+ * is an ancestor of the new upstream commit (`ffReady`). Never throws; a failed fetch changes nothing and the pull fetches itself.
+ */
+export async function fetchAhead({ root, env = process.env, now = () => Date.now() }) {
+  try {
+    const refs = readUpstreamRefs(root)
+    if (refs === null) return "skipped"
+    const fetched = await fetchUpstream(root, refs, spawnGitAsync, GIT_TIMEOUT_MS)
+    if (fetched.status !== 0) return "failed"
+    const after = readUpstreamRefs(root)
+    let ffReady = null
+    if (after !== null && after.head !== after.target) {
+      const ancestor = await spawnGitAsync("git", ["-C", root, "merge-base", "--is-ancestor", after.head, after.target], { windowsHide: true, timeout: GIT_TIMEOUT_MS, env: gitEnv() })
+      if (ancestor.status === 0) ffReady = { head: after.head, target: after.target }
+    }
+    updateSyncStatus(root, env, { fetchedAt: now(), ffReady })
+    return "fetched"
+  } catch {
+    return "failed"
+  }
+}
+
+const FETCH_AHEAD_MS = 10_000
+const fetching = new Map()
+
+/**
+ * Keeps `root`'s upstream fetched on a short timer for as long as this process lives (one timer per root, never overlapping
+ * itself, never keeping the process alive), so a pull is a local fast-forward. Does nothing under `node --test`. Returns a stop function.
+ */
+export function startBackgroundFetch({ root, env = process.env, intervalMs = FETCH_AHEAD_MS, fetchFn = fetchAhead }) {
+  if (env.NODE_TEST_CONTEXT !== undefined || fetching.has(root)) return () => {}
+  let stopped = false
+  let timer = null
+  const tick = async () => {
+    await fetchFn({ root, env })
+    if (stopped) return
+    timer = setTimeout(tick, intervalMs)
+    timer.unref?.()
+  }
+  timer = setTimeout(tick, intervalMs)
+  timer.unref?.()
+  const stop = () => { stopped = true; clearTimeout(timer); fetching.delete(root) }
+  fetching.set(root, stop)
+  return stop
 }
 
 async function runSync({
@@ -218,8 +274,11 @@ async function runSync({
   }
   if (remaining() <= 0) return deadline()
 
-  const after = read === null ? null : readUpstreamRefs(root)
-  if (after !== null && after.head === after.target) return { state: "synced" }
+  const refs = read === null ? null : readUpstreamRefs(root)
+  if (refs !== null && refs.head === refs.target) return { state: "synced" }
+  // The background fetch (below) may already have proved this checkout is behind and not diverged: a commit's ancestry never changes.
+  const ready = refs === null ? undefined : readSyncStatus({ root, env })?.ffReady
+  const after = refs === null ? null : { ...refs, ancestor: ready?.head === refs.head && ready?.target === refs.target }
   const moved = catchUpBehind({ root, spawnGit, known: after })
   if (moved.state === "behind" && moved.reason === "local_changes") {
     return unresolved({ root, reason: "local_changes_in_the_way", cause: "local_changes", paths: moved.paths, spawnGit, timeoutMs: GIT_TIMEOUT_MS })

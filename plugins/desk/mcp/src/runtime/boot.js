@@ -82,7 +82,7 @@ import { runtimeResolverFailure } from "../desk/runtime-resolver.js"
 import { LIFECYCLE_STATES, TERMINAL_STATES } from "../desk/lifecycle.js"
 import { healthWord, syncDegradation } from "./health.js"
 import { pendingMigrations, migrationLine, bashHint } from "./pending-migrations.js"
-import { syncWorkspace } from "./session-sync.js"
+import { startBackgroundFetch, syncWorkspace } from "./session-sync.js"
 import { recordLocalOnlyOnCards } from "../tools/local-only.js"
 import { resolveStartupDeskRoot, resolveStartupStateBranch } from "./startup-resolve.js"
 import { installCardGuard } from "../desk/card-commit-guard.js"
@@ -1247,6 +1247,7 @@ export async function bootOnce({
   migrationsFn = pendingMigrations,
   platform = process.platform,
   syncFn = syncWorkspace,
+  backgroundFetchFn = startBackgroundFetch,
   activeTasksFn = activeTasks,
   walkFn = walkTaskCards,
   repoFn = repoStates,
@@ -1374,6 +1375,8 @@ export async function bootOnce({
       syncTimedOut = true
       pending.push("sync: boot_budget_exceeded")
     } else sync = synced
+    // Keep the upstream fetched while this server lives, so the next pull is a local fast-forward.
+    if (sync?.state === "synced" && sync.nothingToSync === undefined) backgroundFetchFn({ root: root.path, env })
   } catch (error) {
     degraded.push(`sync: ${error.message}`)
   }

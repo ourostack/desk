@@ -10,8 +10,8 @@ import { spawnSync } from "node:child_process"
 import { mkTempRoot } from "../_temp_roots.js"
 import { commitPaths, stagePaths } from "../../../../../plugins/desk/mcp/src/util/git-stage.js"
 import { installSessionTrailerHooks } from "../../../../../plugins/desk/mcp/src/runtime/session-trailer.js"
-import { readUpstreamRefs } from "../../../../../plugins/desk/mcp/src/runtime/fast-refs.js"
-import { syncWorkspace } from "../../../../../plugins/desk/mcp/src/runtime/session-sync.js"
+import { fastGitAnswer, readUpstreamRefs, stripspace } from "../../../../../plugins/desk/mcp/src/runtime/fast-refs.js"
+import { fetchAhead, syncWorkspace } from "../../../../../plugins/desk/mcp/src/runtime/session-sync.js"
 import { lfsSkipEnv } from "../../../../../plugins/desk/mcp/src/runtime/deliver.js"
 import { acquireSyncLock, readSyncStatus, runPushWorker, runSyncPushCli } from "../../../../../plugins/desk/mcp/src/runtime/sync-worker.js"
 
@@ -235,4 +235,61 @@ test("the branch and upstream are read from .git for a plain checkout and a link
   const broken = await mkTempRoot("desk-budget-broken-")
   writeFileSync(path.join(broken, ".git"), "not a pointer\n")
   assert.equal(readUpstreamRefs(broken), null, "a .git file that points nowhere")
+})
+
+// Each git process costs 100-250 ms on a loaded machine, so the count per step is pinned: a step that adds a process fails here.
+async function countGit(run) {
+  const bin = await mkTempRoot("desk-budget-bin-")
+  const log = path.join(bin, "count.log")
+  const real = spawnSync("which", ["git"], { encoding: "utf8" }).stdout.trim()
+  writeFileSync(path.join(bin, "git"), `#!/bin/sh\necho "$*" >> "${log}"\nexec "${real}" "$@"\n`)
+  chmodSync(path.join(bin, "git"), 0o755)
+  const saved = { PATH: process.env.PATH, GIT_LFS_SKIP_SMUDGE: process.env.GIT_LFS_SKIP_SMUDGE }
+  process.env.PATH = `${bin}${path.delimiter}${saved.PATH}`
+  try {
+    await run()
+  } finally {
+    process.env.PATH = saved.PATH
+  }
+  let lines = []
+  try { lines = readFileSync(log, "utf8").split("\n").filter(Boolean) } catch {}
+  return lines
+}
+
+const PULL_PROCESSES = 2
+const SAVE_PROCESSES = 20
+
+test("a pull the background fetch prepared starts at most two git processes, and a save a bounded number", { skip: process.platform === "win32" ? "POSIX paths" : false }, async () => {
+  const { origin, root } = await bigRepo({ slowPostCommit: false })
+  await pull(root)
+  await remoteChange(origin, "docs/d0/new.md", "from the remote\n")
+  await fetchAhead({ root, env: process.env })
+  const behind = await countGit(() => pull(root))
+  assert.equal(readFileSync(path.join(root, "docs", "d0", "new.md"), "utf8"), "from the remote\n")
+  assert.ok(behind.length <= PULL_PROCESSES, `a pull with something new started ${behind.length} git processes: ${behind.join(" | ")}`)
+  const noop = await countGit(() => pull(root))
+  assert.ok(noop.length <= 1, `a no-op pull started ${noop.length} git processes: ${noop.join(" | ")}`)
+
+  const saved = await countGit(async () => { const made = save(root, "counted\n"); assert.equal(made.committed.ok, true, JSON.stringify(made.committed)) })
+  assert.ok(saved.length <= SAVE_PROCESSES, `a save started ${saved.length} git processes: ${saved.join(" | ")}`)
+})
+
+test("hooks, gpgSign and stripspace are answered from files only when that is certain, and match Git", { skip: process.platform === "win32" ? "POSIX paths" : false }, async () => {
+  const { root } = await bigRepo({ slowPostCommit: false })
+  const hookRun = (name) => fastGitAnswer(root, ["hook", "run", "--ignore-missing", name])
+  assert.equal(hookRun("pre-commit")?.skipped, true, "no hook file means nothing to run")
+  writeFileSync(path.join(root, ".git", "hooks", "pre-commit"), "#!/bin/sh\nexit 1\n")
+  assert.equal(hookRun("pre-commit"), null, "a hook file is Git's to run")
+  git(root, ["config", "core.hooksPath", "elsewhere"])
+  assert.equal(hookRun("commit-msg"), null, "a configured hooks path is Git's to read")
+  git(root, ["config", "--unset", "core.hooksPath"])
+  const gpg = () => fastGitAnswer(root, ["config", "--type=bool", "--get", "commit.gpgSign"])
+  assert.equal(gpg()?.status, 1)
+  git(root, ["config", "commit.gpgSign", "false"])
+  assert.equal(gpg(), null, "a configured value is Git's to read")
+  git(root, ["config", "--unset", "commit.gpgSign"])
+  for (const text of ["a  \n\n\n\nb\t\n\n", "\n\nonly", "   \n", "x\r\ny\n"]) {
+    const real = spawnSync("git", ["stripspace"], { input: text, encoding: "utf8" }).stdout
+    assert.equal(stripspace(text), real, JSON.stringify(text))
+  }
 })

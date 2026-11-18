@@ -16,12 +16,23 @@ const APPEND_MAX_WAIT_MS = 30_000
 
 /** The task logs under `root` that differ from HEAD or are untracked, relative to `root` and with `/`. Empty when Git cannot say. */
 export function waitingLogs(root, spawnGit = spawnSync) {
-  const git = (args) => spawnGit("git", ["-C", root, ...args, "--", ":(glob)**/log.md"], { windowsHide: true, encoding: "utf8", timeout: 10_000 })
-  const changed = git(["diff", "--name-only", "-z", "--relative", "HEAD"])
-  const untracked = git(["ls-files", "-z", "--others", "--exclude-standard"])
-  if (changed.status !== 0 || untracked.status !== 0) return []
+  const git = (args) => spawnGit("git", ["-C", root, ...args], { windowsHide: true, encoding: "utf8", timeout: 10_000 })
+  const glob = [":(glob)**/log.md"]
+  let found
+  if (existsSync(path.join(root, ".git"))) {
+    // One status call (what differs from HEAD, and what is untracked) in place of a diff and an ls-files; it takes no lock. Its paths are
+    // relative to the top of the repository, which `root` is here.
+    const status = git(["--no-optional-locks", "status", "--porcelain=v1", "-z", "--no-renames", "--untracked-files=all", "--", ...glob])
+    if (status.status !== 0) return []
+    found = String(status.stdout).split("\0").filter((entry) => entry.length > 3).map((entry) => entry.slice(3))
+  } else {
+    const changed = git(["diff", "--name-only", "-z", "--relative", "HEAD", "--", ...glob])
+    const untracked = git(["ls-files", "-z", "--others", "--exclude-standard", "--", ...glob])
+    if (changed.status !== 0 || untracked.status !== 0) return []
+    found = `${changed.stdout}${untracked.stdout}`.split("\0")
+  }
   // A removed log is not an append. A conflicted one never commits: Git refuses a commit of named paths mid-merge, and Desk refuses one on a detached HEAD.
-  return `${changed.stdout}${untracked.stdout}`.split("\0").filter((rel) => rel !== "" && existsSync(path.join(root, rel)) && existsSync(path.join(root, path.dirname(rel), "task.md")))
+  return found.filter((rel) => rel !== "" && existsSync(path.join(root, rel)) && existsSync(path.join(root, path.dirname(rel), "task.md")))
 }
 
 /** Waits until no waiting log has changed for `quietMs`, at most `maxWaitMs`. `sleep` is the caller's clock. */

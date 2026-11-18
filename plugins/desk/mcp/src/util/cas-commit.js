@@ -3,11 +3,12 @@
 // `git update-ref` of the branch. What it does and why is described at the top of finish-commit.js; it stays the one place
 // that knows how, so every caller that needs a commit published only against a qualified parent shares it.
 
-import { spawn } from "node:child_process"
+import { spawn, spawnSync } from "node:child_process"
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 
+import { fastGitAnswer } from "../runtime/fast-refs.js"
 import { TOOL_COMMIT_ENV } from "../desk/card-commit-guard.js"
 
 const GIT_TIMEOUT_MS = 10_000
@@ -19,8 +20,8 @@ const ZERO = "0".repeat(40)
 const NO_HOOK_RUN = /'hook' is not a git command/u
 
 function git(spawnGit, root, args, { env, input, timeout = GIT_TIMEOUT_MS } = {}) {
-  const answer = spawnGit("git", ["-C", root, ...args], { windowsHide: true, encoding: "utf8", timeout, env, input })
-  return { ok: !answer.error && answer.status === 0, status: answer.status, cut: Boolean(answer.error || answer.signal), notRun: answer === NOT_RUN, stdout: String(answer.stdout ?? ""), stderr: String(answer.stderr ?? answer.error?.message ?? "").trim() }
+  const answer = (spawnGit === spawnSync || spawnGit.real === spawnSync ? fastGitAnswer(root, args, input) : null) ?? spawnGit("git", ["-C", root, ...args], { windowsHide: true, encoding: "utf8", timeout, env, input })
+  return { ok: !answer.error && answer.status === 0, status: answer.status, cut: Boolean(answer.error || answer.signal), notRun: answer === NOT_RUN, skipped: answer.skipped === true, stdout: String(answer.stdout ?? ""), stderr: String(answer.stderr ?? answer.error?.message ?? "").trim() }
 }
 
 function treeLines(spawnGit, root, commit, paths) {
@@ -67,10 +68,12 @@ const NOT_RUN = { status: null, signal: null, stdout: "", stderr: "the time budg
  */
 function budgeted(spawnGit, deadline) {
   if (deadline === null) return spawnGit
-  return (command, args, options) => {
+  const bounded = (command, args, options) => {
     const left = deadline - Date.now()
     return left <= 0 ? NOT_RUN : spawnGit(command, args, { ...options, windowsHide: true, timeout: Math.min(options.timeout, left) })
   }
+  bounded.real = spawnGit
+  return bounded
 }
 
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b)
@@ -128,7 +131,7 @@ function commitCaptured({ root, paths, wanted, head, branch, message, spawnGit: 
         : held(`nothing was committed: the repository's ${name} hook refused the commit: ${answer.stderr || "no reason given"}`)
     const pre = hook("pre-commit")
     if (!pre.ok) return stopped("pre-commit", pre)
-    const treeAfter = git(spawnGit, root, ["write-tree"], { env: own })
+    const treeAfter = pre.skipped ? tree : git(spawnGit, root, ["write-tree"], { env: own })
     if (!treeAfter.ok || treeAfter.stdout.trim() !== tree.stdout.trim())
       return held("nothing was committed: the pre-commit hook changed what would be committed; Desk commits only the captured change")
     const messageFile = path.join(dir, "COMMIT_EDITMSG")

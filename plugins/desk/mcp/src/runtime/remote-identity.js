@@ -10,6 +10,10 @@
 // appended here comes last and wins. Anything less certain (no override, a remote that is not HTTPS, no account that can
 // reach it) leaves the environment untouched.
 
+import { spawnSync } from "node:child_process"
+
+import { fastGitAnswer } from "./fast-refs.js"
+
 const NETWORK_COMMANDS = new Set(["fetch", "pull", "push"])
 const LOGIN = /^[A-Za-z0-9][A-Za-z0-9_-]*$/u
 const REPO = /^[A-Za-z0-9._-]+$/u
@@ -97,7 +101,7 @@ function canUse({ host, login, owner, repo, push, env, spawn, cache, now }) {
 }
 
 function gitText(spawn, root, args, env) {
-  const result = spawn("git", ["-C", root, ...args], { windowsHide: true, encoding: "utf8", timeout: LOOKUP_TIMEOUT_MS, env })
+  const result = (spawn === spawnSync ? fastGitAnswer(root, args) : null) ?? spawn("git", ["-C", root, ...args], { windowsHide: true, encoding: "utf8", timeout: LOOKUP_TIMEOUT_MS, env })
   return result.status === 0 ? result.stdout.trim() : ""
 }
 
