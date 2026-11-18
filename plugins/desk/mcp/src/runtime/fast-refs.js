@@ -12,7 +12,7 @@ function readText(file) {
   try {
     return readFileSync(file, "utf8")
   } catch {
-    return null
+    return ""
   }
 }
 
@@ -22,10 +22,10 @@ function gitDirs(root) {
   const stats = statSync(dot, { throwIfNoEntry: false })
   if (stats === undefined) return null
   if (stats.isDirectory()) return { gitDir: dot, commonDir: dot }
-  const pointer = /^gitdir:\s*(.+?)\s*$/mu.exec(readText(dot) ?? "")
+  const pointer = /^gitdir:\s*(.+?)\s*$/mu.exec(readText(dot))
   if (pointer === null) return null
   const gitDir = path.resolve(root, pointer[1])
-  const common = readText(path.join(gitDir, "commondir"))?.trim()
+  const common = readText(path.join(gitDir, "commondir")).trim()
   return { gitDir, commonDir: common ? path.resolve(gitDir, common) : gitDir }
 }
 
@@ -45,9 +45,9 @@ function branchSettings(config, branch) {
 }
 
 function refValue(commonDir, ref) {
-  const loose = readText(path.join(commonDir, ref))?.trim()
-  if (loose !== undefined && SHA.test(loose)) return loose
-  for (const line of (readText(path.join(commonDir, "packed-refs")) ?? "").split(/\r?\n/u)) {
+  const loose = readText(path.join(commonDir, ref)).trim()
+  if (SHA.test(loose)) return loose
+  for (const line of (readText(path.join(commonDir, "packed-refs"))).split(/\r?\n/u)) {
     const [sha, name] = line.split(" ")
     if (name === ref && SHA.test(sha)) return sha
   }
@@ -61,9 +61,9 @@ function refValue(commonDir, ref) {
 export function readUpstreamRefs(root) {
   const dirs = gitDirs(root)
   if (dirs === null) return null
-  const branch = /^ref: refs\/heads\/(.+?)\s*$/u.exec(readText(path.join(dirs.gitDir, "HEAD")) ?? "")?.[1]
+  const branch = /^ref: refs\/heads\/(.+?)\s*$/u.exec(readText(path.join(dirs.gitDir, "HEAD")))?.[1]
   const config = readText(path.join(dirs.commonDir, "config"))
-  if (branch === undefined || config === null) return null
+  if (branch === undefined || config === "") return null
   const { remote, merge } = branchSettings(config, branch)
   if (remote === undefined || remote === "." || merge === undefined || !merge.startsWith("refs/heads/")) return null
   const tracking = `refs/remotes/${remote}/${merge.slice("refs/heads/".length)}`
