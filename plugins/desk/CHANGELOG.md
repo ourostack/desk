@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.255 — 2026-11-18
+
+The `git-hygiene` skill now gives lanes one push rule, and says never to pass `--delete-branch` to `gh pr merge` (a client-side delete closes pull requests stacked on the branch; the repo setting retargets them). The push rule: push with `git push -u origin HEAD`, then confirm `git rev-parse HEAD` equals `git ls-remote origin refs/heads/<branch>`; a mismatch is a failed push, never a silent success. A bare `git push` on a branch with no upstream prints nothing and pushes nothing, which let CI test an old commit for half an hour.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.254 — 2026-11-18
 
 ### Each desk declares the repository owners it serves
