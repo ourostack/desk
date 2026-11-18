@@ -6,6 +6,8 @@ import { EventEmitter } from "node:events"
 import { createRequire } from "node:module"
 import { PassThrough } from "node:stream"
 import * as path from "node:path"
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
 import { bootstrapPath } from "./_mcp_handshake.js"
 
 const require = createRequire(import.meta.url)
@@ -445,4 +447,95 @@ test("bootstrap.cjs runs the proxy when its own Node is the right one, index.js 
   failingInput.end()
   await new Promise((resolve) => setImmediate(resolve))
   assert.match(errors.join(""), /could not start .*EACCES/u)
+})
+
+// ---- following the newest installed Desk ----
+
+const NODE = { version: "22.12.0", abi: "127" }
+const BASE_PACKAGE = { name: "@ourostack/desk-mcp", version: "1.4.0-alpha.6", toolProtocol: 1, engines: { node: ">=20" } }
+
+function sessions(copies) {
+  const scanRoot = mkdtempSync(path.join(tmpdir(), "desk-newest-"))
+  for (const [id, copy] of Object.entries(copies)) {
+    const pluginRoot = path.join(scanRoot, id, "root-5", "desk")
+    mkdirSync(path.join(pluginRoot, "mcp"), { recursive: true })
+    writeFileSync(path.join(pluginRoot, "plugin.json"), JSON.stringify({ name: "desk", repository: "https://github.com/ourostack/desk", version: copy.version, ...copy.plugin }))
+    if (copy.package !== null) writeFileSync(path.join(pluginRoot, "mcp", "package.json"), JSON.stringify({ ...BASE_PACKAGE, ...copy.package }))
+    if (copy.index !== false) writeFileSync(path.join(pluginRoot, "mcp", "index.js"), "")
+    if (copy.abis) {
+      const dir = path.join(pluginRoot, "mcp", "artifacts", "runtime-deps", BASE_PACKAGE.version)
+      mkdirSync(dir, { recursive: true })
+      writeFileSync(path.join(dir, "support-matrix.json"), JSON.stringify({ targets: copy.abis.map((abi) => ({ platform: process.platform, arch: process.arch, node_abi: abi })) }))
+    }
+  }
+  return { scanRoot, mcp: (id) => path.join(scanRoot, id, "root-5", "desk", "mcp") }
+}
+
+const newest = (s, own = "own") => bootstrap.newestDesk({ mcpRoot: s.mcp(own), current: NODE, platform: process.platform, arch: process.arch, scanRoot: s.scanRoot })
+
+test("a new server runs the newest installed Desk that has the same tool protocol", () => {
+  const s = sessions({ own: { version: "3.2.280" }, old: { version: "3.2.270" }, mid: { version: "3.2.281" }, top: { version: "3.2.283" } })
+  const chosen = newest(s)
+  assert.equal(chosen.version, "3.2.283")
+  assert.equal(chosen.indexFile, path.join(s.mcp("top"), "index.js"))
+  assert.equal(chosen.pluginRoot, path.dirname(s.mcp("top")))
+})
+
+test("a newer Desk is passed over when its tool protocol differs or is absent, it is another plugin, its index.js is missing, or its engines or runtime pack refuse this Node", () => {
+  const s = sessions({
+    own: { version: "3.2.280", abis: ["127"] },
+    protocol: { version: "3.2.290", package: { toolProtocol: 2 } },
+    undeclared: { version: "3.2.291", package: { toolProtocol: undefined } },
+    nopackage: { version: "3.2.292", package: null },
+    other: { version: "3.2.293", plugin: { repository: "https://example.com/fork" } },
+    noindex: { version: "3.2.294", index: false },
+    engines: { version: "3.2.295", package: { engines: { node: ">=24" } } },
+    pack: { version: "3.2.296", abis: ["115"] },
+    ok: { version: "3.2.281", abis: ["127"] },
+  })
+  assert.equal(newest(s).version, "3.2.281")
+  assert.equal(newest(sessions({ own: { version: "3.2.280" }, same: { version: "3.2.280" }, older: { version: "3.2.200" } })), null, "nothing newer keeps this copy")
+})
+
+test("this copy keeps running when it cannot tell: no protocol of its own, not in a sessions layout, or an unreadable scan folder", () => {
+  const s = sessions({ own: { version: "3.2.280", package: { toolProtocol: undefined } }, top: { version: "3.2.299" } })
+  assert.equal(newest(s), null)
+  const t = sessions({ own: { version: "3.2.280" }, top: { version: "3.2.299" } })
+  assert.equal(bootstrap.newestDesk({ mcpRoot: t.mcp("own"), current: NODE, platform: process.platform, arch: process.arch }), null, "default scan needs <sessions>/<session>/root-N/desk")
+  assert.equal(bootstrap.newestDesk({ mcpRoot: t.mcp("own"), current: NODE, platform: process.platform, arch: process.arch, scanRoot: path.join(t.scanRoot, "missing") }), null)
+})
+
+test("the idle proxy starts each new server from the chosen Desk, keeps a plugin root the host set, and falls back to its own copy when there is no choice or the choice throws", () => {
+  const calls = []
+  const logs = []
+  const stdin = new PassThrough()
+  let choice = { indexFile: "/new/mcp/index.js", pluginRoot: "/new", version: "3.2.290" }
+  const run = (env) => runIdleProxy({
+    node: "/node", indexFile: "/own/mcp/index.js", args: ["--root", "/d"], idleMs: IDLE, stdin, stdout: { write() {} }, stderr: { write: (t) => logs.push(t) },
+    exit() {}, signals: new EventEmitter(), kill() {}, setTimer: () => 1, clearTimer() {}, env,
+    chooseIndex: () => { if (choice instanceof Error) throw choice; return choice },
+    spawn: (...call) => { calls.push(call); return Object.assign(new EventEmitter(), { stdin: new EventEmitter(), stdout: new PassThrough(), kill() {} }) },
+  })
+  run({})
+  assert.deepEqual(calls[0][1], ["/new/mcp/index.js", "--root", "/d"])
+  assert.equal(calls[0][2].env.DESK_PLUGIN_ROOT, "/new")
+  assert.match(logs.join(""), /running Desk 3\.2\.290 from \/new/u)
+  run({ DESK_PLUGIN_ROOT: "/own" })
+  assert.equal(calls[1][2].env.DESK_PLUGIN_ROOT, "/new", "the root this copy would have used moves with it")
+  run({ DESK_PLUGIN_ROOT: "/pinned" })
+  assert.equal(calls[2][2].env.DESK_PLUGIN_ROOT, "/pinned")
+  choice = null
+  run({})
+  assert.equal(calls[3][1][0], "/own/mcp/index.js")
+  choice = new Error("scan failed")
+  run({})
+  assert.equal(calls[4][1][0], "/own/mcp/index.js")
+})
+
+test("tool protocol 1 promises every tool the host may have cached: removing or renaming one needs a new protocol number in mcp/package.json", async () => {
+  const { TOOL_NAMES } = await import("../../../../../plugins/desk/mcp/src/tool-names.js")
+  const pkg = JSON.parse(readFileSync(path.join(path.dirname(bootstrapPath), "package.json"), "utf8"))
+  const protocol1 = ["task_create", "task_update", "task_archive", "task_focus", "task_signoff", "track_create", "track_update", "friction_add", "lesson_add", "desk_save", "note", "desk_search", "desk_recall", "desk_status", "desk_doctor", "desk_skill", "improvement_open", "improvement_next", "improvement_update"]
+  if (pkg.toolProtocol === 1) for (const name of protocol1) assert.ok(TOOL_NAMES.includes(name), `${name} is gone but toolProtocol is still 1`)
+  assert.equal(typeof pkg.toolProtocol, "number")
 })

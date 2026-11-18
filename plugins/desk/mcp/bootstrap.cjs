@@ -520,6 +520,64 @@ function serveDegraded(options) {
   });
 }
 
+// ---- the newest installed Desk ----
+
+// A host installs one copy of Desk per session, as <sessions>/<session>/<root-N>/desk, and keeps a session's server for days. When the idle proxy has to start a new server it can start the newest installed copy's index.js instead of the copy it was launched from, so every idle session moves to the current Desk on its next message.
+// A copy is chosen only when it is newer, is the same Desk (plugin name and repository), declares the same mcp/package.json `toolProtocol` (the tools the host already listed all still exist with the same inputs; bump it in the same change that removes or breaks a tool), and its engines and runtime pack accept this Node. Anything else, or any read that fails, keeps the copy the proxy was started from.
+// options: { mcpRoot, current: { version, abi }, platform, arch, scanRoot (the folder of session folders; default: the one this copy sits in, when it sits in that layout) }
+// Returns { indexFile, pluginRoot, version } of the copy to run, or null to keep this one.
+function newestDesk(options) {
+  var mcpRoot = options.mcpRoot;
+  var ownPlugin = readJson(path.join(path.dirname(mcpRoot), "plugin.json"));
+  var ownPackage = readJson(path.join(mcpRoot, "package.json"));
+  var ownVersion = ownPlugin && parseVersion(ownPlugin.version);
+  var protocol = ownPackage && ownPackage.toolProtocol;
+  if (!ownVersion || typeof protocol !== "number") return null;
+  var scanRoot = options.scanRoot;
+  if (!scanRoot) {
+    var layout = path.resolve(mcpRoot, "..", "..", "..", "..");
+    var shape = /^root-\d+$/.test(path.basename(path.resolve(mcpRoot, "..", ".."))) && path.basename(layout) === "sessions";
+    if (!shape) return null;
+    scanRoot = layout;
+  }
+  var sessions;
+  try {
+    sessions = fs.readdirSync(scanRoot);
+  } catch (error) {
+    return null;
+  }
+  var ownAbis = packAbis(mcpRoot, ownPackage.version, options.platform, options.arch);
+  var best = null;
+  var bestVersion = ownVersion;
+  sessions.forEach(function (session) {
+    var roots;
+    try {
+      roots = fs.readdirSync(path.join(scanRoot, session));
+    } catch (error) {
+      return;
+    }
+    roots.forEach(function (root) {
+      if (!/^root-\d+$/.test(root)) return;
+      var pluginRoot = path.join(scanRoot, session, root, "desk");
+      var plugin = readJson(path.join(pluginRoot, "plugin.json"));
+      if (!plugin || plugin.name !== ownPlugin.name || !plugin.repository || plugin.repository !== ownPlugin.repository) return;
+      var version = parseVersion(plugin.version);
+      if (!version || compareVersions(version, bestVersion) <= 0) return;
+      var candidateMcp = path.join(pluginRoot, "mcp");
+      var pkg = readJson(path.join(candidateMcp, "package.json"));
+      if (!pkg || pkg.toolProtocol !== protocol || !fs.existsSync(path.join(candidateMcp, "index.js"))) return;
+      var engines = either(pkg.engines, {});
+      if (typeof engines.node === "string" && !satisfies(options.current.version, engines.node)) return;
+      var abis = packAbis(candidateMcp, pkg.version, options.platform, options.arch);
+      // A copy that ships a runtime pack must ship one for this Node's ABI when this copy does.
+      if (ownAbis.indexOf(String(options.current.abi)) !== -1 && abis.indexOf(String(options.current.abi)) === -1) return;
+      best = { indexFile: path.join(candidateMcp, "index.js"), pluginRoot: pluginRoot, version: plugin.version };
+      bestVersion = version;
+    });
+  });
+  return best;
+}
+
 // ---- running index.js ----
 
 // Load index.js (an ES module) in this process and start it through its own entrypoint guard, which serves diagnostic mode on any startup exception. The import is built at run time so that very old Node can still parse this file.
@@ -625,7 +683,7 @@ function start(o, stderr, serve) {
       // A host keeps one server per session for days, so this process stays small: it starts the real server on demand and ends it when idle (idle-proxy.cjs). An injected importIndex, or DESK_MCP_IDLE_MS=0, runs index.js in this process instead.
       var proxy = idleMs > 0 && o.importIndex === undefined;
       if (proxy) {
-        var proxied = idle.runIdleProxy({ node: current.path, indexFile: indexFile, args: args, env: env, idleMs: idleMs, spawn: o.spawn, stdin: o.stdin, stdout: o.stdout, stderr: stderr, exit: o.exit, signals: o.signals, kill: o.kill, now: o.now, setTimer: o.setTimer, clearTimer: o.clearTimer });
+        var proxied = idle.runIdleProxy({ node: current.path, indexFile: indexFile, chooseIndex: o.chooseIndex !== undefined ? o.chooseIndex : function () { return newestDesk({ mcpRoot: mcpRoot, current: current, platform: platform, arch: either(o.arch, process.arch), scanRoot: o.scanRoot }); }, args: args, env: env, idleMs: idleMs, spawn: o.spawn, stdin: o.stdin, stdout: o.stdout, stderr: stderr, exit: o.exit, signals: o.signals, kill: o.kill, now: o.now, setTimer: o.setTimer, clearTimer: o.clearTimer });
         if (proxied.error !== null) throw proxied.error;
         return new Promise(function () {});
       }
@@ -677,6 +735,7 @@ module.exports = {
   TOOL_NAMES: TOOL_NAMES,
   candidatePaths: candidatePaths,
   importIndex: importIndex,
+  newestDesk: newestDesk,
   installCommand: installCommand,
   packedMajor: packedMajor,
   packAbis: packAbis,
