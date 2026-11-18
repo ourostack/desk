@@ -63,7 +63,7 @@ test("the CI gate job waits for every other job in its workflow, except the main
 // Runs the gate's own shell step against a made-up `needs` result, the way its Linux runner would. Windows has no reliable bash on PATH
 // (it may be the WSL launcher), and the gate never runs there, so these two tests skip on Windows.
 const hasJq = process.platform !== "win32" && spawnSync("jq", ["--version"]).status === 0
-const jobIds = ["blackbox", "browser", "crew-member-binding", "desk-mcp-coverage-shards", "offline-eval-tests", "release-dry-run", "desk-mcp-tests", "desk-runtime-packs", "desk-native-windows", "native-macos-protection", "unused-code"]
+const jobIds = ["blackbox", "browser", "crew-member-binding", "desk-mcp-coverage-shards", "offline-eval-tests", "release-dry-run", "desk-mcp-tests", "desk-runtime-packs", "desk-native-windows", "macos-checks", "unused-code"]
 function gateVerdict({ code, evals, quick = "success", results = {} }) {
   const needs = { "quick-checks": { result: quick, outputs: quick === "success" ? { code: String(code), evals: String(evals) } : {} } }
   for (const id of jobIds) needs[id] = { result: results[id] ?? "success", outputs: {} }
@@ -89,7 +89,7 @@ test("the CI gate fails for a job that had to run but was skipped, failed or was
   assert.equal(gateVerdict({ code: true, evals: false, results: skipped("offline-eval-tests", "desk-mcp-coverage-shards") }), 1)
   assert.equal(gateVerdict({ code: true, evals: true, results: skipped("offline-eval-tests") }), 1)
   assert.equal(gateVerdict({ code: true, evals: true, results: skipped("desk-native-windows") }), 1, "a pull request runs native Windows")
-  assert.equal(gateVerdict({ code: true, evals: true, results: skipped("native-macos-protection") }), 1, "a pull request runs native macOS protection")
+  assert.equal(gateVerdict({ code: true, evals: true, results: skipped("macos-checks") }), 1, "a pull request runs the macOS checks")
   assert.equal(gateVerdict({ code: true, evals: false, results: skipped("offline-eval-tests", "release-dry-run") }), 1, "a pull request checks its changelog fragments")
   assert.equal(gateVerdict({ code: true, evals: false, results: { ...skipped("offline-eval-tests"), browser: "failure" } }), 1)
   assert.equal(gateVerdict({ code: true, evals: true, results: { browser: "cancelled" } }), 1)

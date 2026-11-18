@@ -100,7 +100,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        os: [ubuntu-latest, windows-latest]
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -134,7 +134,6 @@ jobs:
         # Each Node matches the runtime pack Desk ships for that platform; the end-to-end test starts the real server.
         include:
           - { os: ubuntu-latest, node: "22" }
-          - { os: macos-latest, node: "22" }
           - { os: windows-latest, node: "24" }
     steps:
       - name: Use CRLF line endings, as Git for Windows does
@@ -437,30 +436,73 @@ jobs:
         working-directory: tools/unused-code
         run: npm run knip
 
-  # Real macOS ACL checks and marker-identity guards for the factory. macOS runners are few, but this job takes about a minute.
-  native-macos-protection:
-    name: Native macOS protection
-    needs: quick-checks
-    if: needs.quick-checks.outputs.code == 'true'
+  # Every macOS check in one job on one runner. macOS runners are few (5 at once on a standard plan, shared with the whole account), and
+  # five separate macOS jobs per pull request, each about a minute of work, spent up to 43 minutes waiting for a slot (2026-11-18). The
+  # three native checks run one after another here, and a failed step does not stop the rest. The Darwin runtime packs stay in the
+  # native-pack matrix (desk-runtime-packs), which production_runtime_pack.test.js keeps as the one place host-bound packs are built. The test steps run only when the change can affect a result
+  # (the scope step is the one Quick checks runs).
+  macos-checks:
+    name: macOS checks
     runs-on: macos-latest
-    timeout-minutes: 10
+    timeout-minutes: 25
     permissions:
       contents: read
     steps:
-      - name: Check out source
+      - name: Check out repository
         uses: actions/checkout@v4
         with:
+          fetch-depth: 2
           persist-credentials: false
-      - name: Set up Node
+
+      - name: Decide what this change can affect
+        id: scope
+        env:
+          BASE: ${{ github.event_name == 'pull_request' && 'HEAD^1' || '' }}
+        run: |
+          set -euo pipefail
+          code="$(node .github/scripts/changed-scope.mjs --outside "$BASE" docs/ SETUP.md LICENSE)"
+          echo "code=${code#run=}" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Node (the version Desk ships a macOS runtime pack for)
         uses: actions/setup-node@v4
         with:
-          node-version: "22"
+          node-version: "22.23.2"
+          cache: "npm"
+          cache-dependency-path: plugins/desk/mcp/package-lock.json
+
+      # Real macOS ACL checks and marker-identity guards for the factory.
       - name: Verify native ACL checks and marker identity guards
+        if: ${{ !cancelled() && steps.scope.outputs.code == 'true' }}
         run: >-
           node --import ./tests/desk/mcp/__tests__/_isolated_env.mjs
           --test-concurrency=1 --test
           tests/desk/mcp/__tests__/factory/os_protect.test.js
           tests/desk/mcp/__tests__/factory/marker_identity.test.js
+
+      - name: Open, use and close real fresh and mine browsers
+        if: ${{ !cancelled() && steps.scope.outputs.code == 'true' }}
+        env:
+          DESK_BROWSER_REAL: "1"
+        run: node --import ./tests/desk/mcp/__tests__/_isolated_env.mjs --test ./tests/desk/mcp/__tests__/launch/web.test.js
+
+      - name: Install test dependencies
+        if: ${{ !cancelled() && steps.scope.outputs.code == 'true' }}
+        working-directory: plugins/desk/mcp
+        run: npm ci
+
+      # A member's session in a Crew workspace clone binds the clone and writes as that member (see Crew member binding).
+      - name: Run the member-binding tests
+        if: ${{ !cancelled() && steps.scope.outputs.code == 'true' }}
+        working-directory: plugins/desk/mcp
+        run: >-
+          node --import ../../../tests/desk/mcp/__tests__/_isolated_env.mjs --test
+          ../../../tests/desk/mcp/__tests__/desk/crew_member.test.js
+          ../../../tests/desk/mcp/__tests__/desk/gh_logins.test.js
+          ../../../tests/desk/mcp/__tests__/runtime/crew_binding.test.js
+          ../../../tests/desk/mcp/__tests__/runtime/crew_member_admission.test.js
+          ../../../tests/desk/mcp/__tests__/runtime/crew_member_end_to_end.test.js
+          ../../../tests/desk/mcp/__tests__/crew/workspace_session.test.js
+          ../../../tests/desk/mcp/__tests__/ci/windows_hide.test.js
 
   desk-mcp-tests:
     name: desk MCP test suite
@@ -932,7 +974,7 @@ jobs:
       - desk-mcp-tests
       - desk-runtime-packs
       - desk-native-windows
-      - native-macos-protection
+      - macos-checks
       - unused-code
     if: ${{ always() }}
     runs-on: ubuntu-latest

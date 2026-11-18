@@ -685,7 +685,7 @@ test("CI dry-runs auto, RC and stable on every pull request and on main through 
   assert.deepEqual(tests.jobs["ci-gate"].needs, [
     "quick-checks", "blackbox", "browser", "crew-member-binding", "desk-mcp-coverage-shards",
     "offline-eval-tests", "release-dry-run", "desk-mcp-tests", "desk-runtime-packs",
-    "desk-native-windows", "native-macos-protection", "unused-code",
+    "desk-native-windows", "macos-checks", "unused-code",
   ])
   assert.equal(tests.jobs["ci-gate"].name, "CI gate")
   assert.equal(tests.jobs["ci-gate"].if, "${{ always() }}")
