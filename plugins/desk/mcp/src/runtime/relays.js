@@ -516,7 +516,7 @@ const RUNNERS = { dispatch: runDispatch, "merge-when-green": runMerge }
 
 const reposOf = (relay) => (relay.type === "dispatch" ? [relay.watch.repo, relay.fire.repo] : [relay.repo])
 
-function accountOf(relay, drains, states = {}) {
+function accountOf(relay, drains, states) {
   return relay.account ?? reposOf(relay).map((repo) => drains.find((drain) => drain.repo === repo)?.account).find(Boolean) ?? states[relay.name]?.resolvedAccount
 }
 
@@ -551,7 +551,7 @@ export async function pollRelays({ paths, drainFiles, connect, now, signedIn = (
     return connections.get(account ?? "")
   }
   let candidates = null
-  const accountsToTry = async () => (candidates ??= Promise.resolve().then(signedIn).then((list) => list ?? [], () => []))
+  const accountsToTry = async () => (candidates ??= Promise.resolve().then(signedIn).catch(() => []))
   // The first signed-in account that can read every repository the relay uses; undefined when there is no choice to make.
   const resolveAccount = async (relay) => {
     const accounts = await accountsToTry()

@@ -68,7 +68,7 @@ function ghSignedIn() {
   const cleaned = { ...process.env, PATH: ["/opt/homebrew/bin", "/usr/local/bin", process.env.PATH].filter(Boolean).join(":") }
   for (const name of ["GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GH_HOST"]) delete cleaned[name]
   const result = spawnSync("gh", ["auth", "status", "--hostname", "github.com"], { encoding: "utf8", timeout: 10_000, env: cleaned, windowsHide: true })
-  return signedInAccounts(`${result.stdout ?? ""}\n${result.stderr ?? ""}`)
+  return signedInAccounts(`${result.stdout}\n${result.stderr}`)
 }
 
 function drainsCli({ script, env, now, connect, listProcesses, signedIn }) {

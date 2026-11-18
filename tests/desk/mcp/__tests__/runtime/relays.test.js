@@ -972,3 +972,11 @@ test("a remembered account that GitHub starts refusing is chosen again", async (
   await poll(NOW + 20 * MIN, ["old", "new"])
   assert.equal(w.state("pages merge").resolvedAccount, "new")
 })
+
+test("a relay with no account uses the CLI's active account when the signed-in accounts cannot be read", async () => {
+  const w = await setup([MERGE])
+  mergeWorld(w.world)
+  const polled = await pollRelays({ paths: w.paths, drainFiles: w.drainFiles, connect: w.world.connect, now: NOW, signedIn: () => { throw new Error("gh is not installed") } })
+  assert.deepEqual(polled.errors, [])
+  assert.equal(w.state("pages merge").resolvedAccount, undefined)
+})
