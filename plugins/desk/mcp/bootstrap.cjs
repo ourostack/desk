@@ -620,6 +620,15 @@ function start(o, stderr, serve) {
 
   if (selection.node.current) {
     return Promise.resolve().then(function () {
+      var idle = require("./idle-proxy.cjs");
+      var idleMs = idle.idleMs(env);
+      // A host keeps one server per session for days, so this process stays small: it starts the real server on demand and ends it when idle (idle-proxy.cjs). An injected importIndex, or DESK_MCP_IDLE_MS=0, runs index.js in this process instead.
+      var proxy = idleMs > 0 && o.importIndex === undefined;
+      if (proxy) {
+        var proxied = idle.runIdleProxy({ node: current.path, indexFile: indexFile, args: args, env: env, idleMs: idleMs, spawn: o.spawn, stdin: o.stdin, stdout: o.stdout, stderr: stderr, exit: o.exit, signals: o.signals, kill: o.kill, now: o.now, setTimer: o.setTimer, clearTimer: o.clearTimer });
+        if (proxied.error !== null) throw proxied.error;
+        return new Promise(function () {});
+      }
       return either(o.importIndex, importIndex)(indexFile, args);
     }).catch(function (error) {
       return bootstrapFailed(serve, stderr, "could not start index.js", error);
