@@ -1,5 +1,15 @@
 # desk plugin — changelog
 
+## 3.2.249 — 2026-11-18
+
+Desk's MCP server now vendors Ouro UI v1.3.281, moved by Ouro Current.
+
+### Place every lane with `shepherd place`
+
+`work-orchestration` now sends a coordinator to `shepherd place` before it starts a lane, in place of the older advice to check the machine's load by hand. It answers cloud, mini or laptop with a one-line reason, from the mini's swap and load, the laptop's heartbeat and the known cloud 403 windows. Lanes had run on the memory-bound mini even when the cloud could take them.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.248 — 2026-11-18
 
 ### Saves on a big desk no longer wait for Git LFS
