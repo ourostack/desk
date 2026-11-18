@@ -55,6 +55,16 @@ export async function fixture() {
   return { root, desk, repo, remote, card }
 }
 
+// Retries with a growing pause: under load the OS query can keep failing for several seconds, not just once.
+export async function readStartWithRetry(pid, { read = readProcessStart, attempts = 10, pauseMs = 200 } = {}) {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const start = await read(pid)
+    if (start) return start
+    await new Promise((resolve) => setTimeout(resolve, pauseMs * (attempt + 1)))
+  }
+  return null
+}
+
 export async function worktree(f, branch = "topic") {
   const directory = path.join(f.root, branch)
   git(f.repo, "worktree", "add", "-b", branch, directory, "main")
@@ -65,7 +75,7 @@ export async function worktree(f, branch = "topic") {
   try {
     await once(child, "spawn")
     // A busy Windows runner can hit Get-CimInstance's cap and return null; tidy then refuses before the rule under test.
-    for (let attempt = 0; attempt < 3 && !start; attempt += 1) start = await readProcessStart(child.pid)
+    start = await readStartWithRetry(child.pid)
     if (!start) throw new Error("fixture could not read its writer's start time")
   } finally {
     child.kill()
