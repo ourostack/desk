@@ -80,8 +80,8 @@ const skipped = (...ids) => Object.fromEntries(ids.map((id) => [id, "skipped"]))
 
 test("the CI gate lets a pull request skip only the offline evals it cannot affect, and everything but the packs for a docs-only change", { skip: !hasJq && "needs bash and jq, as on the gate's Linux runner" }, () => {
   assert.equal(gateVerdict({ code: true, evals: false, results: skipped("offline-eval-tests") }), 0)
-  assert.equal(gateVerdict({ code: false, evals: false, results: skipped(...jobIds.filter((id) => id !== "desk-runtime-packs" && id !== "macos-checks")) }), 0, "docs only")
-  assert.equal(gateVerdict({ code: false, evals: false, results: skipped(...jobIds) }), 1, "the packs and the macOS checks (which build the Darwin packs) never skip")
+  assert.equal(gateVerdict({ code: false, evals: false, results: skipped(...jobIds.filter((id) => id !== "desk-runtime-packs")) }), 0, "docs only")
+  assert.equal(gateVerdict({ code: false, evals: false, results: skipped(...jobIds) }), 1, "the packs never skip")
   assert.equal(gateVerdict({ code: true, evals: true }), 0, "everything ran")
 })
 

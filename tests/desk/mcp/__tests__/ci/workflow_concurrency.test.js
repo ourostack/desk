@@ -14,6 +14,8 @@ const read = (name) => load(readFileSync(path.join(workflows, name), "utf8"))
 test("the runtime packs are built for every shipped target", () => {
   const jobs = read("desk-mcp-tests.yml").jobs
   assert.deepEqual(jobs["desk-runtime-packs"].strategy.matrix.include.map(item => item.target).sort(), [
+    "darwin-arm64-node-127",
+    "darwin-arm64-node-137",
     "linux-x64-node-127",
     "linux-x64-node-137",
     "linux-x64-node-147",
@@ -22,23 +24,14 @@ test("the runtime packs are built for every shipped target", () => {
   ])
 })
 
-// macOS runners are few (5 at once, shared account-wide), so every macOS check shares one job and one runner.
-test("every macOS check runs in one job on a supported standard Apple-silicon image, including both Darwin runtime packs", () => {
-  const jobs = read("desk-mcp-tests.yml").jobs
-  const mac = jobs["macos-checks"]
-  assert.ok(["macos-latest", "macos-15", "macos-26"].includes(mac.runs-on ?? mac["runs-on"]))
-  assert.equal(mac.needs, undefined, "it waits for nothing, so the pull request's macOS time starts at once")
-  const packs = mac.steps.filter(step => step.uses === "./.github/actions/build-runtime-pack").map(step => step.with)
-  assert.deepEqual(packs.map(pack => pack.target), ["darwin-arm64-node-127", "darwin-arm64-node-137"])
-  assert.deepEqual(packs.map(pack => [pack.node, pack.node_abi, pack.arch, pack.platform]), [["22.23.2", "127", "arm64", "darwin"], ["24.18.0", "137", "arm64", "darwin"]])
-  assert.ok(mac.steps.some(step => /factory\/os_protect\.test\.js/u.test(step.run ?? "")), "native ACL checks")
-  assert.ok(mac.steps.some(step => step.env?.DESK_BROWSER_REAL === "1"), "the real browser check")
-  assert.ok(mac.steps.some(step => /runtime\/crew_member_end_to_end\.test\.js/u.test(step.run ?? "")), "the Crew member-binding tests")
-  for (const id of ["desk-runtime-packs", "browser", "crew-member-binding", "blackbox"]) {
-    const job = jobs[id]
-    const runners = [job["runs-on"], ...(job.strategy?.matrix?.os ?? []), ...(job.strategy?.matrix?.include ?? []).flatMap(item => [item.os, item.runner])].filter(Boolean)
-    assert.ok(!runners.some(runner => String(runner).startsWith("macos")), `${id} takes no macOS runner of its own`)
-  }
+test("the Darwin runtime pack selects a supported standard Apple-silicon image", () => {
+  const entries = read("desk-mcp-tests.yml").jobs["desk-runtime-packs"].strategy.matrix.include
+  const darwin = entries.find(item => item.platform === "darwin")
+  assert.ok(["macos-latest", "macos-15", "macos-26"].includes(darwin.runner), `${darwin.runner} must be a supported standard ARM64 image`)
+  assert.equal(darwin.target, "darwin-arm64-node-127")
+  assert.equal(darwin.arch, "arm64")
+  assert.equal(darwin.node, "22.23.2")
+  assert.equal(darwin.node_abi, "127")
 })
 
 // Every leg runs on every event: a pull request runs everything main runs (AGENTS.md, "CI tiers"), so a matrix names its legs outright.
@@ -101,12 +94,20 @@ test("no job is skipped for a pull request except by what the change can affect,
   const jobs = read("desk-mcp-tests.yml").jobs
   assert.equal(jobs["desk-native-windows"].if, "needs.quick-checks.outputs.code == 'true'")
   assert.ok(jobs["ci-gate"].needs.includes("macos-checks"))
-  // The macOS job decides its own scope (it waits for no job), and every test step in it carries that condition.
-  const scopeStep = jobs["macos-checks"].steps.find((step) => step.id === "scope")
+  // macOS runners are few (5 at once, shared account-wide), so the native macOS checks share one job. It waits for no job and decides
+  // its own scope, and every test step in it carries that condition.
+  const mac = jobs["macos-checks"]
+  assert.equal(mac.needs, undefined)
+  const scopeStep = mac.steps.find((step) => step.id === "scope")
   assert.equal(scopeStep.env.BASE, "${{ github.event_name == 'pull_request' && 'HEAD^1' || '' }}")
   assert.match(scopeStep.run, /changed-scope\.mjs --outside "\$BASE" docs\/ SETUP\.md LICENSE/u)
-  for (const step of jobs["macos-checks"].steps.filter((s) => /os_protect|DESK_BROWSER|crew_member|npm ci/u.test(JSON.stringify(s)) && !s.uses)) {
-    assert.match(step.if, /steps\.scope\.outputs\.code == 'true'/u, step.name)
+  const gated = mac.steps.filter((step) => /os_protect\.test|DESK_BROWSER_REAL|crew_member_end_to_end|npm ci/u.test(JSON.stringify(step)))
+  assert.equal(gated.length, 4, "native ACL, browser, install and Crew member-binding steps")
+  for (const step of gated) assert.match(step.if, /steps\.scope\.outputs\.code == 'true'/u, step.name)
+  for (const id of ["browser", "crew-member-binding", "blackbox", "desk-mcp-coverage-shards"]) {
+    const job = jobs[id]
+    const runners = [job["runs-on"], ...(job.strategy?.matrix?.os ?? []), ...(job.strategy?.matrix?.include ?? []).map((item) => item.os)]
+    assert.ok(!runners.some((runner) => String(runner).startsWith("macos")), `${id} takes no macOS runner of its own`)
   }
   // The runtime packs wait for nothing, so a failing check elsewhere never stops pack production (production_runtime_pack.test.js).
   assert.equal(jobs["desk-runtime-packs"].if, undefined)
