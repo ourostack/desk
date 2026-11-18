@@ -1615,7 +1615,7 @@ contract("every general operator rule is stated in the skill that owns its topic
     ["work-orchestration", /\*\*Profile before choosing a fix\.\*\*[\s\S]+CI is the merge gate, not the workbench/u],
     ["work-orchestration", /\*\*Timebox: watch the number, not the activity\.\*\* About every 90 minutes[\s\S]+change the approach that hour[\s\S]+and say so/u],
     ["work-orchestration", /\*\*Side quests get their own lanes\.\*\*[\s\S]+it does not relay messages between lanes and the human, and it does not take a lane's work itself/u],
-    ["work-orchestration", /\*\*Fit the fleet to the machine\.\*\*/u],
+    ["work-orchestration", /\*\*Place every lane with `shepherd place`\.\*\*[\s\S]+`shepherd place cloud-blocked`/u],
     ["work-orchestration", /\*\*Propose from evidence\.\*\*[\s\S]+relay neither; get the measurement first and say when you will have it/u],
     ["work-orchestration", /Every child brief carries three prohibitions[\s\S]+name the exact blocking screen or error in the return, never ask the person to do it\. Never test on the person's real data or account/u],
     ["evidence-discipline", /## Offline evals on synthetic data, online evals from counts\n\nNever test, reproduce or measure on the human's real data or account: not read-only[\s\S]+not by asking their permission and not through a script you hand them to run[\s\S]+add that shape to the generator, reproduce it offline, then fix it[\s\S]+counts-only telemetry[\s\S]+ships with the telemetry that will show whether it did/u],
