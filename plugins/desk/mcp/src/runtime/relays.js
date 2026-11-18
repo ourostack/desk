@@ -2,7 +2,8 @@
 // A `dispatch` relay watches a workflow and fires another workflow or a repository_dispatch event once per new watched head whose
 // run succeeds, after a quiet period for a newer head. A
 // `merge-when-green` relay merges a labelled pull request once every check it names is green on its head and, if asked, the base
-// branch's latest completed run of a workflow is green. Like `drains.js poll`, no model turn is spent: each poll reads GitHub
+// branch's latest completed run of a workflow is green; with `strict` it also judges named workflows' jobs (minus advisory ones) and updates a
+// head that is behind its base. Like `drains.js poll`, no model turn is spent: each poll reads GitHub
 // with conditional requests (an unchanged answer is a free 304) and acts. See docs/relays.md.
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs"
 import * as path from "node:path"
@@ -113,7 +114,24 @@ function parseDispatch({ watch, fire, settleSeconds }, at, bad) {
   }
 }
 
-function parseMerge({ repo, label, method, deleteBranch, requiredChecks, requireMainWorkflowGreen, skippedPasses }, at, bad) {
+const STRICT_FIELDS = ["requiredWorkflows", "advisoryJobs", "advisoryWorkflows", "requireCurrentBase"]
+
+/** The strict-mode block: a bad field fails loudly, an unknown field too (a misspelt advisory list would otherwise make an advisory job block, or worse, silently not apply). */
+function parseStrict(strict, at, bad) {
+  if (!isObject(strict)) throw bad(`${at}.strict is not an object`)
+  for (const key of Object.keys(strict)) if (!STRICT_FIELDS.includes(key)) throw bad(`${at}.strict.${key} is not a strict field; use ${STRICT_FIELDS.join(", ")}`)
+  if (!textList(strict.requiredWorkflows)) throw bad(`${at}.strict.requiredWorkflows is not a non-empty list of workflow names or file names such as ci`)
+  for (const key of ["advisoryJobs", "advisoryWorkflows"]) if (strict[key] !== undefined && !(Array.isArray(strict[key]) && strict[key].every(isText))) throw bad(`${at}.strict.${key} is not a list of names`)
+  if (strict.requireCurrentBase !== undefined && typeof strict.requireCurrentBase !== "boolean") throw bad(`${at}.strict.requireCurrentBase is not true or false`)
+  return {
+    requiredWorkflows: strict.requiredWorkflows.map((name) => name.trim()),
+    advisoryJobs: (strict.advisoryJobs ?? []).map((name) => name.trim()),
+    advisoryWorkflows: (strict.advisoryWorkflows ?? []).map((name) => name.trim()),
+    requireCurrentBase: strict.requireCurrentBase ?? true,
+  }
+}
+
+function parseMerge({ repo, label, method, deleteBranch, requiredChecks, requireMainWorkflowGreen, skippedPasses, strict }, at, bad) {
   if (!isRepo(repo)) throw bad(`${at}.repo is not "owner/name"`)
   if (label !== undefined && !isText(label)) throw bad(`${at}.label is not a label name`)
   if (method !== undefined && !METHODS.includes(method)) throw bad(`${at}.method is not "squash", "merge" or "rebase"`)
@@ -129,6 +147,7 @@ function parseMerge({ repo, label, method, deleteBranch, requiredChecks, require
     requiredChecks: requiredChecks.map((check) => check.trim()),
     ...(requireMainWorkflowGreen === undefined ? {} : { requireMainWorkflowGreen: requireMainWorkflowGreen.trim() }),
     ...(skippedPasses === undefined ? {} : { skippedPasses }),
+    ...(strict === undefined ? {} : { strict: parseStrict(strict, at, bad) }),
   }
 }
 
@@ -405,14 +424,106 @@ export function waitingOnChecks(requiredChecks, runs, skippedPasses = false, sta
 
 const MERGEABLE = new Set(["clean", "unstable", "has_hooks"])
 
-function waitingOnPull(pr) {
+function waitingOnPull(pr, allowBehind) {
   if (pr.draft) return ["it is a draft"]
   if (pr.mergeable === false || pr.mergeableState === "dirty") return ["it has merge conflicts"]
   if (pr.mergeable === null || pr.mergeableState === "unknown") return ["GitHub has not yet worked out whether it merges cleanly"]
-  if (pr.mergeableState === "behind") return [`it is behind ${pr.baseRef}`]
-  if (!MERGEABLE.has(pr.mergeableState)) return [`GitHub reports it as ${pr.mergeableState}, so the branch rules do not let it merge`]
+  if (pr.mergeableState === "behind" && !allowBehind) return [`it is behind ${pr.baseRef}`]
+  if (!MERGEABLE.has(pr.mergeableState) && pr.mergeableState !== "behind") return [`GitHub reports it as ${pr.mergeableState}, so the branch rules do not let it merge`]
   return []
 }
+
+
+// ── strict mode ──
+
+const sameName = (a, b) => a.toLowerCase() === b.toLowerCase()
+/** A workflow is named by its `name:` or its file's name without the extension, so `ci` matches `ci.yml` and a workflow called `ci`. */
+const workflowNamed = (run, name) => sameName(run.name, name) || sameName(path.posix.basename(run.path).replace(/\.ya?ml$/iu, ""), name)
+/** A job is named exactly, or as a matrix job that starts with the name and a parenthesis (`resource-macos (14)`). */
+const jobNamed = (job, names) => names.some((name) => sameName(job, name) || job.toLowerCase().startsWith(`${name.toLowerCase()} (`))
+
+const workflowRunSummary = (run) => ({ id: run.id, workflowId: run.workflow_id, name: run.name, path: run.path, status: run.status, conclusion: run.conclusion ?? null, runNumber: run.run_number })
+
+/** The newest run of each workflow on the head; an older run of the same workflow was superseded. */
+async function readWorkflowRuns(ctx, state, repo, sha) {
+  const { runs } = await cached(ctx, state, `/repos/${repo}/actions/runs?head_sha=${sha}&per_page=100`, (body) => ({ runs: body.workflow_runs.map(workflowRunSummary), volatile: body.total_count > 100 }))
+  const newest = new Map()
+  for (const run of runs) if (!newest.has(run.workflowId) || run.runNumber > newest.get(run.workflowId).runNumber) newest.set(run.workflowId, run)
+  return [...newest.values()]
+}
+
+async function readJobs(ctx, state, repo, runId) {
+  const route = `/repos/${repo}/actions/runs/${runId}/jobs?filter=latest&per_page=${CHECKS_PAGE}`
+  return cached(ctx, state, route, async (body) => {
+    const jobs = [...body.jobs]
+    for (let page = 2; page <= Math.ceil(body.total_count / CHECKS_PAGE); page++) jobs.push(...(await ctx.api.get(`${route}&page=${page}`)).body.jobs)
+    return { jobs: jobs.map((job) => ({ name: job.name, status: job.status, conclusion: job.conclusion ?? null })), volatile: body.total_count > CHECKS_PAGE || body.jobs.some((job) => job.status !== "completed") }
+  })
+}
+
+/**
+ * Strict judgement of the head: every job of each required workflow finished green (a skip counts only with `skippedPasses`), except the advisory jobs
+ * and the jobs of advisory workflows, which are ignored and only named as warnings. The head's other checks are judged as in plain mode, minus the advisory ones.
+ */
+async function strictChecks(relay, state, ctx, sha) {
+  const { strict } = relay
+  const workflowRuns = await readWorkflowRuns(ctx, state, relay.repo, sha)
+  const advisoryJobs = strict.advisoryJobs
+  const derived = []
+  const requiredJobs = []
+  const waiting = []
+  const warnings = []
+  for (const run of workflowRuns.filter((candidate) => strict.advisoryWorkflows.some((name) => workflowNamed(candidate, name)))) {
+    const { jobs } = await readJobs(ctx, state, relay.repo, run.id)
+    derived.push(...jobs.map((job) => job.name))
+  }
+  const green = (job) => job.status === "completed" && (job.conclusion === "success" || (relay.skippedPasses && SKIPPED_PASSES.has(job.conclusion)))
+  for (const name of strict.requiredWorkflows) {
+    const run = workflowRuns.find((candidate) => workflowNamed(candidate, name))
+    if (!run) {
+      waiting.push(`${name} has not started on this head`)
+      continue
+    }
+    const { jobs } = await readJobs(ctx, state, relay.repo, run.id)
+    requiredJobs.push(...jobs.map((job) => job.name))
+    const judged = jobs.filter((job) => !jobNamed(job.name, advisoryJobs))
+    warnings.push(...jobs.filter((job) => jobNamed(job.name, advisoryJobs) && !green(job) && !SKIPPED_PASSES.has(job.conclusion)).map((job) => `${name} job ${job.name} ${job.status === "completed" ? job.conclusion : job.status} (advisory)`))
+    const before = waiting.length
+    for (const job of judged) {
+      if (job.status !== "completed") waiting.push(`${name} job ${job.name} to finish (${job.status})`)
+      else if (!green(job)) waiting.push(`${name} job ${job.name} finished ${job.conclusion}`)
+    }
+    if (waiting.length === before && run.status !== "completed") waiting.push(`${name} to finish (more of its jobs have not started)`)
+    else if (waiting.length === before && judged.length === 0 && run.status === "completed" && run.conclusion !== "success") waiting.push(`${name} finished ${run.conclusion} with no job to judge`)
+  }
+  const { runs } = await readChecks(ctx, state, relay.repo, sha)
+  const { statuses } = await readStatuses(ctx, state, relay.repo, sha)
+  // A job name an advisory workflow shares with a required workflow's job stays judged: only the operator's own advisoryJobs may silence it.
+  const ignored = [...advisoryJobs, ...derived.filter((name) => !requiredJobs.some((required) => sameName(required, name)))]
+  const kept = runs.filter((run) => !jobNamed(run.name, ignored))
+  warnings.push(...runs.filter((run) => jobNamed(run.name, ignored) && run.status === "completed" && !SKIPPED_PASSES.has(run.conclusion) && run.conclusion !== "success").map((run) => `${run.name} ${run.conclusion} (advisory)`))
+  waiting.push(...waitingOnChecks(relay.requiredChecks, kept, relay.skippedPasses, statuses))
+  return { waiting, warnings: [...new Set(warnings)] }
+}
+
+/** Whether the head holds the base's tip: `ahead` and `identical` do, `behind` and `diverged` do not. */
+async function headIsBehind(ctx, state, relay, pr) {
+  const route = `/repos/${relay.repo}/compare/${encodeURIComponent(pr.baseRef)}...${pr.headSha}?per_page=1`
+  const { status } = await cached(ctx, state, route, (body) => ({ status: body.status }))
+  return status === "behind" || status === "diverged"
+}
+
+/** Brings the head up to the base once per head. A refusal (a conflict, say) is remembered and reported, never retried for that head. */
+async function updateBranch(ctx, state, relay, record, pr, number) {
+  const response = await ctx.api.send("PUT", `/repos/${relay.repo}/pulls/${number}/update-branch`, { expected_head_sha: pr.headSha })
+  record.update = { from: pr.headSha, at: new Date(ctx.now).toISOString(), ...(response.ok ? {} : { failed: response.body.message ?? `HTTP ${response.status}` }) }
+  note(state, ctx.now, { event: "updated-branch", number, ok: response.ok, ...(record.update.failed ? { reason: record.update.failed } : {}) })
+  return updateWaiting(record, pr)
+}
+
+const updateWaiting = (record, pr) => record.update.failed
+  ? [`could not update the branch to ${pr.baseRef} (${record.update.failed}); it needs a push that brings in ${pr.baseRef}`]
+  : [`updated branch to ${pr.baseRef}; waiting for GitHub to publish the new head, then for its checks`]
 
 async function findComment(api, repo, number, marker, login) {
   for (let page = 1; page <= COMMENT_PAGES; page++) {
@@ -445,8 +556,9 @@ async function writeStatus(ctx, relay, number, record, text, { final }) {
 }
 
 const short = (sha) => String(sha).slice(0, 7)
-const waitingText = (relay, pr, waiting) => `**${relay.label}** has not merged this yet (head \`${short(pr.headSha)}\`). Waiting on:\n${waiting.map((line) => `- ${line}`).join("\n")}\n\nThis comment is edited as that changes.`
-const mergedText = (relay, pr, sha, deleted, judged) => `**${relay.label}** merged this (${relay.method}, head \`${short(pr.headSha)}\`, now \`${short(sha)}\`). Every check and status on the head was green${judged ? ` and ${judged.branch}'s latest completed ${relay.requireMainWorkflowGreen} run ${judged.id} (${judged.url}) was green` : ""}${deleted ? "; the branch is deleted" : ""}.`
+const advisoryText = (warnings) => (warnings?.length > 0 ? `\n\nAdvisory, not judged: ${warnings.join("; ")}.` : "")
+const waitingText = (relay, pr, waiting, warnings) => `**${relay.label}** has not merged this yet (head \`${short(pr.headSha)}\`). Waiting on:\n${waiting.map((line) => `- ${line}`).join("\n")}${advisoryText(warnings)}\n\nThis comment is edited as that changes.`
+const mergedText = (relay, pr, sha, deleted, judged, warnings) => `**${relay.label}** merged this (${relay.method}, head \`${short(pr.headSha)}\`, now \`${short(sha)}\`). ${relay.strict ? `Every job of ${relay.strict.requiredWorkflows.join(", ")} on the head finished green${relay.strict.requireCurrentBase ? ` and the head contained ${pr.baseRef}` : ""}, and every other check and status was green` : "Every check and status on the head was green"}${judged ? ` and ${judged.branch}'s latest completed ${relay.requireMainWorkflowGreen} run ${judged.id} (${judged.url}) was green` : ""}${deleted ? "; the branch is deleted" : ""}.${advisoryText(warnings)}`
 
 async function deleteBranch(ctx, relay, pr) {
   if (!relay.deleteBranch || !pr.headRepo || pr.headRepo.toLowerCase() !== pr.baseRepo.toLowerCase() || pr.headRef === pr.baseRef) return false
@@ -461,7 +573,7 @@ const waitReadMs = (record, now) => Math.min(WAIT_READ_MAX_MS, Math.max(WAIT_REA
 function skipRead(relay, state, ctx, number) {
   const record = state.prs[number]
   if (record?.status !== "waiting" || !record.readAt || ctx.now >= Date.parse(record.readAt) + waitReadMs(record, ctx.now)) return false
-  for (const route of Object.keys(state.cache)) if (route.endsWith(`/pulls/${number}`) || (record.headSha && route.includes(`/commits/${record.headSha}/`)) || route === `/repos/${relay.repo}` || route.includes("/workflows/")) ctx.touched.add(route)
+  for (const route of Object.keys(state.cache)) if (route.endsWith(`/pulls/${number}`) || (record.headSha && route.includes(`/commits/${record.headSha}/`)) || route === `/repos/${relay.repo}` || route.includes("/workflows/") || route.includes("/actions/runs") || route.includes("/compare/")) ctx.touched.add(route)
   return true
 }
 
@@ -474,14 +586,22 @@ async function handlePull(relay, state, ctx, number) {
   if (record.headSha !== pr.headSha || !record.firstReadAt) record.firstReadAt = new Date(ctx.now).toISOString()
   record.readAt = new Date(ctx.now).toISOString()
   record.headSha = pr.headSha
-  let waiting = waitingOnPull(pr)
+  const { strict } = relay
+  let waiting = waitingOnPull(pr, Boolean(strict?.requireCurrentBase))
   let mainBranch
   let judged
+  let warnings = []
   if (!pr.labels.includes(relay.label)) waiting = [`the ${relay.label} label is gone`]
+  if (waiting.length === 0 && strict?.requireCurrentBase && (await headIsBehind(ctx, state, relay, pr))) waiting = record.update?.from === pr.headSha ? updateWaiting(record, pr) : await updateBranch(ctx, state, relay, record, pr, number)
   if (waiting.length === 0) {
-    const { runs } = await readChecks(ctx, state, relay.repo, pr.headSha)
-    const { statuses } = await readStatuses(ctx, state, relay.repo, pr.headSha)
-    waiting = waitingOnChecks(relay.requiredChecks, runs, relay.skippedPasses, statuses)
+    if (strict) {
+      ;({ waiting, warnings } = await strictChecks(relay, state, ctx, pr.headSha))
+      if (waiting.length > 0 && record.update && !record.update.failed && record.update.from !== pr.headSha) waiting.unshift(`updated branch to ${pr.baseRef} (the head was ${short(record.update.from)}); waiting for ${strict.requiredWorkflows.join(", ")} on the new head`)
+    } else {
+      const { runs } = await readChecks(ctx, state, relay.repo, pr.headSha)
+      const { statuses } = await readStatuses(ctx, state, relay.repo, pr.headSha)
+      waiting = waitingOnChecks(relay.requiredChecks, runs, relay.skippedPasses, statuses)
+    }
     if (relay.requireMainWorkflowGreen) {
       mainBranch = await cached(ctx, state, `/repos/${relay.repo}`, (body) => body.default_branch)
       const main = await readMain(ctx, state, relay.repo, relay.requireMainWorkflowGreen, mainBranch)
@@ -496,7 +616,7 @@ async function handlePull(relay, state, ctx, number) {
   if (waiting.length > 0) {
     if (JSON.stringify(record.waitingOn) !== JSON.stringify(waiting)) note(state, ctx.now, { event: "waiting", number, on: waiting })
     Object.assign(record, { status: "waiting", waitingOn: waiting, at: new Date(ctx.now).toISOString() })
-    await writeStatus(ctx, relay, number, record, waitingText(relay, pr, waiting), { final: false })
+    await writeStatus(ctx, relay, number, record, waitingText(relay, pr, waiting, warnings), { final: false })
     return
   }
   // The head sha makes GitHub refuse the merge if a push landed after the checks were read.
@@ -513,7 +633,7 @@ async function handlePull(relay, state, ctx, number) {
   prs[number] = { status: "merged", headSha: pr.headSha, sha: response.body.sha, at, commentId: record.commentId, commentAt: record.commentAt }
   note(state, ctx.now, { event: "merged", number, sha: response.body.sha, branchDeleted: deleted })
   ctx.save()
-  await writeStatus(ctx, relay, number, prs[number], mergedText(relay, pr, response.body.sha, deleted, judged), { final: true })
+  await writeStatus(ctx, relay, number, prs[number], mergedText(relay, pr, response.body.sha, deleted, judged, warnings), { final: true })
 }
 
 /** Merges each labelled open pull request whose checks and statuses are all green, the required ones included (and the default branch's workflow, when named),, and keeps its status comment current. */

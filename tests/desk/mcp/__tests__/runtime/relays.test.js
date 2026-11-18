@@ -588,6 +588,144 @@ test("merge-when-green: a red or missing main run, a draft, a conflict and branc
   assert.equal(await why(NOW, { pr: { labels: [] } }), "the merge-when-green label is gone")
 })
 
+const STRICT = { requiredWorkflows: ["ci"], advisoryJobs: ["budget"], advisoryWorkflows: ["resource"], requireCurrentBase: true }
+const STRICT_RELAY = { ...MERGE, strict: STRICT }
+const job = (name, conclusion = "success", status = "completed") => ({ name, status, conclusion: status === "completed" ? conclusion : null })
+
+/** A strict world: the ci workflow's jobs, a resource workflow, and where the head stands against main. */
+function strictWorld(world, { jobs = [job("typecheck"), job("npm test (ubuntu-latest, 1/2)"), job("budget")], resourceJobs = [job("resource-macos")], compare = "ahead", ciStatus = "completed", checks = GREEN, runs = null, jobsTotal = null } = {}) {
+  mergeWorld(world, { checks })
+  world.on("GET", /\/actions\/runs\?head_sha=a+/u, () => ({ total_count: 2, workflow_runs: runs ?? [{ id: 100, workflow_id: 1, name: "ci", path: ".github/workflows/ci.yml", status: "completed", conclusion: "failure", run_number: 3 }, { id: 101, workflow_id: 1, name: "ci", path: ".github/workflows/ci.yml", status: ciStatus, conclusion: ciStatus === "completed" ? "failure" : null, run_number: 5 }, { id: 99, workflow_id: 1, name: "ci", path: ".github/workflows/ci.yml", status: "completed", conclusion: "failure", run_number: 4 }, { id: 102, workflow_id: 2, name: "resource", path: ".github/workflows/resource.yml", status: "completed", conclusion: "failure", run_number: 2 }] }))
+  world.on("GET", /\/actions\/runs\/101\/jobs/u, () => ({ total_count: jobsTotal ?? jobs.length, jobs }))
+  world.on("GET", /\/actions\/runs\/102\/jobs/u, () => ({ total_count: resourceJobs.length, jobs: resourceJobs }))
+  world.on("GET", /\/compare\/main\.\.\.a+/u, () => ({ status: compare }))
+  world.on("PUT", /\/pulls\/7\/update-branch$/u, () => ({ ok: true, status: 202, body: { message: "Updating pull request branch." } }))
+}
+
+test("strict: a green current head merges, naming advisory jobs that are red as warnings it does not judge", async () => {
+  const w = await setup([STRICT_RELAY])
+  strictWorld(w.world, { jobs: [job("typecheck"), job("npm test (ubuntu-latest, 1/2)"), job("budget", "failure")], checks: [...GREEN, check("budget", "failure"), check("resource-macos", "failure")] })
+  const polled = await w.poll()
+  assert.deepEqual(polled.errors, [])
+  assert.equal(prWrites(w.world).length, 1)
+  assert.equal(w.world.writes.some((write) => write.route.endsWith("/update-branch")), false)
+  assert.match(comments(w.world)[0].body.body, /Every job of ci on the head finished green and the head contained main.*Advisory, not judged: ci job budget failure \(advisory\); budget failure \(advisory\); resource-macos failure \(advisory\)\./su)
+})
+
+test("strict: a job an advisory workflow shares a name with a required job of ci stays judged", async () => {
+  const w = await setup([STRICT_RELAY])
+  strictWorld(w.world, { jobs: [job("typecheck", "failure"), job("budget")], resourceJobs: [job("typecheck", "failure")], checks: [check("typecheck", "failure"), check("npm test (ubuntu-latest, 1/2)")] })
+  await w.poll()
+  assert.deepEqual(prWrites(w.world), [])
+  assert.deepEqual(w.state("pages merge").prs["7"].waitingOn.slice(0, 1), ["ci job typecheck finished failure"])
+})
+
+test("strict: a red or pending job of the required workflow holds the merge and the status names it", async () => {
+  const red = await setup([STRICT_RELAY])
+  strictWorld(red.world, { jobs: [job("typecheck", "failure"), job("budget")] })
+  await red.poll()
+  assert.deepEqual(prWrites(red.world), [])
+  assert.deepEqual(red.state("pages merge").prs["7"].waitingOn, ["ci job typecheck finished failure"])
+
+  const pending = await setup([STRICT_RELAY])
+  strictWorld(pending.world, { jobs: [job("typecheck"), job("npm test (ubuntu-latest, 1/2)", null, "in_progress")], ciStatus: "in_progress" })
+  await pending.poll()
+  assert.deepEqual(prWrites(pending.world), [])
+  assert.deepEqual(pending.state("pages merge").prs["7"].waitingOn, ["ci job npm test (ubuntu-latest, 1/2) to finish (in_progress)"])
+  assert.match(relayStatusLines([STRICT_RELAY], { "pages merge": pending.state("pages merge") }, NOW)[0], /#7 waiting on ci job npm test/u)
+
+  const unstarted = await setup([STRICT_RELAY])
+  strictWorld(unstarted.world, { jobs: [job("typecheck")], ciStatus: "in_progress" })
+  await unstarted.poll()
+  assert.deepEqual(unstarted.state("pages merge").prs["7"].waitingOn, ["ci to finish (more of its jobs have not started)"])
+})
+
+test("strict: a head behind main is updated once with its expected head, never merged, and then waits for ci on the new head", async () => {
+  const w = await setup([STRICT_RELAY])
+  strictWorld(w.world, { compare: "behind" })
+  await w.poll(NOW)
+  assert.deepEqual(prWrites(w.world), [{ method: "PUT", route: "/repos/o/pages/pulls/7/update-branch", body: { expected_head_sha: SHA } }])
+  assert.match(w.state("pages merge").prs["7"].waitingOn[0], /^updated branch to main; waiting for GitHub to publish the new head/u)
+  await w.poll(NOW + 5 * MIN)
+  assert.equal(prWrites(w.world).length, 1, "the same head is not updated twice")
+
+  const NEW = "c".repeat(40)
+  w.world.pull(7, { head: { sha: NEW, ref: "feature/x", repo: { full_name: "o/pages" } } })
+  w.world.on("GET", /\/compare\/main\.\.\.c+/u, () => ({ status: "ahead" }))
+  w.world.on("GET", /\/actions\/runs\?head_sha=c+/u, () => ({ total_count: 1, workflow_runs: [{ id: 103, workflow_id: 1, name: "ci", path: ".github/workflows/ci.yml", status: "in_progress", conclusion: null, run_number: 6 }] }))
+  w.world.on("GET", /\/commits\/c+\/check-runs/u, () => ({ total_count: 0, check_runs: [] }))
+  w.world.on("GET", /\/commits\/c+\/status/u, () => ({ state: "pending", total_count: 0, statuses: [] }))
+  w.world.on("GET", /\/actions\/runs\/103\/jobs/u, () => ({ total_count: 1, jobs: [job("typecheck", null, "in_progress")] }))
+  assert.deepEqual((await w.poll(NOW + 10 * MIN)).errors, [])
+  assert.equal(prWrites(w.world).length, 1)
+  assert.deepEqual(w.state("pages merge").prs["7"].waitingOn.slice(0, 2), [`updated branch to main (the head was ${SHA.slice(0, 7)}); waiting for ci on the new head`, "ci job typecheck to finish (in_progress)"])
+})
+
+test("strict: a conflict from update-branch is reported once and not retried for that head", async () => {
+  const w = await setup([STRICT_RELAY])
+  strictWorld(w.world, { compare: "diverged" })
+  w.world.on("PUT", /\/pulls\/7\/update-branch$/u, () => ({ ok: false, status: 422, body: { message: "merge conflict between base and head" } }))
+  await w.poll(NOW)
+  await w.poll(NOW + 5 * MIN)
+  assert.equal(prWrites(w.world).length, 1)
+  assert.match(w.state("pages merge").prs["7"].waitingOn[0], /could not update the branch to main \(merge conflict between base and head\)/u)
+})
+
+test("strict: a pull request GitHub's branch rules call behind is updated too, and a head already current is not", async () => {
+  const behind = await setup([STRICT_RELAY])
+  strictWorld(behind.world, { compare: "behind" })
+  behind.world.pull(7, { mergeable_state: "behind" })
+  await behind.poll()
+  assert.equal(prWrites(behind.world).length, 1)
+  const current = await setup([STRICT_RELAY])
+  strictWorld(current.world, { compare: "identical" })
+  await current.poll()
+  assert.equal(current.world.writes.some((write) => write.route.endsWith("/update-branch")), false)
+})
+
+test("strict: edge cases: no ci run yet, no jobs, a long job list, advisory jobs still running or skipped, and no currency check", async () => {
+  const none = await setup([STRICT_RELAY])
+  strictWorld(none.world, { runs: [] })
+  await none.poll()
+  assert.deepEqual(none.state("pages merge").prs["7"].waitingOn, ["ci has not started on this head"])
+
+  const empty = await setup([STRICT_RELAY])
+  strictWorld(empty.world, { jobs: [] })
+  await empty.poll()
+  assert.deepEqual(empty.state("pages merge").prs["7"].waitingOn, ["ci finished failure with no job to judge"])
+
+  const long = await setup([STRICT_RELAY])
+  strictWorld(long.world, { jobsTotal: 150 })
+  await long.poll()
+  assert.equal(long.world.reads.some((read) => read.route.includes("/runs/101/jobs") && read.route.endsWith("&page=2")), true)
+
+  const lenient = await setup([{ ...STRICT_RELAY, skippedPasses: true, strict: { ...STRICT, requireCurrentBase: false } }])
+  strictWorld(lenient.world, { compare: "behind", jobs: [job("typecheck"), job("e2e", "skipped"), job("budget", null, "in_progress")], checks: [...GREEN, check("budget", null, "in_progress")] })
+  await lenient.poll()
+  assert.equal(lenient.world.writes.some((write) => write.route.endsWith("/update-branch")), false, "without requireCurrentBase the head is not compared or updated")
+  assert.equal(prWrites(lenient.world).length, 1)
+  assert.match(comments(lenient.world)[0].body.body, /finished green, and every other check/u)
+  assert.match(comments(lenient.world)[0].body.body, /ci job budget in_progress \(advisory\)/u)
+
+  const refused = await setup([STRICT_RELAY])
+  strictWorld(refused.world, { compare: "behind" })
+  refused.world.on("PUT", /\/pulls\/7\/update-branch$/u, () => ({ ok: false, status: 500, body: {} }))
+  await refused.poll()
+  assert.match(refused.state("pages merge").prs["7"].waitingOn[0], /could not update the branch to main \(HTTP 500\)/u)
+})
+
+test("a strict block is validated: bad or unknown fields fail loudly", () => {
+  const bad = (strict, message) => assert.throws(() => parseRelayConfig(JSON.stringify({ relays: [{ ...MERGE, strict }] }), "relays.json"), message)
+  bad("ci", /strict is not an object/u)
+  bad({}, /strict\.requiredWorkflows is not a non-empty list/u)
+  bad({ requiredWorkflows: ["ci"], advisoryJob: ["x"] }, /strict\.advisoryJob is not a strict field/u)
+  bad({ requiredWorkflows: ["ci"], advisoryJobs: "x" }, /advisoryJobs is not a list of names/u)
+  bad({ requiredWorkflows: ["ci"], advisoryWorkflows: [5] }, /advisoryWorkflows is not a list of names/u)
+  bad({ requiredWorkflows: ["ci"], requireCurrentBase: "yes" }, /requireCurrentBase is not true or false/u)
+  const [parsed] = parseRelayConfig(JSON.stringify({ relays: [{ ...MERGE, strict: { requiredWorkflows: [" ci "] } }] }), "relays.json")
+  assert.deepEqual(parsed.strict, { requiredWorkflows: ["ci"], advisoryJobs: [], advisoryWorkflows: [], requireCurrentBase: true })
+})
+
 test("merge-when-green: a queued or in-progress main run is not judged, so the latest completed green one counts and is named", async () => {
   const w = await setup([MERGE])
   mergeWorld(w.world, { main: [{ id: 11, status: "queued", conclusion: null }, { id: 10, status: "in_progress", conclusion: null }, { id: 9, conclusion: "success" }] })
