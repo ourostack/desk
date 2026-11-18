@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.284 — 2026-11-18
+
+Desk's MCP server now vendors Ouro UI v1.3.311, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.283 — 2026-11-18
 
 Publication now closes the earlier `desk/publish/*` pull requests that a newer candidate supersedes, so an unmerged one no longer stays open until someone closes it by hand.
