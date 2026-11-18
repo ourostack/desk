@@ -50,33 +50,36 @@ const personal = (topic, body) => ({ scope: "personal", topic, body })
 
 // ── personal ────────────────────────────────────────────────────────────────
 
-test("lesson_add personal creates AGENTS.md with a Lessons section and says session start loads it", async () => {
+const SHELF_LESSONS = (rule) => new RegExp(`^# Shelved lessons\\n[\\s\\S]*## Lessons\\n\\n${rule}$`, "u")
+
+test("lesson_add personal writes the lesson to LESSONS.md, never AGENTS.md, and says session start lists it", async () => {
   const root = await mkTempDeskRoot()
+  const agents = "# Desk\n\nRules.\n"
+  await fs.writeFile(path.join(root, "AGENTS.md"), agents, "utf8")
   const result = await lesson_add({ deskRoot: root, input: personal("Answer before a long wait.", "Reply to the operator before starting a blocking wait.") })
   assert.equal(result.status, "added")
   assert.equal(result.scope, "personal")
-  assert.equal(result.path, "AGENTS.md")
+  assert.equal(result.path, "LESSONS.md")
+  assert.equal(result.tier, "shelf")
   assert.equal(result.in_effect, true)
-  assert.match(result.message, /session start prints for you/u)
-  assert.match(result.message, /AGENTS\.md/u)
-  const content = await fs.readFile(path.join(root, "AGENTS.md"), "utf8")
-  assert.match(content, new RegExp(`^## Lessons\\n\\n- \\*\\*Answer before a long wait\\.\\*\\* Reply to the operator before starting a blocking wait\\. \\(${DAY}\\)\\n$`, "u"))
+  assert.match(result.message, /session start lists this topic/u)
+  assert.equal(await fs.readFile(path.join(root, "AGENTS.md"), "utf8"), agents)
+  assert.match(await fs.readFile(path.join(root, "LESSONS.md"), "utf8"), SHELF_LESSONS(`- \\*\\*Answer before a long wait\\.\\*\\* Reply to the operator before starting a blocking wait\\. \\(${DAY}\\)\\n`))
 })
 
-test("lesson_add personal adds to the end of an existing Lessons section, before the next section", async () => {
+test("lesson_add personal creates no AGENTS.md when the desk has none", async () => {
   const root = await mkTempDeskRoot()
-  const before = "# Desk\n\n## Operator\n\n- Ari.\n\n## Lessons\n\n- **Old.** Old rule. (2026-01-01)\n\n## North Star\n\nText.\n"
-  await fs.writeFile(path.join(root, "AGENTS.md"), before, "utf8")
-  await lesson_add({ deskRoot: root, input: personal("New", "New rule.") })
-  const content = await fs.readFile(path.join(root, "AGENTS.md"), "utf8")
-  assert.match(content, new RegExp(`^# Desk\\n\\n## Operator\\n\\n- Ari\\.\\n\\n## Lessons\\n\\n- \\*\\*Old\\.\\*\\* Old rule\\. \\(2026-01-01\\)\\n- \\*\\*New\\.\\*\\* New rule\\. \\(${DAY}\\)\\n\\n## North Star\\n\\nText\\.\\n$`, "u"))
-})
-
-test("lesson_add personal appends a Lessons section to an AGENTS.md that has none", async () => {
-  const root = await mkTempDeskRoot()
-  await fs.writeFile(path.join(root, "AGENTS.md"), "# Desk\n\nRules.", "utf8")
   await lesson_add({ deskRoot: root, input: personal("Rule", "Do it.") })
-  assert.match(await fs.readFile(path.join(root, "AGENTS.md"), "utf8"), new RegExp(`^# Desk\\n\\nRules\\.\\n\\n## Lessons\\n\\n- \\*\\*Rule\\.\\*\\* Do it\\. \\(${DAY}\\)\\n$`, "u"))
+  assert.equal(await exists(path.join(root, "AGENTS.md")), false)
+  assert.ok(await exists(path.join(root, "LESSONS.md")))
+})
+
+test("lesson_add personal adds to the end of the shelf's Lessons section", async () => {
+  const root = await mkTempDeskRoot()
+  await lesson_add({ deskRoot: root, input: personal("Old", "Old rule.") })
+  await lesson_add({ deskRoot: root, input: personal("New", "New rule.") })
+  const lines = (await fs.readFile(path.join(root, "LESSONS.md"), "utf8")).split("\n").filter((line) => line.startsWith("- **"))
+  assert.deepEqual(lines.map((line) => line.slice(0, 9)), ["- **Old.*", "- **New.*"])
 })
 
 test("lesson_add personal replaces the line for the same topic instead of adding a second one", async () => {
@@ -85,18 +88,27 @@ test("lesson_add personal replaces the line for the same topic instead of adding
   await lesson_add({ deskRoot: root, input: personal("Other", "Other rule.") })
   const result = await lesson_add({ deskRoot: root, input: personal("Rule.", "Second wording.") })
   assert.equal(result.status, "updated")
-  const content = await fs.readFile(path.join(root, "AGENTS.md"), "utf8")
+  const content = await fs.readFile(path.join(root, "LESSONS.md"), "utf8")
   assert.equal(content.includes("First wording"), false)
-  assert.match(content, new RegExp(`\\n- \\*\\*Rule\\.\\*\\* Second wording\\. \\(${DAY}\\)\\n- \\*\\*Other\\.\\*\\* Other rule\\.`, "u"))
+  assert.match(content, new RegExp(`\\n- \\*\\*Rule\\.\\*\\* Second wording\\. \\(${DAY}\\)\\n`, "u"))
+  assert.match(content, /\n- \*\*Other\.\*\* Other rule\./u)
 })
 
-test("lesson_add personal with a person writes that person's AGENTS.md in a shared workspace", async () => {
+test("lesson_add personal takes an older AGENTS.md line on the same topic off, and touches nothing else in the file", async () => {
+  const root = await mkTempDeskRoot()
+  const before = "# Desk\n\nRules.\n\n## Lessons\n\n- **Rule.** Old wording. (2026-01-01)\n- **Other.** Kept. (2026-01-02)\n"
+  await fs.writeFile(path.join(root, "AGENTS.md"), before, "utf8")
+  await lesson_add({ deskRoot: root, input: personal("Rule", "New wording.") })
+  assert.equal(await fs.readFile(path.join(root, "AGENTS.md"), "utf8"), "# Desk\n\nRules.\n\n## Lessons\n\n- **Other.** Kept. (2026-01-02)\n")
+})
+
+test("lesson_add personal with a person writes that person's LESSONS.md in a shared workspace", async () => {
   const root = await crewRoot()
   const result = await lesson_add({ deskRoot: root, person: "ari", personOf: async () => ({ status: "ok", personPrefix: "desks/ari" }), input: personal("Rule", "Do it.") })
-  assert.equal(result.path, path.posix.join("desks", "ari", "AGENTS.md"))
+  assert.equal(result.path, path.posix.join("desks", "ari", "LESSONS.md"))
   assert.equal(result.in_effect, true)
-  assert.ok(await exists(path.join(root, "desks", "ari", "AGENTS.md")))
-  assert.equal(await exists(path.join(root, "AGENTS.md")), false)
+  assert.ok(await exists(path.join(root, "desks", "ari", "LESSONS.md")))
+  assert.equal(await exists(path.join(root, "LESSONS.md")), false)
 })
 
 test("lesson_add personal refuses in a shared workspace when the session has no person, so the team's AGENTS.md is never written", async () => {
@@ -111,7 +123,7 @@ test("lesson_add personal is not in effect when session start resolves a differe
   const root = await crewRoot()
   const other = await lesson_add({ deskRoot: root, person: "ari", personOf: async () => ({ status: "ok", personPrefix: "desks/bo" }), input: personal("Rule", "Do it.") })
   assert.equal(other.in_effect, false)
-  assert.equal(other.message, "Written to desks/ari/AGENTS.md, but not in effect: session start on this desk prints desks/bo/AGENTS.md, not this file; set DESK_PERSON to the alias this session writes for.")
+  assert.equal(other.message, "Written to desks/ari/LESSONS.md, but not in effect: session start on this desk prints desks/bo/AGENTS.md, not this file; set DESK_PERSON to the alias this session writes for.")
   const none = await lesson_add({ deskRoot: root, person: "ari", personOf: async () => ({ status: "unresolved", reason: "login_not_cached" }), input: personal("Rule", "Do it.") })
   assert.equal(none.in_effect, false)
   assert.match(none.message, /cannot tell whose desk this is \(login_not_cached\)/u)
@@ -129,119 +141,57 @@ test("lesson_add personal asks session start's own lookup, with the call's envir
   assert.equal(unset.in_effect, false)
 })
 
-// The case from ourostack/desk#554: a Crew workspace whose team AGENTS.md is 12,215 bytes leaves 4 KB of the shared 16 KB for
-// a person's 10,171-byte AGENTS.md (ourostack/desk#659 raised that to the person's 8 KB floor). A new lesson used to be
-// refused; now the oldest lessons move to the shelf, and every one of them still loads.
-test("lesson_add personal past the shared budget keeps the new lesson in what session start prints, shelves the oldest, and drops none", async () => {
-  const root = await crewRoot()
-  await fs.writeFile(path.join(root, "AGENTS.md"), `# Crew\n\n${"Team rule line that binds every session here.\n".repeat(270)}`.padEnd(12_215, "t"), "utf8")
-  const lessons = Array.from({ length: 60 }, (_, index) => `- **Lesson ${index + 1}.** ${index === 1 ? "Validate Kusto dashboards against live data before import." : "A rule the desk learned the hard way, worded at a realistic length for one line."} (2026-${String(1 + Math.floor(index / 28)).padStart(2, "0")}-${String(1 + (index % 28)).padStart(2, "0")})`)
-  const mine = `# Ari\n\n${"Preference prose that is not a lesson.\n".repeat(50)}\n## Lessons\n\n${lessons.join("\n")}\n`
-  await fs.writeFile(path.join(root, "desks", "ari", "AGENTS.md"), mine.padEnd(10_171, " "), "utf8")
-  const result = await lesson_add({ deskRoot: root, person: "ari", personOf: async () => ({ status: "ok", personPrefix: "desks/ari" }), input: personal("Supervise overnight children with a host schedule", "Use a host schedule to supervise overnight child sessions, not in-session timers.") })
-  assert.deepEqual([result.status, result.tier, result.in_effect, result.path], ["added", "session_start", true, "desks/ari/AGENTS.md"])
-  const agents = await fs.readFile(path.join(root, "desks", "ari", "AGENTS.md"), "utf8")
-  const shelf = await fs.readFile(path.join(root, "desks", "ari", "LESSONS.md"), "utf8")
-  const printed = printedPart(agents, personAgentsCap(readAgentsMd(root)))
-  assert.match(printed, /\*\*Supervise overnight children with a host schedule\.\*\*/u, "the new lesson is in what session start prints")
-  for (const line of lessons) {
-    const inAgents = agents.includes(`${line}\n`)
-    assert.notEqual(inAgents, shelf.includes(`${line}\n`), `${line.slice(0, 20)} is in exactly one of the two files`)
-    if (inAgents) assert.ok(printed.includes(line), "a lesson left in AGENTS.md is one session start prints")
-  }
-  const shelved = lessonEntries(shelf).map((entry) => entry.topic)
-  assert.ok(shelved.length > 0)
-  assert.deepEqual(result.shelved, { path: "desks/ari/LESSONS.md", topics: shelved })
-  assert.match(result.message, new RegExp(`^In effect: the lesson is in desks/ari/AGENTS\\.md, which session start prints for you on this desk\\. To make room, ${shelved.length} older lessons moved to desks/ari/LESSONS\\.md, where session start lists their topics and task_focus returns them: (?:Lesson \\d+; )+Lesson 60; Lesson 1; Lesson 2\\.$`, "u"), "lessons already past the cut move first")
-  assert.deepEqual(shelved.slice(-2), ["Lesson 1", "Lesson 2"], "then the oldest, until the new one fits")
-  // Session start lists every shelved topic, and focusing a task returns the shelved lessons, those closest to it first.
-  assert.deepEqual(shelfIndex(path.join(root, "desks", "ari")).topics, shelved)
-  await task_create({ deskRoot: root, person: "ari", input: { track: "ops", slug: "dashboard-tiles", title: "Fix the Kusto dashboard tiles", status: "processing" } })
-  const focus = await taskFocus({ deskRoot: root, person: "ari", input: { track: "ops", slug: "dashboard-tiles" } })
-  assert.equal(focus.shelved_lessons.path, "desks/ari/LESSONS.md")
-  assert.match(focus.shelved_lessons.lessons[0], /^- \*\*Lesson 2\.\*\* Validate Kusto dashboards/u)
-  assert.equal(focus.shelved_lessons.lessons.length + focus.shelved_lessons.not_shown, shelved.length)
-})
-
-test("lesson_add personal puts the lesson on the shelf when the rest of AGENTS.md leaves it no room, and says so", async () => {
+test("lesson_add personal never grows AGENTS.md, however large it is, and the shelf takes every lesson", async () => {
   const root = await mkTempDeskRoot()
   const big = `# Desk\n\n${"x".repeat(AGENTS_MD_CAP_BYTES - 20)}\n`
   await fs.writeFile(path.join(root, "AGENTS.md"), big, "utf8")
   const result = await lesson_add({ deskRoot: root, input: personal("Rule", "Do it.") })
-  assert.deepEqual([result.status, result.tier, result.path, result.in_effect, result.shelved], ["added", "shelf", "LESSONS.md", true, undefined])
-  assert.equal(result.message, "In effect: the lesson is in LESSONS.md, the lesson shelf: AGENTS.md has no room left in what session start prints once its other rules are in, so session start lists this topic and task_focus returns the lesson for the task you focus.")
-  assert.equal(await fs.readFile(path.join(root, "AGENTS.md"), "utf8"), big, "AGENTS.md is left as it was")
+  assert.deepEqual([result.status, result.tier, result.path, result.in_effect], ["added", "shelf", "LESSONS.md", true])
+  assert.equal(await fs.readFile(path.join(root, "AGENTS.md"), "utf8"), big)
   const shelf = await fs.readFile(path.join(root, "LESSONS.md"), "utf8")
   assert.ok(shelf.startsWith(SHELF_HEADER))
   assert.match(shelf, new RegExp(`\\n## Lessons\\n\\n- \\*\\*Rule\\.\\*\\* Do it\\. \\(${DAY}\\)\\n$`, "u"))
   const again = await lesson_add({ deskRoot: root, input: personal("Rule", "Do it.") })
-  assert.deepEqual([again.status, again.tier], ["unchanged", "shelf"])
+  assert.equal(again.status, "unchanged")
 })
 
-test("lesson_add personal moves lessons already past the cut to the shelf, since nothing loads them where they are", async () => {
-  const root = await crewRoot()
-  await fs.writeFile(path.join(root, "AGENTS.md"), `# Crew\n\n${"x".repeat(AGENTS_MD_CAP_BYTES - 40)}\n`, "utf8")
-  await fs.writeFile(path.join(root, "desks", "ari", "AGENTS.md"), `# Ari\n\n${"Preference prose.\n".repeat(500)}\n## Lessons\n\n- **Hidden.** Past the cut. (2026-01-01)\n`, "utf8")
-  const result = await lesson_add({ deskRoot: root, person: "ari", input: personal("Rule", "Do it.") })
-  assert.deepEqual([result.tier, result.path, result.shelved.topics], ["shelf", "desks/ari/LESSONS.md", ["Hidden"]])
-  assert.equal((await fs.readFile(path.join(root, "desks", "ari", "AGENTS.md"), "utf8")).includes("Hidden"), false)
-  assert.deepEqual(lessonEntries(await fs.readFile(path.join(root, "desks", "ari", "LESSONS.md"), "utf8")).map((entry) => entry.topic), ["Hidden", "Rule"])
-})
-
-test("lesson_add personal brings a shelved topic back to AGENTS.md when recorded again, or replaces it in place on the shelf when there is no room", async () => {
-  const root = await mkTempDeskRoot()
-  await fs.writeFile(path.join(root, "LESSONS.md"), `${SHELF_HEADER}\n## Lessons\n\n- **Rule.** Old words. (2026-01-01)\n- **Other.** Stays. (2026-01-02)\n`, "utf8")
-  const back = await lesson_add({ deskRoot: root, input: personal("Rule", "New words.") })
-  assert.deepEqual([back.status, back.tier, back.path], ["updated", "session_start", "AGENTS.md"])
-  assert.match(await fs.readFile(path.join(root, "AGENTS.md"), "utf8"), /\*\*Rule\.\*\* New words\./u)
-  assert.deepEqual(lessonEntries(await fs.readFile(path.join(root, "LESSONS.md"), "utf8")).map((entry) => entry.line), ["- **Other.** Stays. (2026-01-02)"])
-
-  const full = await mkTempDeskRoot()
-  await fs.writeFile(path.join(full, "AGENTS.md"), `# Desk\n\n${"x".repeat(AGENTS_MD_CAP_BYTES - 20)}\n`, "utf8")
-  await fs.writeFile(path.join(full, "LESSONS.md"), `${SHELF_HEADER}\n## Lessons\n\n- **Rule.** Old words. (2026-01-01)\n- **Other.** Stays. (2026-01-02)\n`, "utf8")
-  const kept = await lesson_add({ deskRoot: full, input: personal("Rule", "New words.") })
-  assert.deepEqual([kept.status, kept.tier], ["updated", "shelf"])
-  assert.deepEqual(lessonEntries(await fs.readFile(path.join(full, "LESSONS.md"), "utf8")).map((entry) => entry.topic), ["Rule", "Other"])
-})
-
-test("lesson_add personal writes the shelf before AGENTS.md, so a failed write leaves a moved lesson in both files, never in neither", { skip: process.platform === "win32" || process.getuid?.() === 0 }, async () => {
-  const root = await mkTempDeskRoot()
-  const old = Array.from({ length: 5 }, (_, index) => `- **Old ${index}.** ${"w".repeat(60)} (2026-01-0${index + 1})`)
-  const before = `# Desk\n\n${"x".repeat(AGENTS_MD_CAP_BYTES - 300)}\n\n## Lessons\n\n${old.join("\n")}\n`
-  await fs.writeFile(path.join(root, "AGENTS.md"), before, "utf8")
-  await fs.chmod(path.join(root, "AGENTS.md"), 0o444)
-  await assert.rejects(() => lesson_add({ deskRoot: root, input: personal("Rule", "Do it.") }), /EACCES|EPERM/u)
-  await fs.chmod(path.join(root, "AGENTS.md"), 0o644)
-  assert.equal(await fs.readFile(path.join(root, "AGENTS.md"), "utf8"), before)
-  const shelf = await fs.readFile(path.join(root, "LESSONS.md"), "utf8")
-  assert.ok(lessonEntries(shelf).length > 0)
-  for (const entry of lessonEntries(shelf)) assert.ok(before.includes(entry.line), "every shelved line is still in AGENTS.md too")
-})
-
-test("lesson_add personal commits AGENTS.md and the shelf together, in one commit", async () => {
+test("lesson_add personal writes nothing to a copy of the desk that is behind its remote", async () => {
+  const remote = await mkTempDeskRoot()
+  git(remote, ["init", "-q", "--bare", "-b", "main"])
   const root = await mkTempDeskRoot()
   initGit(root)
-  const old = Array.from({ length: 5 }, (_, index) => `- **Old ${index}.** ${"w".repeat(60)} (2026-01-0${index + 1})`)
-  await fs.writeFile(path.join(root, "AGENTS.md"), `# Desk\n\n${"x".repeat(AGENTS_MD_CAP_BYTES - 300)}\n\n## Lessons\n\n${old.join("\n")}\n`, "utf8")
+  git(root, ["checkout", "-q", "-b", "main"])
+  await fs.writeFile(path.join(root, "AGENTS.md"), `# Desk\n\n## Lessons\n\n- **Rule.** Old wording. (2026-01-01)\n`, "utf8")
+  git(root, ["add", "AGENTS.md"])
+  git(root, ["commit", "-q", "-m", "init"])
+  git(root, ["remote", "add", "origin", remote])
+  git(root, ["push", "-q", "-u", "origin", "main"])
+  const other = path.join(await mkTempDeskRoot(), "clone")
+  git(root, ["clone", "-q", remote, other])
+  git(other, ["config", "user.email", "t@example.com"])
+  git(other, ["config", "user.name", "T"])
+  const trimmed = "# Desk\n\nTrimmed.\n"
+  await fs.writeFile(path.join(other, "AGENTS.md"), trimmed, "utf8")
+  git(other, ["commit", "-q", "-am", "trim"])
+  git(other, ["push", "-q", "origin", "main"])
+  const result = await lesson_add({ deskRoot: root, schedulePush: () => {}, env: {}, input: personal("Rule", "New wording.") })
+  assert.equal(result.in_effect, true)
+  assert.equal(await fs.readFile(path.join(root, "AGENTS.md"), "utf8"), trimmed, "the stale AGENTS.md was brought up to date, not written back")
+  assert.match(await fs.readFile(path.join(root, "LESSONS.md"), "utf8"), /New wording\./u)
+})
+
+test("lesson_add personal commits only LESSONS.md, in one commit", async () => {
+  const root = await mkTempDeskRoot()
+  initGit(root)
+  await fs.writeFile(path.join(root, "AGENTS.md"), "# Desk\n", "utf8")
   git(root, ["add", "AGENTS.md"])
   git(root, ["commit", "-q", "-m", "init"])
   const result = await lesson_add({ deskRoot: root, schedulePush: () => {}, input: personal("Rule", "Do it.") })
-  assert.equal(result.tier, "session_start")
+  assert.equal(result.tier, "shelf")
   assert.equal(result.commit, undefined)
   assert.equal(result.in_effect, true)
-  assert.ok(result.shelved.topics.length > 0)
-  assert.deepEqual(git(root, ["show", "--name-only", "--format=", "HEAD"]).split("\n").filter(Boolean).sort(), ["AGENTS.md", "LESSONS.md"])
+  assert.deepEqual(git(root, ["show", "--name-only", "--format=", "HEAD"]).split("\n").filter(Boolean), ["LESSONS.md"])
   assert.equal(git(root, ["status", "--short"]).trim(), "")
-})
-
-test("lesson_add personal judges a lesson by the part of the file session start prints, even when the lesson fits but the file runs past it", async () => {
-  const root = await mkTempDeskRoot()
-  // The Lessons section comes first, so the new line lands near the top while the file as a whole passes the cap.
-  const long = `# Desk\n\n## Lessons\n\n- **Old.** Kept. (2026-01-01)\n\n## Notes\n\n${"x".repeat(AGENTS_MD_CAP_BYTES)}\n`
-  await fs.writeFile(path.join(root, "AGENTS.md"), long, "utf8")
-  const result = await lesson_add({ deskRoot: root, input: personal("Rule", "Do it.") })
-  assert.equal(result.in_effect, true)
-  assert.match(await fs.readFile(path.join(root, "AGENTS.md"), "utf8"), /\*\*Rule\.\*\* Do it\./u)
 })
 
 test("lesson_add personal treats the same lesson twice on one day as already in effect, with nothing to commit", async () => {
@@ -257,21 +207,18 @@ test("lesson_add personal treats the same lesson twice on one day as already in 
   assert.equal(pushes.length, 1)
 })
 
-test("lesson_add personal keeps a CRLF file's line ending and finds its Lessons section", async () => {
+test("lesson_add personal keeps a CRLF AGENTS.md's line ending when it takes an older line on the topic off", async () => {
   const root = await mkTempDeskRoot()
-  await fs.writeFile(path.join(root, "AGENTS.md"), "# Desk\r\n\r\n## Lessons\r\n\r\n- **Rule.** Old. (2026-01-01)\r\n\r\n## Next\r\n", "utf8")
-  await lesson_add({ deskRoot: root, input: personal("New", "New.") })
+  await fs.writeFile(path.join(root, "AGENTS.md"), "# Desk\r\n\r\n## Lessons\r\n\r\n- **Rule.** Old. (2026-01-01)\r\n- **Keep.** Kept. (2026-01-02)\r\n\r\n## Next\r\n", "utf8")
   const result = await lesson_add({ deskRoot: root, input: personal("Rule", "Replaced.") })
   assert.equal(result.status, "updated")
-  const content = await fs.readFile(path.join(root, "AGENTS.md"), "utf8")
-  assert.match(content, new RegExp(`^# Desk\\r\\n\\r\\n## Lessons\\r\\n\\r\\n- \\*\\*Rule\\.\\*\\* Replaced\\. \\(${DAY}\\)\\r\\n- \\*\\*New\\.\\*\\* New\\. \\(${DAY}\\)\\r\\n\\r\\n## Next\\r\\n$`, "u"))
-  assert.equal(content.match(/## Lessons/gu).length, 1)
+  assert.equal(await fs.readFile(path.join(root, "AGENTS.md"), "utf8"), "# Desk\r\n\r\n## Lessons\r\n\r\n- **Keep.** Kept. (2026-01-02)\r\n\r\n## Next\r\n")
 })
 
 test("lesson_add personal serialises writes to one AGENTS.md, so two at once both land", async () => {
   const root = await mkTempDeskRoot()
   await Promise.all(["One", "Two", "Three", "Four"].map((topic) => lesson_add({ deskRoot: root, input: personal(topic, `${topic} rule.`) })))
-  const content = await fs.readFile(path.join(root, "AGENTS.md"), "utf8")
+  const content = await fs.readFile(path.join(root, "LESSONS.md"), "utf8")
   for (const topic of ["One", "Two", "Three", "Four"]) assert.match(content, new RegExp(`\\*\\*${topic}\\.\\*\\*`, "u"))
   assert.equal(await exists(path.join(root, ".agents-md.lock")), false)
 })
@@ -280,7 +227,7 @@ test("lesson_add personal refuses, writing nothing, while another session holds 
   const root = await mkTempDeskRoot()
   await fs.mkdir(path.join(root, ".agents-md.lock", "held"), { recursive: true })
   await assert.rejects(() => lesson_add({ deskRoot: root, lockWaitMs: 30, input: personal("Rule", "Do it.") }), /another session is writing AGENTS\.md/u)
-  assert.equal(await exists(path.join(root, "AGENTS.md")), false)
+  assert.equal(await exists(path.join(root, "LESSONS.md")), false)
 })
 
 test("lesson_add checks its input", async () => {
@@ -296,7 +243,7 @@ test("lesson_add checks its input", async () => {
   assert.equal(await exists(path.join(root, "AGENTS.md")), false)
 })
 
-test("lesson_add personal commits exactly AGENTS.md and schedules one push", async () => {
+test("lesson_add personal commits exactly LESSONS.md and schedules one push", async () => {
   const root = await mkTempDeskRoot()
   initGit(root)
   await fs.writeFile(path.join(root, "other.md"), "x", "utf8")
@@ -305,26 +252,26 @@ test("lesson_add personal commits exactly AGENTS.md and schedules one push", asy
   const result = await lesson_add({ deskRoot: root, input: personal("Rule", "Do it."), schedulePush: (opts) => calls.push(opts) })
   assert.equal(result.commit, undefined)
   assert.equal(result.in_effect, true)
-  assert.equal(result.message, "In effect: the lesson is in AGENTS.md, which session start prints for you on this desk.")
+  assert.equal(result.message, "In effect: the lesson is in LESSONS.md, the lesson shelf: AGENTS.md stays small, so session start lists this topic and task_focus returns the lesson for the task you focus.")
   assert.equal(git(root, ["log", "-1", "--format=%s"]).trim(), "lesson_add: personal rule")
-  assert.deepEqual(git(root, ["show", "--name-only", "--format=", "HEAD"]).split("\n").filter(Boolean), ["AGENTS.md"])
+  assert.deepEqual(git(root, ["show", "--name-only", "--format=", "HEAD"]).split("\n").filter(Boolean), ["LESSONS.md"])
   assert.match(git(root, ["status", "--short"]), /^A  other\.md$/mu)
   assert.deepEqual(calls, [{ root }])
 })
 
-test("lesson_add personal leaves an AGENTS.md that already held unstaged edits uncommitted", async () => {
+test("lesson_add personal leaves a LESSONS.md that already held unstaged edits uncommitted, and commits nothing of AGENTS.md's", async () => {
   const root = await mkTempDeskRoot()
   initGit(root)
-  await fs.writeFile(path.join(root, "AGENTS.md"), "# Desk\n", "utf8")
-  git(root, ["add", "AGENTS.md"])
+  await fs.writeFile(path.join(root, "LESSONS.md"), "# Shelved lessons\n", "utf8")
+  git(root, ["add", "LESSONS.md"])
   git(root, ["commit", "-q", "-m", "init"])
-  await fs.writeFile(path.join(root, "AGENTS.md"), "# Desk\n\nAnother session's edit.\n", "utf8")
+  await fs.writeFile(path.join(root, "LESSONS.md"), "# Shelved lessons\n\nAnother session's edit.\n", "utf8")
   const calls = []
   const result = await lesson_add({ deskRoot: root, input: personal("Rule", "Do it."), schedulePush: (opts) => calls.push(opts) })
   assert.equal(result.in_effect, false)
-  assert.equal(result.message, "Written to AGENTS.md, but not in effect: it is not committed (AGENTS.md already held changes from elsewhere, so Desk left it for you to commit without them; route_around says how), so other machines do not have it.")
+  assert.match(result.message, /not committed \(LESSONS\.md already held changes from elsewhere/u)
   assert.equal(git(root, ["log", "--format=%s"]).trim(), "init")
-  assert.match(await fs.readFile(path.join(root, "AGENTS.md"), "utf8"), /Another session's edit\.\n\n## Lessons/u)
+  assert.match(await fs.readFile(path.join(root, "LESSONS.md"), "utf8"), /Another session's edit\./u)
   assert.deepEqual(calls, [])
 })
 
@@ -336,7 +283,7 @@ test("lesson_add personal reports a commit failure without losing the write", as
   assert.equal(result.commit.status, "failed")
   assert.equal(result.in_effect, false)
   assert.match(result.message, /the commit failed: boom/u)
-  assert.match(await fs.readFile(path.join(root, "AGENTS.md"), "utf8"), /Do it\./u)
+  assert.match(await fs.readFile(path.join(root, "LESSONS.md"), "utf8"), /Do it\./u)
 })
 
 // ── desk ────────────────────────────────────────────────────────────────────
@@ -584,13 +531,11 @@ test("lesson_add personal refuses an AGENTS.md that is a link out of the desk", 
   assert.equal(await fs.readFile(path.join(outside, "AGENTS.md"), "utf8"), "# Elsewhere\n")
 })
 
-test("lesson_add personal fills an empty Lessons section and tells search what changed", async () => {
+test("lesson_add personal tells search what changed", async () => {
   const root = await mkTempDeskRoot()
-  await fs.writeFile(path.join(root, "AGENTS.md"), "# Desk\n\n## Lessons\n\n## Later\n", "utf8")
   const changed = []
   await lesson_add({ deskRoot: root, input: personal("Rule", "Do it."), search: { noteChange: (rel) => changed.push(rel) } })
-  assert.match(await fs.readFile(path.join(root, "AGENTS.md"), "utf8"), new RegExp(`^# Desk\\n\\n## Lessons\\n\\n- \\*\\*Rule\\.\\*\\* Do it\\. \\(${DAY}\\)\\n\\n## Later\\n$`, "u"))
-  assert.deepEqual(changed, ["AGENTS.md"])
+  assert.deepEqual(changed, ["LESSONS.md"])
 })
 
 test("lesson_add refuses a topic with no word in it and a skill owner that is not a skill name", async () => {
@@ -600,15 +545,8 @@ test("lesson_add refuses a topic with no word in it and a skill owner that is no
   await assert.rejects(() => lesson_add({ deskRoot: root, input: { scope: "desk", topic: "Rule", body: "Do it.", owner: "skill:desk" }, addFriction: async () => ({}) }), /owner/u)
 })
 
-test("lesson_add personal keeps a blank line before a heading that followed the last lesson directly", async () => {
-  const root = await mkTempDeskRoot()
-  await fs.writeFile(path.join(root, "AGENTS.md"), "## Lessons\n\n- **Old.** Old. (2026-01-01)\n## Next\n", "utf8")
-  await lesson_add({ deskRoot: root, input: personal("New", "New.") })
-  assert.match(await fs.readFile(path.join(root, "AGENTS.md"), "utf8"), new RegExp(`^## Lessons\\n\\n- \\*\\*Old\\.\\*\\* Old\\. \\(2026-01-01\\)\\n- \\*\\*New\\.\\*\\* New\\. \\(${DAY}\\)\\n\\n## Next\\n$`, "u"))
-})
-
-test("lesson_add personal: desk_search finds the lesson right after it is written, in the desk's AGENTS.md and in a person's own", async (t) => {
-  for (const [root, person, where] of [[await mkTempDeskRoot(), null, "AGENTS.md"], [await crewRoot(), "ari", "desks/ari/AGENTS.md"]]) {
+test("lesson_add personal: desk_search finds the lesson right after it is written, in the desk's LESSONS.md and in a person's own", async (t) => {
+  for (const [root, person, where] of [[await mkTempDeskRoot(), null, "LESSONS.md"], [await crewRoot(), "ari", "desks/ari/LESSONS.md"]]) {
     // The engine a Desk server runs, already holding the desk in its index before the lesson is written.
     const search = createSearchEngine({ deskRoot: root, semantic: "unsupported", pauseMs: 0, cleanup: () => ({ removed: false, bytes: 0 }), watch: () => ({ close() {} }) })
     t.after(() => search.close())

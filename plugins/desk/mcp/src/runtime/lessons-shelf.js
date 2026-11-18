@@ -1,15 +1,13 @@
 // The lessons shelf: LESSONS.md beside a person's AGENTS.md (the desk root's on a solo desk), for the lessons that no
 // longer fit in what session start prints.
 //
-// Session start prints AGENTS.md only up to a byte budget, shared in a Crew workspace with the team's file, so a desk
-// that keeps learning outgrows it. lesson_add then keeps the newest lessons in AGENTS.md and moves the oldest to the
-// shelf, never deleting one. Every shelved lesson still loads: session start lists each shelved topic, task_focus (and
+// AGENTS.md is always on: every session prints it, up to a byte budget, so a desk that keeps learning outgrows it.
+// lesson_add therefore writes every lesson to the shelf and never appends to AGENTS.md. Every shelved lesson loads: session start lists each shelved topic, task_focus (and
 // task_create with focus) returns the shelved lessons that fit, those that share the most words with the task first, and
-// desk_search finds them. A lesson recorded again under the same topic comes back off the shelf.
+// desk_search finds them. A lesson recorded again under a topic replaces the earlier one.
 
 import { readFileSync } from "node:fs"
 import * as path from "node:path"
-import { printedPart } from "./agents-md.js"
 import { lessonEntries, withLesson, withoutLesson } from "./lesson-section.js"
 
 export const SHELF_FILE = "LESSONS.md"
@@ -23,71 +21,23 @@ const SHELF_READ_BYTES = 1024 * 1024
 export const SHELF_HEADER = [
   "# Shelved lessons",
   "",
-  "Lessons that `lesson_add` moved out of AGENTS.md so the newest stay within what session start prints. Nothing here is dropped: session start lists every topic, `task_focus` returns the lessons that fit for the task you focus (those closest to it first), and recording a lesson again under its topic moves it back to AGENTS.md.",
+  "Lessons that `lesson_add` records, kept out of AGENTS.md so that file stays small. Nothing here is dropped: session start lists every topic, and `task_focus` returns the lessons that fit for the task you focus (those closest to it first). Recording a lesson again under its topic replaces it.",
   "",
 ].join("\n")
 
-// A CRLF file cut at a line break leaves its last printed line ending in "\r", which is still that line.
-const printedLines = (text, cap) => new Set(printedPart(text, cap).split(/\r?\n/u).map((entry) => entry.replace(/\r$/u, "")))
 const oldestFirst = (a, b) => a.date.localeCompare(b.date) || a.order - b.order
 
-// `text` with every lesson other than `keep` that falls past the printed part taken out, each pushed onto `moved`.
-function withoutUnseen(text, keep, cap, moved) {
-  let rest = text
-  for (;;) {
-    const printed = printedLines(rest, cap)
-    const unseen = lessonEntries(rest).find((entry) => entry.line !== keep && !printed.has(entry.line))
-    if (unseen === undefined) return rest
-    rest = withoutLesson(rest, unseen.line)
-    moved.push(unseen)
-  }
-}
-
 /**
- * `shelve({ agents, shelf, line, topic, cap }) -> { agents, shelf, tier, moved, replaced }`: AGENTS.md and LESSONS.md
- * texts with the lesson `line` for `topic` recorded, judged by the first `cap` bytes session start prints.
- *
- * - Lessons already past the printed part move to the shelf, because nothing loads them where they are.
- * - If the new line falls past the printed part, the oldest lessons in AGENTS.md move to the shelf until it fits, and
- *   the topic comes off the shelf, so the newest word on it is what session start prints.
- * - If it cannot fit even with no other lesson left (the rest of AGENTS.md fills the budget), the printed lessons stay
- *   where they are, the topic leaves AGENTS.md, and the new line goes on the shelf (in its old place there, if it had one).
- *
- * `tier` is "session_start" or "shelf"; `moved` holds every other lesson that left AGENTS.md for the shelf, as
- * `{ line, topic }`.
+ * `shelve({ agents, shelf, line, topic }) -> { agents, shelf, replaced }`: AGENTS.md and LESSONS.md texts with the lesson
+ * `line` for `topic` recorded on the shelf. A lesson never goes into AGENTS.md, which every session prints in full and
+ * which a write from a stale copy could regrow. A line already under `topic` in AGENTS.md (an older Desk wrote there)
+ * leaves it, so the newest word on the topic is the only one loaded.
  */
-export function shelve({ agents, shelf, line, topic, cap }) {
-  const shelved = lessonEntries(shelf).find((entry) => entry.topic === topic)
-  const added = withLesson(agents, line, topic)
-  let moved = []
-  let text = withoutUnseen(added.text, line, cap, moved)
-  let tier = "session_start"
-  if (!printedLines(text, cap).has(line)) {
-    let rotated = text
-    const older = []
-    for (const entry of lessonEntries(text).filter((each) => each.line !== line).sort(oldestFirst)) {
-      rotated = withoutLesson(rotated, entry.line)
-      older.push(entry)
-      if (printedLines(rotated, cap).has(line)) break
-    }
-    if (printedLines(rotated, cap).has(line)) {
-      text = rotated
-      moved.push(...older)
-    } else {
-      // Judged again without the new line, which no longer pushes the others down.
-      const before = lessonEntries(agents).find((entry) => entry.topic === topic)
-      moved = []
-      text = withoutUnseen(before === undefined ? agents : withoutLesson(agents, before.line), null, cap, moved)
-      tier = "shelf"
-    }
-  }
-  let shelfText = shelved === undefined || tier === "shelf" ? shelf : withoutLesson(shelf, shelved.line)
-  if ((moved.length > 0 || tier === "shelf") && shelfText.trim() === "") shelfText = SHELF_HEADER
-  // A moved lesson never replaces a shelved line that shares its topic (a hand edit or a merge can leave two); only the
-  // lesson being recorded replaces its topic.
-  for (const entry of moved) shelfText = withLesson(shelfText, entry.line, entry.topic, { append: true }).text
-  if (tier === "shelf") shelfText = withLesson(shelfText, line, topic).text
-  return { agents: text, shelf: shelfText, tier, moved: moved.map((entry) => ({ line: entry.line, topic: entry.topic })), replaced: added.replaced || shelved !== undefined }
+export function shelve({ agents, shelf, line, topic }) {
+  const old = lessonEntries(agents).find((entry) => entry.topic === topic)
+  const base = shelf.trim() === "" ? SHELF_HEADER : shelf
+  const recorded = withLesson(base, line, topic)
+  return { agents: old === undefined ? agents : withoutLesson(agents, old.line), shelf: recorded.text, replaced: recorded.replaced || old !== undefined }
 }
 
 /** The shelf in `dir` as `{ path, entries }` (entries as `lessonEntries` gives them), or null when it holds no lesson. */
