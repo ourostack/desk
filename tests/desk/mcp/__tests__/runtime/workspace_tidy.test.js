@@ -15,7 +15,7 @@ import { dispositionRecord, mergeTidyEvidence } from "../../../../../plugins/des
 import { withWorkspaceClaim } from "../../../../../plugins/desk/mcp/src/runtime/workspace-claim.js"
 import { acknowledgeRepair, readReport, reportPath, runBootChecks, runRepair } from "../../../../../plugins/desk/hooks/lib/boot-checks.cjs"
 import { different } from "../_file_identity.js"
-import { fixture, git, moduleUrl, squashFixture, tidy, tidyInspectionGit, worktree } from "./_workspace_tidy_fixture.js"
+import { fixture, git, moduleUrl, readStartWithRetry, squashFixture, tidy, tidyInspectionGit, worktree } from "./_workspace_tidy_fixture.js"
 
 test("workspace tidy exposes the deferred repair and bounded inventory", () => {
   assert.equal(typeof tidy.inspectWorkspace, "function")
@@ -543,4 +543,12 @@ test("a late read cannot continue inventory after the boot deadline", async () =
   await new Promise((resolve) => setTimeout(resolve, 10))
   assert.equal(calls, 1)
   assert.equal(result.worktrees.length, 0)
+})
+
+test("the fixture keeps trying to read its writer's start time through repeated failures, then gives up", async () => {
+  let calls = 0
+  const flaky = async () => (++calls < 6 ? null : "started")
+  assert.equal(await readStartWithRetry(1, { read: flaky, pauseMs: 1 }), "started")
+  assert.equal(calls, 6)
+  assert.equal(await readStartWithRetry(1, { read: async () => null, attempts: 3, pauseMs: 1 }), null)
 })
