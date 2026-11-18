@@ -424,7 +424,7 @@ export function waitingOnChecks(requiredChecks, runs, skippedPasses = false, sta
 
 const MERGEABLE = new Set(["clean", "unstable", "has_hooks"])
 
-function waitingOnPull(pr, { allowBehind = false } = {}) {
+function waitingOnPull(pr, allowBehind) {
   if (pr.draft) return ["it is a draft"]
   if (pr.mergeable === false || pr.mergeableState === "dirty") return ["it has merge conflicts"]
   if (pr.mergeable === null || pr.mergeableState === "unknown") return ["GitHub has not yet worked out whether it merges cleanly"]
@@ -587,7 +587,7 @@ async function handlePull(relay, state, ctx, number) {
   record.readAt = new Date(ctx.now).toISOString()
   record.headSha = pr.headSha
   const { strict } = relay
-  let waiting = waitingOnPull(pr, { allowBehind: Boolean(strict?.requireCurrentBase) })
+  let waiting = waitingOnPull(pr, Boolean(strict?.requireCurrentBase))
   let mainBranch
   let judged
   let warnings = []
