@@ -1675,3 +1675,13 @@ test("startSuccessor adopts the session the app created even though it answered 
     : { status: 1, stdout: '{"ok":false,"error":"the app did not answer in time"}' }
   assert.deepEqual(startSuccessor({ repo: "a/b", predecessor: "old" }, { env: { DESK_DRAINS_SHEPHERD: "shep" }, spawn }), { ok: true, session: "new" })
 })
+
+test("every kind of failed token read names what gh said, or that it stopped", async () => {
+  const say = (result) => connectGithub("me", { spawn: () => result, pauseMs: 1 }).catch((error) => error.message)
+  assert.match(await say({ status: null, error: new Error("spawnSync gh ETIMEDOUT") }), /ETIMEDOUT/u)
+  assert.match(await say({ status: null, signal: "SIGKILL" }), /gh stopped \(SIGKILL\)/u)
+  assert.match(await say({ status: null }), /gh stopped \(no status\)/u)
+  assert.match(await connectGithub(undefined, { spawn: () => ({ status: null }), pauseMs: 1 }).catch((error) => error.message), /its active account/u)
+  assert.match(await say({ status: 2, stderr: "", stdout: "" }), /no token for me/u)
+  assert.match(await say({ status: null, error: Object.assign(new Error("spawn gh ENOENT"), { code: "ENOENT" }) }), /no token for me/u)
+})
