@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.268 — 2026-11-18
+
+Desk's MCP server now vendors Ouro UI v1.3.294, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.267 — 2026-11-18
 
 A save starts at most 14 git processes (was 17). The write-branch check, the publish-branch lookup and the read-back of the branch after a commit now read `.git` files, and a save reads the committed tree once instead of twice. The commit itself is unchanged: it still builds on a private index and moves the branch only if it has not moved.
