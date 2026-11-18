@@ -1,5 +1,15 @@
 # desk plugin — changelog
 
+## 3.2.274 — 2026-11-18
+
+### A drain's successor passes `--why` when Shepherd creates it
+
+Drain recovery now sends `--why` with the `shepherd create` call that starts a drain's successor, so it is not refused once Shepherd requires a reason on every action others see.
+
+Desk's MCP server now vendors Ouro UI v1.3.299, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.273 — 2026-11-18
 
 ### Run the laptop lane start when `shepherd place` says laptop
