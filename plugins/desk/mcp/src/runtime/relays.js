@@ -27,6 +27,16 @@ const REFUSED_MS = 5 * 60_000
  * changes the pull request, so the next poll reads it and the labelled list again in full instead of as a free 304.
  */
 const COMMENT_MS = 10 * 60_000
+/**
+ * A labelled pull request still waiting is read again no sooner than this, growing to the cap as it waits: while its checks run, every read of
+ * them is a full (counted) answer, so reading each 30 s poll would spend most of the account's hourly quota on CI that takes minutes.
+ */
+const WAIT_READ_MIN_MS = 60_000
+const WAIT_READ_MAX_MS = 240_000
+/** A merge relay with nothing labelled polls less often: its interval stretches by one step per this many empty polls, up to `MAX_IDLE_STRETCH` times. */
+const IDLE_POLLS_PER_STEP = 20
+const MAX_IDLE_STRETCH = 4
+const SPEND_WINDOW_MS = 60 * 60_000
 const CHECKS_PAGE = 100
 const COMMENT_PAGES = 5
 const TYPES = ["dispatch", "merge-when-green"]
@@ -445,11 +455,24 @@ async function deleteBranch(ctx, relay, pr) {
   return response.ok || [404, 422].includes(response.status)
 }
 
+const waitReadMs = (record, now) => Math.min(WAIT_READ_MAX_MS, Math.max(WAIT_READ_MIN_MS, (now - Date.parse(record.firstReadAt ?? record.readAt)) / 4))
+
+/** A waiting pull request not yet due for another read keeps its cached answers (and their tags) through this poll's cleanup. */
+function skipRead(relay, state, ctx, number) {
+  const record = state.prs[number]
+  if (record?.status !== "waiting" || !record.readAt || ctx.now >= Date.parse(record.readAt) + waitReadMs(record, ctx.now)) return false
+  for (const route of Object.keys(state.cache)) if (route.endsWith(`/pulls/${number}`) || (record.headSha && route.includes(`/commits/${record.headSha}/`)) || route === `/repos/${relay.repo}` || route.includes("/workflows/")) ctx.touched.add(route)
+  return true
+}
+
 async function handlePull(relay, state, ctx, number) {
   const prs = state.prs
+  if (skipRead(relay, state, ctx, number)) return
   const pr = await cached(ctx, state, `/repos/${relay.repo}/pulls/${number}`, pullSummary)
   if (pr.state !== "open") return delete prs[number]
   const record = (prs[number] ??= {})
+  if (record.headSha !== pr.headSha || !record.firstReadAt) record.firstReadAt = new Date(ctx.now).toISOString()
+  record.readAt = new Date(ctx.now).toISOString()
   record.headSha = pr.headSha
   let waiting = waitingOnPull(pr)
   let mainBranch
@@ -497,6 +520,7 @@ async function handlePull(relay, state, ctx, number) {
 async function runMerge(relay, state, ctx) {
   const labelled = await cached(ctx, state, `/repos/${relay.repo}/issues?state=open&labels=${encodeURIComponent(relay.label)}&per_page=100`, (body) => body.filter((issue) => issue.pull_request).map((issue) => issue.number))
   for (const [number, record] of Object.entries(state.prs)) if (record.status !== "merged" && !labelled.includes(Number(number))) delete state.prs[number]
+  state.idlePolls = labelled.length === 0 ? (state.idlePolls ?? 0) + 1 : 0
   const merged = Object.entries(state.prs).filter(([, record]) => record.status === "merged").sort((a, b) => b[1].at.localeCompare(a[1].at))
   for (const [number] of merged.slice(MERGED_KEPT)) delete state.prs[number]
   const errors = []
@@ -529,6 +553,42 @@ function safely(read, fallback) {
     return read()
   } catch {
     return fallback
+  }
+}
+
+/** The api a relay reads through, counting what each call costs: a 304 is free, every other answer and every write counts against the account's quota. */
+function metered(api, meter) {
+  return {
+    ...api,
+    get: async (route, options) => {
+      try {
+        const answer = await api.get(route, options)
+        if (answer.notModified) meter.free += 1
+        else meter.counted += 1
+        return answer
+      } catch (error) {
+        meter.counted += 1
+        throw error
+      }
+    },
+    send: async (...args) => {
+      meter.counted += 1
+      return api.send(...args)
+    },
+  }
+}
+
+/** Keeps the relay's last poll and a rolling hour of spend in its state, so what a relay costs is read from the status instead of guessed. */
+function recordSpend(state, meter, now) {
+  const at = new Date(now).toISOString()
+  state.lastPoll = { at, ...meter }
+  const window = state.spend
+  if (!window || now - Date.parse(window.at) >= SPEND_WINDOW_MS) {
+    if (window) state.spendLastHour = { counted: window.counted, free: window.free }
+    state.spend = { at, counted: meter.counted, free: meter.free }
+  } else {
+    window.counted += meter.counted
+    window.free += meter.free
   }
 }
 
@@ -569,7 +629,8 @@ export async function pollRelays({ paths, drainFiles, connect, now, signedIn = (
   }
   await Promise.all(relays.map(async (relay) => {
     const state = states[relay.name]
-    if (state.lastPollAt && now - Date.parse(state.lastPollAt) < relay.everySeconds * 1000 - DUE_SLACK_MS) return
+    const stretch = relay.type === "merge-when-green" ? Math.min(MAX_IDLE_STRETCH, 1 + Math.floor((state.idlePolls ?? 0) / IDLE_POLLS_PER_STEP)) : 1
+    if (state.lastPollAt && now - Date.parse(state.lastPollAt) < relay.everySeconds * 1000 * stretch - DUE_SLACK_MS) return
     if (!accountOf(relay, drains, states)) {
       try {
         const login = await resolveAccount(relay)
@@ -592,9 +653,10 @@ export async function pollRelays({ paths, drainFiles, connect, now, signedIn = (
     }
     delete state.hold
     let api = null
+    const meter = { counted: 0, free: 0 }
     try {
       api = await connectOnce(account)
-      const ctx = { api, now, save, touched: new Set() }
+      const ctx = { api: metered(api, meter), now, save, touched: new Set() }
       await RUNNERS[relay.type](relay, state, ctx)
       forget(state, ctx.touched)
       state.lastOkAt = new Date(now).toISOString()
@@ -605,13 +667,15 @@ export async function pollRelays({ paths, drainFiles, connect, now, signedIn = (
       if (state.resolvedAccount && [401, 403, 404].includes(error.status)) delete state.resolvedAccount
     }
     if (api?.quota()) state.quota = api.quota()
+    recordSpend(state, meter, now)
     state.lastPollAt = new Date(now).toISOString()
   }))
   save()
   const apis = await Promise.all([...connections.values()].map((connection) => connection.catch(() => null)))
   const calls = apis.reduce((sum, api) => sum + (api ? api.calls().total : 0), 0)
+  const spent = relays.reduce((sum, relay) => sum + (states[relay.name].lastPoll?.at === new Date(now).toISOString() ? states[relay.name].lastPoll.counted : 0), 0)
   const errors = relays.filter((relay) => states[relay.name].lastError).map((relay) => ({ relay: relay.name, error: states[relay.name].lastError }))
-  return { at: new Date(now).toISOString(), wakes: [], errors, calls, status: relayStatusLines(relays, states, now) }
+  return { at: new Date(now).toISOString(), wakes: [], errors, calls, spent, status: relayStatusLines(relays, states, now) }
 }
 
 // ── Visibility ──
@@ -629,7 +693,7 @@ export function relayStatusLines(relays, states, now) {
   return relays.map((relay) => {
     const state = states[relay.name] ?? {}
     const head = `relay ${relay.name} (${relay.type})`
-    const tail = `${state.hold ? `, held: ${state.hold}` : ""}${state.lastError ? `, last error: ${state.lastError}` : ""}`
+    const tail = `${state.spend && state.spend.counted + state.spend.free > 0 ? `, spent ${state.spend.counted} counted calls (${state.spend.free} free) since ${state.spend.at}` : ""}${state.hold ? `, held: ${state.hold}` : ""}${state.lastError ? `, last error: ${state.lastError}` : ""}`
     if (!state.lastPollAt) return `${head}: not polled yet${tail}`
     const polled = `polled ${ago(state.lastPollAt, now)}`
     if (relay.type === "dispatch") {

@@ -980,3 +980,66 @@ test("a relay with no account uses the CLI's active account when the signed-in a
   assert.deepEqual(polled.errors, [])
   assert.equal(w.state("pages merge").resolvedAccount, undefined)
 })
+
+// ── What a poll costs: a 304 is free, so only a changed answer, a write or a first read counts against the account's quota ──
+
+const reads = (w) => w.world.reads.length
+const countedSince = async (w, at) => (await w.poll(at)).spent
+
+test("cost: an idle merge relay and an idle dispatch relay read once per poll and spend nothing counted once their tags are held", async () => {
+  const w = await setup([IMMEDIATE, MERGE])
+  w.world.on("GET", runsRoute, () => ({ workflow_runs: [run(1)] }))
+  w.world.on("GET", /\/issues\?state=open&labels=merge-when-green/u, () => [])
+  const first = await w.poll(NOW)
+  assert.equal(first.spent, 2, "the first poll reads each list in full")
+  const before = reads(w)
+  assert.equal(await countedSince(w, NOW + 30 * SECOND), 0)
+  assert.equal(reads(w) - before, 2, "one conditional read per relay")
+  assert.equal(w.state(MERGE.name).lastPoll.free, 1)
+})
+
+test("cost: a labelled pull request whose checks keep changing is read once a minute, not on every 30 s poll", async () => {
+  const w = await setup([MERGE])
+  let queued = 1
+  mergeWorld(w.world)
+  w.world.on("GET", /\/commits\/a+\/check-runs/u, () => ({ total_count: 1, check_runs: [check("typecheck", null, "queued"), ...Array.from({ length: queued }, (_, n) => check(`other ${n}`, null, "in_progress"))] }))
+  const spend = []
+  for (let at = 0; at <= 10 * MIN; at += 30 * SECOND) {
+    queued += 1
+    spend.push((await w.poll(NOW + at)).spent)
+  }
+  const total = spend.reduce((sum, value) => sum + value, 0)
+  assert.ok(total <= 40, `ten minutes of churning CI cost ${total} counted calls; reading every poll costs about 75`)
+  assert.ok(spend.filter((value) => value === 0).length >= 10, "polls between reads cost nothing")
+  assert.equal(w.world.writes.filter((write) => write.method === "PUT").length, 0)
+})
+
+test("cost: a skipped read keeps the tags, so the next read of an unchanged pull request is free, and a green head still merges on the read that sees it", async () => {
+  const w = await setup([MERGE])
+  mergeWorld(w.world, { checks: [{ ...check("typecheck", null, "queued"), id: 1, started_at: "2026-11-14T11:00:00Z" }] })
+  await w.poll(NOW)
+  await w.poll(NOW + 30 * SECOND)
+  assert.equal(await countedSince(w, NOW + 5 * MIN), 0, "every answer is unchanged, so every read is a 304")
+  mergeWorld(w.world)
+  await w.poll(NOW + 5 * MIN + 30 * SECOND)
+  assert.equal(w.world.writes.filter((write) => write.method === "PUT").length, 0, "inside the interval it is not read yet")
+  await w.poll(NOW + 12 * MIN)
+  assert.equal(w.world.writes.filter((write) => write.method === "PUT").length, 1)
+})
+
+test("cost: a merge relay with nothing labelled stretches its interval, and goes back to it as soon as something is labelled", async () => {
+  const w = await setup([{ ...MERGE, everySeconds: 30 }])
+  let labelled = []
+  mergeWorld(w.world)
+  w.world.on("GET", /\/issues\?state=open&labels=merge-when-green/u, () => labelled)
+  for (let n = 0; n < 20; n++) await w.poll(NOW + n * 30 * SECOND)
+  const before = reads(w)
+  await w.poll(NOW + 20 * 30 * SECOND)
+  assert.equal(reads(w), before, "30 s after the last poll is too soon once the relay has gone quiet")
+  await w.poll(NOW + 21 * 30 * SECOND)
+  assert.equal(reads(w) - before, 1, "a minute is not")
+  labelled = [{ number: 7, pull_request: {} }]
+  await w.poll(NOW + 24 * 30 * SECOND)
+  await w.poll(NOW + 25 * 30 * SECOND)
+  assert.equal(w.state(MERGE.name).idlePolls, 0)
+})

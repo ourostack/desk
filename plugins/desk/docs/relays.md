@@ -60,7 +60,7 @@ Only check runs are read, so a check that reports as a commit status never count
 
 ## Quota
 
-Each poll sends the stored `ETag` as `If-None-Match`, and what a `304` means is kept next to the tag, so a quiet relay costs no quota. A relay shares its account's window with the issue drains: at 25 calls left it pauses until the window resets, and under 10% (or 200 calls) it polls at most every 15 minutes.
+Each poll sends the stored `ETag` as `If-None-Match`, and what a `304` means is kept next to the tag, so a quiet relay costs no quota. A labelled pull request still waiting on checks is read again at most once a minute, growing to every four minutes as it waits, because every read of running checks is a full answer that counts; a green head still merges on the read that sees it. A `merge-when-green` relay with nothing labelled polls up to four times less often. `relays status` shows what each relay has spent in the current hour, as counted calls and free `304`s. A relay shares its account's window with the issue drains: at 25 calls left it pauses until the window resets, and under 10% (or 200 calls) it polls at most every 15 minutes.
 
 ## Running it from Ouroboros
 
