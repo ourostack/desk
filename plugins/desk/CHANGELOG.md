@@ -1,5 +1,13 @@
 # desk plugin — changelog
 
+## 3.2.254 — 2026-11-18
+
+### Each desk declares the repository owners it serves
+
+Desk no longer names any organization. A desk lists the owners it serves in `_meta/desk.json` (`{"repo_owners": ["acme"]}`), besides the owner of its own Git remote, and a session in a repository by one of them binds that desk. An owner served by two desks, or by none, binds nothing.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.253 — 2026-11-18
 
 Desk's MCP server now vendors Ouro UI core v0.18.0, moved by Ouro Current.
