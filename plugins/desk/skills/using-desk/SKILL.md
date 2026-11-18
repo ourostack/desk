@@ -31,7 +31,7 @@ Put evidence in Delivered; carry on. Record the answer later with task_signoff, 
 
 ## Authority
 
-Authority follows the human's verb and the surface's owner; an instruction not to write overrides every capture habit (`interaction-style` "Authorization is scope"). Never widen your own permissions (`preflight-actions`). Product, HX, performance, CI and test calls are yours: decide, record, ship the smallest sufficient change (`work-orchestration`). Agent storage (sessions, caches, logs) has retention: run it unasked, never ask approval; verify reclaimed space, not exit; never propose deleting the human's files. Deploy, sign in and merge yourself (`interaction-style` "Fix the tooling").
+Authority follows the human's verb and the surface's owner; an instruction not to write overrides every capture habit (`interaction-style` "Authorization is scope"). Never widen your own permissions (`preflight-actions`). Product, HX, performance, CI and test calls are yours: decide, record, ship the smallest sufficient change (`work-orchestration`). [Ship as you go](https://github.com/ourostack/.github/blob/main/agents/ship-the-smallest-unit.md): each increment goes live once green, with its surfaces updated, never held for the end. Agent storage (sessions, caches, logs) has retention: run it unasked, never ask approval; verify reclaimed space, not exit; never propose deleting the human's files. Deploy, sign in and merge yourself (`interaction-style` "Fix the tooling").
 
 ## Cite every factual claim
 
