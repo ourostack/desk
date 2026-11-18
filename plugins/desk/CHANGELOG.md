@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.286 — 2026-11-18
+
+Desk's MCP server now vendors Ouro UI v1.3.312, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.285 — 2026-11-18
 
 `lesson_add` no longer writes personal lessons into AGENTS.md. They go to the LESSONS.md shelf that session start lists and `task_focus` returns, so an always-on file cannot grow from lessons, and the tool no longer moves older lessons out of AGENTS.md. Before it removes an older same-topic line from AGENTS.md it fast-forwards the desk to its remote and skips the removal when the checkout is behind or diverged, so a stale copy is never written back over a newer one. The reply always reports the shelf as the lesson's place.
