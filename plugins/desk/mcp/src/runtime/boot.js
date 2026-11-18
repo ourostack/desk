@@ -1202,11 +1202,11 @@ function buildInstructions(ctx) {
 }
 
 // The three closing rules that `--json` carries as separate lines, as one instruction, plus the step-heading rule.
-const CLOSING_RULES = "If the next step needs something not on this machine, say so and stop: never recreate, clone or fetch it. Report real status only."
+const CLOSING_RULES = "Missing: say so and stop; never recreate, clone or fetch it. Report real status. Durable work (reports, evidence, images others must find) goes in the focused task's desk folder; host session files/ is scratch, overriding its artifacts rule."
 
 // What the plain-text boot says before its instructions: what Desk is, where its RFC is and the two boundaries.
 function introInstruction(pluginRoot) {
-  return `Desk lets people and agents delegate outcomes; RFC: ${path.join(pluginRoot, "docs", "agentic-engineering-v3-rfc.md")}. Never do anything irreversibly destructive or contact anyone without the operator's approval.`
+  return `Desk RFC: ${path.join(pluginRoot, "docs", "agentic-engineering-v3-rfc.md")}. Never do anything irreversible or contact anyone without approval.`
 }
 
 // The plain-text wording of the same instructions, in the order the text boot prints them: the closing rules last.
