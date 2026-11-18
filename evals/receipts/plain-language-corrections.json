@@ -7,8 +7,8 @@
     "actor": "headless GitHub Copilot CLI harness: one fresh subject process per case, then one separate judge process",
     "model": "subject gpt-6.1-sol; judge claude-opus-5.5",
     "runtimeRevision": "GitHub Copilot CLI 1.0.114",
-    "startedAt": "2026-11-18T23:04:36.297Z",
-    "completedAt": "2026-11-18T23:05:32.166Z",
+    "startedAt": "2026-11-18T23:49:49.799Z",
+    "completedAt": "2026-11-18T23:50:39.054Z",
     "harness": {
       "command": "copilot",
       "pluginDirs": [
@@ -47,7 +47,7 @@
         {
           "id": "no-shorthand-tokens",
           "passed": true,
-          "evidence": "The message, \"The retry policy draft is ready. Do you want a fixed three retries or exponential backoff?\", has no wdyt, lmk, imo or similar chat shorthand."
+          "evidence": "The response, \"The retry policy draft is ready. Do you want a fixed three retries or exponential backoff?\", contains no wdyt, lmk, imo or similar chat shorthand."
         }
       ]
     },
@@ -57,12 +57,12 @@
         {
           "id": "layout-sets-width",
           "passed": true,
-          "evidence": "The article width comes from `grid-template-columns: 16rem minmax(0, 1fr)` in `.docs`, plus the viewport-based padding `clamp(1rem, 3vw, 3rem)`. Nothing else sets the article or paragraph width."
+          "evidence": "The article width comes from `grid-template-columns: 16rem minmax(0, 1fr)`, with padding of `clamp(1rem, 3vw, 3rem)`. On narrow screens it becomes a single `minmax(0, 1fr)` column, so the grid column and the window set the line width."
         },
         {
           "id": "no-fixed-measure",
           "passed": true,
-          "evidence": "No `max-width` or `width` is set on the article or its paragraphs. The only fixed size is the `16rem` sidebar column, and the article rules set only `font-size`, `line-height` and margins."
+          "evidence": "Neither `.docs__article` nor `.docs__article p` sets a max-width or width. The only fixed size is the 16rem sidebar column, and the 48rem value is a media-query breakpoint, not a cap on paragraph width."
         }
       ]
     }
