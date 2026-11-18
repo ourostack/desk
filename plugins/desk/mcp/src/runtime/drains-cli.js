@@ -11,7 +11,7 @@ import { pollRelays, readRelayConfig, readRelayStates, relayPaths, relayStatusLi
 import { findPluginlessRuntimes, listProcesses as psList, pluginlessRuntimeLines } from "./pluginless-runtimes.js"
 import { ackStalled, pollStalled, stalledPaths, stalledStatus } from "./stalled.js"
 import { ackSchedule, pollSchedules, readScheduleConfig, readScheduleStates, scheduleStatusLines, schedulePaths } from "./schedules.js"
-import { ackWake, connectGithub, drainPaths, deskInUse, drainStatusLines, installLauncher, pollDrains, readDrainConfig, readDrainStates, whyOf, withDrainLock } from "./drains.js"
+import { ackWake, connectGithub, recoverDrainTarget, drainPaths, deskInUse, drainStatusLines, installLauncher, pollDrains, readDrainConfig, readDrainStates, whyOf, withDrainLock } from "./drains.js"
 
 /** The Desk a poll ran from, for the history: its version, and the release commit when the launcher's own copy ran. */
 const deskLabel = ({ version, release }) => (release ? `${version} ${release.slice(0, 8)}` : version)
@@ -84,7 +84,10 @@ function drainsCli({ script, env, now, connect, listProcesses }) {
       }),
       command("ack", ACK("repository", { repo: { type: "string", required: true, placeholder: "<owner/name>", description: "The repository the wake was for." } }), (input) => {
         const paths = pathsOf(drainPaths({ env }), input)
-        return withDrainLock(paths.lock, () => ackWake({ paths, repo: input.repo, wake: input.wake, error: input.error, now: now() }))
+        return withDrainLock(paths.lock, () => {
+          const acked = ackWake({ paths, repo: input.repo, wake: input.wake, error: input.error, now: now() })
+          return input.error ? { ...acked, recovery: recoverDrainTarget({ paths, repo: input.repo, now: now() }) } : acked
+        })
       }),
       command("status", { ...READ, summary: "List each drain's state, the relays and any unmerged save, without recording anything.", flags: { config: CONFIG, state: STATE } }, (input) => {
         const paths = pathsOf(drainPaths({ env }), input)

@@ -9,7 +9,7 @@ import { test } from "node:test"
 import { fileURLToPath } from "node:url"
 import { mkTempRoot } from "../_temp_roots.js"
 import {
-  ackWake, connectGithub, DRAIN_STATUS_MARKER, drainPaths, drainsHome, deskInUse, drainStatusLines, installLauncher, parseDrainConfig, pollDrain, pollDrains, quotaHold, quotaLines,
+  ackWake, connectGithub, DRAIN_STATUS_MARKER, drainPaths, drainsHome, deskInUse, drainStatusLines, installLauncher, parseDrainConfig, pollDrain, pollDrains, quotaHold, quotaLines, recoverDrainTarget, startSuccessor, successorKickoff,
   readDrainConfig, readDrainStates, wakeId, wakeMessage, whyOf, withDrainLock,
 } from "../../../../../plugins/desk/mcp/src/runtime/drains.js"
 import { runDrainsCli } from "../../../../../plugins/desk/mcp/src/runtime/drains-cli.js"
@@ -1558,4 +1558,92 @@ test("a launcher that cannot be refreshed never stops a command, and the output 
   const printed = JSON.parse(out.join(""))
   assert.equal(printed.status.length, 1)
   assert.deepEqual(printed.launcher, { error: "ENOTDIR" })
+})
+
+const ARCHIVED = "Failed to send message: invalid argument: This workspace is archived. Restore it before continuing."
+
+test("a drain whose session is archived starts a successor and sends its wakes there, keeping the waiting events", async () => {
+  const w = await world([issue(1, "2026-11-13T01:00:00Z")])
+  await w.poll()
+  w.issues.push(issue(2, "2026-11-13T03:00:00Z", "New thing"))
+  w.refuse = ARCHIVED
+  await w.poll()
+  assert.equal(w.state().pending.length, 1)
+  assert.match(w.state().targetGone.error, /archived/u)
+  const started = []
+  const result = recoverDrainTarget({ paths: w.paths, repo: DRAIN.repo, now: NOW, start: (input) => { started.push(input); return { ok: true, session: "11111111-2222-3333-4444-555555555555" } } })
+  assert.equal(result.changed, true)
+  assert.deepEqual(started, [{ repo: DRAIN.repo, predecessor: DRAIN.session, account: "maintainer" }])
+  assert.equal(w.state().targetGone, undefined)
+  const out = await w.poll()
+  assert.equal(out.wakes[0].session, "11111111-2222-3333-4444-555555555555")
+  assert.match(out.status.find((line) => line.startsWith("issue drain")), /-> 11111111 \(succeeds 58fbd57e\)/u)
+  assert.equal(w.state().pending.length, 0)
+  assert.equal(JSON.parse(readFileSync(w.paths.config, "utf8")).drains[0].session, DRAIN.session)
+})
+
+test("a failed start of a successor is retried after ten minutes, never more often, and shows in the status", async () => {
+  const w = await world([issue(1, "2026-11-13T01:00:00Z")])
+  await w.poll()
+  w.issues.push(issue(2, "2026-11-13T03:00:00Z"))
+  w.refuse = ARCHIVED
+  await w.poll()
+  let tries = 0
+  const fail = () => { tries += 1; return { ok: false, error: "the app is not running" } }
+  assert.equal(recoverDrainTarget({ paths: w.paths, repo: DRAIN.repo, now: NOW, start: fail }).ok, false)
+  assert.equal(recoverDrainTarget({ paths: w.paths, repo: DRAIN.repo, now: NOW + 60_000, start: fail }).changed, false)
+  assert.equal(tries, 1)
+  const out = await pollDrains({ paths: w.paths, connect: w.connect, now: NOW + 60_000, ackCommand: [] })
+  assert.match(out.status.find((line) => line.startsWith("issue drain")), /archived or gone, starting a successor: starting its successor failed: the app is not running/u)
+  recoverDrainTarget({ paths: w.paths, repo: DRAIN.repo, now: NOW + 11 * 60_000, start: () => ({ ok: true, session: "22222222-2222-3333-4444-555555555555" }) })
+  assert.equal(w.state().successor.to, "22222222-2222-3333-4444-555555555555")
+})
+
+test("a successor lapses when the config names a new session, and an ordinary failure never starts one", async () => {
+  const w = await world([issue(1, "2026-11-13T01:00:00Z")])
+  await w.poll()
+  w.issues.push(issue(2, "2026-11-13T03:00:00Z"))
+  w.refuse = "the app did not answer"
+  await w.poll()
+  assert.equal(w.state().targetGone, undefined)
+  assert.equal(recoverDrainTarget({ paths: w.paths, repo: DRAIN.repo, now: NOW, start: () => assert.fail("no successor") }).changed, false)
+  w.refuse = ARCHIVED
+  await w.poll()
+  recoverDrainTarget({ paths: w.paths, repo: DRAIN.repo, now: NOW, start: () => ({ ok: true, session: "33333333-2222-3333-4444-555555555555" }) })
+  writeFileSync(w.paths.config, JSON.stringify({ drains: [{ ...DRAIN, session: "44444444-2222-3333-4444-555555555555" }] }))
+  assert.equal((await pollDrains({ paths: w.paths, connect: w.connect, now: NOW, ackCommand: [] })).status.some((line) => line.includes("-> 44444444: ")), true)
+})
+
+test("startSuccessor asks Shepherd to create the drain's session with a Succeeds line first, and reports why it could not", () => {
+  const seen = []
+  const ok = startSuccessor({ repo: "acme/widgets", predecessor: DRAIN.session, account: "me" }, { env: { DESK_DRAINS_SHEPHERD: "shep" }, spawn: (...call) => { seen.push(call); return { status: 0, stdout: '{"ok":true,"session_id":"abc"}' } } })
+  assert.deepEqual(ok, { ok: true, session: "abc" })
+  assert.equal(seen[0][0], "shep")
+  const args = seen[0][1]
+  assert.deepEqual(args.slice(0, 5), ["create", "--project", "acme/widgets", "--name", "Drain: acme/widgets"])
+  assert.equal(args[args.indexOf("--prompt") + 1].split("\n")[0], `Succeeds: ${DRAIN.session}`)
+  assert.match(successorKickoff({ repo: "a/b", predecessor: "x", account: "me" }), /Work on GitHub as me/u)
+  const bad = startSuccessor({ repo: "a/b", predecessor: "x" }, { env: { DESK_DRAINS_SHEPHERD: "shep" }, spawn: () => ({ status: 1, stdout: '{"ok":false,"error":"no project \'a/b\'"}' }) })
+  assert.deepEqual(bad, { ok: false, error: "no project 'a/b'" })
+  assert.equal(startSuccessor({ repo: "a/b", predecessor: "x" }, { env: { DESK_DRAINS_SHEPHERD: "shep" }, spawn: () => ({ status: 1, stdout: "", stderr: "boom\nmore" }) }).error, "boom")
+})
+
+test("a token read that times out or hits a busy keyring is retried and never says to sign in", async () => {
+  const tries = []
+  const slept = []
+  const sleep = async (ms) => { slept.push(ms) }
+  const flaky = [{ status: null, signal: "SIGTERM", stdout: "" }, { status: 1, stdout: "", stderr: "keychain is locked\n" }, { status: 0, stdout: "tok\n" }]
+  const spawn = () => { tries.push(1); return flaky[tries.length - 1] }
+  const api = await connectGithub("me", { spawn, sleep, fetchImpl: async () => response({ login: "me" }) })
+  assert.equal(api.login, "me")
+  assert.equal(tries.length, 3)
+  assert.equal(slept.length, 2)
+  const never = { spawn: () => ({ status: null, signal: "SIGTERM" }), sleep }
+  const failure = await connectGithub("me", never).catch((error) => error)
+  assert.equal(failure.code, "drains_github_cli_token_unavailable")
+  assert.doesNotMatch(failure.message, /Sign in|gh auth login/u)
+  const missing = []
+  const signedOut = await connectGithub("me", { spawn: () => { missing.push(1); return { status: 1, stdout: "", stderr: "no oauth token found for github.com account me" } }, sleep }).catch((error) => error)
+  assert.equal(signedOut.code, "drains_sign_in_the_github_cli")
+  assert.equal(missing.length, 1, "a signed-out account is not retried")
 })

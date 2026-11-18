@@ -6,7 +6,7 @@
 // something other than the drain changed it since the revision last recorded for that issue.
 import { createHash } from "node:crypto"
 import { spawnSync } from "node:child_process"
-import { closeSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs"
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 import * as os from "node:os"
 import * as path from "node:path"
@@ -40,7 +40,21 @@ const QUOTA_RESERVE = 25
 const QUOTA_LOW = 200
 const QUOTA_SLOW_MS = 15 * 60_000
 
+/** What the app says when a wake's session is archived or no longer exists: waiting never fixes it, so the drain gets a successor. */
+const SESSION_GONE = /archived|no such (?:session|workspace)|(?:session|workspace)\b[^.]{0,40}(?:not found|does not exist|no longer exists)/iu
+/** A failed attempt to start a successor is tried again after this long. */
+const RECOVER_RETRY_MS = 10 * 60_000
+const SHEPHERD_MS = 90_000
+/** `gh auth token` reads the keyring, which can be slow or busy under load: three tries, each given this long, with a pause between. */
+const TOKEN_TRIES = 3
+const TOKEN_MS = 20_000
+const TOKEN_PAUSE_MS = 2_000
+const NO_TOKEN = /no oauth token|not logged in|no accounts? |not signed in/iu
+
 const blank = () => ({ seeded: false, seen: {}, pending: [] })
+
+/** The session a drain's wakes go to: the successor started for it when its configured session was archived or gone, else the configured one. A new configured session retires the successor. */
+export const sessionOf = (drain, state) => (state?.successor && state.successor.from === drain.session ? state.successor.to : drain.session)
 
 /** Where the drain config, state and lock live: Desk's state folder (`$XDG_STATE_HOME`, else `~/.local/state`). */
 export function drainsHome({ env = process.env, homeDir = os.homedir() } = {}) {
@@ -522,14 +536,15 @@ export function quotaLines(drains, states, now) {
 export function drainStatusLines(drains, states, now) {
   return [...quotaLines(drains, states, now), ...drains.map((drain) => {
     const state = states[drain.repo]
-    const head = `issue drain ${drain.repo} -> ${drain.session.slice(0, 8)}`
+    const session = sessionOf(drain, state)
+    const head = `issue drain ${drain.repo} -> ${session.slice(0, 8)}${session === drain.session ? "" : ` (succeeds ${state.successor.predecessor.slice(0, 8)})`}`
     if (!state?.lastPollAt) return `${head}: not polled yet${state?.hold ? `, held: ${state.hold}` : ""}`
     const ok = lastOk(state)
     const good = ok ? `last ok poll ${ok} (lag ${span(now - Date.parse(ok))})` : "no ok poll recorded"
     const since = state.pending.map((event) => Date.parse(event.seenAt)).filter(Number.isFinite)
     const waiting = `${state.pending.length} waiting${since.length ? ` (oldest ${span(now - Math.min(...since))})` : ""}`
     const wake = state.lastWakeAt ? `${ago(state.lastWakeAt, now)} (${state.lastWakeCount} issue${state.lastWakeCount === 1 ? "" : "s"})` : "never"
-    return `${head}: ${good}, polled ${ago(state.lastPollAt, now)}, ${state.openCount ?? "?"} open, ${waiting}, last wake ${wake}${state.hold ? `, held: ${state.hold}` : ""}${state.lastError ? `, last error: ${state.lastError}` : ""}`
+    return `${head}: ${good}, polled ${ago(state.lastPollAt, now)}, ${state.openCount ?? "?"} open, ${waiting}, last wake ${wake}${state.hold ? `, held: ${state.hold}` : ""}${state.lastError ? `, last error: ${state.lastError}` : ""}${state.targetGone ? `, session archived or gone, starting a successor: ${state.targetGone.error}` : ""}`
   })]
 }
 
@@ -538,8 +553,9 @@ export function drainStatusLines(drains, states, now) {
  * stays pending and comes back with the next poll. Repositories dropped from the config lose their state.
  * Each wake carries `done`, the command that reports its delivery: the runner appends `--error <text>` when delivery failed.
  */
-export async function pollDrains({ paths, connect, now, ackCommand, ackFlags = [], desk }) {
+export async function pollDrains({ paths, connect, now, ackCommand, ackFlags = [], desk, recover = recoverDrainTarget }) {
   const drains = readDrainConfig(paths.config)
+  for (const drain of drains) if (readDrainStates(paths.state)[drain.repo]?.targetGone) recover({ paths, repo: drain.repo, now })
   const stored = readDrainStates(paths.state)
   const states = Object.fromEntries(drains.map((drain) => [drain.repo, stored[drain.repo] ?? blank()]))
   for (const drain of drains) {
@@ -551,7 +567,7 @@ export async function pollDrains({ paths, connect, now, ackCommand, ackFlags = [
   const wakes = drains.filter((drain) => states[drain.repo].pending.length > 0).map((drain) => {
     const events = states[drain.repo].pending
     const id = wakeId(drain.repo, events)
-    return { id, repo: drain.repo, session: drain.session, message: wakeMessage(drain.repo, events), replaces: wakePrefix(drain.repo), events, done: [...ackCommand, "ack", "--repo", drain.repo, "--wake", id, ...ackFlags] }
+    return { id, repo: drain.repo, session: sessionOf(drain, states[drain.repo]), message: wakeMessage(drain.repo, events), replaces: wakePrefix(drain.repo), events, done: [...ackCommand, "ack", "--repo", drain.repo, "--wake", id, ...ackFlags] }
   })
   const errors = drains.filter((drain) => states[drain.repo].lastError).map((drain) => ({ repo: drain.repo, error: states[drain.repo].lastError }))
   const calls = drains.reduce((sum, drain) => sum + states[drain.repo].calls.total, 0)
@@ -562,11 +578,17 @@ export async function pollDrains({ paths, connect, now, ackCommand, ackFlags = [
 export function ackWake({ paths, repo, wake, error, now }) {
   const states = readDrainStates(paths.state)
   const state = states[repo]
+  if (state && error && SESSION_GONE.test(error)) {
+    const drain = readDrainConfig(paths.config).find((entry) => entry.repo === repo)
+    state.targetGone = { session: drain ? sessionOf(drain, state) : null, at: new Date(now).toISOString(), error: error.slice(0, 200) }
+    writeDrainStates(paths.state, states)
+  }
   if (!state || state.pending.length === 0) return { ok: true, changed: false, reason: "nothing is waiting" }
   if (wakeId(repo, state.pending) !== wake) return { ok: true, changed: false, reason: "the waiting events changed after this wake was made, so the next poll sends them again" }
   if (error) {
     state.lastError = `the wake was not delivered: ${error}`
   } else {
+    delete state.targetGone
     state.lastWakeCount = state.pending.length
     state.lastWakeAt = new Date(now).toISOString()
     state.turns = [...(state.turns ?? []), state.lastWakeAt].filter((at) => now - Date.parse(at) <= 2 * TURN_MS).slice(-TURNS_KEPT)
@@ -576,15 +598,87 @@ export function ackWake({ paths, repo, wake, error, now }) {
   return { ok: true, changed: true, reason: error ? "recorded the failed delivery; the events stay waiting" : "cleared the delivered events" }
 }
 
+// ── A drain whose session is archived or gone ──
+
+function shepherdCommand({ env, homeDir }) {
+  const installed = path.join(homeDir, "Library", "Application Support", "housesitter", "releases", "shepherd", "current", "bin", "shepherd.mjs")
+  if (env.DESK_DRAINS_SHEPHERD) return [env.DESK_DRAINS_SHEPHERD]
+  if (existsSync(installed)) return [process.execPath, installed]
+  return ["shepherd"]
+}
+
+/** The first message of a drain's successor. Its first line is what Shepherd reads to archive the predecessor once the successor has taken over. */
+export function successorKickoff({ repo, predecessor, account }) {
+  return [
+    `Succeeds: ${predecessor}`,
+    `You are the long-running issue drain for ${repo}, taking over from session ${predecessor}, which was archived. Desk's poller delivers new and changed issues to you as wakes and keeps the ones it could not deliver, so the first wake carries what was waiting.`,
+    "Load and follow the `draining-issues` skill exactly: post a visible acknowledgement on every issue, preserve other owners' claims, and close an issue only when its promise is verified.",
+    "Keep exactly one of these labels on each issue you touch, creating them if missing: `drain: triaged`, `drain: in progress`, `drain: blocked`, `drain: needs ari`. Use `drain: needs ari` only for a real human decision or right, and say exactly what he must decide.",
+    ...(account ? [`Work on GitHub as ${account}.`] : []),
+    "Read the open issues now, then drain what is waiting. When the backlog is empty, go idle; do not poll with model turns.",
+  ].join("\n\n")
+}
+
+/** Starts a session in the drain's project through Shepherd. Returns { ok, session } or { ok: false, error }. */
+export function startSuccessor({ repo, predecessor, account }, { spawn = spawnSync, env = process.env, homeDir = os.homedir() } = {}) {
+  const [program, ...lead] = shepherdCommand({ env, homeDir })
+  const args = [...lead, "create", "--project", repo, "--name", `Drain: ${repo}`, "--prompt", successorKickoff({ repo, predecessor, account }), "--mode", "autopilot", "--json"]
+  const result = spawn(program, args, { encoding: "utf8", timeout: SHEPHERD_MS, env, windowsHide: true })
+  let out = null
+  try {
+    out = JSON.parse(String(result.stdout ?? ""))
+  } catch {}
+  if (out?.session_id) return { ok: true, session: String(out.session_id) }
+  const why = out?.error ?? String(result.stderr ?? "").trim().split("\n")[0] ?? result.error?.message
+  return { ok: false, error: String(why || result.error?.message || "shepherd create printed no session").slice(0, 200) }
+}
+
+/**
+ * A drain whose wake failed because its session is archived or gone starts a successor session and sends its wakes there from then on,
+ * so nothing waits for a person. The successor's first line says `Succeeds: <old id>`. The drain config stays as it is: the pointer is
+ * kept in the drain's state and lapses if the configured session changes. A failed start is tried again after ten minutes.
+ */
+export function recoverDrainTarget({ paths, repo, now, start = startSuccessor }) {
+  const drain = readDrainConfig(paths.config).find((entry) => entry.repo === repo)
+  const states = readDrainStates(paths.state)
+  const state = states[repo]
+  if (!drain || !state?.targetGone) return { ok: true, changed: false, reason: "the drain's session is not known to be archived" }
+  if (state.recoverAt && now - Date.parse(state.recoverAt) < RECOVER_RETRY_MS) return { ok: true, changed: false, reason: "a successor was tried a moment ago; trying again later" }
+  const predecessor = sessionOf(drain, state)
+  const started = start({ repo, predecessor, account: drain.account })
+  if (started.ok) {
+    state.successor = { from: drain.session, to: started.session, predecessor, at: new Date(now).toISOString() }
+    delete state.targetGone
+    delete state.recoverAt
+    delete state.lastError
+  } else {
+    state.recoverAt = new Date(now).toISOString()
+    state.targetGone.error = `starting its successor failed: ${started.error}`
+  }
+  writeDrainStates(paths.state, states)
+  return { ok: started.ok, changed: started.ok, ...(started.ok ? { session: started.session, predecessor } : { error: started.error }) }
+}
+
 // ── GitHub ──
 
 /** The drain's GitHub access: its account's token from the `gh` CLI, then the REST API. `login` skips asking GitHub who the token is. */
-export async function connectGithub(account, { spawn = spawnSync, fetchImpl = fetch, env = process.env, login: knownLogin } = {}) {
+export async function connectGithub(account, { spawn = spawnSync, fetchImpl = fetch, env = process.env, login: knownLogin, sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)) } = {}) {
   const tokenArgs = ["auth", "token", "--hostname", "github.com", ...(account ? ["--user", account] : [])]
   const cleaned = { ...env, PATH: ["/opt/homebrew/bin", "/usr/local/bin", env.PATH].filter(Boolean).join(":") }
   for (const name of ["GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GH_HOST"]) delete cleaned[name]
-  const result = spawn("gh", tokenArgs, { encoding: "utf8", timeout: 10_000, env: cleaned, windowsHide: true })
-  const token = result.status === 0 ? String(result.stdout ?? "").trim() : ""
+  let token = ""
+  let transient = ""
+  for (let attempt = 1; attempt <= TOKEN_TRIES && !token; attempt++) {
+    const result = spawn("gh", tokenArgs, { encoding: "utf8", timeout: TOKEN_MS, env: cleaned, windowsHide: true })
+    token = result.status === 0 ? String(result.stdout ?? "").trim() : ""
+    if (token) break
+    const said = String(result.stderr ?? "").trim().split("\n")[0]
+    // Only gh's own "no oauth token" (or a clean empty answer) means the account is not signed in; a timeout, a signal, a keyring that is busy or locked, or any other message is a read that failed and is tried again.
+    transient = result.status === null || (result.status !== 0 && said && !NO_TOKEN.test(said)) ? (said || result.error?.message || `gh stopped (${result.signal ?? "no status"})`) : ""
+    if (!transient) break
+    if (attempt < TOKEN_TRIES) await sleep(TOKEN_PAUSE_MS * attempt)
+  }
+  if (!token && transient) throw Object.assign(new Error(`Wait for the next poll: it reads the token again; the GitHub CLI could not read it for ${account ?? "its active account"} (${transient.slice(0, 160)})`), { code: "drains_github_cli_token_unavailable", transient: true })
   if (!token) throw Object.assign(new Error(`Sign in the GitHub CLI: the GitHub CLI has no token for ${account ?? "its active account"} (run \`gh auth login --hostname github.com\`)`), { code: "drains_sign_in_the_github_cli" })
   // What this connection spent and what GitHub says is left in the account's window; a 304 answer costs nothing against it.
   const meter = { total: 0, notModified: 0, quota: null }
