@@ -1,5 +1,15 @@
 # desk plugin — changelog
 
+## 3.2.251 — 2026-11-18
+
+### Desk binds the desk that owns the session's repository
+
+An operator with a personal desk and a work desk no longer has an ouro-ui session land in the work desk. When nothing names a desk, Desk now binds the one whose kind matches the owner of the repository the session was opened in (personal for the operator's own repositories, work for Microsoft ones) before any home-folder fallback, and `desk_status` reports the source as `repo_owner_desk`.
+
+`desk_save` refuses a path that belongs to another desk on the machine, instead of answering `nothing_to_commit`, and names that desk. `desk_search` and `desk_recall` return `desk_searched` with the root and name of the desk they searched.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.250 — 2026-11-18
 
 A pull on a big desk now takes well under a second, and Desk's own commit and push hooks start fewer programs. A pull used to start about twenty Git processes (and refresh the whole index first), which took seconds on a busy machine. It now reads the branch, its upstream and the fetched commit straight from `.git`, answers at once when the desk is already at its upstream, skips the fetch when one finished in the last 15 seconds, and refreshes the index only when Git refuses the move because of it. The delivery worker reads the same facts from `.git` instead of asking Git. The `prepare-commit-msg` and `pre-push` hooks use shell built-ins instead of `head`, `grep`, `sed`, `tr`, `cat` and `dirname`, so each now starts at most one program (they are rewritten on the next session start).
