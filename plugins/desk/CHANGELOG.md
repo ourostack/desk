@@ -1,5 +1,55 @@
 # desk plugin — changelog
 
+## 3.2.274 — 2026-11-18
+
+### A drain's successor passes `--why` when Shepherd creates it
+
+Drain recovery now sends `--why` with the `shepherd create` call that starts a drain's successor, so it is not refused once Shepherd requires a reason on every action others see.
+
+Desk's MCP server now vendors Ouro UI v1.3.299, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.273 — 2026-11-18
+
+### Run the laptop lane start when `shepherd place` says laptop
+
+`work-orchestration` now tells a coordinator to run the start command `shepherd place` prints when it answers laptop, instead of only mentioning it. Under swap pressure the mini kept running every lane because the line was advice, not the start.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.272 — 2026-11-18
+
+Desk's MCP server now vendors Ouro UI v1.3.298, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.271 — 2026-11-18
+
+Desk's MCP server now vendors Ouro UI v1.3.297, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.270 — 2026-11-18
+
+Lanes no longer inherit the coordinator's model. In the GitHub Copilot app, `create_session` without `kickoff.model` starts the new session on the model of the session that asked, and coordinators run on Opus, so most lanes ran on Opus too. A new Copilot `preToolUse` hook, [`hooks/copilot-lane-model.cjs`](hooks/copilot-lane-model.cjs), fills in `kickoff.model` for `create_session`, `open_issue_session` and `open_pr_session` calls that name none, through `modifiedArgs`, with `claude-sonnet-5.5`. `laneModel` in Desk's `config.json` (the state folder's `ouroboros-skills/desk/config.json`) or `DESK_LANE_MODEL` changes the default, and a model the caller names is always kept. The hook fails open, and only acts where the host runs hooks for the app's own tools, so a coordinator should still pass `kickoff.model` itself.
+
+Desk's MCP server now vendors Ouro UI v1.3.296, moved by Ouro Current.
+
+Relays now spend far fewer REST calls on a busy work account. A labelled pull request still waiting on checks is read at most once a minute (growing to once every four minutes as it waits) instead of on every poll, because each read of running checks is a full answer that counts against the hourly quota. A `merge-when-green` relay with nothing labelled polls up to four times less often. Each relay now records the calls it spent (counted and free `304`s), and `relays status` shows the current hour's total, so a relay's cost is read instead of guessed.
+
+A rate-limit 403 or 429 in the issue drains now says it is rate limited, not "check gh auth".
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.269 — 2026-11-18
+
+### Session hooks no longer wait on a timed-out migration check's cleanup
+
+On Windows, a session-start hook that timed out a pending-migration check could wait up to 30 s for `taskkill` to end that check's process tree, past the hook's 10 s limit when a runner was loaded. A read-only check now stops waiting 1 s after its timeout and reports as not checked, while the cleanup carries on in the background.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.268 — 2026-11-18
 
 Desk's MCP server now vendors Ouro UI v1.3.294, moved by Ouro Current.

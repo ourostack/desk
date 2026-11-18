@@ -622,7 +622,7 @@ export function successorKickoff({ repo, predecessor, account }) {
 /** Starts a session in the drain's project through Shepherd. Returns { ok, session } or { ok: false, error }. */
 export function startSuccessor({ repo, predecessor, account }, { spawn = spawnSync, env = process.env, homeDir = os.homedir() } = {}) {
   const [program, ...lead] = shepherdCommand({ env, homeDir })
-  const args = [...lead, "create", "--project", repo, "--name", `Drain: ${repo}`, "--prompt", successorKickoff({ repo, predecessor, account }), "--mode", "autopilot", "--json"]
+  const args = [...lead, "create", "--project", repo, "--name", `Drain: ${repo}`, "--prompt", successorKickoff({ repo, predecessor, account }), "--mode", "autopilot", "--why", `Desk starts the successor of the archived drain ${predecessor} for ${repo}`, "--json"]
   const result = spawn(program, args, { encoding: "utf8", timeout: SHEPHERD_MS, env, windowsHide: true })
   let out = null
   try {
@@ -702,7 +702,16 @@ export async function connectGithub(account, { spawn = spawnSync, fetchImpl = fe
       meter.notModified += 1
       return { notModified: true }
     }
-    if (!response.ok) throw Object.assign(new Error(`Check gh auth status, then try again: GitHub answered HTTP ${response.status} for ${route.split("?")[0]}`), { code: "drains_check_gh_auth_status_then", status: response.status })
+    if (!response.ok) {
+      // A 429, or a 403 that GitHub says is the rate limit, is the hourly quota running out, not a refused token.
+      const said = response.status === 403 ? await response.text().catch(() => "") : ""
+      if (response.status === 429 || (response.status === 403 && (remaining === "0" || response.headers.has("retry-after") || /rate limit/iu.test(said)))) {
+        const reset = Number(response.headers.get("x-ratelimit-reset"))
+        const until = Number.isFinite(reset) && reset > 0 ? new Date(reset * 1000).toISOString() : "the next window"
+        throw Object.assign(new Error(`Wait for the quota to reset: GitHub's hourly API limit is used up, rate limited until ${until} (HTTP ${response.status} for ${route.split("?")[0]})`), { code: "drains_rate_limited", status: response.status, rateLimited: true })
+      }
+      throw Object.assign(new Error(`Check gh auth status, then try again: GitHub answered HTTP ${response.status} for ${route.split("?")[0]}`), { code: "drains_check_gh_auth_status_then", status: response.status })
+    }
     return { body: await response.json(), next: /rel="next"/u.test(response.headers.get("link") ?? ""), etag: response.headers.get("etag") }
   }
   const all = async (route) => {
