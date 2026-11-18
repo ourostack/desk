@@ -314,7 +314,7 @@ function copyProfile(source, dest, app) {
 }
 
 function launchConfig(kind, browser, profileDir, profileName, outputDir) {
-  var launch = { channel: browser.channel, executablePath: browser.executablePath, headless: true, args: ["--no-first-run", "--no-default-browser-check"] };
+  var launch = { channel: browser.channel, executablePath: browser.executablePath, headless: true, args: ["--no-first-run", "--no-default-browser-check", "--mute-audio"] };
   if (kind === "mine") {
     // Cookies still need the normal encryption backend; excluding saved-login stores does not change it.
     // Sync stays off so the copy never writes back to the person's account.
