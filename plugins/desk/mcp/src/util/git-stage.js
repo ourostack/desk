@@ -416,7 +416,8 @@ export function commitPaths(root, relPaths, message, spawnGit, stateBranch) {
   // A real run whose paths are staged and clean commits on a private index with the post-commit hook (Git LFS's whole-tree walk) detached, so a save on a big repository returns at once.
   if (spawnGit === spawnSync && expected !== null && relPaths.every(plainRelative)) {
     const entries = indexEntries(root, relPaths, spawnGit)
-    if (entries !== null) return commitIndexPaths(root, relPaths, entries, message, spawnGit, stateBranch)
+    // Only when every path is one file the index holds: a folder or a deletion keeps the commit it always had.
+    if (entries !== null && relPaths.every((p) => entries.some((entry) => entry.path === p))) return commitIndexPaths(root, relPaths, entries, message, spawnGit, stateBranch)
   }
   // The desk's own pre-commit hook (`desk/card-commit-guard.js`) refuses a commit that changes a task card unless Desk is the one committing:
   // this is Desk's commit path, so it says so for the git call (and only for that call).
