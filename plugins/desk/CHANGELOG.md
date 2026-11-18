@@ -1,5 +1,15 @@
 # desk plugin — changelog
 
+## 3.2.278 — 2026-11-18
+
+Desk's browser closes a headless browser that has sat unused for 5 minutes (`DESK_WEB_IDLE_MS`, 0 for never) and gives back the 100-350 MB it held; agents often forget to close one. The next command on it reopens a browser of the same kind by itself, goes back to the last page it was sent to, and says in that reply that it reopened. Scroll position, form input and extra tabs are not kept.
+
+Desk's MCP server now vendors Ouro UI v1.3.306, moved by Ouro Current.
+
+**Ship as you go.** `work-orchestration` now says each increment goes live once reviewed and green, with every surface it touches updated in the same change and its live place reported, never held for the end of a pass or for a sibling change, following ourostack's [ship as you go](https://github.com/ourostack/.github/blob/main/agents/ship-the-smallest-unit.md) rule. `using-desk` says the same in a phrase.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.277 — 2026-11-18
 
 ### Durable work goes on the desk, not in the host's session folder
