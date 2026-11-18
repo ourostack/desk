@@ -186,7 +186,7 @@ function startPostCommit(root, env) {
   const { GIT_INDEX_FILE: _private, ...clean } = env
   try {
     const child = spawn("git", ["-C", root, "hook", "run", "--ignore-missing", "post-commit"], { detached: true, stdio: "ignore", windowsHide: true, env: clean })
-    child.on("error", () => {})
+    child.on("error", Function.prototype)
     child.unref()
   } catch {
     // The commit already stands; a post-commit hook that cannot start is not a reason to fail it.

@@ -9,6 +9,7 @@ import * as path from "node:path"
 import { spawnSync } from "node:child_process"
 import { mkTempRoot } from "../_temp_roots.js"
 import { commitPaths, stagePaths } from "../../../../../plugins/desk/mcp/src/util/git-stage.js"
+import { lfsSkipEnv } from "../../../../../plugins/desk/mcp/src/runtime/deliver.js"
 import { acquireSyncLock, readSyncStatus, runPushWorker, runSyncPushCli } from "../../../../../plugins/desk/mcp/src/runtime/sync-worker.js"
 
 const SAVE_BUDGET_MS = 1000
@@ -109,4 +110,24 @@ test("a push that keeps failing ends blocked with the cause on the status record
   assert.notEqual(code, 0)
   assert.match(stderr, /blocked/iu, "the failure is never silent")
   assert.match(stderr, /desk_status/u, "and says where to look next")
+})
+
+test("the push skips Git LFS's upload scan only when it can see that no pushed file is an LFS file", () => {
+  const skip = { GIT_LFS_SKIP_PUSH: "1" }
+  const answer = (diff, attrs) => (args) => (args[0] === "diff" ? diff : attrs)
+  const ok = (stdout) => ({ status: 0, stdout })
+  const bad = { status: 1, stdout: "" }
+  assert.deepEqual(lfsSkipEnv(answer(bad), "a", "b"), {}, "a diff Git cannot read keeps the scan")
+  assert.deepEqual(lfsSkipEnv(answer(ok("")), "a", "b"), skip, "nothing changed has nothing to upload")
+  assert.deepEqual(lfsSkipEnv(answer(ok("x.md\0"), bad), "a", "b"), {}, "attributes Git cannot read keep the scan")
+  assert.deepEqual(lfsSkipEnv(answer(ok("x.png\0"), ok("x.png\0filter\0lfs\0")), "a", "b"), {}, "an LFS file keeps the scan")
+  assert.deepEqual(lfsSkipEnv(answer(ok("x.md\0"), ok("x.md\0filter\0unspecified\0")), "a", "b"), skip)
+})
+
+test("sync-push says what it does not know when the worker ends in an unrecognized state", async () => {
+  let stderr = ""
+  const io = { stdout: { write: () => true }, stderr: { write: (chunk) => { stderr += chunk; return true } } }
+  const code = await runSyncPushCli({ argv: ["--root", "/tmp/anywhere"], env: process.env, runWorker: async () => ({ result: "weird" }), io })
+  assert.notEqual(code, 0)
+  assert.match(stderr, /does not know/u)
 })

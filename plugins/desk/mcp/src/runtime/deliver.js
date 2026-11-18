@@ -66,7 +66,7 @@ export function runner(spawnGit, cwd) {
 // Git LFS's pre-push hook walks the pushed range to find objects to upload, which takes seconds on a big repository on a busy
 // machine. When no path the range changes is LFS-tracked it has nothing to upload, so the push skips it. Any doubt (a Git
 // failure, an LFS path) keeps the hook.
-function lfsSkipEnv(git, from, to) {
+export function lfsSkipEnv(git, from, to) {
   const changed = git(["diff", "--name-only", "-z", `${from}..${to}`])
   if (changed.status !== 0) return {}
   if (changed.stdout === "") return { GIT_LFS_SKIP_PUSH: "1" }
