@@ -23,7 +23,7 @@
     "evals/fixtures/unicode-slug/__tests__/tools/friction_add.test.js",
     "evals/worlds/engineering-v2-kernel/v2-approved-local-delivery/held-out/oracle.test.js"
   ],
-  "reviewedSourceFingerprint": "9d7dc76f6e4118ef5220773a3dd20516b846d4189882e9d5da437979cef4c7d4",
+  "reviewedSourceFingerprint": "d3e23713735bc54e17ee684188082040b55421c2bc379ea7eebb44da546ea36c",
   "knownFailure": [
     {"issue": "https://github.com/ourostack/desk/issues/1186", "case": "v2-new-work-alignment", "observed": "2026-11-17"}
   ],
