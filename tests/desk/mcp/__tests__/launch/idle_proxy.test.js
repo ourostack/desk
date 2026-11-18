@@ -6,7 +6,7 @@ import { EventEmitter } from "node:events"
 import { createRequire } from "node:module"
 import { PassThrough } from "node:stream"
 import * as path from "node:path"
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, readFileSync, renameSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { bootstrapPath } from "./_mcp_handshake.js"
 
@@ -491,9 +491,13 @@ test("a newer Desk is passed over when its tool protocol differs or is absent, i
     noindex: { version: "3.2.294", index: false },
     engines: { version: "3.2.295", package: { engines: { node: ">=24" } } },
     pack: { version: "3.2.296", abis: ["115"] },
-    ok: { version: "3.2.281", abis: ["127"] },
+    ok: { version: "3.2.281", abis: ["127"], package: { engines: undefined } },
+    unreadable: { version: "3.2.282", plugin: { version: "not a version" } },
   })
+  writeFileSync(path.join(s.scanRoot, "a-file"), "")
+  mkdirSync(path.join(s.scanRoot, "own", "not-a-root", "desk"), { recursive: true })
   assert.equal(newest(s).version, "3.2.281")
+  assert.equal(newest(sessions({ own: { version: "3.2.280", plugin: { name: "other" } } }), "missing"), null, "a copy with no manifest of its own")
   assert.equal(newest(sessions({ own: { version: "3.2.280" }, same: { version: "3.2.280" }, older: { version: "3.2.200" } })), null, "nothing newer keeps this copy")
 })
 
@@ -503,6 +507,15 @@ test("this copy keeps running when it cannot tell: no protocol of its own, not i
   const t = sessions({ own: { version: "3.2.280" }, top: { version: "3.2.299" } })
   assert.equal(bootstrap.newestDesk({ mcpRoot: t.mcp("own"), current: NODE, platform: process.platform, arch: process.arch }), null, "default scan needs <sessions>/<session>/root-N/desk")
   assert.equal(bootstrap.newestDesk({ mcpRoot: t.mcp("own"), current: NODE, platform: process.platform, arch: process.arch, scanRoot: path.join(t.scanRoot, "missing") }), null)
+})
+
+test("without a scan folder, a copy that sits in <sessions>/<session>/root-N/desk scans its sibling sessions", () => {
+  const root = mkdtempSync(path.join(tmpdir(), "desk-layout-"))
+  const s = sessions({ own: { version: "3.2.280" }, top: { version: "3.2.284" } })
+  const sessionsDir = path.join(root, "sessions")
+  renameSync(s.scanRoot, sessionsDir)
+  const found = bootstrap.newestDesk({ mcpRoot: path.join(sessionsDir, "own", "root-5", "desk", "mcp"), current: NODE, platform: process.platform, arch: process.arch })
+  assert.equal(found.version, "3.2.284")
 })
 
 test("the idle proxy starts each new server from the chosen Desk, keeps a plugin root the host set, and falls back to its own copy when there is no choice or the choice throws", () => {

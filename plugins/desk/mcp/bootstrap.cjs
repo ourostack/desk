@@ -560,7 +560,7 @@ function newestDesk(options) {
       if (!/^root-\d+$/.test(root)) return;
       var pluginRoot = path.join(scanRoot, session, root, "desk");
       var plugin = readJson(path.join(pluginRoot, "plugin.json"));
-      if (!plugin || plugin.name !== ownPlugin.name || !plugin.repository || plugin.repository !== ownPlugin.repository) return;
+      if (!plugin || plugin.name !== ownPlugin.name || plugin.repository !== ownPlugin.repository) return;
       var version = parseVersion(plugin.version);
       if (!version || compareVersions(version, bestVersion) <= 0) return;
       var candidateMcp = path.join(pluginRoot, "mcp");
@@ -683,7 +683,7 @@ function start(o, stderr, serve) {
       // A host keeps one server per session for days, so this process stays small: it starts the real server on demand and ends it when idle (idle-proxy.cjs). An injected importIndex, or DESK_MCP_IDLE_MS=0, runs index.js in this process instead.
       var proxy = idleMs > 0 && o.importIndex === undefined;
       if (proxy) {
-        var proxied = idle.runIdleProxy({ node: current.path, indexFile: indexFile, chooseIndex: o.chooseIndex !== undefined ? o.chooseIndex : function () { return newestDesk({ mcpRoot: mcpRoot, current: current, platform: platform, arch: either(o.arch, process.arch), scanRoot: o.scanRoot }); }, args: args, env: env, idleMs: idleMs, spawn: o.spawn, stdin: o.stdin, stdout: o.stdout, stderr: stderr, exit: o.exit, signals: o.signals, kill: o.kill, now: o.now, setTimer: o.setTimer, clearTimer: o.clearTimer });
+        var proxied = idle.runIdleProxy({ node: current.path, indexFile: indexFile, chooseIndex: function () { return newestDesk({ mcpRoot: mcpRoot, current: current, platform: platform, arch: either(o.arch, process.arch), scanRoot: o.scanRoot }); }, args: args, env: env, idleMs: idleMs, spawn: o.spawn, stdin: o.stdin, stdout: o.stdout, stderr: stderr, exit: o.exit, signals: o.signals, kill: o.kill, now: o.now, setTimer: o.setTimer, clearTimer: o.clearTimer });
         if (proxied.error !== null) throw proxied.error;
         return new Promise(function () {});
       }
