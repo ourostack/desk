@@ -55,6 +55,9 @@ const version = value => typeof value === "string" && /^\d{1,6}(?:\.\d{1,6}){1,3
 const exception = value => typeof value === "string" &&
   /^System\.(?:IO\.[A-Za-z]{1,64}Exception|UnauthorizedAccessException|ArgumentException|NotSupportedException|Security\.SecurityException)$/u.test(value)
 
+// PowerShell starts in up to about 7 s at p99 and 20 s at worst on a loaded hosted Windows runner (the ACL probe measured 7.2 s), so readiness gets its own bound; the move's acknowledgement stays at 5 s.
+export const NATIVE_READINESS_MS = 30000
+
 // Dependencies are internal JS seams for protocol tests, never MCP input.
 export async function moveArchive(source, destination, beforeMove, {
   platform = process.platform, spawn = spawnChild, realpath = fs.realpath, env = process.env,
@@ -139,7 +142,7 @@ export async function moveArchive(source, destination, beforeMove, {
   let failure
   try {
     try { child.stdin.write(JSON.stringify({ source, destination }) + "\n") } catch { fail("input unavailable") }
-    await bounded(ready, 5000, "readiness exceeded its bound")
+    await bounded(ready, NATIVE_READINESS_MS, "readiness exceeded its bound")
     await beforeMove()
     if (issue || state.closed) throw issue || problem("closed before release")
     state.released = true
