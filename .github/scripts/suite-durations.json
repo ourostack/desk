@@ -453,7 +453,7 @@
   "tools/lesson_add.test.js": 9.1,
   "tools/lesson_team.test.js": 55.6,
   "tools/local_only.test.js": 30.1,
-  "tools/move.test.js": 177.8,
+  "tools/move.test.js": 75,
   "tools/move_archive_and_rename.test.js": 75.5,
   "tools/move_archive_and_rename_part2.test.js": 75.5,
   "tools/note.test.js": 30.5,
@@ -516,6 +516,8 @@
   "util/rename_retry.test.js": 0.3,
   "util/rename_sites.test.js": 0.2,
   "util/tool_commits.test.js": 0.8,
-  "util/write_segment_api.test.js": 0.2
+  "util/write_segment_api.test.js": 0.2,
+  "tools/move_part2.test.js": 75,
+  "tools/move_part3.test.js": 75
  }
 }
