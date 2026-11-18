@@ -14,8 +14,6 @@ const read = (name) => load(readFileSync(path.join(workflows, name), "utf8"))
 test("the runtime packs are built for every shipped target", () => {
   const jobs = read("desk-mcp-tests.yml").jobs
   assert.deepEqual(jobs["desk-runtime-packs"].strategy.matrix.include.map(item => item.target).sort(), [
-    "darwin-arm64-node-127",
-    "darwin-arm64-node-137",
     "linux-x64-node-127",
     "linux-x64-node-137",
     "linux-x64-node-147",
@@ -24,14 +22,14 @@ test("the runtime packs are built for every shipped target", () => {
   ])
 })
 
-test("the Darwin runtime pack selects a supported standard Apple-silicon image", () => {
-  const entries = read("desk-mcp-tests.yml").jobs["desk-runtime-packs"].strategy.matrix.include
-  const darwin = entries.find(item => item.platform === "darwin")
-  assert.ok(["macos-latest", "macos-15", "macos-26"].includes(darwin.runner), `${darwin.runner} must be a supported standard ARM64 image`)
-  assert.equal(darwin.target, "darwin-arm64-node-127")
-  assert.equal(darwin.arch, "arm64")
-  assert.equal(darwin.node, "22.23.2")
-  assert.equal(darwin.node_abi, "127")
+test("both Darwin runtime packs are built in the macOS checks job, on a supported standard Apple-silicon image", () => {
+  const mac = read("desk-mcp-tests.yml").jobs["macos-checks"]
+  assert.ok(["macos-latest", "macos-15", "macos-26"].includes(mac["runs-on"]), `${mac["runs-on"]} must be a supported standard ARM64 image`)
+  const packs = mac.steps.filter(step => step.uses === "./.github/actions/build-runtime-pack").map(step => step.with)
+  assert.deepEqual(packs, [
+    { target: "darwin-arm64-node-127", node: "22.23.2", platform: "darwin", arch: "arm64", node_abi: "127" },
+    { target: "darwin-arm64-node-137", node: "24.18.0", platform: "darwin", arch: "arm64", node_abi: "137" },
+  ])
 })
 
 // Every leg runs on every event: a pull request runs everything main runs (AGENTS.md, "CI tiers"), so a matrix names its legs outright.

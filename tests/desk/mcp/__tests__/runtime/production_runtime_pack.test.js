@@ -809,6 +809,14 @@ test("CI checks committed generated artifacts before rebuilding runtime dependen
 // never be completed, which is exactly how 1.4.0-alpha.4 first shipped.
 const hostedNativePackLanes = Object.freeze([
   Object.freeze({
+    target: "darwin-arm64-node-127",
+    runnerPrefix: "macos",
+    nodeVersion: "22.23.2",
+    platform: "darwin",
+    arch: "arm64",
+    nodeAbi: "127",
+  }),
+  Object.freeze({
     target: "darwin-arm64-node-137",
     runnerPrefix: "macos",
     nodeVersion: "24.18.0",
@@ -907,10 +915,30 @@ export function tarArchiveArguments(text) {
     .filter((archive) => archive.length > 0)
 }
 
+const packBuilderAction = "./.github/actions/build-runtime-pack"
+
+// Every host-bound pack is built by the shared local action, which holds the build, verify and upload steps. A target's producer is either
+// a matrix entry of a job whose action step takes `matrix.target`, or a job that names the target in its own action step (the macOS
+// checks job builds both Darwin packs on its one runner). The job shape is free; what matters is that the pack is built on its own host.
+function packBuilderSteps(job) {
+  return (job.steps ?? []).filter((step) => step.uses === packBuilderAction)
+}
+
+function expandedJob(job) {
+  const action = require("js-yaml").load(readFileSync(path.join(repoRoot, ".github", "actions", "build-runtime-pack", "action.yml"), "utf8"))
+  return { ...job, steps: [...(job.steps ?? []), ...(packBuilderSteps(job).length > 0 ? action.runs.steps : [])] }
+}
+
 function matrixEntriesForTarget(jobs, target) {
-  return jobs.flatMap(([name, job]) => laneMatrixValues(job)
-    .filter((entry) => String(entry.target ?? "") === target)
-    .map((entry) => ({ name, job, entry })))
+  return jobs.flatMap(([name, job]) => {
+    const steps = packBuilderSteps(job)
+    const fromMatrix = steps.some((step) => step.with?.target === "${{ matrix.target }}")
+      ? laneMatrixValues(job).filter((entry) => String(entry.target ?? "") === target)
+      : []
+    const literal = steps.filter((step) => step.with?.target === target)
+      .map((step) => ({ target, runner: job["runs-on"], node: step.with.node }))
+    return [...fromMatrix, ...literal].map((entry) => ({ name, job: expandedJob(job), entry }))
+  })
 }
 
 // A job that builds a pack without declaring a target matrix is a local smoke build of whatever host it
@@ -942,7 +970,7 @@ test("a hosted native lane produces every host-bound runtime pack target without
     assert.equal(
       laneEntries.length,
       1,
-      `exactly one matrix entry may declare ${lane.target}; found ${laneEntries.length}`,
+      `exactly one producer may declare ${lane.target}; found ${laneEntries.length}`,
     )
 
     const { name: jobName, job, entry } = laneEntries[0]
@@ -971,10 +999,10 @@ test("a hosted native lane produces every host-bound runtime pack target without
     assert.ok(jobUploadsArtifact(job), `${jobName} must upload the verified pack`)
     const laneArtifacts = artifactNamesFor(job)
     assert.ok(
-      laneArtifacts.length > 0 && laneArtifacts.every((name) => /\$\{\{\s*matrix\.target\s*\}\}/u.test(name)),
+      laneArtifacts.length > 0 && laneArtifacts.every((name) => /\$\{\{\s*inputs\.target\s*\}\}/u.test(name)),
       `${jobName} must give each target its own artifact name`,
     )
-    for (const name of laneArtifacts) laneArtifactNames.add(name.replaceAll("${{ matrix.target }}", lane.target))
+    for (const name of laneArtifacts) laneArtifactNames.add(name.replaceAll("${{ inputs.target }}", lane.target))
     assert.deepEqual(
       job.permissions,
       { contents: "read" },
@@ -998,10 +1026,13 @@ test("a hosted native lane produces every host-bound runtime pack target without
     }
   }
 
-  const laneJobNames = new Set(
-    hostedNativePackLanes.flatMap((lane) => matrixEntriesForTarget(jobs, lane.target).map(({ name }) => name)),
-  )
-  assert.equal(laneJobNames.size, 1, "host-bound targets belong to one maintained native-pack matrix job")
+  // Job shape is free, but no producer may wait for another job: a failing coverage gate must never stop native pack production.
+  for (const lane of hostedNativePackLanes) {
+    for (const { name, job } of matrixEntriesForTarget(jobs, lane.target)) {
+      assert.equal(job.needs ?? null, null, `${name} produces ${lane.target} and must not wait on another job`)
+      assert.equal(job.if ?? null, null, `${name} produces ${lane.target} and must run on every change`)
+    }
+  }
 
   // The main gate still builds a pack for whatever host it runs on, after it has verified the committed
   // artifact set. That build is a smoke check, so it must stay behind the verifier and must never publish
