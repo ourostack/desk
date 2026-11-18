@@ -40,6 +40,8 @@ An existing folder can be a partly set-up desk, not a taken alias; keep the requ
 
 ## Team tooling
 
+First run `platform.install.copilot` from `status` or `join` (once per machine; it keeps Desk and Crew on their channels, so every later session starts on the newest release). An existing crew member runs the same line to bring an older install up to date.
+
 `status` and `join` report the team's plugin as `tooling`, with the install command per host in `tooling.install` (`copilot`, `claude`); run the one for this host. When `tooling.install` is null, `tooling.message` says why: the tooling repository holds no plugin yet (say where it is and install nothing), a monorepo's origin is not on GitHub (install from the clone), or a monorepo has several plugins and none is named (ask the team which, and record it in `_meta/crew.json` through a pull request). On Claude Code a null install means the plugin has no marketplace; say where it lives and install nothing some other way. `tooling: null` means the workspace has no plugin.
 
 ## Short interview
