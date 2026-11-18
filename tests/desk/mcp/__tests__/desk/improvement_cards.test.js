@@ -13,7 +13,6 @@ import {
   STATES,
   MOVES,
   CLAIM_TTL_HOURS,
-  MAX_CLAIMS_PER_DAY,
   MAX_LIVE_CLAIMS,
   MAX_CARD_FILES,
   SET_ASIDE_FOLDER,
@@ -81,7 +80,6 @@ async function plant(where, templateKey, key) {
 
 test("constants and vocabularies are single named, frozen values", () => {
   assert.equal(CLAIM_TTL_HOURS, 4)
-  assert.equal(MAX_CLAIMS_PER_DAY, 2)
   assert.equal(MAX_LIVE_CLAIMS, 1)
   assert.equal(MAX_CARD_FILES, 2000)
   assert.equal(SET_ASIDE_FOLDER, "invalid")
@@ -523,7 +521,7 @@ test("claimNext keeps only the last ten claim times", async () => {
   assert.equal(card.claim_log.at(-1).at, iso(at(13, 8)))
 })
 
-test("claimNext says claim_held for a live claim, cap_reached after 2 claims in the UTC day and none_open when nothing is open", async () => {
+test("claimNext says claim_held for a live claim, no cap on claims in a day and none_open when nothing is open", async () => {
   const where = await desk()
   assert.deepEqual(await claim(where), { result: "none_open" })
   for (let i = 0; i < 3; i += 1) await open(where, { key: cardKey("reconcile_class", reason(i)), evidence: [], now: at(1) })
@@ -533,7 +531,9 @@ test("claimNext says claim_held for a live claim, cap_reached after 2 claims in 
   const two = await claim(where, { now: at(2, 10) })
   assert.equal(two.result, "claimed")
   await updateCard({ ...where, key: two.card.key, claim_id: two.claim_id, now: at(2, 10), patch: { state: "open" } })
-  assert.deepEqual(await claim(where, { now: at(2, 23) }), { result: "cap_reached" })
+  const three = await claim(where, { now: at(2, 23) })
+  assert.equal(three.result, "claimed")
+  await updateCard({ ...where, key: three.card.key, claim_id: three.claim_id, now: at(2, 23), patch: { state: "open" } })
   assert.equal((await claim(where, { now: at(3, 0) })).result, "claimed")
 })
 
@@ -1162,8 +1162,8 @@ test("triage_alarm_strict_new_write_and_legacy_read", async () => {
   assert.ok(!legacy.module.LOOP_ALARMS.includes("step_stale:triage"), "the baseline predates the code")
   assert.deepEqual(LOOP_ALARMS.filter((name) => !legacy.module.LOOP_ALARMS.includes(name)), ["triage_engine_unpinned", "step_stale:triage"], "the two additions")
   assert.deepEqual(legacy.module.LOOP_ALARMS.filter((name) => !LOOP_ALARMS.includes(name)), [])
-  for (const name of ["SOURCES", "STATES", "MOVES", "CLAIM_TTL_HOURS", "MAX_CLAIMS_PER_DAY", "MAX_LIVE_CLAIMS", "MAX_CARD_FILES", "CLOSE_REASONS", "CHECK_RESULTS"]) {
-    assert.deepEqual({ SOURCES, STATES, MOVES, CLAIM_TTL_HOURS, MAX_CLAIMS_PER_DAY, MAX_LIVE_CLAIMS, MAX_CARD_FILES, CLOSE_REASONS, CHECK_RESULTS }[name], legacy.module[name], `${name} is unchanged`)
+  for (const name of ["SOURCES", "STATES", "MOVES", "CLAIM_TTL_HOURS", "MAX_LIVE_CLAIMS", "MAX_CARD_FILES", "CLOSE_REASONS", "CHECK_RESULTS"]) {
+    assert.deepEqual({ SOURCES, STATES, MOVES, CLAIM_TTL_HOURS, MAX_LIVE_CLAIMS, MAX_CARD_FILES, CLOSE_REASONS, CHECK_RESULTS }[name], legacy.module[name], `${name} is unchanged`)
   }
   const older = await desk()
   assert.equal((await legacy.module.openImprovement({ ...older, key: KEY, source: "loop_alarm", evidence: [], plugin: "desk", signal: null, now: at(1) })).result, "invalid_source")

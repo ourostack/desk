@@ -257,6 +257,26 @@ test("a recovered open or claimed card closes unverified as source_recovered, wh
   assert.equal((await byKey(ctx, held)).close_reason, "source_recovered")
 }))
 
+test("an open Desk problem whose own issue is closed closes at once as source_recovered; one whose issue is open stays", () => scratch(async (ctx) => {
+  const evidence = (n) => ({ evidence: [`issue:ourostack/desk#${n}`] })
+  const done = await make(ctx, "desk_problem", "ourostack/desk#12", "open", {}, evidence(12))
+  const live = await make(ctx, "desk_problem", "ourostack/desk#13", "open", {}, evidence(13))
+  const w = world({ issues: { 12: { state: "closed" }, 13: { state: "open" } } })
+  const out = await go(ctx, w)
+  assert.deepEqual(out.counts, { closed_unverified: 1, source_recovered: 1 })
+  const closed = await byKey(ctx, done)
+  assert.equal(closed.state, "closed_unverified")
+  assert.equal(closed.close_reason, "source_recovered")
+  assert.deepEqual(closed.evidence, ["issue:ourostack/desk#12"])
+  assert.equal((await byKey(ctx, live)).state, "open")
+  await make(ctx, "desk_problem", "ourostack/desk#14", "open", {}, evidence(14))
+  const failed = await go(ctx, w)
+  assert.equal(failed.counts.issue_failed, 1)
+  const bare = await make(ctx, "desk_problem", "ourostack/desk#15", "open")
+  await go(ctx, w)
+  assert.equal((await byKey(ctx, bare)).state, "open")
+}))
+
 test("a recovered open card with a mirror issue closes its issue too", () => scratch(async (ctx) => {
   await make(ctx, "andon", ANDON, "open", mirrored)
   const w = world({ status: conditions(cond(`andon:${ANDON}`)), issues: { 11: { body: BODY(), labels: [] } } })

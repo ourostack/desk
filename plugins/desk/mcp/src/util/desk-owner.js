@@ -83,3 +83,10 @@ export function otherDeskContaining(deskRoot, target, { homeDir = os.homedir(), 
     return root !== here && target.startsWith(root + path.sep)
   }) ?? null
 }
+
+/** The desk, other than `deskRoot`, that holds the card `track/slug` (live only), or null. */
+export function otherDeskHoldingCard(deskRoot, track, slug, { homeDir = os.homedir(), spawn = spawnSync } = {}) {
+  const here = path.resolve(deskRoot)
+  return knownDesks({ homeDir, spawn }).find((desk) => path.resolve(desk.root) !== here
+    && existsSync(path.join(desk.root, track, slug, "task.md"))) ?? null
+}

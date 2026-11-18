@@ -1434,7 +1434,7 @@ contract("no skill or doc tells an agent to remove or change a billing or sign-i
   assert.match(section, /[Oo]nly `no_agent_cli`, `no_credentials`, `unsupported_host` and `sign_in_unknown` open the `loop_alarm:headless_blocked` card/u);
   assert.match(section, /`disabled_would_bill`, `disabled` and `budget_exhausted` are shown on the health record and at session start and never carded/u);
   assert.match(section, /the agent changes nothing/u);
-  assert.match(section, /Desk problem closes after 7 days quiet[^\n]*`closed_confirmed`[^.\n]*measured[^.\n]*`closed_unverified` otherwise/u);
+  assert.match(section, /Desk problem that shipped a fix closes after 7 days quiet[^\n]*`closed_confirmed`[^.\n]*measured[^.\n]*`closed_unverified` otherwise/u);
   assert.match(section, /`unavailable` with the reason `not_recorded`[\s\S]+store_not_compared[\s\S]+kept on this machine/u);
   assert.match(text("plugins/desk/skills/desk-problem/SKILL.md"), /`closed_confirmed`[^.\n]*measured[^.\n]*`closed_unverified` otherwise/u);
 });
@@ -1546,7 +1546,6 @@ contract("the improvement-loop bounds in the doc are the constants in the code",
   const facts = [
     [constant("factory/headless.js", "MAX_HEADLESS_JOBS_PER_DAY"), /(\d+) evaluator runs a day/u],
     [constant("desk/improvement-cards.js", "MAX_LIVE_CLAIMS"), /(\d+) live claim per machine/u],
-    [constant("desk/improvement-cards.js", "MAX_CLAIMS_PER_DAY"), /(\d+) new claims per machine per day/u],
     [constant("desk/improvement-cards.js", "CLAIM_TTL_HOURS"), /claim lasts (\d+) hours/u],
     [constant("factory/improvement-verify.js", "THIN_CHECKS_BEFORE_ESCALATION"), /after (\d+) checks/u],
     [constant("factory/improvement-verify.js", "DESK_PROBLEM_QUIET_DAYS"), /(\d+) days quiet/u],
