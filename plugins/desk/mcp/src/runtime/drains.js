@@ -622,7 +622,7 @@ export function successorKickoff({ repo, predecessor, account }) {
 /** Starts a session in the drain's project through Shepherd. Returns { ok, session } or { ok: false, error }. */
 export function startSuccessor({ repo, predecessor, account }, { spawn = spawnSync, env = process.env, homeDir = os.homedir() } = {}) {
   const [program, ...lead] = shepherdCommand({ env, homeDir })
-  const args = [...lead, "create", "--project", repo, "--name", `Drain: ${repo}`, "--prompt", successorKickoff({ repo, predecessor, account }), "--mode", "autopilot", "--json"]
+  const args = [...lead, "create", "--project", repo, "--name", `Drain: ${repo}`, "--prompt", successorKickoff({ repo, predecessor, account }), "--mode", "autopilot", "--why", `Desk starts the successor of the archived drain ${predecessor} for ${repo}`, "--json"]
   const result = spawn(program, args, { encoding: "utf8", timeout: SHEPHERD_MS, env, windowsHide: true })
   let out = null
   try {

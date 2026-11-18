@@ -1628,6 +1628,7 @@ test("startSuccessor asks Shepherd to create the drain's session with a Succeeds
   const args = seen[0][1]
   assert.deepEqual(args.slice(0, 5), ["create", "--project", "acme/widgets", "--name", "Drain: acme/widgets"])
   assert.equal(args[args.indexOf("--prompt") + 1].split("\n")[0], `Succeeds: ${DRAIN.session}`)
+  assert.match(args[args.indexOf("--why") + 1], /archived drain/u)
   assert.match(successorKickoff({ repo: "a/b", predecessor: "x", account: "me" }), /Work on GitHub as me/u)
   const bad = startSuccessor({ repo: "a/b", predecessor: "x" }, { env: { DESK_DRAINS_SHEPHERD: "shep" }, spawn: () => ({ status: 1, stdout: '{"ok":false,"error":"no project \'a/b\'"}' }) })
   assert.deepEqual(bad, { ok: false, error: "no project 'a/b'" })
