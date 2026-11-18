@@ -46,7 +46,6 @@ export const MOVES = Object.freeze({
   closed_unverified: Object.freeze(["open"]),
 })
 export const CLAIM_TTL_HOURS = 4
-export const MAX_CLAIMS_PER_DAY = 2
 export const MAX_LIVE_CLAIMS = 1
 // The loop steps whose `step_stale:<step>` alarm this version may write; `triage` came with the loop's triage step (no field, lifecycle or claim change), so an earlier Desk reads its card and never writes it.
 const STEP_NAMES = ["evaluate", "route", "mirror", "reconcile", "verify", "measure", "deliver", "triage"]
@@ -603,17 +602,15 @@ export async function machineKey(env) {
   }
 }
 
-const utcDay = (stamp) => stamp.slice(0, 10)
 
 /**
  * `claimNext({ env, deskRoot, personPrefix, now, session?, lockWaitMs? })
- * -> { result: "claimed", card, claim_id, file } | { result: "claim_held", key } | { result: "cap_reached" | "none_open" | "too_many_cards" }
+ * -> { result: "claimed", card, claim_id, file } | { result: "claim_held", key } | { result: "none_open" | "too_many_cards" }
  * | { result: "invalid_location" | "machine_key_unavailable" | "invalid_session" | "unreadable_folder" | "lock_busy" }`.
  * The machine key is derived here from `env` by `machineKey(env)` (no caller supplies one); when the factory state cannot give it
  * the answer is `machine_key_unavailable`. Takes the
  * open card with the oldest `last_opened_at` (a claimed card whose claim expired counts as open; a card with another machine's
- * live claim is not offered). One live claim per machine (`MAX_LIVE_CLAIMS`), at most `MAX_CLAIMS_PER_DAY` claims per machine in
- * the UTC day (counted from the cards' own `claim_log`), a `CLAIM_TTL_HOURS` expiry. It reads up to `MAX_CARD_FILES` card files
+ * live claim is not offered). One live claim per machine (`MAX_LIVE_CLAIMS`) and a `CLAIM_TTL_HOURS` expiry; there is no daily cap. It reads up to `MAX_CARD_FILES` card files
  * and answers `too_many_cards`, never `none_open` or a claim, when the folder holds more.
  */
 export async function claimNext({ env, deskRoot, personPrefix, now, session, lockWaitMs, lockHooks }) {
@@ -628,8 +625,6 @@ export async function claimNext({ env, deskRoot, personPrefix, now, session, loc
     const candidates = cards.filter((card) => card.state === "open" || (card.state === "claimed" && !isClaimLive(card, date)))
       .sort((a, b) => a.last_opened_at.localeCompare(b.last_opened_at) || a.key.localeCompare(b.key))
     if (candidates.length === 0) return { result: "none_open" }
-    const today = cards.reduce((sum, card) => sum + card.claim_log.filter((entry) => entry.machine === machine && utcDay(entry.at) === utcDay(date.toISOString())).length, 0)
-    if (today >= MAX_CLAIMS_PER_DAY) return { result: "cap_reached" }
     const claim = {
       claim_id: randomUUID(), claimed_at: date.toISOString(), expires_at: new Date(date.getTime() + CLAIM_TTL_HOURS * HOUR_MS).toISOString(), machine, session: session ?? null,
     }

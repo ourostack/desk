@@ -180,15 +180,20 @@ export async function runVerifyStep(env, {
   const recovered = read.cards
     .filter((card) => (card.state === "open" || card.state === "claimed") && reading(status, card, nowMs).kind === "recovered")
     .sort((a, b) => (a.key < b.key ? -1 : 1))
+  // An open or claimed Desk problem whose own GitHub issue is closed has been dealt with: it closes at once, without the quiet days.
+  const closedIssueCandidates = read.cards
+    .filter((card) => card.source === "desk_problem" && card.kaizen_url === null && (card.state === "open" || card.state === "claimed") && !recovered.includes(card))
+    .sort((a, b) => (a.key < b.key ? -1 : 1))
+    .slice(0, MAX_CHECKS_PER_RUN)
   const checks = due.slice(0, MAX_CHECKS_PER_RUN)
   const closes = recovered.slice(0, MAX_CHECKS_PER_RUN)
   if (due.length > checks.length) count("deferred", due.length - checks.length)
   if (recovered.length > closes.length) count("deferred", recovered.length - closes.length)
-  if (checks.length + closes.length === 0) return finish(true, "nothing_to_verify")
+  if (checks.length + closes.length + closedIssueCandidates.length === 0) return finish(true, "nothing_to_verify")
 
   let reader = null
   let issues = null
-  if (checks.length > 0 || closes.some((card) => card.kaizen_url !== null)) {
+  if (checks.length > 0 || closedIssueCandidates.length > 0 || closes.some((card) => card.kaizen_url !== null)) {
     let granted
     try {
       granted = await access(env, { deskRoot, runner })
@@ -403,6 +408,16 @@ export async function runVerifyStep(env, {
   }
 
   for (const card of closes) await close(card, "closed_unverified", "source_recovered")
+  for (const card of closedIssueCandidates) {
+    try {
+      const pointer = card.evidence.map((item) => /^issue:([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)#([1-9]\d{0,8})$/u.exec(item)).find(Boolean)
+      if (pointer === undefined) continue
+      const issue = await reader.get(`repos/${pointer[1]}/issues/${pointer[2]}`)
+      if (isObject(issue) && issue.state === "closed") await close(card, "closed_unverified", "source_recovered")
+    } catch {
+      count("issue_failed")
+    }
+  }
   for (const card of checks) {
     try {
       await check(card)

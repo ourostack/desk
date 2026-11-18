@@ -230,15 +230,15 @@ test("improvement_next explains each refusal in one fixed sentence", async () =>
   const again = await next(w)
   assert.deepEqual(again, { status: "claim_held", meaning: NEXT_REFUSALS.claim_held, key: held.card.key })
   assert.equal(JSON.stringify(again).includes(held.claim_id), false)
-  // the cap: two claims a day on one machine
+  // no daily cap: many claims in a day on one machine, one live claim at a time
   const capped = await where()
-  for (const id of ["ourostack/factory#1", "ourostack/factory#2"]) {
+  for (const id of ["ourostack/factory#1", "ourostack/factory#2", "ourostack/factory#4"]) {
     const got = await claimed(capped, { source: "andon", id })
     await update(capped, { key: got.card.key, claim_id: got.claim_id, state: "open" })
   }
   await open(capped, { source: "andon", id: "ourostack/factory#3" })
-  assert.deepEqual(await next(capped), { status: "cap_reached", meaning: NEXT_REFUSALS.cap_reached })
-  assert.deepEqual(Object.keys(NEXT_REFUSALS).sort(), ["cap_reached", "claim_held", "machine_key_unavailable", "none_open", "noninteractive", "too_many_cards"])
+  assert.equal((await next(capped)).status, "claimed")
+  assert.deepEqual(Object.keys(NEXT_REFUSALS).sort(), ["claim_held", "machine_key_unavailable", "none_open", "noninteractive", "too_many_cards"])
   for (const sentence of Object.values(NEXT_REFUSALS)) assert.match(sentence, /^[^\n]+\.$/u)
 })
 

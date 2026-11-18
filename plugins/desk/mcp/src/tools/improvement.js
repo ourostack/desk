@@ -25,7 +25,6 @@ export { AUTHORITY }
 /** What each refusal of `improvement_next` means, in one fixed sentence. */
 export const NEXT_REFUSALS = Object.freeze({
   claim_held: "This machine already holds a live claim; finish or release that card first.",
-  cap_reached: "This machine has taken its claims for today; try again tomorrow.",
   none_open: "No improvement card is open.",
   too_many_cards: "The card folder holds more files than can be read safely; close or archive finished cards.",
   machine_key_unavailable: "This machine has no factory state, so it cannot take improvement cards.",
