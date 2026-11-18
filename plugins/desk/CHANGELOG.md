@@ -1,5 +1,12 @@
 # desk plugin — changelog
 
+## 3.2.287 — 2026-11-18
+
+### Added
+- A merge-when-green relay can set `updateBehind`: a labelled pull request whose checks failed while it is behind its base is updated from the base once, in case the base has fixed the failure, without needing a `strict` block.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.286 — 2026-11-18
 
 Desk's MCP server now vendors Ouro UI v1.3.312, moved by Ouro Current.
