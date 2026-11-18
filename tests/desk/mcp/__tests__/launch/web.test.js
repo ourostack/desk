@@ -1862,3 +1862,77 @@ test("a browser nobody has used for the idle time is closed, and the next comman
   assert.equal(closed.isError, false, text(closed))
   assert.equal(Object.keys(controller.settings.contexts).length, 0)
 })
+
+test("a browser that cannot be reopened after an idle close says why, and the next command tries again", async () => {
+  const { options } = await setup()
+  const controller = web.createController({ ...options, idleMs: 60000 })
+  const { contextId } = JSON.parse(text(await controller.call("browser_context", { action: "open" })))
+  controller.settings.contexts[contextId].lastUsed = Date.now() - 120000
+  await controller.releaseIdle()
+  options.env.FAKE_CLI_MODE = "open-fail"
+  const failed = await controller.call("browser_command", { contextId, args: ["snapshot"] })
+  assert.equal(failed.isError, true)
+  options.env.FAKE_CLI_MODE = ""
+  const again = await controller.call("browser_command", { contextId, args: ["snapshot"] })
+  assert.equal(again.isError, false, text(again))
+  assert.match(again.content.at(-1).text, /reopened this browser/u)
+  await controller.closeAll()
+})
+
+test("the idle time reads DESK_WEB_IDLE_MS, and an unreadable value keeps the default", async () => {
+  const { options } = await setup()
+  assert.equal(web.createController({ ...options, idleMs: "abc" }).settings.idleMs, 300000)
+  assert.equal(web.createController({ ...options, idleMs: "" }).settings.idleMs, 300000)
+  assert.equal(web.createController({ ...options, idleMs: "0" }).settings.idleMs, 0)
+})
+
+test("commands sent together to an idle-closed browser reopen it once, and closing an idle-closed browser just forgets it", async () => {
+  const { options, calls } = await setup()
+  const controller = web.createController({ ...options, idleMs: 60000 })
+  const { contextId } = JSON.parse(text(await controller.call("browser_context", { action: "open" })))
+  controller.settings.contexts[contextId].lastUsed = Date.now() - 120000
+  await controller.releaseIdle()
+  const opens = () => calls().filter((call) => JSON.stringify(call).includes("open")).length
+  const before = opens()
+  const [one, two] = await Promise.all([1, 2].map(() => controller.call("browser_command", { contextId, args: ["snapshot"] })))
+  assert.equal(one.isError, false, text(one))
+  assert.equal(two.isError, false, text(two))
+  assert.equal(opens() - before, 1, "one reopen served both")
+  controller.settings.contexts[controller.settings.aliases[contextId]].lastUsed = Date.now() - 120000
+  await controller.releaseIdle()
+  const closed = await controller.call("browser_context", { action: "close", contextId })
+  assert.equal(closed.isError, false, text(closed))
+  assert.deepEqual(Object.keys(controller.settings.idleClosed), [], "nothing is left to reopen")
+})
+
+test("a mine browser is closed when idle, and one still opening is left alone", async () => {
+  const { options, profiles } = await setup()
+  makeProfile(path.join(profiles, "edge"))
+  const native = fakeDriver()
+  const controller = web.createController({ ...options, authDriver: native.driver, idleMs: 60000 })
+  const { contextId } = JSON.parse(text(await controller.call("browser_context", { action: "open", browser: "mine" })))
+  const record = controller.settings.contexts[contextId]
+  record.lastUsed = Date.now() - 120000
+  const adapter = record.adapter
+  record.adapter = undefined
+  await controller.releaseIdle()
+  assert.ok(controller.settings.contexts[contextId], "a mine browser without its handle yet is left alone")
+  record.adapter = adapter
+  await controller.releaseIdle()
+  assert.equal(controller.settings.contexts[contextId], undefined)
+  assert.equal(native.calls.filter((call) => call[0] === "context.close").length, 1)
+})
+
+test("a fresh browser still being started is left alone by the idle release", async () => {
+  const { options } = await setup()
+  const controller = web.createController({ ...options, idleMs: 60000 })
+  const { contextId } = JSON.parse(text(await controller.call("browser_context", { action: "open" })))
+  const record = controller.settings.contexts[contextId]
+  record.lastUsed = Date.now() - 120000
+  const owner = path.join(options.tmpDir, `desk-browser-${contextId}`, "owner.json")
+  fs.renameSync(owner, `${owner}.hold`)
+  await controller.releaseIdle()
+  assert.ok(controller.settings.contexts[contextId], "no owner file yet means it is still opening")
+  fs.renameSync(`${owner}.hold`, owner)
+  await controller.closeAll()
+})
