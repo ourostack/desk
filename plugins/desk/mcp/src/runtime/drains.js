@@ -54,7 +54,7 @@ const NO_TOKEN = /no oauth token|not logged in|no accounts? |not signed in/iu
 const blank = () => ({ seeded: false, seen: {}, pending: [] })
 
 /** The session a drain's wakes go to: the successor started for it when its configured session was archived or gone, else the configured one. A new configured session retires the successor. */
-export const sessionOf = (drain, state) => (state?.successor && state.successor.from === drain.session ? state.successor.to : drain.session)
+const sessionOf = (drain, state) => (state?.successor && state.successor.from === drain.session ? state.successor.to : drain.session)
 
 /** Where the drain config, state and lock live: Desk's state folder (`$XDG_STATE_HOME`, else `~/.local/state`). */
 export function drainsHome({ env = process.env, homeDir = os.homedir() } = {}) {
