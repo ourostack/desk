@@ -1698,3 +1698,17 @@ test("startSuccessor with no options uses the process environment and reports a 
     else process.env.DESK_DRAINS_SHEPHERD = before
   }
 })
+
+test("a drain whose session lost its workspace folder starts a successor like an archived one", async () => {
+  const w = await world([issue(1, "2026-11-13T01:00:00Z")])
+  await w.poll()
+  w.issues.push(issue(2, "2026-11-13T03:00:00Z", "New thing"))
+  w.refuse = "Failed to send message: invalid argument: this session can't receive messages because its workspace folder is missing."
+  await w.poll()
+  assert.match(w.state().targetGone.error, /workspace folder is missing/u)
+  const started = []
+  const result = recoverDrainTarget({ paths: w.paths, repo: DRAIN.repo, now: NOW, start: (input) => { started.push(input); return { ok: true, session: "11111111-2222-3333-4444-555555555555" } } })
+  assert.equal(result.changed, true)
+  assert.equal(started.length, 1)
+  assert.equal((await w.poll()).wakes[0].session, "11111111-2222-3333-4444-555555555555")
+})
