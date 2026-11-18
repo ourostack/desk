@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "suiteId": "fixture",
+  "sourceFingerprint": "698daed63ae204b82230050ed37e2fb77e6b786db6af229571c59503e9862c5c",
+  "contractFingerprint": "66685f502233c3e2ccf27125fc85ce70d07ef363c424a03fcabf0699febc3814",
+  "run": {
+    "actor": "fixture actor",
+    "model": "fixture model",
+    "runtimeRevision": "fixture revision",
+    "startedAt": "2026-02-30T12:00:00Z",
+    "completedAt": "1970-01-01T00:00:00.001Z"
+  },
+  "cases": [
+    {
+      "id": "case-1",
+      "checks": [
+        {
+          "id": "check-must",
+          "passed": true,
+          "evidence": "External harness receipt."
+        },
+        {
+          "id": "check-must-not",
+          "passed": true,
+          "evidence": "External harness receipt."
+        }
+      ]
+    }
+  ]
+}

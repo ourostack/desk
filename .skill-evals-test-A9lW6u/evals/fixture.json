@@ -1,0 +1,49 @@
+{
+  "schemaVersion": 1,
+  "id": "fixture",
+  "description": "Fixture suite.",
+  "sources": [
+    "source.txt",
+    "evals/worlds/fixture/case-1/desk/seeded.md",
+    "evals/worlds/fixture/case-1/person"
+  ],
+  "reviewedSourceFingerprint": "5156df5151501b0e23300d906b84cc411c900685ac6c65b26bd4303937e86dcc",
+  "requirements": [
+    {
+      "id": "r1",
+      "description": "First requirement."
+    },
+    {
+      "id": "r2",
+      "description": "Second requirement."
+    }
+  ],
+  "cases": [
+    {
+      "id": "case-1",
+      "description": "Fixture case.",
+      "prompt": "Evaluate the fixture.",
+      "checks": [
+        {
+          "id": "check-must",
+          "polarity": "must",
+          "evidenceType": "response",
+          "covers": [
+            "r1"
+          ],
+          "description": "Required evidence."
+        },
+        {
+          "id": "check-must-not",
+          "polarity": "must_not",
+          "evidenceType": "tool_call",
+          "covers": [
+            "r2"
+          ],
+          "description": "Forbidden evidence."
+        }
+      ],
+      "world": "evals/worlds/fixture/case-1"
+    }
+  ]
+}

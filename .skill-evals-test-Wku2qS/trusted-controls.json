@@ -1,0 +1,76 @@
+{
+  "schemaVersion": 1,
+  "kind": "trusted_evaluation_controls",
+  "source": "trusted_controller",
+  "approvedRevision": "cccccccccccccccccccccccccccccccccccccccc",
+  "controls": {
+    "dataset": {
+      "id": "engineering-v2-alpha",
+      "version": "1.0.0",
+      "sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+    },
+    "fixtureManifestSha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "checkerManifestSha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+    "admissionContractSha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "toolingSourceManifestSha256": "1111111111111111111111111111111111111111111111111111111111111111",
+    "bindingSha256": "2222222222222222222222222222222222222222222222222222222222222222",
+    "runtime": {
+      "nodeVersion": "v22.23.2",
+      "sdkVersion": "1.0.13",
+      "sdkLockSha256": "3333333333333333333333333333333333333333333333333333333333333333",
+      "cliVersion": "1.0.84-1",
+      "cliSha256": "4444444444444444444444444444444444444444444444444444444444444444",
+      "qualificationReceiptSha256": "5555555555555555555555555555555555555555555555555555555555555555",
+      "sessionMode": "interactive"
+    },
+    "activation": {
+      "subjectAgent": "fixture-worker",
+      "compositionSeam": "qualified-native-agent",
+      "requestedConfigurationSha256": "6666666666666666666666666666666666666666666666666666666666666666"
+    },
+    "attemptPolicy": {
+      "maxAttemptsPerCell": 1,
+      "automaticRetry": false
+    },
+    "baseline": {
+      "groupId": "alpha-group",
+      "policySha256": "7777777777777777777777777777777777777777777777777777777777777777"
+    },
+    "expectedCells": {
+      "path": "expected-cells.json",
+      "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+    },
+    "cells": [
+      {
+        "id": "cell-1",
+        "roles": [
+          [
+            "copilot",
+            "gpt-6-astra",
+            "high",
+            "default",
+            "native-subject",
+            "8888888888888888888888888888888888888888888888888888888888888888",
+            "9999999999999999999999999999999999999999999999999999999999999999"
+          ],
+          [
+            "copilot",
+            "claude-opus-5",
+            "high",
+            "default",
+            "empty-judge",
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+          ]
+        ]
+      },
+      {
+        "id": "cell-2",
+        "roles": [
+          null,
+          null
+        ]
+      }
+    ]
+  }
+}

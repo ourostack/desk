@@ -35,7 +35,7 @@ Authority follows the human's verb and the surface's owner; an instruction not t
 
 ## Cite every factual claim
 
-Every factual claim to a human or an agent carries an inline link to its primary source, or is labeled inference or unverified (`evidence-discipline`).
+Every factual claim to a human or an agent, drafts included, carries an inline link to its primary source and the why behind any number, or is labeled inference or unverified (`evidence-discipline`).
 
 ## Own the stack
 

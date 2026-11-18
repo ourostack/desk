@@ -496,7 +496,8 @@ function main() {
 
   assertSectionPhrases(section(skill, "Cite every factual claim"), "using-desk Cite every factual claim", [
     "Every factual claim to a human or an agent",
-    "inline link to its primary source",
+    "drafts included",
+    "inline link to its primary source and the why behind any number",
     "labeled inference or unverified",
     "`evidence-discipline`",
   ]);

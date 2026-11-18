@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "kind": "relevant_revision_request",
+  "repository": "owner/public-alpha",
+  "ref": "refs/pull/17/merge",
+  "head": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "previousHeads": [
+    "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  ],
+  "changedPaths": [
+    "evals/offline/checks.mjs"
+  ],
+  "events": [
+    {
+      "eventId": "delivery-1",
+      "receivedAt": "2026-09-15T00:00:00Z",
+      "head": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    }
+  ]
+}
