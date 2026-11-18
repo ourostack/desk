@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.264 — 2026-11-18
+
+Desk's MCP server now vendors Ouro UI core v0.18.3 and Ouro UI v1.3.292, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.263 — 2026-11-18
 
 A Desk pull and a Desk save start far fewer git processes, which is what costs time on a loaded machine. A pull that the new background fetch prepared starts 2 (was 9-10) and a pull with nothing new starts none (was 5-6); a save starts about 19 (was 35-40). Desk now reads the branch, upstream, remote settings, hook presence, `commit.gpgSign` and commit-message cleanup from `.git` files and asks git whenever a detached HEAD, a hooks path, an included config or anything else unusual makes a file read uncertain. The sync worker fetches every 10 seconds so a pull is a local fast-forward, and the first pull in a process, or one after a task-log write, checks for waiting log entries with a single `git status`.
