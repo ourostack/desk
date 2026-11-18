@@ -16,15 +16,17 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSy
 import * as path from "node:path"
 
 const SESSION_MARKER = "# desk-session-trailer"
-const HOOK_VERSION = 1
+const HOOK_VERSION = 2
 const CHAINED_SUFFIX = ".desk-chained"
 const GIT_TIMEOUT_MS = 5000
 
-const SESSION_ID = `sid=$(printf '%s' "\${COPILOT_AGENT_SESSION_ID:-\${AGENCY_SESSION_ID:-}}" | tr -d '\\r\\n')`
+// Shell built-ins only on the usual path: every program a hook starts costs a process, and a hook runs on every commit and push.
+const SESSION_ID = `sid="\${COPILOT_AGENT_SESSION_ID:-\${AGENCY_SESSION_ID:-}}"
+case "$sid" in *[![:graph:]]*) sid=$(printf '%s' "$sid" | tr -d '\\r\\n') ;; esac`
 
-const chainTail = (name, withStdin) => `chained="$(dirname "$0")/${name}${CHAINED_SUFFIX}"
+const chainTail = (name, withStdin) => `chained="\${0%/*}/${name}${CHAINED_SUFFIX}"
 if [ -x "$chained" ] && ! grep -q '${SESSION_MARKER}' "$chained" 2>/dev/null; then
-${withStdin ? `  printf '%s\\n' "$input" | "$chained" "$@"` : `  "$chained" "$@"`}
+${withStdin ? `  printf '%s' "$input" | "$chained" "$@"` : `  "$chained" "$@"`}
   exit $?
 fi
 exit 0
@@ -41,8 +43,8 @@ function prepareCommitMsgScript() {
 add_session() {
   [ -n "$sid" ] || return 0
   case "\${2:-}" in merge|squash) return 0 ;; esac
-  case "$(head -n 1 "$1" 2>/dev/null)" in fixup!*|squash!*|amend!*) return 0 ;; esac
-  git interpret-trailers --parse "$1" 2>/dev/null | grep -qi '^Session:' && return 0
+  read -r first < "$1" 2>/dev/null
+  case "$first" in fixup!*|squash!*|amend!*) return 0 ;; esac
   git interpret-trailers --in-place --if-exists doNothing --trailer "Session: $sid" "$1" 2>/dev/null
   return 0
 }
@@ -53,15 +55,18 @@ ${chainTail("prepare-commit-msg", false)}`
 /** The `pre-push` hook text. */
 function prePushScript() {
   return `${header("pre-push")}${SESSION_ID}
-input=$(cat)
+nl='
+'
+input=""
+while IFS= read -r line || [ -n "$line" ]; do input="$input$line$nl"; done
 warn_other_session() {
   [ -n "$sid" ] || return 0
-  printf '%s\\n' "$input" | while read -r _ _ remote_ref remote_sha; do
+  printf '%s' "$input" | while read -r _ _ remote_ref remote_sha; do
     case "$remote_sha" in ""|*[!0]*) ;; *) continue ;; esac
     [ -n "$remote_sha" ] || continue
-    remote_branch=$(printf '%s' "$remote_ref" | sed 's|^refs/heads/||')
+    remote_branch=\${remote_ref#refs/heads/}
     case "$remote_branch" in main|master) continue ;; esac
-    other=$(git log -1 --format='%(trailers:key=Session,valueonly,separator=%x2C)' "$remote_sha" 2>/dev/null | tr -d '\\r\\n')
+    other=$(git log -1 --format='%(trailers:key=Session,valueonly,separator=%x2C)' "$remote_sha" 2>/dev/null)
     [ -n "$other" ] && [ "$other" != "$sid" ] || continue
     echo "Warning: the latest commit on $remote_ref was made by session $other, and this is session $sid. Another session may be working on that branch; check before pushing more commits there." >&2
   done

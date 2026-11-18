@@ -101,7 +101,7 @@ test("installing again changes nothing, an older Desk hook is rewritten, and a f
   const hooks = path.join(dir, ".git", "hooks")
   assert.deepEqual(installSessionTrailerHooks(dir).hooks.map((hook) => hook.state), ["current", "current"])
   const file = path.join(hooks, "prepare-commit-msg")
-  writeFileSync(file, readFileSync(file, "utf8").replace(" v1", " v0"))
+  writeFileSync(file, readFileSync(file, "utf8").replace(/ v\d+\n/u, " v0\n"))
   assert.equal(installSessionTrailerHooks(dir).hooks[0].state, "updated")
 
   const other = path.join(path.dirname(dir), "foreign")
