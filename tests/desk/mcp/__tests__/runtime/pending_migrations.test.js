@@ -275,6 +275,13 @@ test("a Windows tree cleanup that is slow, refused or cannot start resolves as t
   assert.deepEqual(await runBlock("exec sleep 30", { ...WINDOWS_TIMEOUT, timeoutMs: 100, execFile: cannotStart }), unqualified)
 })
 
+test("a read-only caller stops waiting for a slow Windows tree cleanup after its own wait, well before the cleanup's budget", async () => {
+  const started = performance.now()
+  const result = await runBlock("exec sleep 30", { ...WINDOWS_TIMEOUT, timeoutMs: 50, treeBudgetMs: 30_000, treeWaitMs: 100, execFile: fakeTaskkill(2_000) })
+  assert.deepEqual(result, { status: null, stdout: "", stderr: "", timedOut: true, unavailable: false, cleanup: "unqualified" })
+  assert.ok(performance.now() - started < 1_000, "the result did not wait for the 2 s cleanup")
+})
+
 test("taskkill runs from the Windows folder named by SystemRoot, or from C:\\Windows when that is missing or not absolute", async () => {
   const saved = { SystemRoot: process.env.SystemRoot, windir: process.env.windir }
   const files = []
