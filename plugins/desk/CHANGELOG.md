@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.258 — 2026-11-18
+
+Desk's MCP server now vendors Ouro UI v1.3.287, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.257 — 2026-11-18
 
 `crew.js status` and `join` now report `platform.install.copilot`: one line that installs Desk on its `release` channel and Crew on `main`, both with `--cache-policy auto --cache-ttl 0`, the setup the CIT crew has. Start-crew and join-crew tell the founder and each member to run it, and an existing crew runs the same line to bring an older install up to date, so a team that opts in later gets plugins that follow every release without a restart.
