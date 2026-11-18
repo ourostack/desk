@@ -678,7 +678,7 @@ export async function connectGithub(account, { spawn = spawnSync, fetchImpl = fe
     if (!transient) break
     if (attempt < TOKEN_TRIES) await sleep(TOKEN_PAUSE_MS * attempt)
   }
-  if (!token && transient) throw Object.assign(new Error(`Wait for the next poll: it reads the token again; the GitHub CLI could not read it for ${account ?? "its active account"} (${transient.slice(0, 160)})`), { code: "drains_github_cli_token_unavailable", transient: true })
+  if (!token && transient) throw Object.assign(new Error(`Wait for the next poll, which reads the token again: the GitHub CLI's token read for ${account ?? "its active account"} gave no answer, probably because the keyring was busy or slow (${transient.slice(0, 160)})`), { code: "drains_github_cli_token_unavailable", transient: true })
   if (!token) throw Object.assign(new Error(`Sign in the GitHub CLI: the GitHub CLI has no token for ${account ?? "its active account"} (run \`gh auth login --hostname github.com\`)`), { code: "drains_sign_in_the_github_cli" })
   // What this connection spent and what GitHub says is left in the account's window; a 304 answer costs nothing against it.
   const meter = { total: 0, notModified: 0, quota: null }
