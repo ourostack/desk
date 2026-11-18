@@ -1,5 +1,15 @@
 # desk plugin — changelog
 
+## 3.2.267 — 2026-11-18
+
+A save starts at most 14 git processes (was 17). The write-branch check, the publish-branch lookup and the read-back of the branch after a commit now read `.git` files, and a save reads the committed tree once instead of twice. The commit itself is unchanged: it still builds on a private index and moves the branch only if it has not moved.
+
+Desk's MCP server now vendors Ouro UI core v0.19.0, moved by Ouro Current.
+
+A drain whose session lost its workspace folder now gets a successor session, as an archived one does. Before, the wake failed every poll with the app's error and nothing recovered.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.266 — 2026-11-18
 
 A drains relay configured without an `account` now uses the signed-in GitHub CLI account that can read the repositories it watches and acts on, and remembers the choice in the relay's state. Before, it polled as the CLI's active account and reported `Check gh auth status ... HTTP 403` when that account could not reach the repository. If GitHub later refuses the remembered account, the relay chooses again on its next poll; if no signed-in account can reach the repository, the relay's error names it and says to set `account` in `relays.json`.
