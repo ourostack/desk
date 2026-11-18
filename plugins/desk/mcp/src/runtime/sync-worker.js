@@ -50,7 +50,7 @@
 
 import { randomUUID } from "node:crypto"
 import { spawn, spawnSync } from "node:child_process"
-import { lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs"
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 
@@ -104,6 +104,30 @@ function fetchOkPath({ root, env }) {
 /** Where this root's last sync outcome is recorded, for `desk_status` to read (never a network call — see status.js). */
 export function syncStatusPath({ root, env }) {
   return path.join(resolveDeskStateDir({ env }), "sync", `${lastStartRootKey(root)}.status.json`)
+}
+
+// A marker that a task log entry was written and may not be committed yet. It lets a pull skip looking for waiting logs (a
+// whole-tree Git call) when nothing here wrote one; the first pull of each process still looks, for entries older Desks left.
+function logsPendingPath({ root, env }) {
+  return path.join(resolveDeskStateDir({ env }), "sync", `${lastStartRootKey(root)}.logs-pending`)
+}
+
+export function markLogsPending({ root, env }) {
+  try {
+    const file = logsPendingPath({ root, env })
+    mkdirSync(path.dirname(file), { recursive: true })
+    writeFileSync(file, "")
+  } catch {
+    // The worker commits the entry anyway; the marker only saves a pull a look.
+  }
+}
+
+export function logsMayBePending({ root, env }) {
+  return existsSync(logsPendingPath({ root, env }))
+}
+
+export function clearLogsPending({ root, env }) {
+  try { unlinkSync(logsPendingPath({ root, env })) } catch { /* already gone */ }
 }
 
 function tryCreateExclusive(file, bytes) {
@@ -690,6 +714,7 @@ async function pushRound({
     // Task log entries are committed here, once they have been quiet a moment, so rapid entries are one commit and the server that wrote them may end.
     await settleLogs(root, { sleep: clock.sleep, spawnGit, quietMs, maxWaitMs })
     const logs = commitWaitingLogs(root, spawnGit)
+    if (["committed", "empty"].includes(logs) && waitingLogs(root, spawnGit).length === 0) clearLogsPending({ root, env })
     if (!pushable) return { result: { result: "skipped" }, logs }
     return { result: await deliverUntilDone({ root, env, spawnGit, fileProblem, clock }), logs }
   } finally {
@@ -730,6 +755,7 @@ export function defaultSpawnWorker({ root, env, debounceMs, spawnImpl = spawn })
  * Focus, pinned by `sync_worker.test.js`). `spawnWorker` is a test seam.
  */
 export function schedulePush({ root, env = process.env, debounceMs = DEFAULT_DEBOUNCE_MS, logs = false, spawnWorker = defaultSpawnWorker }) {
+  if (logs) markLogsPending({ root, env })
   if (publicationDeferred(env)) return
   // Card commits from a checkout on a feature branch were already published to the default branch when they were written; a log entry's commit is the worker's to make.
   if (!logs && deliveryIsPublication(root)) return

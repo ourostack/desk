@@ -20,12 +20,12 @@
 // Never `--force`, never a stash, never a rebase in the shared checkout. Every Git call runs with
 // `GIT_TERMINAL_PROMPT=0` and a timeout. `spawnGit` (over `spawnSync`) is a test seam.
 
-import { readUpstreamRefs } from "./fast-refs.js"
 import { spawnSync } from "node:child_process"
 import { mkdirSync, rmSync, unlinkSync, writeFileSync } from "node:fs"
 import * as path from "node:path"
 
 import { lastStartRootKey, resolveDeskStateDir } from "./last-start.js"
+import { fastGitAnswer, readUpstreamRefs } from "./fast-refs.js"
 import { remoteIdentityEnv } from "./remote-identity.js"
 import { publicationPolicy, publicationRecovery, publishPullRequest } from "./pr-publication.js"
 import { abandonedComment, closeSaved, savesFor } from "./unmerged-saves.js"
@@ -56,6 +56,8 @@ function subcommand(args) {
 
 export function runner(spawnGit, cwd) {
   return (args, timeout = GIT_TIMEOUT_MS, extraEnv = {}, input = undefined) => {
+    const fast = spawnGit === spawnSync && input === undefined ? fastGitAnswer(cwd, args) : null
+    if (fast !== null) return { status: fast.status, stdout: fast.stdout, stderr: "" }
     const env = remoteIdentityEnv({ root: cwd, args, env: { ...gitEnv(), ...extraEnv }, spawn: spawnGit })
     const once = (limit) => spawnGit("git", ["-C", cwd, ...args], { windowsHide: true, encoding: "utf8", timeout: limit, env, input, maxBuffer: 64 * 1024 * 1024 })
     let result = once(timeout)
@@ -329,7 +331,8 @@ export function catchUpBehind({ root, spawnGit = spawnSync, known = null }) {
   const head = known?.head ?? git(["rev-parse", "HEAD"]).stdout.trim()
   const target = known?.target ?? git(["rev-parse", "--verify", "--quiet", `${upstream.tracking}^{commit}`]).stdout.trim()
   if (head === target) return { state: "current" }
-  if (git(["merge-base", "--is-ancestor", head, target]).status !== 0) return { state: "diverged" }
+  // `known.ancestor` is set when the background fetch already proved `head` is an ancestor of `target`.
+  if (known?.ancestor !== true && git(["merge-base", "--is-ancestor", head, target]).status !== 0) return { state: "diverged" }
   return followsUpstream({ git, upstream, head, target })
 }
 

@@ -948,16 +948,15 @@ function budgetedHooks(t, seconds) {
   return { spawn, seen }
 }
 
-test("#632: hooks that together outlast the one 10 s budget are cut off at what is left, and nothing is committed", async (t) => {
+test("#632: hooks are not on the 10 s budget: each gets the full bound, and hooks that together outlast 10 s still commit", async (t) => {
   const root = await stagedChange()
-  const before = headOf632(root)
   const entries = indexEntries(root, ["a.txt"], spawnSync)
   const { spawn, seen } = budgetedHooks(t, 4)
   const result = commitIndexPaths(root, ["a.txt"], entries, "save", spawn)
   assert.deepEqual(seen.map((s) => s.hook), ["pre-commit", "prepare-commit-msg", "commit-msg"])
-  assert.ok(seen[2].timeout <= 2000, `the third hook is given only what is left (${seen[2].timeout} ms)`)
-  assert.equal(result.ok, false)
-  assert.equal(headOf632(root), before)
+  assert.ok(seen.every((s) => s.timeout >= 600_000), "every hook is given the full bound")
+  assert.equal(result.ok, true, result.stderr)
+  assert.equal(git(root, ["show", "HEAD:a.txt"]), "two\n")
 })
 
 test("#632: hooks that together stay inside the one 10 s budget commit", async (t) => {
@@ -991,7 +990,8 @@ function spendsTheBudget(t, spends) {
     if (how === "ran") toEnd()
     return answer
   }
-  const past = () => calls.filter((call) => call.past).map((call) => call.verb)
+  const hooksOfTheUser = /^hook run --ignore-missing (pre-commit|prepare-commit-msg|commit-msg)/u
+  const past = () => calls.filter((call) => call.past && !hooksOfTheUser.test(call.verb)).map((call) => call.verb)
   const dispatched = (start) => calls.filter((call) => call.verb.startsWith(start)).length
   return { spawn, past, dispatched }
 }
