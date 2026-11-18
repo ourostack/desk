@@ -9,6 +9,8 @@
 "use strict";
 
 var childProcess = require("child_process");
+var v8 = require("v8");
+var vm = require("vm");
 
 var DEFAULT_IDLE_MS = 180000;
 // A child told to stop (its stdin closed) gets this long to finish before it is killed.
@@ -39,7 +41,7 @@ function hasId(message) {
   return message.id !== undefined && message.id !== null;
 }
 
-// options: { launchChild() -> child, stdin, stdout, stderr, idleMs, now, setTimer, clearTimer, exit, signals, kill }
+// options: { launchChild() -> child, compact() (collects garbage once a server has ended), stdin, stdout, stderr, idleMs, now, setTimer, clearTimer, exit, signals, kill }
 // The child is { stdin, stdout, kill(signal), on(event, listener) } like a child_process child with piped stdin and stdout.
 function createIdleProxy(options) {
   var child = null;
@@ -184,6 +186,7 @@ function createIdleProxy(options) {
       stopping = false;
       clientCalls = {};
       serverCalls = {};
+      options.compact();
       if (clientEnded) return finish(code || 0);
       if (queue.length > 0) ensureChild();
       return;
@@ -305,7 +308,16 @@ function hostDefaults() {
     clearTimer: clearTimeout,
     exit: process.exit,
     signals: process,
-    kill: process.kill
+    kill: process.kill,
+    // The process's heap can sit at tens of MB of garbage from its own startup and traffic; a collection after a server ends brings it back to the baseline.
+    compact: function () {
+      try {
+        v8.setFlagsFromString("--expose-gc");
+        vm.runInNewContext("gc")();
+      } catch (error) {
+        // Not collecting only leaves the memory for later.
+      }
+    }
   };
 }
 
@@ -333,7 +345,8 @@ function runIdleProxy(o) {
     clearTimer: pick("clearTimer"),
     exit: pick("exit"),
     signals: pick("signals"),
-    kill: pick("kill")
+    kill: pick("kill"),
+    compact: pick("compact")
   });
   return { proxy: proxy, error: proxy.begin() };
 }

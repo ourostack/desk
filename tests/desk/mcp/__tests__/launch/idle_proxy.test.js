@@ -25,6 +25,7 @@ function harness({ idleMs: idle = IDLE, failSpawnAt = [] } = {}) {
   const stderr = []
   const exits = []
   const kills = []
+  const compacted = []
   const signals = new EventEmitter()
   const children = []
   let spawns = 0
@@ -60,11 +61,12 @@ function harness({ idleMs: idle = IDLE, failSpawnAt = [] } = {}) {
     exit: (code) => exits.push(code),
     signals,
     kill: (pid, signal) => kills.push(signal),
+    compact: () => compacted.push(clock.now),
   })
 
   const tick = () => new Promise((resolve) => setImmediate(resolve))
   return {
-    proxy, stdin, sent, stderr, exits, kills, signals, children, timers,
+    proxy, stdin, sent, stderr, exits, kills, compacted, signals, children, timers,
     last: () => children.at(-1),
     host: async (message) => { stdin.write(`${typeof message === "string" ? message : JSON.stringify(message)}\n`); await tick() },
     sees: () => sent.filter(Boolean).map((line) => JSON.parse(line.trim())),
@@ -220,6 +222,7 @@ test("a server that does not leave after its stdin closes is killed", async () =
   assert.deepEqual(server.killed, ["SIGKILL"])
   server.leave(null, "SIGKILL")
   await h.flush()
+  assert.equal(h.compacted.length, 1, "the proxy collects its garbage once the server has gone")
   assert.equal(h.proxy.running(), false)
   assert.deepEqual(h.exits, [], "the proxy lives on")
   // A server that leaves in time is not killed afterwards.
