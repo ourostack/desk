@@ -123,6 +123,10 @@ At pristine `superpowers:subagent-driven-development`'s per-task completion step
 
 An intentionally retained alpha/PR-only worktree or an acknowledged transfer stays named with its owner and trigger. Missing inventory, a live or unobservable writer, local-only work, failed cleanup or an unacknowledged transfer keeps cleanup pending; neither a child's success status nor a plan-complete flag grants deletion authority. The sequential `executing-plans` fallback has the same ownership boundary.
 
+## Lane processes end with their lane
+
+Every process a lane starts (a dev server, a mock daemon, a watcher, a `sleep` polling loop) belongs to that lane and ends with it. Start each one so it dies with its owner: in the lane's own shell session or process group, never detached or under `nohup`, `setsid` or `disown`, and give a polling loop a bounded count or deadline instead of an endless `while` or `sleep`. Record its pid and port in the lane's resource table when it starts. Stop it by exact pid before the lane reports back, and list it in the Resources inventory as stopped; a child that reports with one still running is `cleanup_pending`. A process the lane found already running and did not start is not its to stop. Orphans cost the machine memory and slow every other session, so a coordinator that finds a finished lane's process still running stops it and records the miss as friction.
+
 ## Everything else has an owner
 
 | Responsibility | Owner |

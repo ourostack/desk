@@ -94,6 +94,13 @@ requires(
 contract("a clear task can stay task-card-only", () => {
   assert.match(text("plugins/desk/skills/task-lifecycle/SKILL.md"), /clear task can remain task-card-only/u);
 });
+contract("lane processes end with their lane", () => {
+  const lifecycle = text("plugins/desk/skills/using-superpowers-with-desk/SKILL.md");
+  assert.match(lifecycle, /## Lane processes end with their lane/u);
+  assert.match(lifecycle, /dev server[\s\S]+mock daemon[\s\S]+`sleep` polling loop[\s\S]+ends with it/u);
+  assert.match(lifecycle, /never detached or under `nohup`, `setsid` or `disown`/u);
+  assert.match(lifecycle, /Stop it by exact pid before the lane reports back/u);
+});
 contract("done names the delivery evidence", () => {
   assert.match(text("plugins/desk/skills/task-lifecycle/SKILL.md"), /release\/install, consuming-surface smoke, resource dispositions and durable state/u);
 });
