@@ -28,10 +28,10 @@ function git(spawnGit, root, args, { env, input, timeout = GIT_TIMEOUT_MS } = {}
 let lastTree = { key: "", lines: [] }
 
 const memoKey = (root, commit, paths) => `${root}\0${commit}\0${paths.join("\0")}`
-const realSpawn = (spawnGit) => spawnGit === spawnSync || spawnGit.real === spawnSync
+const isRealGit = (spawnGit) => spawnGit === spawnSync || spawnGit.real === spawnSync
 
 function treeLines(spawnGit, root, commit, paths) {
-  const memo = realSpawn(spawnGit)
+  const memo = isRealGit(spawnGit)
   const key = memoKey(root, commit, paths)
   if (memo && lastTree.key === key) return [...lastTree.lines]
   const tree = git(spawnGit, root, ["ls-tree", "-r", "-z", commit, "--", ...paths])
