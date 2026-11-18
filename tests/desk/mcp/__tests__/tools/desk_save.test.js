@@ -283,7 +283,7 @@ test("desk_save reports nothing_to_commit when nothing is unstaged at the paths 
   assert.equal(commitCount(root), 1)
 })
 
-test("desk_save reports a commit failure as nothing_to_commit with the reason, and creates no commit", async () => {
+test("desk_save reports a commit failure as commit_failed with the reason, and creates no commit", async () => {
   const root = await mkTempDeskRoot()
   initGit(root)
   await fs.writeFile(path.join(root, "notes.md"), "Hand-written notes.\n", "utf8")
@@ -301,7 +301,7 @@ test("desk_save reports a commit failure as nothing_to_commit with the reason, a
     schedulePush,
   })
 
-  assert.equal(result.status, "nothing_to_commit")
+  assert.equal(result.status, "commit_failed")
   assert.deepEqual(notCommitted(result.commit), { status: "failed", reason: "commit boom" })
   assert.deepEqual(routedPaths(result.commit.route_around), ["notes.md"])
   assert.equal(commitCount(root), 0)

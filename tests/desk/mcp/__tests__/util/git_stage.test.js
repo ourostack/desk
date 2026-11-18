@@ -1167,6 +1167,8 @@ test("#632: a post-commit hook that commits other paths after it leaves this com
   hookIn(root, "post-commit", 'unset GIT_INDEX_FILE; [ -e hooked.txt ] || { echo hooked > hooked.txt; git add hooked.txt; git commit -q -m hooked -- hooked.txt; }')
   const result = commitIndexPaths(root, ["a.txt"], indexEntries(root, ["a.txt"], spawnSync), "save", spawnSync)
   assert.equal(result.ok, true, result.stderr)
+  // The post-commit hook runs detached, so its commit lands after the save returns.
+  for (let waited = 0; lastCommitMessage(root) !== "hooked" && waited < 100; waited++) await new Promise((resolve) => setTimeout(resolve, 100))
   assert.equal(lastCommitMessage(root), "hooked")
   assert.equal(git(root, ["show", "HEAD:a.txt"]), "two\n")
 })

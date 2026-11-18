@@ -201,12 +201,17 @@ async function writeFiles(checked) {
  * non-Git desk, or when the desk root isn't a Git repository, there is
  * nothing desk_save can do, so it reports `nothing_to_commit` too.
  *
- * Returns: { status: "committed" | "nothing_to_commit", commit?, desk_commit?, desk_pushed?, desk_note? }: a commit made here reports
+ * Returns: { status: "committed" | "nothing_to_commit" | "commit_failed" | "commit_unknown", commit?, desk_commit?, desk_pushed?, desk_note? }: a commit made here reports
  * its short sha as `desk_commit` (left out when Git cannot say) and `desk_pushed: false`, because the push is scheduled, not yet done.
  */
 function tidyTrailer(message) {
   const trimmed = message.replace(/\s+$/u, "")
   return trimmed.split("\n").at(-1).trim() === TIDY_TRAILER ? trimmed : `${trimmed}\n\n${TIDY_TRAILER}`
+}
+
+// A commit that did not finish is never "nothing_to_commit": that word means there was nothing to save. `commit_unknown` is a commit that was cut off and may have landed.
+function commitNotMade(commit) {
+  return { status: commit.status === "unknown" ? "commit_unknown" : "commit_failed", commit }
 }
 
 export async function desk_save(args) {
@@ -344,7 +349,7 @@ async function saveDesk({ deskRoot, input, person = null, spawnGit = spawnSync, 
   }
   const committed = commitPaths(deskRoot, paths, message, spawnGit)
   if (!committed.ok) {
-    return { status: "nothing_to_commit", commit: commitFailure({ root: deskRoot, paths: listed, message, committed }) }
+    return commitNotMade(commitFailure({ root: deskRoot, paths: listed, message, committed }))
   }
   // HEAD is read before the push is scheduled, so a push that rebases cannot hand back its own hash.
   const deskCommit = headSha(deskRoot, spawnGit)
@@ -421,7 +426,7 @@ function commitTidy({ deskRoot, paths, message, spawnGit, schedulePush }) {
     throw Object.assign(new Error("desk_save: Unstage and restore the card, then pass only the moved cards: a task card in `paths` is not a regular file (a link, for example); unstage and restore it, then pass only the moved cards"), { code: "desk_save_a_task_card_in_paths" })
   }
   const committed = commitIndexPaths(deskRoot, rels, entries, tidyTrailer(message), spawnGit)
-  if (!committed.ok) return { status: "nothing_to_commit", commit: commitFailure({ root: deskRoot, paths: rels, message: tidyTrailer(message), committed }) }
+  if (!committed.ok) return commitNotMade(commitFailure({ root: deskRoot, paths: rels, message: tidyTrailer(message), committed }))
   schedulePush({ root: deskRoot })
   return { status: "committed" }
 }

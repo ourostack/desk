@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process"
 import { createHash } from "node:crypto"
 import { existsSync, readFileSync } from "node:fs"
 import * as path from "node:path"
+import { fastGitAnswer } from "../runtime/fast-refs.js"
 import { deskFailure } from "../runtime/desk-failure.js"
 import { commandArgument } from "../runtime/pr-publication.js"
 import { catchUpBehind } from "../runtime/deliver.js"
@@ -32,6 +33,8 @@ const GIT_TIMEOUT_MS = 10_000
 // A call cut off by the clock is asked again with three times the room before anything concludes from it: a loaded
 // machine's slow answer is not the same fact as an answer of "no".
 function git(root, args) {
+  const quick = gitSeam.spawn === spawnSync ? fastGitAnswer(root, args) : null
+  if (quick !== null) return quick
   const run = (timeout) => gitSeam.spawn("git", ["-C", root, ...args], { encoding: "utf8", windowsHide: true, timeout })
   const first = run(GIT_TIMEOUT_MS)
   return first.status === null ? run(GIT_TIMEOUT_MS * 3) : first

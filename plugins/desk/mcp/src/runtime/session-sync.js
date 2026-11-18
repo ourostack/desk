@@ -223,7 +223,7 @@ export async function fetchAhead({ root, env = process.env, now = () => Date.now
   }
 }
 
-const FETCH_AHEAD_MS = 10_000
+const FETCH_AHEAD_MS = 60_000
 const fetching = new Map()
 
 /**

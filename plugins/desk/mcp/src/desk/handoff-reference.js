@@ -4,6 +4,7 @@
 // a path in its own session folder or the temp folder. The URL resolves once the push lands on the branch it names.
 
 import { spawnSync } from "node:child_process"
+import { fastGitAnswer } from "../runtime/fast-refs.js"
 
 const HANDOFFS = /(?:^|\/)handoffs\//u
 
@@ -11,7 +12,7 @@ const HANDOFFS = /(?:^|\/)handoffs\//u
 export const isHandoffPath = (rel) => HANDOFFS.test(rel.replaceAll("\\", "/"))
 
 function git(root, args, spawnGit) {
-  const result = spawnGit("git", ["-C", root, ...args], { encoding: "utf8", windowsHide: true, timeout: 5000 })
+  const result = (spawnGit === spawnSync ? fastGitAnswer(root, args) : null) ?? spawnGit("git", ["-C", root, ...args], { encoding: "utf8", windowsHide: true, timeout: 5000 })
   return result.status === 0 && typeof result.stdout === "string" ? result.stdout.trim() : ""
 }
 

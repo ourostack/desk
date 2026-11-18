@@ -210,7 +210,7 @@ for (const c of cases) {
 }
 
 // The real case behind #561: desk_save on two newly written JSON records returned
-// { status: "nothing_to_commit", commit: { status: "failed", reason: "timeout" } }, yet HEAD held both files with their full
+// { status: "commit_failed", commit: { status: "failed", reason: "timeout" } }, yet HEAD held both files with their full
 // contents and the requested message. The commit landed after the timeout; it was not missing.
 test("desk_save: two new records whose commit landed but timed out are committed and pushed, never nothing_to_commit", async () => {
   const root = await repo()
@@ -276,7 +276,7 @@ test("desk_save: written bytes whose commit timed out before landing are asked o
   assert.match(git(root, ["diff", "--cached", "--name-only"]), /^other\.md$/m, "the unrelated staged entry is still staged")
 })
 
-test("desk_save: a commit that timed out before landing keeps nothing_to_commit and the timeout, and adds its route", async () => {
+test("desk_save: a commit that timed out before landing is commit_failed, never nothing_to_commit, with the timeout and its route", async () => {
   const root = await repo()
   await fs.writeFile(path.join(root, "notes.md"), "Hand-written notes.\n", "utf8")
   const result = await desk_save({ deskRoot: root, input: { paths: ["notes.md"], message: "save notes" }, spawnGit: timedOutBeforeCommit, schedulePush: () => assert.fail("no push") })
@@ -284,7 +284,7 @@ test("desk_save: a commit that timed out before landing keeps nothing_to_commit 
   const { next, ...answer } = result
   assert.match(next, /^The change is on disk but not committed or on the remote yet: run commit\.route_around\.steps now, in order, then read back the remote\.$/u)
   const { route_around: route, ...commit } = answer.commit
-  assert.deepEqual({ ...answer, commit }, { status: "nothing_to_commit", commit: { status: "failed", reason: "timeout" } })
+  assert.deepEqual({ ...answer, commit }, { status: "commit_failed", commit: { status: "failed", reason: "timeout" } })
   assertRoute(route)
 })
 
@@ -527,6 +527,7 @@ test("the route of an unknown commit that landed never commits the dirt that cam
   })()
   const result = await desk_save({ deskRoot: root, input: { files: [{ path: "notes.md", content: "Exact notes.\n" }], message: "save notes" }, spawnGit: landedUnreadable, schedulePush: () => assert.fail("no push for an unknown commit") })
   assert.equal(result.commit.status, "unknown")
+  assert.equal(result.status, "commit_unknown", "a commit that may have landed is never nothing_to_commit")
   await fs.writeFile(path.join(root, "notes.md"), "Exact notes.\nSomeone else's line.\n", "utf8")
   git(root, ["add", "notes.md"])
   await fs.writeFile(path.join(root, "notes.md"), "Exact notes.\nSomeone else's line.\nAnd more.\n", "utf8")
