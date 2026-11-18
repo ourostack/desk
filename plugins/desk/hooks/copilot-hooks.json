@@ -17,6 +17,15 @@
         "timeoutSec": 5
       }
     ],
+    "preToolUse": [
+      {
+        "type": "command",
+        "matcher": "create_session|open_issue_session|open_pr_session",
+        "bash": "node \"${PLUGIN_ROOT}/hooks/copilot-lane-model.cjs\"",
+        "powershell": "node \"${PLUGIN_ROOT}/hooks/copilot-lane-model.cjs\"",
+        "timeoutSec": 5
+      }
+    ],
     "sessionEnd": [
       {
         "type": "command",
