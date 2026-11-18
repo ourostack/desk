@@ -66,4 +66,4 @@ function main(stdin = process.stdin, stdout = process.stdout) {
   });
 }
 
-module.exports = { decide, laneModel, main };
+module.exports = { main };
