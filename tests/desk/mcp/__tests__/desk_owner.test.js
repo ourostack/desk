@@ -46,6 +46,13 @@ function mkWorld() {
   return { home, personal, work, ouro: repo("ouro-ui", "https://github.com/ourostack/ouro-ui.git"), cit: repo("CIT", "git@github.com:gim-home/CIT.git") }
 }
 
+function restoreHome([home, profile]) {
+  for (const [key, value] of [["HOME", home], ["USERPROFILE", profile]]) {
+    if (value === undefined) delete process.env[key]
+    else process.env[key] = value
+  }
+}
+
 const resolve = (w, folder) => resolveDeskRootWithSource({ homeDir: w.home, env: {}, cwd: w.home, hostProjectRoot: folder, deskPluginRoot: w.home })
 
 test("a session in a personal repository binds the personal desk, one in a Microsoft repository the work desk", () => {
@@ -68,28 +75,28 @@ test("desk_save refuses a path that belongs to another desk, naming that desk an
     { paths: [path.join(w.personal, "ouro-ui", "notes.md")], message: "m" },
     { files: [{ path: "ouro-ui/new.md", content: "x\n" }], message: "m" },
   ]) {
-    const home = process.env.HOME
-    process.env.HOME = w.home
+    const home = [process.env.HOME, process.env.USERPROFILE]
+    process.env.HOME = process.env.USERPROFILE = w.home
     try {
       await assert.rejects(
         desk_save({ deskRoot: w.work, input, schedulePush: () => {} }),
         (error) => error.code === "desk_save_path_belongs_to_another_desk" && error.message.includes(w.personal) && error.message.includes("--root " + w.personal) && error.message.includes("arimendelow/desk"),
       )
     } finally {
-      process.env.HOME = home
+      restoreHome(home)
     }
   }
 })
 
 test("desk_save still reports nothing_to_commit for an unknown path in its own desk", async () => {
   const w = mkWorld()
-  const home = process.env.HOME
-  process.env.HOME = w.home
+  const home = [process.env.HOME, process.env.USERPROFILE]
+  process.env.HOME = process.env.USERPROFILE = w.home
   try {
     const result = await desk_save({ deskRoot: w.personal, input: { paths: ["nowhere/x.md"], message: "m" }, schedulePush: () => {} })
     assert.equal(result.status, "nothing_to_commit")
   } finally {
-    process.env.HOME = home
+    restoreHome(home)
   }
 })
 
