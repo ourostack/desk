@@ -468,12 +468,14 @@ async function readJobs(ctx, state, repo, runId) {
 async function strictChecks(relay, state, ctx, sha) {
   const { strict } = relay
   const workflowRuns = await readWorkflowRuns(ctx, state, relay.repo, sha)
-  const advisoryJobs = [...strict.advisoryJobs]
+  const advisoryJobs = strict.advisoryJobs
+  const derived = []
+  const requiredJobs = []
   const waiting = []
   const warnings = []
   for (const run of workflowRuns.filter((candidate) => strict.advisoryWorkflows.some((name) => workflowNamed(candidate, name)))) {
     const { jobs } = await readJobs(ctx, state, relay.repo, run.id)
-    advisoryJobs.push(...jobs.map((job) => job.name))
+    derived.push(...jobs.map((job) => job.name))
   }
   const green = (job) => job.status === "completed" && (job.conclusion === "success" || (relay.skippedPasses && SKIPPED_PASSES.has(job.conclusion)))
   for (const name of strict.requiredWorkflows) {
@@ -483,19 +485,23 @@ async function strictChecks(relay, state, ctx, sha) {
       continue
     }
     const { jobs } = await readJobs(ctx, state, relay.repo, run.id)
+    requiredJobs.push(...jobs.map((job) => job.name))
     const judged = jobs.filter((job) => !jobNamed(job.name, advisoryJobs))
     warnings.push(...jobs.filter((job) => jobNamed(job.name, advisoryJobs) && !green(job) && !SKIPPED_PASSES.has(job.conclusion)).map((job) => `${name} job ${job.name} ${job.status === "completed" ? job.conclusion : job.status} (advisory)`))
+    const before = waiting.length
     for (const job of judged) {
       if (job.status !== "completed") waiting.push(`${name} job ${job.name} to finish (${job.status})`)
       else if (!green(job)) waiting.push(`${name} job ${job.name} finished ${job.conclusion}`)
     }
-    if (waiting.length === 0 && run.status !== "completed") waiting.push(`${name} to finish (more of its jobs have not started)`)
-    else if (judged.length === 0 && run.status === "completed" && run.conclusion !== "success") waiting.push(`${name} finished ${run.conclusion} with no job to judge`)
+    if (waiting.length === before && run.status !== "completed") waiting.push(`${name} to finish (more of its jobs have not started)`)
+    else if (waiting.length === before && judged.length === 0 && run.status === "completed" && run.conclusion !== "success") waiting.push(`${name} finished ${run.conclusion} with no job to judge`)
   }
   const { runs } = await readChecks(ctx, state, relay.repo, sha)
   const { statuses } = await readStatuses(ctx, state, relay.repo, sha)
-  const kept = runs.filter((run) => !jobNamed(run.name, advisoryJobs))
-  warnings.push(...runs.filter((run) => jobNamed(run.name, advisoryJobs) && run.status === "completed" && !SKIPPED_PASSES.has(run.conclusion) && run.conclusion !== "success").map((run) => `${run.name} ${run.conclusion} (advisory)`))
+  // A job name an advisory workflow shares with a required workflow's job stays judged: only the operator's own advisoryJobs may silence it.
+  const ignored = [...advisoryJobs, ...derived.filter((name) => !requiredJobs.some((required) => sameName(required, name)))]
+  const kept = runs.filter((run) => !jobNamed(run.name, ignored))
+  warnings.push(...runs.filter((run) => jobNamed(run.name, ignored) && run.status === "completed" && !SKIPPED_PASSES.has(run.conclusion) && run.conclusion !== "success").map((run) => `${run.name} ${run.conclusion} (advisory)`))
   waiting.push(...waitingOnChecks(relay.requiredChecks, kept, relay.skippedPasses, statuses))
   return { waiting, warnings: [...new Set(warnings)] }
 }

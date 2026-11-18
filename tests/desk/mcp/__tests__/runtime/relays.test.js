@@ -612,6 +612,14 @@ test("strict: a green current head merges, naming advisory jobs that are red as 
   assert.match(comments(w.world)[0].body.body, /Every job of ci on the head finished green and the head contained main.*Advisory, not judged: ci job budget failure \(advisory\); budget failure \(advisory\); resource-macos failure \(advisory\)\./su)
 })
 
+test("strict: a job an advisory workflow shares a name with a required job of ci stays judged", async () => {
+  const w = await setup([STRICT_RELAY])
+  strictWorld(w.world, { jobs: [job("typecheck", "failure"), job("budget")], resourceJobs: [job("typecheck", "failure")], checks: [check("typecheck", "failure"), check("npm test (ubuntu-latest, 1/2)")] })
+  await w.poll()
+  assert.deepEqual(prWrites(w.world), [])
+  assert.deepEqual(w.state("pages merge").prs["7"].waitingOn.slice(0, 1), ["ci job typecheck finished failure"])
+})
+
 test("strict: a red or pending job of the required workflow holds the merge and the status names it", async () => {
   const red = await setup([STRICT_RELAY])
   strictWorld(red.world, { jobs: [job("typecheck", "failure"), job("budget")] })
