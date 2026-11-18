@@ -432,3 +432,9 @@ test("a failure while closing superseded PRs does not stop publishing", () => {
   const f = fixture({ create: true, open: [{ number: 7, headRefName: `desk/publish/${"d".repeat(40)}` }], fail: "close" })
   assert.equal(publishPullRequest(f.request).receipt.merge, merged)
 })
+
+test("a list of open PRs that is not a list does not stop publishing", () => {
+  const f = fixture({ create: true, open: {} })
+  assert.equal(publishPullRequest(f.request).receipt.merge, merged)
+  assert.ok(!f.calls.some((call) => call[2] === "close"))
+})

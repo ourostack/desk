@@ -164,8 +164,8 @@ export function publishPullRequest({ git, spawnGit, root, upstream, head, onto, 
   if (pr.state === "OPEN") {
     try {
       const open = gh(["pr", "list", "--repo", repo.full, "--base", base, "--state", "open", "--json", "number,headRefName"])
-      for (const old of Array.isArray(open) ? open : []) {
-        if (typeof old?.headRefName !== "string" || !old.headRefName.startsWith("desk/publish/") || old.headRefName === branch || !Number.isSafeInteger(old.number)) continue
+      for (const old of open) {
+        if (!String(old.headRefName).startsWith("desk/publish/") || old.headRefName === branch) continue
         try { gh(["pr", "close", String(old.number), "--repo", repo.full, "--delete-branch", "--comment", `Superseded by ${pr.url}, which publishes a newer candidate that includes this one's work.`], false) } catch { /* the next publication tries again */ }
       }
     } catch { /* closing is housekeeping; it never blocks publishing */ }
