@@ -269,6 +269,9 @@ test("an open Desk problem whose own issue is closed closes at once as source_re
   assert.equal(closed.close_reason, "source_recovered")
   assert.deepEqual(closed.evidence, ["issue:ourostack/desk#12"])
   assert.equal((await byKey(ctx, live)).state, "open")
+  await make(ctx, "desk_problem", "ourostack/desk#14", "open", {}, evidence(14))
+  const failed = await go(ctx, w)
+  assert.equal(failed.counts.issue_failed, 1)
 }))
 
 test("a recovered open card with a mirror issue closes its issue too", () => scratch(async (ctx) => {
