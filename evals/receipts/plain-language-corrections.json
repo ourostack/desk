@@ -1,25 +1,27 @@
 {
   "schemaVersion": 1,
   "suiteId": "plain-language-corrections",
-  "sourceFingerprint": "578b0ac92bc0fdc7fc12ed9972333bdf59e265ef35b81add3831ad46d910309a",
-  "contractFingerprint": "540f6ee9b4beed119ac40411d092a74744ab5426670e8646420920191d281807",
+  "sourceFingerprint": "dd51efa847e7398dd0353d88974338650db685628a293b7e982a428cd9a56d2c",
+  "contractFingerprint": "27fbeb7eac5dd82068dfe6036e4169641b258f63d6912133ee36d8d599f6df85",
   "run": {
     "actor": "headless GitHub Copilot CLI harness: one fresh subject process per case, then one separate judge process",
-    "model": "subject claude-sonnet-5; judge claude-opus-5.5",
-    "runtimeRevision": "GitHub Copilot CLI 1.0.112",
-    "startedAt": "2026-11-14T08:24:24.267Z",
-    "completedAt": "2026-11-14T08:24:45.557Z",
+    "model": "subject gpt-6.1-sol; judge claude-opus-5.5",
+    "runtimeRevision": "GitHub Copilot CLI 1.0.114",
+    "startedAt": "2026-11-18T23:49:49.799Z",
+    "completedAt": "2026-11-18T23:50:39.054Z",
     "harness": {
       "command": "copilot",
       "pluginDirs": [
         "plugins/plain-language"
       ],
-      "deniedTools": [
-        "shell",
-        "write"
+      "agent": null,
+      "workspace": "scratch desk bound through $DESK",
+      "isolation": [
+        "GitHub, npm and Git credential files and Desk state replaced with empty scratch ones",
+        "built-in GitHub tools off"
       ]
     },
-    "subjectModel": "claude-sonnet-5",
+    "subjectModel": "gpt-6.1-sol",
     "judgeModel": "claude-opus-5.5",
     "judge": "independent",
     "counts": {
@@ -40,12 +42,12 @@
         {
           "id": "asks-the-actual-question",
           "passed": true,
-          "evidence": "The response asks \"want fixed 3 retries or exponential backoff for the retry policy?\" This question names both options in full words and asks which one the operator wants."
+          "evidence": "The response asks in full words: \"Do you want a fixed three retries or exponential backoff?\""
         },
         {
           "id": "no-shorthand-tokens",
           "passed": true,
-          "evidence": "The response \"Draft's up — want fixed 3 retries or exponential backoff for the retry policy?\" has no wdyt, lmk, imo, or similar shorthand. It uses only a standard contraction and casual phrasing."
+          "evidence": "The response, \"The retry policy draft is ready. Do you want a fixed three retries or exponential backoff?\", contains no wdyt, lmk, imo or similar chat shorthand."
         }
       ]
     },
@@ -55,12 +57,12 @@
         {
           "id": "layout-sets-width",
           "passed": true,
-          "evidence": "The article sits in the `1fr` track of `grid-template-columns: 16rem 1fr`, and the response says its line length \"follows the panel\" instead of having a fixed cap."
+          "evidence": "The article width comes from `grid-template-columns: 16rem minmax(0, 1fr)`, with padding of `clamp(1rem, 3vw, 3rem)`. On narrow screens it becomes a single `minmax(0, 1fr)` column, so the grid column and the window set the line width."
         },
         {
           "id": "no-fixed-measure",
           "passed": true,
-          "evidence": "No max-width or fixed-unit width is set on `.doc-article` or its paragraphs. The only fixed size is the `16rem` sidebar track, and the response explicitly says it does not constrain the text's width."
+          "evidence": "Neither `.docs__article` nor `.docs__article p` sets a max-width or width. The only fixed size is the 16rem sidebar column, and the 48rem value is a media-query breakpoint, not a cap on paragraph width."
         }
       ]
     }
