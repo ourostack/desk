@@ -196,7 +196,7 @@ test("Desk running from an Agency session that loads the ms-desk overlay still n
     const load = async (container, overlays) => {
       const util = path.join(scratch, container, "desk", "mcp", "src", "util")
       mkdirSync(util, { recursive: true })
-      for (const file of ["paths.js", "startup-direction.js", "redact.js", "agency-session.cjs"]) copyFileSync(path.join(mcpRoot, "src", "util", file), path.join(util, file))
+      for (const file of ["paths.js", "desk-owner.js", "startup-direction.js", "redact.js", "agency-session.cjs"]) copyFileSync(path.join(mcpRoot, "src", "util", file), path.join(util, file))
       mkdirSync(path.join(util, "..", "factory"), { recursive: true })
       copyFileSync(path.join(mcpRoot, "src", "factory", "credential.js"), path.join(util, "..", "factory", "credential.js"))
       mkdirSync(path.join(util, "..", "desk"), { recursive: true })

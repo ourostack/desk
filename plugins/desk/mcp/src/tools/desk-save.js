@@ -21,6 +21,7 @@ import * as path from "node:path"
 import { existsSync, statSync, lstatSync, realpathSync, readFileSync, readlinkSync, constants as fsConstants, promises as fs } from "node:fs"
 import { spawnSync } from "node:child_process"
 import { personPrefix, isPathContained, resolveWriteTarget } from "../util/paths.js"
+import { otherDeskOwning, otherDeskContaining } from "../util/desk-owner.js"
 import { isLiveCardPath } from "../desk/card-commit-guard.js"
 import { DESK_COMMIT_HASH_NOTE, headSha } from "./task.js"
 import { isGitRepository, hasUnmergedPath, hasUnstagedWork, stagedChanges, indexEntries, stagePaths, commitPaths, commitIndexPaths } from "../util/git-stage.js"
@@ -223,6 +224,26 @@ export async function desk_save(args) {
   return references.length === 0 ? out : { ...out, handoff_references: references, handoff_note: "Give the next session these URLs, never a path in a session folder or the temp folder; each resolves once the push lands." }
 }
 
+// A path another desk on this machine owns is refused before anything is written or reported as "nothing to commit": a session
+// bound to one desk must not silently drop a save meant for the other.
+function misdirectedPath(deskRoot, relativePath) {
+  const absolute = path.resolve(deskRoot, relativePath)
+  const owner = isPathContained(path.resolve(deskRoot), absolute)
+    ? otherDeskOwning(deskRoot, path.relative(deskRoot, absolute))
+    : otherDeskContaining(deskRoot, absolute)
+  if (owner === null) return
+  const inOwner = path.isAbsolute(relativePath) ? path.relative(owner.root, absolute) : relativePath
+  const code = "desk_save_path_belongs_to_another_desk"
+  throw Object.assign(new Error(deskFailure({
+    code,
+    thing: "desk_save: path",
+    probably: `${relativePath} belongs to the ${owner.name} desk at ${owner.root}, not the ${path.resolve(deskRoot)} desk this session is bound to; nothing was written or committed`,
+    look: `call desk_status to see which desk this session is bound to and why`,
+    keepWorking: `save paths that live in the bound desk, and commit ${inOwner} in ${owner.root} with Git`,
+    fix: `start the session from a repository that desk owns, or pass --root ${owner.root}, then save ${inOwner} again`,
+  })), { code, owner_desk: owner.root })
+}
+
 async function saveDesk({ deskRoot, input, person = null, spawnGit = spawnSync, schedulePush = schedulePushDefault }) {
   const values = input ?? {}
   if (values.paths === undefined && values.files === undefined) {
@@ -240,6 +261,7 @@ async function saveDesk({ deskRoot, input, person = null, spawnGit = spawnSync, 
     throw Object.assign(new Error("desk_save: Pass only `paths` with tidy: true: `files` cannot be combined with tidy: true; a tidy commits moves already staged, so pass only `paths`"), { code: "desk_save_true_files_cannot_be_combined" })
   }
   const effectiveRoot = path.resolve(personPrefix(deskRoot, person))
+  for (const relativePath of [...paths, ...files.map((file) => file.path)]) misdirectedPath(deskRoot, relativePath)
   for (const relativePath of paths) {
     const absolute = path.resolve(deskRoot, relativePath)
     if (!isPathContained(effectiveRoot, absolute)) {

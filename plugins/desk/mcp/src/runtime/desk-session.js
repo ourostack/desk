@@ -41,7 +41,7 @@ const READ_TOOLS = new Set(["desk_search", "desk_recall"])
 // outranks the saved binding and $DESK; a bare launch folder (`hint`, reported as "host-project" too) stays below them, so losing an
 // association never reselects it. Neither kind of folder replaces another of its kind.
 const ROOT_SOURCE_PRIORITY = Object.freeze([
-  "home_fallback", "overlay_home_fallback", "launch-folder", "env:DESK",
+  "home_fallback", "overlay_home_fallback", "repo_owner_desk", "launch-folder", "env:DESK",
   "activation-config", "host-project", "host-session-root", "explicit-root",
 ])
 const rootRank = (root) => ROOT_SOURCE_PRIORITY.indexOf(root.hint === true ? "launch-folder" : root.source)

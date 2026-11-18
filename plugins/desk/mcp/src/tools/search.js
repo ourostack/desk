@@ -6,6 +6,7 @@
 import { promises as fs } from "node:fs"
 import * as path from "node:path"
 import { toDeskPath } from "../util/paths.js"
+import { describeDesk } from "../util/desk-owner.js"
 import { searchRouter } from "../search/files-router.js"
 import { objectInput } from "../util/object-input.js"
 import {
@@ -370,13 +371,20 @@ export async function desk_search({ deskRoot, input, opts, search, queryRouter, 
   })
   // No query, or `newest: true`, lists documents by the time they were last updated instead of ranking them; the window is `filters.since` to `filters.until`.
   if (request.newest === true || !String(request.query ?? "").trim()) {
-    return newestDocuments({
+    return withDesk(deskRoot, await newestDocuments({
       deskRoot, input: { ...request, from: request.filters?.since, to: request.filters?.until }, opts, search, queryRouter, signal,
-    })
+    }))
   }
-  return (queryRouter ?? searchRouter(search)).lexical({
+  return withDesk(deskRoot, await (queryRouter ?? searchRouter(search)).lexical({
     ...request, deskRoot, now: opts?.now, opts, signal, kind: "lexical",
-  })
+  }))
+}
+
+// Names the desk a read searched, so a miss in the wrong desk reads as one.
+function withDesk(deskRoot, result) {
+  return result !== null && typeof result === "object" && !Array.isArray(result)
+    ? { ...result, desk_searched: describeDesk(deskRoot) }
+    : result
 }
 
 // Shared result contract for the engine's index and a fresh in-memory FTS corpus; `db` is either one.
@@ -470,9 +478,9 @@ export async function indexedSearch({ deskRoot, input, opts, db }) {
 // desk_recall — "do I remember anything about X", ranked by meaning in the session's search engine
 // (src/search/engine.js), which always answers.
 export async function desk_recall({ deskRoot, input, opts, search, queryRouter, signal }) {
-  return (queryRouter ?? searchRouter(search)).semantic({
+  return withDesk(deskRoot, await (queryRouter ?? searchRouter(search)).semantic({
     ...input, deskRoot, opts, signal, kind: "recall",
-  })
+  }))
 }
 
 // ---------------------------------------------------------------------------
