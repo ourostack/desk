@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.265 — 2026-11-18
+
+A save whose commit fails or is cut off now answers `commit_failed` or `commit_unknown`, with a route to finish it, and never `nothing_to_commit`. `nothing_to_commit` now means only that there was nothing to commit. The sync worker fetches every 60 seconds instead of 10, and a pull fetches for itself when the last fetch is older than 15 seconds. A save starts 17 git processes or fewer (was 19) because the content home, handoff and tool-commit lookups read `.git` files instead of asking git.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.264 — 2026-11-18
 
 Desk's MCP server now vendors Ouro UI core v0.18.3 and Ouro UI v1.3.292, moved by Ouro Current.
