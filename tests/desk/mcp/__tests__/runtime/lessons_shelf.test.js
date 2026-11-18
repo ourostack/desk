@@ -65,3 +65,8 @@ test("shelfForTask puts the lessons sharing words with the task first, then the 
   assert.deepEqual(shelfForTask(entries, "", one), { shown: [entries[1].line], not_shown: 2 })
   assert.deepEqual(shelfForTask(entries, "with that this every", 1_000_000).shown[0], entries[1].line, "common words do not count as shared")
 })
+
+test("shelfForTask puts a later line first among lessons dated the same day", () => {
+  const entries = lessonEntries(`## Lessons\n\n${entry("First", "2026-02-01")}\n${entry("Second", "2026-02-01")}\n`)
+  assert.deepEqual(shelfForTask(entries, "").shown, [entries[1].line, entries[0].line])
+})
