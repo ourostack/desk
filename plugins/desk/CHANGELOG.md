@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.253 — 2026-11-18
+
+Desk's MCP server now vendors Ouro UI core v0.18.0, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.252 — 2026-11-18
 
 A drain whose target session is archived or gone now recovers by itself. When the wake runner reports that error, Desk starts a successor session through Shepherd (its first kickoff line is `Succeeds: <old id>`), keeps the new id in the drain's state and sends later wakes there; a failed start is retried after ten minutes. See [issue drains](docs/issue-drains.md).
