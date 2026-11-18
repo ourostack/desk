@@ -655,7 +655,7 @@ test("the worker reports an unreadable pending list as nothing to push, and stop
   let reads = 0
   const fadingRead = intercept((args) => args.includes("--cherry-pick"), () => (reads++ < 1 ? { status: 0, stdout: `${sha}\n`, stderr: "" } : { status: 1, stdout: "", stderr: "" }))
   const offline = (cmd, args, opts) => (args.includes("fetch") ? { status: 128, stdout: "", stderr: "fatal: Could not read from remote repository.\n" } : fadingRead(cmd, args, opts))
-  assert.deepEqual(await runPushWorker({ root: desk, clock: instantClock, spawnGit: offline, fileProblem: () => assert.fail("not filed") }), { result: "blocked", reason: "unreachable", unpushed: 0 })
+  assert.deepEqual(await runPushWorker({ root: desk, clock: instantClock, retryDelaysMs: [], spawnGit: offline, fileProblem: () => assert.fail("not filed") }), { result: "blocked", reason: "unreachable", unpushed: 0 })
 })
 
 test("a commit made just after the worker's last check, while its own worker found the lock held, is still pushed", async () => {

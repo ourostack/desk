@@ -11,6 +11,7 @@
 // `spawnGit` is an injectable seam over `node:child_process`'s `spawnSync`,
 // for tests only; real callers never pass it.
 
+import { spawnSync } from "node:child_process"
 import { existsSync, readFileSync, realpathSync, writeFileSync } from "node:fs"
 import * as path from "node:path"
 
@@ -289,14 +290,14 @@ export function commitIndexPaths(root, relPaths, entries, message, spawnGit, sta
   const operation = operationAnswer(step, root)
   if (operation) return failed(operation.reason, false)
   if (sameEntries(before === "" ? [] : treeEntries(root, before, relPaths, step), expected)) return failed("nothing to commit: HEAD already holds these paths as the index does", false)
-  let answer = commitCaptured({ root, paths: relPaths, wanted: expected, head: before, branch, message, spawnGit, env: { ...process.env, [TOOL_COMMIT_ENV]: "1" }, toolCommit: true, deadline })
+  let answer = commitCaptured({ root, paths: relPaths, wanted: expected, head: before, branch, message, spawnGit, env: { ...process.env, [TOOL_COMMIT_ENV]: "1" }, toolCommit: true, deadline, backgroundPostCommit: spawnGit === spawnSync })
   // Another writer moved the branch while this commit was being qualified. Nothing was changed, so it is qualified again on the branch as it now is, here, within the same budget, rather than handed back.
   for (let again = 0; answer.state === "held" && answer.moved === true && again < QUALIFY_AGAIN; again += 1) {
     const now = headOf(root, step)
     if (now === null || now === before) break
     before = now
     if (sameEntries(treeEntries(root, before, relPaths, step), expected)) return failed("nothing to commit: HEAD already holds these paths as the index does", false)
-    answer = commitCaptured({ root, paths: relPaths, wanted: expected, head: before, branch, message, spawnGit, env: { ...process.env, [TOOL_COMMIT_ENV]: "1" }, toolCommit: true, deadline })
+    answer = commitCaptured({ root, paths: relPaths, wanted: expected, head: before, branch, message, spawnGit, env: { ...process.env, [TOOL_COMMIT_ENV]: "1" }, toolCommit: true, deadline, backgroundPostCommit: spawnGit === spawnSync })
   }
   if (answer.state === "finished") {
     recordToolCommit(root)
@@ -389,6 +390,9 @@ function capturedPaths(root, relPaths, spawnGit) {
   return differs?.status === 0 ? entryLines(entries) : null
 }
 
+// A path written the way the index spells it (no `./`, no `..`, not absolute): the private-index commit matches paths by that spelling.
+const plainRelative = (p) => !path.isAbsolute(p) && path.posix.normalize(p) === p && !p.startsWith("../") && p !== "." && !p.includes("\\")
+
 /**
  * `git commit` exactly `relPaths` (relative to `root`) with `message`, never
  * `-a`/`-A` and never a pattern: the pathspec after `--` names precisely the
@@ -409,6 +413,12 @@ export function commitPaths(root, relPaths, message, spawnGit, stateBranch) {
   const before = headOf(root, spawnGit)
   const branch = branchOf(root, spawnGit)
   const expected = capturedPaths(root, relPaths, spawnGit)
+  // A real run whose paths are staged and clean commits on a private index with the post-commit hook (Git LFS's whole-tree walk) detached, so a save on a big repository returns at once.
+  if (spawnGit === spawnSync && expected !== null && relPaths.every(plainRelative)) {
+    const entries = indexEntries(root, relPaths, spawnGit)
+    // Only when every path is one file the index holds: a folder or a deletion keeps the commit it always had.
+    if (entries !== null && relPaths.every((p) => entries.some((entry) => entry.path === p))) return commitIndexPaths(root, relPaths, entries, message, spawnGit, stateBranch)
+  }
   // The desk's own pre-commit hook (`desk/card-commit-guard.js`) refuses a commit that changes a task card unless Desk is the one committing:
   // this is Desk's commit path, so it says so for the git call (and only for that call).
   const env = { ...process.env, [TOOL_COMMIT_ENV]: "1" }

@@ -54,13 +54,27 @@ function subcommand(args) {
 }
 
 export function runner(spawnGit, cwd) {
-  return (args, timeout = GIT_TIMEOUT_MS) => {
-    const env = remoteIdentityEnv({ root: cwd, args, env: gitEnv(), spawn: spawnGit })
-    const once = (limit) => spawnGit("git", ["-C", cwd, ...args], { windowsHide: true, encoding: "utf8", timeout: limit, env, maxBuffer: 64 * 1024 * 1024 })
+  return (args, timeout = GIT_TIMEOUT_MS, extraEnv = {}, input = undefined) => {
+    const env = remoteIdentityEnv({ root: cwd, args, env: { ...gitEnv(), ...extraEnv }, spawn: spawnGit })
+    const once = (limit) => spawnGit("git", ["-C", cwd, ...args], { windowsHide: true, encoding: "utf8", timeout: limit, env, input, maxBuffer: 64 * 1024 * 1024 })
     let result = once(timeout)
     if (result.status === null && LOCAL_READS.has(subcommand(args))) result = once(timeout * 3)
     return { status: result.status, stdout: typeof result.stdout === "string" ? result.stdout : "", stderr: typeof result.stderr === "string" ? result.stderr : "" }
   }
+}
+
+// Git LFS's pre-push hook walks the pushed range to find objects to upload, which takes seconds on a big repository on a busy
+// machine. When no path the range changes is LFS-tracked it has nothing to upload, so the push skips it. Any doubt (a Git
+// failure, an LFS path) keeps the hook.
+export function lfsSkipEnv(git, from, to) {
+  const changed = git(["diff", "--name-only", "-z", `${from}..${to}`])
+  if (changed.status !== 0) return {}
+  if (changed.stdout === "") return { GIT_LFS_SKIP_PUSH: "1" }
+  const attrs = git(["check-attr", "-z", "filter", "--stdin"], undefined, {}, changed.stdout)
+  if (attrs.status !== 0) return {}
+  const fields = attrs.stdout.split("\0")
+  for (let i = 2; i < fields.length; i += 3) if (fields[i] === "lfs") return {}
+  return { GIT_LFS_SKIP_PUSH: "1" }
 }
 
 const OBJECT_ID = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/u
@@ -370,7 +384,7 @@ export function deliver({ root, env = process.env, spawnGit = spawnSync, deliver
         const recovery = error.message.includes("Fix:") ? "" : `. Fix: run ${publicationRecovery(root)}`
         return { state: "failed", reason: "publication_blocked", error: error.message + recovery, publication: error.publication ?? null, delivered: [], skipped: [] }
       }
-    } else pushed = built.head === onto ? { status: 0 } : git(["push", "--quiet", upstream.remote, `${built.head}:${upstream.merge}`], NETWORK_TIMEOUT_MS)
+    } else pushed = built.head === onto ? { status: 0 } : git(["push", "--quiet", upstream.remote, `${built.head}:${upstream.merge}`], NETWORK_TIMEOUT_MS, lfsSkipEnv(git, onto, built.head))
     cleanup()
     if (pushed.status === 0) {
       git(["update-ref", upstream.tracking, target])

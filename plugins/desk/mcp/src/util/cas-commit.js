@@ -3,6 +3,7 @@
 // `git update-ref` of the branch. What it does and why is described at the top of finish-commit.js; it stays the one place
 // that knows how, so every caller that needs a commit published only against a qualified parent shares it.
 
+import { spawn } from "node:child_process"
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
@@ -81,7 +82,7 @@ const held = (reason, extra = {}) => ({ state: "held", reason, ...extra })
  * hooks see (a Desk tool's commit, which the card guard lets through), and `deadline` holds every Git call it makes, the reads
  * after the branch update included, to one total time budget ending then (see `budgeted`), in place of each step's own bound.
  */
-function commitCaptured({ root, paths, wanted, head, branch, message, spawnGit: unbudgeted, env, toolCommit, deadline = null }) {
+function commitCaptured({ root, paths, wanted, head, branch, message, spawnGit: unbudgeted, env, toolCommit, deadline = null, backgroundPostCommit = false }) {
   const spawnGit = budgeted(unbudgeted, deadline)
   const bound = deadline === null ? `the ${COMMIT_TIMEOUT_MS / 1000} s bound` : "the end of the commit's time budget"
   const prefixRead = git(spawnGit, root, ["rev-parse", "--show-prefix"])
@@ -158,7 +159,7 @@ function commitCaptured({ root, paths, wanted, head, branch, message, spawnGit: 
     const nowRead = git(spawnGit, root, ["rev-parse", "--verify", "-q", ref])
     const now = nowRead.ok ? nowRead.stdout.trim() : null
     if (now === commitId) {
-      const post = hook("post-commit")
+      const post = backgroundPostCommit ? startPostCommit(root, env) : hook("post-commit")
       if (post.notRun) return { state: "unknown", reason: `the branch holds the commit, but the commit's time budget ran out before the post-commit hook could run, so it was not run; read back before anything else and never commit it again`, commit: commitId }
       return afterPostCommit({ spawnGit, root, branch, commitId, post, bound })
     }
@@ -175,6 +176,22 @@ function commitCaptured({ root, paths, wanted, head, branch, message, spawnGit: 
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
+}
+
+// post-commit cannot change the commit it follows, and a hook such as Git LFS's walks the whole working tree (seconds on a big
+// repository on a busy machine), so a Desk save starts it detached and returns. It runs on the real index, as it does under git
+// commit, never on the private one this call removes. A start that fails is the same as a hook that failed to start under
+// git commit: the commit stands.
+function startPostCommit(root, env) {
+  const { GIT_INDEX_FILE: _private, ...clean } = env
+  try {
+    const child = spawn("git", ["-C", root, "hook", "run", "--ignore-missing", "post-commit"], { detached: true, stdio: "ignore", windowsHide: true, env: clean })
+    child.on("error", Function.prototype)
+    child.unref()
+  } catch {
+    // The commit already stands; a post-commit hook that cannot start is not a reason to fail it.
+  }
+  return { ok: true, cut: false, notRun: false, stdout: "", stderr: "" }
 }
 
 // post-commit runs after the branch moved, so the commit, the hook's outcome and where HEAD is afterwards are three facts, read
