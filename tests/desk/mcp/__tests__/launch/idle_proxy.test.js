@@ -244,19 +244,72 @@ test("a server that does not leave after its stdin closes is killed", async () =
   assert.equal(broken.proxy.running(), false)
 })
 
-test("a server that ends by itself ends the proxy with its exit code (1 when it gave none or was killed by a signal)", async () => {
-  for (const [code, signal, expected, said] of [[3, null, 3], [null, null, 1], [null, "SIGSEGV", 1, /ended on SIGSEGV/u]]) {
+test("a server that crashes keeps the host's tools: calls it never answered get a retryable error, and the next message starts a new server that replays the handshake", async () => {
+  for (const [code, signal, said] of [[3, null, /exited with code 3/u], [null, "SIGKILL", /ended on SIGKILL/u]]) {
     const h = harness()
     await handshaken(h)
-    h.last().leave(code, signal)
+    await h.host(CALL(7))
+    const crashed = h.last()
+    crashed.leave(code, signal)
+    await h.flush()
+    assert.deepEqual(h.exits, [])
+    assert.equal(h.proxy.running(), false)
+    assert.match(h.stderr.join(""), said)
+    const failed = h.sees().find((message) => message.id === 7)
+    assert.equal(failed.error.code, -32603)
+    assert.match(failed.error.message, /retry this call.*friction_add/su)
+    // A second exit event from the dead server changes nothing.
+    crashed.leave(9)
+    await h.host(CALL(8))
+    assert.equal(h.children.length, 2)
+    assert.equal(h.last().written[0].method, "initialize")
+    h.last().say({ jsonrpc: "2.0", id: "desk-idle-proxy-resume", result: {} })
+    await h.flush()
+    assert.deepEqual(h.last().written.map((message) => message.id ?? message.method), ["desk-idle-proxy-resume", "notifications/initialized", 8])
+    assert.deepEqual(h.exits, [])
+  }
+})
+
+test("a server that crashes again and again right after it starts ends the proxy with its exit code (1 when it gave none), as a server that never runs would", async () => {
+  for (const [code, expected] of [[3, 3], [null, 1]]) {
+    const h = harness()
+    await handshaken(h)
+    h.last().leave(code)
+    await h.host(CALL(2))
+    h.last().leave(code)
+    await h.host(CALL(3))
+    assert.deepEqual(h.exits, [])
+    h.last().leave(code)
     await h.flush()
     assert.deepEqual(h.exits, [expected])
-    if (said) assert.match(h.stderr.join(""), said)
-    // A second ending changes nothing.
-    h.last().leave(9)
-    await h.advance(IDLE)
-    assert.deepEqual(h.exits, [expected])
+    assert.match(h.stderr.join(""), /3 times in a row; not restarting/u)
   }
+})
+
+test("a crash after a long run starts the count again, and a crash after the host has gone ends the proxy with the server's code", async () => {
+  const h = harness()
+  await handshaken(h)
+  for (let round = 0; round < 4; round += 1) {
+    await h.advance(60000)
+    h.last().leave(1)
+    await h.host(CALL(10 + round))
+  }
+  assert.deepEqual(h.exits, [])
+
+  h.stdin.end()
+  await h.flush()
+  h.last().leave(4)
+  await h.flush()
+  assert.deepEqual(h.exits, [4])
+})
+
+test("a server that ends after the proxy was sent a signal ends the proxy and is not restarted", async () => {
+  const h = harness()
+  await handshaken(h)
+  h.signals.emit("SIGTERM")
+  h.last().leave(null)
+  await h.flush()
+  assert.deepEqual(h.exits, [1])
 })
 
 test("a stale exit from a server that was already replaced is ignored", async () => {

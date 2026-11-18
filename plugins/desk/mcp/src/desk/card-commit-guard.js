@@ -34,6 +34,7 @@
 // cannot be installed (a read-only hooks folder, a chained hook already in the way) is reported by the boot as a degraded line.
 
 import { spawnSync } from "node:child_process"
+import { fileURLToPath } from "node:url"
 import { chmodSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, unlinkSync, writeFileSync } from "node:fs"
 import * as path from "node:path"
 
@@ -43,10 +44,13 @@ import { DEFERRED_TOOLS_LOAD_HINT } from "../util/deferred-tools.js"
 export const TOOL_COMMIT_ENV = "DESK_TOOL_COMMIT"
 /** The first marker line of the hook Desk writes. */
 export const HOOK_MARKER = "# desk-card-commit-guard"
-const HOOK_VERSION = 6
+const HOOK_VERSION = 7
 export const CHAINED_NAME = "pre-commit.desk-chained"
 /** Set by the hook while it runs; a second entry (the pre-commit framework's `pre-commit.legacy` chain) exits 0 instead of looping. */
 const RUNNING_ENV = "DESK_CARD_GUARD_RUNNING"
+/** Beside the hook: one line naming this install's `scripts/local-recovery.js`, so the refusal can give a command that works when the session's Desk tools are down. */
+export const RECOVERY_POINTER_NAME = "pre-commit.desk-recovery"
+const RECOVERY_SCRIPT = fileURLToPath(new URL("../../scripts/local-recovery.js", import.meta.url))
 /** The name the pre-commit framework gives the hook it found when it installed itself. */
 const LEGACY_NAME = "pre-commit.legacy"
 
@@ -107,6 +111,14 @@ desk_card_guard() {
     echo "Desk refused this commit because it changes a task card, and a card is written only through Desk's tools, which commit it for you:"
     echo "$refused" | sed 's/^/  /'
     echo "Use task_update (status, repos, a progress note, the next step, more body text), task_create, task_update or task_archive: each writes the card and commits it for you."
+    recovery=$(cat "$(dirname "$0")/${RECOVERY_POINTER_NAME}" 2>/dev/null)
+    [ -f "$recovery" ] || recovery="<Desk plugin folder>/mcp/scripts/local-recovery.js"
+    track=$(echo "$first" | awk -F/ '{print $(NF-2)}')
+    slug=$(echo "$first" | awk -F/ '{print $(NF-1)}')
+    person=""
+    case "$first" in desks/*) person=" --person \\"$(echo "$first" | awk -F/ '{print $2}')\\"" ;; esac
+    echo "If Desk's tools are down in this session, run the same task_update from a shell; it starts its own Desk server and prints a JSON report:"
+    echo "  echo '{\\"track\\":\\"$track\\",\\"slug\\":\\"$slug\\",\\"note\\":\\"<what changed>\\"}' | node \\"$recovery\\" --root \\"$top\\"$person --operation task_update"
     echo "If this card is in a desk this session's Desk tools cannot reach, do not commit it by hand: make the edit from a session bound to that desk, or ask the person who owns it."
     echo '${hint}'
     echo "To commit your other work, take each card out of this commit first (git restore --staged <card path>), then use task_update for the card itself."
@@ -159,6 +171,15 @@ function isDeskHook(text) {
   return text.split("\n", 3).some((line) => line.startsWith(HOOK_MARKER))
 }
 
+function writeRecoveryPointer(dir) {
+  const file = path.join(dir, RECOVERY_POINTER_NAME)
+  try {
+    if (!present(file) || readFileSync(file, "utf8") !== `${RECOVERY_SCRIPT}\n`) writeFileSync(file, `${RECOVERY_SCRIPT}\n`)
+  } catch {
+    // The refusal then names the script by its place in the plugin folder.
+  }
+}
+
 function stamp() {
   return new Date().toISOString().replace(/[-:.TZ]/gu, "").slice(0, 14)
 }
@@ -199,12 +220,16 @@ export function installCardGuard(root, { spawnGit = spawnSync } = {}) {
       if (isDeskHook(current)) {
         if (current === wanted) {
           chmodSync(file, 0o755)
+          writeRecoveryPointer(dir)
           return { state: "current", path: file }
         }
         state = "updated"
       } else {
         const legacy = path.join(dir, LEGACY_NAME)
-        if (present(legacy) && isDeskHook(readFileSync(legacy, "utf8"))) return { state: "current", path: legacy, via: "legacy" }
+        if (present(legacy) && isDeskHook(readFileSync(legacy, "utf8"))) {
+          writeRecoveryPointer(dir)
+          return { state: "current", path: legacy, via: "legacy" }
+        }
         const chainedFile = path.join(dir, CHAINED_NAME)
         if (present(chainedFile)) renameSync(chainedFile, `${chainedFile}.bak-${stamp()}`)
         renameSync(file, chainedFile)
@@ -215,6 +240,7 @@ export function installCardGuard(root, { spawnGit = spawnSync } = {}) {
     }
     writeFileSync(file, wanted)
     chmodSync(file, 0o755)
+    writeRecoveryPointer(dir)
     return chained ? { state, path: file, chained } : { state, path: file }
   } catch (error) {
     return { state: "failed", reason: error.message }
