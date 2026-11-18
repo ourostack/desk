@@ -1685,3 +1685,16 @@ test("every kind of failed token read names what gh said, or that it stopped", a
   assert.match(await say({ status: 2, stderr: "", stdout: "" }), /no token for me/u)
   assert.match(await say({ status: null, error: Object.assign(new Error("spawn gh ENOENT"), { code: "ENOENT" }) }), /no token for me/u)
 })
+
+test("startSuccessor with no options uses the process environment and reports a missing shepherd", () => {
+  const before = process.env.DESK_DRAINS_SHEPHERD
+  process.env.DESK_DRAINS_SHEPHERD = "/no/such/shepherd-for-drains-test"
+  try {
+    const result = startSuccessor({ repo: "a/b", predecessor: "x" })
+    assert.equal(result.ok, false)
+    assert.match(result.error, /ENOENT/u)
+  } finally {
+    if (before === undefined) delete process.env.DESK_DRAINS_SHEPHERD
+    else process.env.DESK_DRAINS_SHEPHERD = before
+  }
+})
