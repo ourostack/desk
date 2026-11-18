@@ -1137,7 +1137,7 @@ test("a lock that cannot be created for another reason than an existing owner is
   await assert.rejects(withDrainLock(path.join(dir, `${"x".repeat(400)}.lock`), () => "x"), (error) => error.code !== "EEXIST")
 })
 
-const response = (body, { status = 200, link = null, headers = {} } = {}) => ({ ok: status < 400, status, json: async () => body, headers: { get: (name) => (name === "link" ? link : headers[name] ?? null) } })
+const response = (body, { status = 200, link = null, headers = {} } = {}) => ({ ok: status < 400, status, json: async () => body, text: async () => JSON.stringify(body), headers: { get: (name) => (name === "link" ? link : headers[name] ?? null), has: (name) => name in headers } })
 
 test("lists open issues without pull requests across pages and reads comments since a time, with the account's token", async () => {
   const spawned = []
@@ -1358,6 +1358,7 @@ test("conditional requests: a stored tag goes out as If-None-Match, a 304 is cou
     response([issue(2, "u2")], { headers }),
     response({}, { status: 304, headers: { ...headers, "x-ratelimit-remaining": "4989" } }),
     response({}, { status: 403, headers: { ...headers, "x-ratelimit-remaining": "0" } }),
+    response({ message: "forbidden" }, { status: 403, headers: { ...headers, "x-ratelimit-remaining": "4000" } }),
   ]
   const fetchImpl = async (url, init) => { sent.push([url, init.headers["If-None-Match"]]); return answers.shift() }
   const api = await connectGithub("work", { spawn, fetchImpl, login: "work_microsoft" })
@@ -1375,8 +1376,9 @@ test("conditional requests: a stored tag goes out as If-None-Match, a 304 is cou
   assert.equal(sent.at(-1)[1], '"t1"')
   assert.deepEqual(api.calls(), { total: 3, notModified: 1 })
   assert.deepEqual({ remaining: api.quota().remaining, limit: api.quota().limit, reset: api.quota().reset }, { remaining: 4989, limit: 5000, reset: 1794600000 })
-  await assert.rejects(api.changedIssues("o/r", "2026-11-13T00:58:00Z"), /GitHub answered HTTP 403 for \/repos\/o\/r\/issues$/u)
+  await assert.rejects(api.changedIssues("o/r", "2026-11-13T00:58:00Z"), (error) => error.rateLimited === true && error.code === "drains_rate_limited" && /rate limited until 2026-/u.test(error.message) && !/gh auth/u.test(error.message))
   assert.equal(api.quota().remaining, 0, "the quota is read from the refusal too")
+  await assert.rejects(api.changedIssues("o/r", "2026-11-13T00:58:00Z"), /Check gh auth status, then try again: GitHub answered HTTP 403 for \/repos\/o\/r\/issues$/u)
 })
 
 test("asks GitHub who the active account is when none is configured", async () => {
