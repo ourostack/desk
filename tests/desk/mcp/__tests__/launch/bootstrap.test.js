@@ -113,26 +113,28 @@ function collect(output) {
 
 // ---- it must run on very old Node ----
 
-test("the bootstrap uses only syntax and built-ins that Node 8 has", () => {
-  const source = readFileSync(bootstrapPath, "utf8")
-  // Strings first (one holds a URL), then comments.
-  const code = source.replace(/"(?:[^"\\]|\\.)*"/gu, "\"\"").replace(/\/\/.*$/gmu, "").replace(/\/\*[\s\S]*?\*\//gu, "")
-  for (const [name, pattern] of [
-    ["arrow functions", /=>/u],
-    ["template literals", /`/u],
-    ["const or let", /\b(?:const|let)\s/u],
-    ["optional chaining or nullish coalescing", /\?\.|\?\?/u],
-    ["spread or rest", /\.\.\./u],
-    ["classes", /\bclass\s/u],
-    ["async functions", /\basync\s|\bawait\s/u],
-    ["structuredClone", /structuredClone/u],
-    ["destructuring", /\b(?:var)\s*[{[]/u],
-  ]) {
-    assert.doesNotMatch(code, pattern, `bootstrap.cjs must not use ${name}`)
+test("the bootstrap and its idle proxy use only syntax and built-ins that Node 8 has", () => {
+  for (const [file, builtins] of [[bootstrapPath, ["./idle-proxy.cjs", "child_process", "fs", "os", "path", "url"]], [path.join(path.dirname(bootstrapPath), "idle-proxy.cjs"), ["child_process"]]]) {
+    const source = readFileSync(file, "utf8")
+    // Strings first (one holds a URL), then comments.
+    const code = source.replace(/"(?:[^"\\]|\\.)*"/gu, "\"\"").replace(/\/\/.*$/gmu, "").replace(/\/\*[\s\S]*?\*\//gu, "")
+    for (const [name, pattern] of [
+      ["arrow functions", /=>/u],
+      ["template literals", /`/u],
+      ["const or let", /\b(?:const|let)\s/u],
+      ["optional chaining or nullish coalescing", /\?\.|\?\?/u],
+      ["spread or rest", /\.\.\./u],
+      ["classes", /\bclass\s/u],
+      ["async functions", /\basync\s|\bawait\s/u],
+      ["structuredClone", /structuredClone/u],
+      ["destructuring", /\b(?:var)\s*[{[]/u],
+    ]) {
+      assert.doesNotMatch(code, pattern, `${path.basename(file)} must not use ${name}`)
+    }
+    const modules = [...source.matchAll(/require\("([^"]+)"\)/gu)].map((match) => match[1]).sort()
+    assert.deepEqual([...new Set(modules)], builtins)
   }
-  const modules = [...source.matchAll(/require\("([^"]+)"\)/gu)].map((match) => match[1]).sort()
-  assert.deepEqual([...new Set(modules)], ["child_process", "fs", "os", "path", "url"])
-  assert.match(source, /Known limit: .*no `node` executable at all/u)
+  assert.match(readFileSync(bootstrapPath, "utf8"), /Known limit: .*no `node` executable at all/u)
 })
 
 for (const major of [16, 20, 22, 24]) {
