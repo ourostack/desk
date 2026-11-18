@@ -166,6 +166,7 @@ function settings(o) {
     },
     contexts: {},
     idleClosed: {},
+    aliases: {},
     idleMs: idleMs(env, o.idleMs),
     evidenceId: new Date().toISOString().replace(/[:.]/g, "-") + "-" + process.pid,
     exitWaitMs: o.exitWaitMs || 5000,
@@ -742,7 +743,6 @@ function checkArgs(args) {
 function command(s, id, args) {
   checkId(id);
   var dir = contextDir(s, id);
-  if (s.idleClosed[id]) throw plain("That browser was closed after " + Math.round(s.idleMs / 60000) + " minutes unused, to give its memory back. Open a new one with browser_context.");
   if (!fs.existsSync(path.join(dir, "config.json"))) throw plain("There is no open browser with that contextId. Open one with browser_context.");
   var record = s.contexts[id];
   var owner = readOwner(dir);
@@ -848,7 +848,32 @@ function createController(options) {
     }
     if (input.action !== "close") throw plain("action must be \"open\" or \"close\".");
     checkId(input.contextId);
-    return close(s, input.contextId);
+    var id = resolve(input.contextId);
+    if (s.idleClosed[id]) { delete s.idleClosed[id]; return { contextId: input.contextId, closed: true }; }
+    return close(s, id);
+  }
+  // Follows a context id that was reopened after an idle close to the context that took its place.
+  function resolve(id) {
+    var hops = 0;
+    while (typeof id === "string" && s.aliases[id] && hops++ < 100) id = s.aliases[id];
+    return id;
+  }
+  // Brings back a browser that was closed for sitting unused: a new one of the same kind, sent to the page it was last on.
+  function reopen(id) {
+    var gone = s.idleClosed[id];
+    if (!gone.reopening) {
+      gone.reopening = open(s, gone.kind).then(function (opened) {
+        var fresh = opened.contextId;
+        s.aliases[id] = fresh;
+        delete s.idleClosed[id];
+        var back = gone.url ? command(s, fresh, ["goto", gone.url]).catch(function () { /* the command that follows reports what the page does */ }) : Promise.resolve();
+        return back.then(function () {
+          if (s.contexts[fresh] && gone.url) s.contexts[fresh].url = gone.url;
+          return { id: fresh, text: "Desk reopened this browser, which had been closed after " + Math.round(s.idleMs / 60000) + " minutes unused" + (gone.url ? ", and went back to " + gone.url : "") + ". Page state such as scroll position, form input and open tabs was not kept." };
+        });
+      }, function (error) { gone.reopening = null; throw error; });
+    }
+    return gone.reopening;
   }
   // Closes a browser nobody has used for the idle time and no command is running in; a browser still opening is left alone.
   function releaseIdle() {
@@ -858,7 +883,8 @@ function createController(options) {
       if (record.lastUsed === undefined) { record.lastUsed = now; return null; }
       if (record.busy || now - record.lastUsed < s.idleMs) return null;
       if (record.kind === "mine" ? !record.adapter : !fs.existsSync(path.join(contextDir(s, id), "owner.json"))) return null;
-      return close(s, id).then(function () { s.idleClosed[id] = true; }, function () { /* kept; the next pass tries again */ });
+      var gone = { kind: record.kind, url: record.url };
+      return close(s, id).then(function () { s.idleClosed[id] = gone; }, function () { /* kept; the next pass tries again */ });
     }));
   }
   if (s.idleMs > 0) setInterval(releaseIdle, Math.max(250, Math.min(30000, Math.floor(s.idleMs / 4)))).unref();
@@ -869,11 +895,24 @@ function createController(options) {
       var given = input || {};
       if (name === "browser_context") return answer(function () { return context(given); });
       if (name === "browser_command") {
-        var record = s.contexts[given.contextId];
-        if (record) { record.busy = (record.busy || 0) + 1; record.lastUsed = Date.now(); }
-        return answer(function () { return command(s, given.contextId, given.args); }).then(function (reply) {
-          if (record) { record.busy -= 1; record.lastUsed = Date.now(); }
-          return reply;
+        var id = resolve(given.contextId);
+        var back = s.idleClosed[id] ? reopen(id) : Promise.resolve(null);
+        return back.then(function (note) {
+          var live = note ? note.id : id;
+          var record = s.contexts[live];
+          if (record) { record.busy = (record.busy || 0) + 1; record.lastUsed = Date.now(); }
+          var args = given.args;
+          return answer(function () { return command(s, live, args); }).then(function (reply) {
+            if (record) {
+              record.busy -= 1;
+              record.lastUsed = Date.now();
+              if (!reply.isError && Array.isArray(args) && (args[0] === "goto" || args[0] === "tab-new") && typeof args[1] === "string" && args[1].charAt(0) !== "-") record.url = args[1];
+            }
+            if (note) reply.content.push({ type: "text", text: note.text });
+            return reply;
+          });
+        }, function (error) {
+          return answer(function () { throw error; });
         });
       }
       return answer(function () { throw plain(unknownToolMessage(name, BROWSER_TOOL_NAMES, "Desk Browser's")); });
@@ -960,7 +999,7 @@ function serve(o) {
   }
   function ownerOf(input) {
     var id = input && input.contextId;
-    for (var i = controllers.length - 1; i >= 0; i--) if (typeof id === "string" && controllers[i].settings.contexts[id]) return controllers[i];
+    for (var i = controllers.length - 1; i >= 0; i--) if (typeof id === "string" && (controllers[i].settings.contexts[id] || controllers[i].settings.idleClosed[id] || controllers[i].settings.aliases[id])) return controllers[i];
     return controllers[controllers.length - 1];
   }
   function keepCurrent(opening) {

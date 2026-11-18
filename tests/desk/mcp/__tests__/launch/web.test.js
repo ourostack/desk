@@ -1831,7 +1831,7 @@ test("real: fresh opens headless, loads a page, closes and its folder is gone", 
   }
 })
 
-test("a browser nobody has used for the idle time is closed, and a command on it says so", async () => {
+test("a browser nobody has used for the idle time is closed, and the next command reopens it on the page it was on", async () => {
   const { options, calls } = await setup()
   const controller = web.createController({ ...options, idleMs: 0 })
   const opened = JSON.parse(text(await controller.call("browser_context", { action: "open" })))
@@ -1840,6 +1840,8 @@ test("a browser nobody has used for the idle time is closed, and a command on it
   controller.settings.idleMs = 60000
   await controller.releaseIdle()
   assert.ok(controller.settings.contexts[contextId], "a browser just used stays open")
+  const went = await controller.call("browser_command", { contextId, args: ["goto", "https://example.test/page"] })
+  assert.equal(went.isError, false, text(went))
   record.lastUsed = Date.now() - 120000
   record.busy = 1
   await controller.releaseIdle()
@@ -1847,8 +1849,16 @@ test("a browser nobody has used for the idle time is closed, and a command on it
   record.busy = 0
   await controller.releaseIdle()
   assert.equal(controller.settings.contexts[contextId], undefined, "an idle browser is closed")
-  assert.ok(calls().some((call) => call.args?.includes("close") || JSON.stringify(call).includes("close")), "its driver was told to close")
+  const before = calls().length
   const after = await controller.call("browser_command", { contextId, args: ["snapshot"] })
-  assert.equal(after.isError, true)
-  assert.match(text(after), /closed after 1 minutes unused/u)
+  assert.equal(after.isError, false, text(after))
+  assert.match(after.content.at(-1).text, /reopened this browser.*1 minutes unused.*went back to https:\/\/example\.test\/page/u)
+  const reopened = calls().slice(before).map((call) => JSON.stringify(call))
+  assert.ok(reopened.some((call) => call.includes("https://example.test/page")), "it went back to the last page")
+  assert.equal(Object.keys(controller.settings.contexts).length, 1, "one browser is open again")
+  const plain = await controller.call("browser_command", { contextId, args: ["snapshot"] })
+  assert.equal(plain.content.length, 1, "the note is only on the call that reopened it")
+  const closed = await controller.call("browser_context", { action: "close", contextId })
+  assert.equal(closed.isError, false, text(closed))
+  assert.equal(Object.keys(controller.settings.contexts).length, 0)
 })
