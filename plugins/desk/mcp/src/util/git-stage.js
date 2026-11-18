@@ -390,6 +390,9 @@ function capturedPaths(root, relPaths, spawnGit) {
   return differs?.status === 0 ? entryLines(entries) : null
 }
 
+// A path written the way the index spells it (no `./`, no `..`, not absolute): the private-index commit matches paths by that spelling.
+const plainRelative = (p) => !path.isAbsolute(p) && path.posix.normalize(p) === p && !p.startsWith("../") && p !== "." && !p.includes("\\")
+
 /**
  * `git commit` exactly `relPaths` (relative to `root`) with `message`, never
  * `-a`/`-A` and never a pattern: the pathspec after `--` names precisely the
@@ -411,7 +414,7 @@ export function commitPaths(root, relPaths, message, spawnGit, stateBranch) {
   const branch = branchOf(root, spawnGit)
   const expected = capturedPaths(root, relPaths, spawnGit)
   // A real run whose paths are staged and clean commits on a private index with the post-commit hook (Git LFS's whole-tree walk) detached, so a save on a big repository returns at once.
-  if (spawnGit === spawnSync && expected !== null) {
+  if (spawnGit === spawnSync && expected !== null && relPaths.every(plainRelative)) {
     const entries = indexEntries(root, relPaths, spawnGit)
     if (entries !== null) return commitIndexPaths(root, relPaths, entries, message, spawnGit, stateBranch)
   }
