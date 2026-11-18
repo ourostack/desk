@@ -23,6 +23,10 @@ Every workspace has one shape (see `crew:shared-desk-conventions`). The setups d
 
 The tooling repository is made by hand beforehand: someone with the rights creates it (private is fine, readable by the whole team) and adds the plugin (`<dir>/plugin.json` for Copilot through Agency, `<dir>/.claude-plugin/plugin.json` for Claude Code) and, for Claude Code installs, a `.claude-plugin/marketplace.json` at its root. `start` checks all of it before writing and says what is missing.
 
+## Keep the team current
+
+Every member, the founder first, runs `platform.install.copilot` from `status` (Desk on `@release`, Crew on `@main`, both with `--cache-policy auto --cache-ttl 0`). Have the team's own plugin depend on `github:ourostack/desk:plugins/desk@release` rather than `@main`. An existing crew runs the same one line; there is nothing else to migrate.
+
 ## What the repository must allow
 
 - **Direct pushes to the default branch by members.** Each member's desk is pushed straight to it on joining, so a rule requiring pull requests there stops every join (`GH006`, "Protected branch update failed"). Keep it open to members, or exempt them.

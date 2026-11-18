@@ -136,3 +136,10 @@ test("the origin is read as owner/name from the remote spellings people use", as
     assert.equal((await crewStatus({ repo: repo.clone })).origin, origin, url)
   }
 })
+
+test("status gives one line that installs Desk and Crew on their auto-updating channels", async () => {
+  const repo = await teamRepo({ "_meta/desks.md": ROSTER, "desks/_template/AGENTS.md": "x" })
+  const { platform } = await crewStatus({ repo: repo.clone })
+  const flags = "--engine copilot --cache-policy auto --cache-ttl 0"
+  assert.equal(platform.install.copilot, `agency plugin install github:ourostack/desk:plugins/desk@release ${flags} && agency plugin install github:ourostack/desk:plugins/crew@main ${flags}`)
+})

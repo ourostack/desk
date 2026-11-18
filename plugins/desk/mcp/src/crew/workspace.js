@@ -54,6 +54,10 @@ const ADOPTION_TRAILER = "Crew-Adoption"
 const ENV_TOKEN_ACCOUNT = "env-token"
 // Agency fetches a plugin locator again on every install instead of keeping a stale copy of the team's plugin.
 const AGENCY_FLAGS = "--engine copilot --cache-policy auto --cache-ttl 0"
+// Desk (its release channel) and Crew (main), installed the way every crew member and the CIT crew have them: re-running the
+// line on an existing install brings its cache flags up to date, so it is both the setup and the upgrade.
+const PLATFORM_INSTALL = `agency plugin install github:ourostack/desk:plugins/desk@release ${AGENCY_FLAGS} && agency plugin install github:ourostack/desk:plugins/crew@main ${AGENCY_FLAGS}`
+const PLATFORM = { install: { copilot: PLATFORM_INSTALL }, about: "Install or update Desk and Crew with platform.install.copilot: it keeps both on their channels, so every later session starts on the newest release with no restart or further step. Run it once per machine, and again to bring an older install up to date." }
 
 const NOT_CREW_MESSAGE = "This repository is not a Crew workspace yet. To make it one, start a crew in it with crew:start-crew, which adds Crew's layout and keeps everything already here; then teammates join it with crew:join-crew."
 
@@ -246,6 +250,7 @@ export async function crewStatus({ repo, identity, spawnGit = spawnSync, session
     base,
     setup: config.setup,
     tooling,
+    platform: PLATFORM,
     roster: aliases,
     template: listFiles(path.join(top, ...TEMPLATE.split("/"))).length > 0,
     member,
@@ -1098,7 +1103,7 @@ export async function joinWorkspace({ repo, identity, alias, adoptExisting, appl
   const status = await crewStatus({ repo, identity, spawnGit })
   if (status.state !== "crew") return { action: "join", ...status }
   if (!validIdentity(identity)) return refuse("Pass an identity, the stable account login this member signs in with, with no | or line break: it is required")
-  const memberResult = (row, extra = "") => ({ action: "join", state: "member", repo: status.repo, identity, alias: row.alias, desk: deskOf(row.alias), tooling: status.tooling, message: `${identity} is already on the roster as ${row.alias}; nothing to add.${extra} A Desk session started in this clone writes to ${deskOf(row.alias)}/ while gh is signed in as ${identity}; Desk checks this before it reports the join as done.` })
+  const memberResult = (row, extra = "") => ({ action: "join", state: "member", repo: status.repo, identity, alias: row.alias, desk: deskOf(row.alias), tooling: status.tooling, platform: status.platform, message: `${identity} is already on the roster as ${row.alias}; nothing to add.${extra} A Desk session started in this clone writes to ${deskOf(row.alias)}/ while gh is signed in as ${identity}; Desk checks this before it reports the join as done.` })
   if (status.member !== null) return memberResult(status.member)
   const problem = aliasProblem(alias)
   if (problem !== null) return refuse(problem)
@@ -1154,7 +1159,7 @@ export async function joinWorkspace({ repo, identity, alias, adoptExisting, appl
   const member = { alias, identity, origin: status.origin }
   const roster = exists(top, ROSTER) ? readFileSync(path.join(top, ...ROSTER.split("/")), "utf8") : null
   const header = markdownTables(roster ?? "").find((table) => table.header.includes("alias") && table.header.includes("identity"))?.header ?? ROSTER_COLUMNS
-  const result = { ...historyResult, desk, files, row: rosterRow(header, member), tooling: status.tooling, ...(adopting ? { adoption: adoption() } : {}) }
+  const result = { ...historyResult, desk, files, row: rosterRow(header, member), tooling: status.tooling, platform: status.platform, ...(adopting ? { adoption: adoption() } : {}) }
   if (!apply) {
     const deskPart = adopting ? `Adopting ${desk}/ preserves every existing file, adds ${plural(result.adoption.missing.length, "missing template file")} and then` : resumed ? `${desk}/ is already in place, so joining adds` : `Joining adds ${desk}/ (${plural(files.length, "file")}) and then`
     return { ...result, state: "plan", message: `Plan only: nothing was written. ${deskPart} the roster row for ${identity}. Run again with --apply to make the change.` }
@@ -1238,7 +1243,7 @@ export async function joinWorkspace({ repo, identity, alias, adoptExisting, appl
       return memberResult(settled, unused)
     }
     if (landed.open !== undefined) return openResult(result, landed, checkout.base, `Not joined yet: ${desk}/ is pushed, and `)
-    const next = `A Desk session started in this clone writes to ${desk}/ while gh is signed in as ${identity}; Desk checks this before it reports the join as done.${toolingNote}`
+    const next = `A Desk session started in this clone writes to ${desk}/ while gh is signed in as ${identity}; Desk checks this before it reports the join as done. ${PLATFORM.about}${toolingNote}`
     if (landed.unfetched !== undefined) return unconfirmedResult(result, landed, "joined", "Joined", next)
     if (adopting && (changedAdoption("HEAD") || reservationAt("HEAD") !== null || adoptionOwnershipProblem(git, desk, identity) !== null)) return { ...result, state: "failed", stage: "verify", reason: "the adopted desk, template, registry reservations or pending claims changed during the roster merge", message: "Keep onboarding open and review the current contents and authority before continuing: the registry row merged, but the adopted desk, template, registry reservations or pending claims changed during the merge." }
     // Read back: the default branch must now hold this identity's row under this alias, and the whole desk.
