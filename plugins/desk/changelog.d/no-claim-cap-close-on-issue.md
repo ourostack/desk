@@ -1,1 +1,0 @@
-`improvement_next` no longer stops after 2 claims a day; the live claim (one per machine, 4 hours) still keeps two agents off the same card. The loop now closes an open or claimed Desk problem card as soon as its own GitHub issue is closed, as `closed_unverified` with reason `source_recovered` and the issue kept as evidence, instead of waiting 7 quiet days.
