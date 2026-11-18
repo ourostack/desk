@@ -40,8 +40,8 @@ const QUOTA_RESERVE = 25
 const QUOTA_LOW = 200
 const QUOTA_SLOW_MS = 15 * 60_000
 
-/** What the app says when a wake's session is archived or no longer exists: waiting never fixes it, so the drain gets a successor. */
-const SESSION_GONE = /archived|no such (?:session|workspace)|(?:session|workspace)\b[^.]{0,40}(?:not found|does not exist|no longer exists)/iu
+/** What the app says when a wake's session is archived, has lost its workspace folder or no longer exists: waiting never fixes it, so the drain gets a successor. */
+const SESSION_GONE = /archived|workspace folder\b[^.]{0,20}\bmissing|no such (?:session|workspace)|(?:session|workspace)\b[^.]{0,40}(?:not found|does not exist|no longer exists)/iu
 /** A failed attempt to start a successor is tried again after this long. */
 const RECOVER_RETRY_MS = 10 * 60_000
 const SHEPHERD_MS = 90_000
