@@ -372,7 +372,7 @@ function main() {
   assert.match(section(skill, "Authority"), /Deploy, sign in and merge yourself \(`interaction-style` "Fix the tooling"\)/u);
   assert.match(owned("interaction-style"), /Deploy and run sign-in flows yourself; never type a password or paste a secret[^\n]+only a password, MFA or consent screen you hit is the human's\./u);
   // The waste rules moved to work-orchestration (the surface that plans lanes); Authority keeps the one-sentence trigger.
-  assert.match(section(skill, "Authority"), /ship the smallest sufficient change \(`work-orchestration`\)/u);
+  assert.match(section(skill, "Authority"), /ship each small change live as you go \(`work-orchestration`\)/u);
   assert.match(owned("work-orchestration"), /side quests in their own lanes;/u);
   assert.match(owned("work-orchestration"), /Agent storage has retention, run unasked[^\n]*; verify reclaimed space, not exit; never propose deleting the human's\./u);
 
