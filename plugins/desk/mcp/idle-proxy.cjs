@@ -66,6 +66,7 @@ function createIdleProxy(options) {
   var finished = null;
   var startedAt = 0;
   var quickCrashes = 0;
+  var signalled = false;
 
   function touch() {
     lastTraffic = options.now();
@@ -203,8 +204,8 @@ function createIdleProxy(options) {
     // A child that ended by itself or by a crash: the host keeps its tools. Calls it never answered get an error the host can retry, and the next message starts a new child, as after an idle stop.
     var reason = signal ? "ended on " + signal : "exited with code " + code;
     quickCrashes = options.now() - startedAt < QUICK_CRASH_MS ? quickCrashes + 1 : 1;
-    if (clientEnded || quickCrashes >= MAX_QUICK_CRASHES) {
-      options.stderr.write("[desk-mcp] idle proxy: the server " + reason + (clientEnded ? "\n" : " " + quickCrashes + " times in a row; not restarting it\n"));
+    if (clientEnded || signalled || quickCrashes >= MAX_QUICK_CRASHES) {
+      options.stderr.write("[desk-mcp] idle proxy: the server " + reason + (clientEnded || signalled ? "\n" : " " + quickCrashes + " times in a row; not restarting it\n"));
       return finish(code === null || code === undefined ? 1 : code);
     }
     options.stderr.write("[desk-mcp] idle proxy: the server " + reason + "; it restarts on the next message\n");
@@ -303,6 +304,7 @@ function createIdleProxy(options) {
     options.stdin.on("error", onClientEnd);
     FORWARDED_SIGNALS.forEach(function (signal) {
       options.signals.on(signal, function () {
+        signalled = true;
         if (child !== null) child.kill(signal);
         else options.kill(process.pid, signal);
       });

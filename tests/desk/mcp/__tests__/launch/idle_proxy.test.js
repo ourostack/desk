@@ -303,6 +303,15 @@ test("a crash after a long run starts the count again, and a crash after the hos
   assert.deepEqual(h.exits, [4])
 })
 
+test("a server that ends after the proxy was sent a signal ends the proxy and is not restarted", async () => {
+  const h = harness()
+  await handshaken(h)
+  h.signals.emit("SIGTERM")
+  h.last().leave(null)
+  await h.flush()
+  assert.deepEqual(h.exits, [1])
+})
+
 test("a stale exit from a server that was already replaced is ignored", async () => {
   const h = harness()
   await handshaken(h)
