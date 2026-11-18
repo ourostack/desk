@@ -15,17 +15,16 @@ const PERSONAL_REPO_OWNERS = Object.freeze(["ourostack"])
 const WORK_REPO_OWNERS = Object.freeze(["microsoft", "gim-home", "teams-microsoft", "shared-internal-tools", "azure", "office"])
 
 /** `owner` and `repo` of a Git remote URL (https or scp style), or null. */
-export function parseRemote(url) {
+function parseRemote(url) {
   const match = /^(?:[a-z][a-z0-9+.-]*:\/\/(?:[^@/]*@)?[^/]+\/|(?:[^@/]*@)?[^:/]+:)([^/]+)\/([^/]+?)(?:\.git)?\/?$/iu.exec(String(url ?? "").trim())
   return match === null ? null : { owner: match[1], repo: match[2] }
 }
 
 function originOf(folder, spawn) {
-  if (!folder || !existsSync(folder)) return null
   const run = spawn(
     "git",
     ["-C", folder, "config", "--get", "remote.origin.url"],
-    { encoding: "utf8", timeout: 2000, windowsHide: true },
+    { encoding: "utf8", timeout: 5000, windowsHide: true },
   )
   return run.status === 0 ? parseRemote(run.stdout) : null
 }
@@ -35,8 +34,8 @@ export function repoOwnerOf(folder, spawn = spawnSync) {
   return originOf(folder, spawn)?.owner.toLowerCase() ?? null
 }
 
-/** Every desk workspace in the operator's home folder: `{ root, name, owner, kind }`; `kind` is "work", "personal" or "unknown". */
-export function knownDesks({ homeDir = os.homedir(), spawn = spawnSync } = {}) {
+/** Every desk workspace in the operator's home folder: `{ root, name, owner, kind }`; `kind` is "work" or "personal". */
+function knownDesks({ homeDir = os.homedir(), spawn = spawnSync } = {}) {
   return DESK_FOLDERS
     .map((folder) => path.join(homeDir, folder))
     .filter((root) => isDeskWorkspace(root))
@@ -47,10 +46,9 @@ export function knownDesks({ homeDir = os.homedir(), spawn = spawnSync } = {}) {
     })
 }
 
+// A work desk's remote is owned by an EMU account (`<alias>_microsoft`); without a remote, the overlay's folder name says.
 function deskKind(owner, root) {
-  if (owner !== null && owner.endsWith("_microsoft")) return "work"
-  if (owner !== null) return "personal"
-  return path.basename(root) === "ms-desk" ? "work" : "unknown"
+  return /_microsoft$|^ms-desk$/u.test(owner ?? path.basename(root)) ? "work" : "personal"
 }
 
 /** The one desk whose kind matches the repository owner, or null when the owner or the match is not clear. */
@@ -76,8 +74,8 @@ export function describeDesk(root, spawn = spawnSync) {
  * `rel` is relative to `deskRoot`.
  */
 export function otherDeskOwning(deskRoot, rel, { homeDir = os.homedir(), spawn = spawnSync } = {}) {
-  const top = String(rel).split(/[\\/]/u).find((part) => part !== "" && part !== ".")
-  if (!top || top === ".." || existsSync(path.join(deskRoot, top))) return null
+  const top = rel.split(path.sep)[0]
+  if (existsSync(path.join(deskRoot, top))) return null
   const here = path.resolve(deskRoot)
   return knownDesks({ homeDir, spawn }).find((desk) => path.resolve(desk.root) !== here && existsSync(path.join(desk.root, top))) ?? null
 }
@@ -87,6 +85,6 @@ export function otherDeskContaining(deskRoot, target, { homeDir = os.homedir(), 
   const here = path.resolve(deskRoot)
   return knownDesks({ homeDir, spawn }).find((desk) => {
     const root = path.resolve(desk.root)
-    return root !== here && (target === root || target.startsWith(root + path.sep))
+    return root !== here && target.startsWith(root + path.sep)
   }) ?? null
 }

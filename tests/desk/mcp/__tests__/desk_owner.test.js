@@ -9,6 +9,7 @@ import { mkdirSync, mkdtempSync, writeFileSync, realpathSync } from "node:fs"
 import { spawnSync } from "node:child_process"
 import { resolveDeskRootWithSource } from "../../../../plugins/desk/mcp/src/util/paths.js"
 import { desk_save } from "../../../../plugins/desk/mcp/src/tools/desk-save.js"
+import { deskStartupDirection } from "../../../../plugins/desk/mcp/src/util/startup-direction.js"
 import { desk_search, desk_recall } from "../../../../plugins/desk/mcp/src/tools/search.js"
 
 const git = (cwd, ...args) => spawnSync("git", ["-C", cwd, ...args], { encoding: "utf8" })
@@ -99,4 +100,20 @@ test("desk_search and desk_recall say which desk they searched", async () => {
     await desk_search({ deskRoot: w.personal, input: { query: "x" }, queryRouter }),
     await desk_recall({ deskRoot: w.personal, input: { topic: "x" }, queryRouter }),
   ]) assert.deepEqual(result.desk_searched, { root: w.personal, name: "arimendelow/desk" })
+})
+
+test("two personal desks, or a repository owner nobody claims, bind no desk by owner", () => {
+  const w = mkWorld()
+  mkdirSync(path.join(w.home, "desk", "_meta"), { recursive: true })
+  mkdirSync(path.join(w.home, "desk", "_archive"), { recursive: true })
+  assert.equal(resolve(w, w.ouro).source, "home_fallback")
+  const stranger = path.join(w.home, "stranger")
+  mkdirSync(stranger)
+  git(stranger, "init", "-q")
+  git(stranger, "remote", "add", "origin", "https://github.com/someone-else/repo.git")
+  assert.notEqual(resolve(w, stranger).source, "repo_owner_desk")
+})
+
+test("the startup line says a desk bound by repository owner is the one matching the repository", () => {
+  assert.match(deskStartupDirection({ root: "/h/personal-desk", source: "repo_owner_desk" }), /matching the session's repository owner/u)
 })

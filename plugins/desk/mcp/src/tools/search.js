@@ -382,9 +382,7 @@ export async function desk_search({ deskRoot, input, opts, search, queryRouter, 
 
 // Names the desk a read searched, so a miss in the wrong desk reads as one.
 function withDesk(deskRoot, result) {
-  return result !== null && typeof result === "object" && !Array.isArray(result)
-    ? { ...result, desk_searched: describeDesk(deskRoot) }
-    : result
+  return { ...result, desk_searched: describeDesk(deskRoot) }
 }
 
 // Shared result contract for the engine's index and a fresh in-memory FTS corpus; `db` is either one.
