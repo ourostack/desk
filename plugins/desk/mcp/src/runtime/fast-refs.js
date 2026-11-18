@@ -191,7 +191,7 @@ export function fastGitAnswer(root, args, input) {
       const target = /^ref: (refs\/remotes\/origin\/.+?)\s*$/u.exec(readText(path.join(dirs.commonDir, "refs/remotes/origin/HEAD")))?.[1]
       return target === undefined ? null : answer(target)
     }
-    const key = args.length === 3 && args[0] === "config" && args[1] === "--get" ? /^(remote|branch)\.([A-Za-z0-9_-]+)\.(url|pushurl|remote)$/u.exec(args[2]) : null
+    const key = args.length === 3 && args[0] === "config" && args[1] === "--get" ? /^(remote|branch)\.([A-Za-z0-9_-]+)\.(url|pushurl|remote|merge)$/u.exec(args[2]) : null
     if (key !== null) {
       const config = readText(path.join(dirs.commonDir, "config"))
       if (/^\s*\[\s*(?:include|url)/imu.test(config)) return null

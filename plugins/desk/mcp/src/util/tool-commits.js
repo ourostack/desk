@@ -8,8 +8,9 @@
 // Best effort: a state folder that cannot be written only leaves a commit unrecorded, which is the old, stricter answer.
 
 import { spawnSync } from "node:child_process"
-import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
+import { appendFileSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs"
 import * as path from "node:path"
+import { fastGitAnswer } from "../runtime/fast-refs.js"
 import { lastStartRootKey, resolveDeskStateDir } from "../runtime/last-start.js"
 import { assertNotRealStateUnderTest } from "../runtime/test-state-guard.js"
 
@@ -23,7 +24,9 @@ const tops = new Map()
 
 function topOf(root) {
   if (!tops.has(root)) {
-    const top = spawnSync("git", ["-C", root, "rev-parse", "--show-toplevel"], { encoding: "utf8", windowsHide: true, timeout: 5000 })
+    // A plain checkout's top is `root` itself, as Git's own answer spells it (links resolved).
+    const quick = fastGitAnswer(root, ["rev-parse", "--show-toplevel"])
+    const top = quick === null ? spawnSync("git", ["-C", root, "rev-parse", "--show-toplevel"], { encoding: "utf8", windowsHide: true, timeout: 5000 }) : { status: 0, stdout: realpathSync(root) }
     if (top.status !== 0 || top.stdout.trim() === "") return root
     tops.set(root, path.resolve(top.stdout.trim()))
   }
@@ -37,7 +40,7 @@ function ledgerPath(root, env) {
 /** Records the commit now at HEAD of `root` as one Desk's tools made. Never throws. */
 export function recordToolCommit(root, env = process.env) {
   try {
-    const head = spawnSync("git", ["-C", root, "rev-parse", "--verify", "HEAD^{commit}"], { encoding: "utf8", windowsHide: true, timeout: 5000 })
+    const head = fastGitAnswer(root, ["rev-parse", "--verify", "HEAD^{commit}"]) ?? spawnSync("git", ["-C", root, "rev-parse", "--verify", "HEAD^{commit}"], { encoding: "utf8", windowsHide: true, timeout: 5000 })
     const sha = head.status === 0 ? head.stdout.trim() : ""
     if (!SHA.test(sha)) return
     const file = ledgerPath(root, env)

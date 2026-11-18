@@ -257,7 +257,7 @@ async function countGit(run) {
 }
 
 const PULL_PROCESSES = 2
-const SAVE_PROCESSES = 20
+const SAVE_PROCESSES = 16
 
 test("a pull the background fetch prepared starts at most two git processes, and a save a bounded number", { skip: process.platform === "win32" ? "POSIX paths" : false }, async () => {
   const { origin, root } = await bigRepo({ slowPostCommit: false })

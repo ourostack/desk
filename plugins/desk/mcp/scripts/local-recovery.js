@@ -311,7 +311,7 @@ export async function runRecovery({
     report.result = redact(result, payload)
     report.git.headAfter = gitHead(root, env)
     if (response.isError || result.status === "error") throw failure("tool_error")
-    if (!["updated", "created", "archived", "already_archived", "committed", "nothing_to_commit"].includes(result.status)) {
+    if (!["updated", "created", "archived", "already_archived", "committed", "nothing_to_commit", "commit_failed", "commit_unknown"].includes(result.status)) {
       throw failure("unexpected_tool_result")
     }
     report.effects.mutation = ["nothing_to_commit", "already_archived"].includes(result.status)
