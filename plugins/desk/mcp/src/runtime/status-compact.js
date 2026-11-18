@@ -96,9 +96,9 @@ function notesFor(payload) {
 // paths tried); those payloads are small, so the keys are passed through whole.
 const DIAGNOSTIC_KEYS = ["mode", "reason", "reason_detail", "binding_path", "paths_tried", "remediation"]
 
-const DETAIL_PENDING_SUMMARY = "Desk is ready, but its details (root, search, sync) are still loading, so the empty fields below are not a missing desk. Call desk_status again shortly."
+const DETAIL_PENDING_SUMMARY = "Desk is ready, but its details (root, search, sync) are still loading, so the empty fields below are not a missing desk. Do not wait on it: task_focus the task you are on, or task_create one with focus: true (desk:start-task), so your work has a desk folder. Call desk_status again shortly."
 // The usual first answer of a session: the desk the session admitted is already named, and only the runtime's own detail is still to come.
-const DETAIL_PENDING_ROOTED_SUMMARY = "Desk is ready, but its details (search, sync) are still loading, so the empty fields below are not a fault. Call desk_status again shortly."
+const DETAIL_PENDING_ROOTED_SUMMARY = "Desk is ready, but its details (search, sync) are still loading, so the empty fields below are not a fault. Do not wait on it: task_focus the task you are on, or task_create one with focus: true (desk:start-task), so your work has a desk folder. Call desk_status again shortly."
 
 // The first line of a runtime status error, at most 200 characters, so a stack or a long message never fills the answer.
 function errorLine(error) {

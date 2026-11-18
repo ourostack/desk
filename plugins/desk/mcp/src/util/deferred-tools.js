@@ -47,5 +47,5 @@ export const DEFERRED_TOOLS_HINT = deferredToolsHint("unknown")
 // The same rules, short, for the plain-text boot that every session carries: the long form above stays in the task-card guard and `--json`.
 export function deferredToolsHintShort(host) {
   const names = host === "claude" ? "`mcp__plugin_desk_desk__<name>` (ToolSearch loads a deferred one)" : host === "copilot" ? "`desk-<name>`" : "`desk-<name>` on Copilot, `mcp__plugin_desk_desk__<name>` on Claude Code"
-  return `Desk's tools are ${names}: call them as tools, never through the shell; repair a missing one (session-start skill).`
+  return `Desk's tools are ${names}: call them as tools, never via the shell; repair a missing one (session-start skill).`
 }
