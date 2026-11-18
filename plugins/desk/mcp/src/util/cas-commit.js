@@ -63,13 +63,13 @@ function headOf(spawnGit, root, branch) {
 const NOT_RUN = { status: null, signal: null, stdout: "", stderr: "the time budget was spent before this step, so it was not run", error: { code: "ETIMEDOUT" } }
 
 /**
- * `spawnGit` held to one total time budget ending at `deadline` (a `Date.now()` time): each call gets what is left, or no more
+ * `spawnGit` held to one total time budget ending at `deadline.at` (a `Date.now()` time): each call gets what is left, or no more
  * than it asked for, and a call with nothing left is not run. `deadline` null means no budget: `spawnGit` itself.
  */
 function budgeted(spawnGit, deadline) {
   if (deadline === null) return spawnGit
   const bounded = (command, args, options) => {
-    const left = deadline - Date.now()
+    const left = deadline.at - Date.now()
     return left <= 0 ? NOT_RUN : spawnGit(command, args, { ...options, windowsHide: true, timeout: Math.min(options.timeout, left) })
   }
   bounded.real = spawnGit
@@ -123,9 +123,16 @@ function commitCaptured({ root, paths, wanted, head, branch, message, spawnGit: 
     if (built !== null) return held(`nothing was committed: the tree built for the commit does not match the captured change (${built})`)
     // The hooks git commit runs, run by Git itself on the private index, in git commit's order and with its arguments.
     const hookEnv = { ...own, GIT_EDITOR: ":" }
-    const hook = (name, ...args) => git(spawnGit, root, ["hook", "run", "--ignore-missing", name, ...(args.length > 0 ? ["--", ...args] : [])], { env: hookEnv, timeout: COMMIT_TIMEOUT_MS })
+    // The hooks that can stop a commit are the user's own code, so their running time is not Desk's to budget: each gets the full bound, and the budget moves out by as long as it ran.
+    const hook = (name, ...args) => {
+      const own = name !== "post-commit"
+      const started = Date.now()
+      const answer = git(own ? unbudgeted : spawnGit, root, ["hook", "run", "--ignore-missing", name, ...(args.length > 0 ? ["--", ...args] : [])], { env: hookEnv, timeout: COMMIT_TIMEOUT_MS })
+      if (own && !answer.cut && deadline !== null) deadline.at += Date.now() - started
+      return answer
+    }
     const stopped = (name, answer) => answer.cut
-      ? { state: "unknown", reason: `the ${name} hook was cut off at ${bound} and may still be running; the branch was not moved, but read back before anything else` }
+      ? { state: "unknown", reason: `the ${name} hook was cut off at the ${COMMIT_TIMEOUT_MS / 1000} s bound and may still be running; the branch was not moved, but read back before anything else` }
       : NO_HOOK_RUN.test(answer.stderr)
         ? held("nothing was committed: this Git has no `git hook run` (it needs Git 2.36 or later), so Desk cannot run the repository's hooks; update Git")
         : held(`nothing was committed: the repository's ${name} hook refused the commit: ${answer.stderr || "no reason given"}`)
@@ -147,7 +154,7 @@ function commitCaptured({ root, paths, wanted, head, branch, message, spawnGit: 
     const made = git(spawnGit, root, ["commit-tree", tree.stdout.trim(), ...(head === "" ? [] : ["-p", head]), "-F", messageFile, ...(sign ? ["-S"] : [])], { env: refEnv, timeout: COMMIT_TIMEOUT_MS })
     if (!made.ok) return held(`nothing was committed: git commit-tree failed: ${made.stderr || "no reason given"}`)
     const commitId = made.stdout.trim()
-    if (deadline !== null && Date.now() >= deadline) return held("nothing was committed: the commit's time budget ran out before the branch was moved")
+    if (deadline !== null && Date.now() >= deadline.at) return held("nothing was committed: the commit's time budget ran out before the branch was moved")
     const branchLast = git(spawnGit, root, ["symbolic-ref", "--short", "-q", "HEAD"])
     if (!branchLast.ok || branchLast.stdout.trim() !== branch) return held(`nothing was committed: the checkout left ${branch} while the hooks ran`)
     const operationLast = operationAnswer(spawnGit, root)

@@ -277,7 +277,7 @@ function branchOf(root, spawnGit) {
  * (`afterFailedCommit`); never throws on a Git failure.
  */
 export function commitIndexPaths(root, relPaths, entries, message, spawnGit, stateBranch) {
-  const deadline = Date.now() + GIT_TIMEOUT_MS
+  const deadline = { at: Date.now() + GIT_TIMEOUT_MS }
   const step = budgeted(spawnGit, deadline)
   const refusal = commitBranchRefusal(root, step, stateBranch)
   if (refusal !== null) return { ok: false, stderr: refusal, readback: "absent" }
@@ -288,7 +288,7 @@ export function commitIndexPaths(root, relPaths, entries, message, spawnGit, sta
   const expected = entryLines(entries)
   const failed = (reason, made) => {
     const answer = afterFailedCommit(reason, root, relPaths, message, before, expected, step, branch, made)
-    return answer.readback === "unknown" && Date.now() >= deadline ? { ...answer, stderr: `${reason}; the commit's time budget ran out before the result could be read back, so its read-back is unknown: read back before anything else` } : answer
+    return answer.readback === "unknown" && Date.now() >= deadline.at ? { ...answer, stderr: `${reason}; the commit's time budget ran out before the result could be read back, so its read-back is unknown: read back before anything else` } : answer
   }
   const operation = operationAnswer(step, root)
   if (operation) return failed(operation.reason, false)
