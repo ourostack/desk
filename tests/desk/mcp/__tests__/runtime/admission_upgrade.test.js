@@ -644,8 +644,10 @@ for (const launch of crashPaths) {
     assert.equal((await session.statusUntil(settled, SLOW_RUNNER_STATUS)).state, "ready")
     // Worker threads load the preload too, so a process can say it more than once.
     const armed = [...new Set([...session.stderr().matchAll(/\[crash-preload\] armed pid (\d+)/gu)].map((match) => Number(match[1])))]
-    const deskPid = launch.reexec ? armed.find((pid) => pid !== session.child.pid) : session.child.pid
-    assert.deepEqual(armed.sort(), (launch.reexec ? [session.child.pid, deskPid] : [deskPid]).sort(), session.stderr())
+    // Both launchers run index.js as a child of their own process (the idle proxy, or the re-exec under another Node).
+    const child = launch.entry !== "index"
+    const deskPid = child ? armed.find((pid) => pid !== session.child.pid) : session.child.pid
+    assert.deepEqual(armed.sort(), (child ? [session.child.pid, deskPid] : [deskPid]).sort(), session.stderr())
     process.kill(deskPid, "SIGUSR2")
     await waitFor(() => /caught unhandled_rejection/u.test(session.stderr()))
     const status = (await session.call("desk_status", { detail: true })).payload

@@ -280,7 +280,7 @@ export const UNMATCHED_TASK_INSTRUCTION_TEXT = "The name matches no open task: r
 // that ask the operator which task to take up.
 // The task alone read as the go when the first message left a choice to the agent ("how it shows them is up to you"): three of three
 // sessions then changed the repository with no alignment, and three of three with the last sentence aligned and waited (2026-10-12).
-export const NEW_WORK_GO_SENTENCE = " Creating the task is not the go: state your assumptions and what done means, then wait for the operator's go."
+export const NEW_WORK_GO_SENTENCE = " Creating it is not the go: state your assumptions and what done means, then wait for the go."
 export const NEW_WORK_INSTRUCTION = "If the first message describes new work, skip the report: before any design, plan or code, task_create it with `focus: true` (desk:start-task)." + NEW_WORK_GO_SENTENCE + " A question is not new work."
 // A session with no operator has nobody to give the go, so it gets the instruction without that sentence.
 export const NEW_WORK_INSTRUCTION_UNATTENDED = NEW_WORK_INSTRUCTION.replace(NEW_WORK_GO_SENTENCE, "")

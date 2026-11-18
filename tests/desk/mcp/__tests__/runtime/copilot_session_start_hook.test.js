@@ -86,8 +86,9 @@ test("every Desk session disables explicitly enabled native memory and injects t
 test("the plugin registers only Desk's own boundary hooks for Copilot", () => {
   const hooks = JSON.parse(readFileSync(path.join(plugin, "hooks", "copilot-hooks.json"), "utf8")).hooks
   const commands = (event) => hooks[event].map((entry) => entry.bash)
-  assert.deepEqual(commands("preToolUse"), ['node "${PLUGIN_ROOT}/hooks/copilot-lane-model.cjs"'], "the one hook on the host's tool calls names a lane's model")
+  assert.deepEqual(commands("preToolUse"), ['node "${PLUGIN_ROOT}/hooks/copilot-lane-model.cjs"', 'node "${PLUGIN_ROOT}/hooks/copilot-durable-files.cjs"'], "the hooks on the host's tool calls name a lane's model and point durable files at the desk")
   assert.equal(hooks.preToolUse[0].matcher, "create_session|open_issue_session|open_pr_session")
+  assert.equal(hooks.preToolUse[1].matcher, "create|edit|[a-z_]*image[a-z_]*")
   assert.deepEqual(commands("postToolUse"), ['node "${PLUGIN_ROOT}/hooks/copilot-intake-context.cjs"', 'node "${PLUGIN_ROOT}/hooks/copilot-skill-current.cjs"'])
   assert.deepEqual(hooks.postToolUse.map((entry) => entry.matcher), ["skill", "skill"])
   assert.equal(hooks.agentStop, undefined, "Desk registers no per-turn hook: the factory runs nothing after a turn")
