@@ -5,6 +5,7 @@ import { strict as assert } from "node:assert"
 import { EventEmitter } from "node:events"
 import { createRequire } from "node:module"
 import { PassThrough } from "node:stream"
+import * as path from "node:path"
 import { bootstrapPath } from "./_mcp_handshake.js"
 
 const require = createRequire(import.meta.url)
@@ -410,7 +411,7 @@ test("runIdleProxy starts index.js under the chosen Node with the host's own pid
 
 test("bootstrap.cjs runs the proxy when its own Node is the right one, index.js in this process when the idle time is 0 or importIndex is given", async () => {
   const current = { path: "/running/node", version: "v22.18.0", abi: "127" }
-  const base = { env: { PATH: "", HOME: "/nonexistent", DESK_NODE_SYSTEM_PREFIX: "/nonexistent-prefix" }, args: ["--root", "/d"], current, mcpRoot: bootstrapPath.replace("/bootstrap.cjs", "") }
+  const base = { env: { PATH: "", HOME: "/nonexistent", DESK_NODE_SYSTEM_PREFIX: "/nonexistent-prefix" }, args: ["--root", "/d"], current, mcpRoot: path.dirname(bootstrapPath) }
   const spawns = []
   const stdin = new PassThrough()
   const proxied = bootstrap.run({
@@ -420,7 +421,7 @@ test("bootstrap.cjs runs the proxy when its own Node is the right one, index.js 
   })
   await new Promise((resolve) => setImmediate(resolve))
   assert.equal(spawns.length, 1)
-  assert.deepEqual(spawns[0].slice(0, 2), ["/running/node", [bootstrapPath.replace("bootstrap.cjs", "index.js"), "--root", "/d"]])
+  assert.deepEqual(spawns[0][1], [path.join(path.dirname(bootstrapPath), "index.js"), "--root", "/d"])
   void proxied
 
   const inProcess = []

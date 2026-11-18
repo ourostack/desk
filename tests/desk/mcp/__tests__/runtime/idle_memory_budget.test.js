@@ -5,7 +5,7 @@
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import { spawn, spawnSync } from "node:child_process"
-import { mkdirSync, writeFileSync } from "node:fs"
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import * as path from "node:path"
 import { bootstrapPath, isolatedEnv, makeIsolatedHome } from "../launch/_mcp_handshake.js"
 
@@ -33,6 +33,14 @@ function syntheticDesk(desk) {
 function rssMb(pid) {
   const out = spawnSync("ps", ["-o", "rss=", "-p", String(pid)], { encoding: "utf8" }).stdout.trim()
   return Number(out) / 1024
+}
+
+function memoryDetail(pid) {
+  try {
+    return readFileSync(`/proc/${pid}/status`, "utf8").split("\n").filter((line) => /^(VmRSS|RssAnon|RssFile|Threads)/u.test(line)).join(" ").replace(/\s+/gu, " ")
+  } catch {
+    return ""
+  }
 }
 
 function childPids(pid) {
@@ -77,7 +85,7 @@ test("an idle Desk MCP server holds under 100 MB: its server process is released
     for (let waited = 0; childPids(proxy.pid).length > 0 && waited < 30000; waited += 250) await sleep(250)
     assert.equal(childPids(proxy.pid).length, 0, "the server is released after the idle time")
     const idleMb = rssMb(proxy.pid)
-    assert.ok(idleMb < IDLE_BUDGET_MB, `an idle session holds ${idleMb.toFixed(1)} MB, budget ${IDLE_BUDGET_MB} MB`)
+    assert.ok(idleMb < IDLE_BUDGET_MB, `an idle session holds ${idleMb.toFixed(1)} MB, budget ${IDLE_BUDGET_MB} MB (${memoryDetail(proxy.pid)}; node ${process.version})`)
 
     const resumed = await status()
     assert.deepEqual(Object.keys(resumed.result).sort(), Object.keys(first.result).sort(), "the call after the release gets the same kind of answer")
