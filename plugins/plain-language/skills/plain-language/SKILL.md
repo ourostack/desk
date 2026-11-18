@@ -1,6 +1,6 @@
 ---
 name: plain-language
-description: Use when writing anything a person will read, such as chat replies, handoffs, documents, PR text, reviews, comments or commit messages, or the CSS that lays out rendered text.
+description: Use when writing anything a person will read, such as chat replies, handoffs, documents, PR text, reviews, comments or commit messages, or the CSS that lays out rendered text, and when explaining why something is the way it is.
 ---
 
 # Plain Language
@@ -58,6 +58,12 @@ These tells survive a tight edit. Cut them:
 - State relationships with words such as `because`, `if`, `before`, `after`, and `therefore` instead of leaving them implicit.
 - Use complete sentences in prose. Fragments belong in headings, labels, table cells, and deliberate status markers.
 - Spell out chat shorthand such as `wdyt`, `lmk` or `imo`: ask the actual question or say the actual thing in words. Keep shorthand only in a person's own voice when they use it themselves.
+
+## Explain from first principles
+
+When you explain a cause, a design or a number, lead with the fundamental reason in one or two everyday sentences, and add mechanics only if asked. A list of pipeline steps describes what happens, not why. An everyday analogy helps, and any number still carries its primary source.
+
+Asked why a site took about 7 minutes to show a change, don't list the packaging, timer and rebuild. Write: `A static site is just files, a photograph taken when it's built. Nothing runs behind it, so it can't save, and showing any change means taking a whole new photograph. The 7 minutes and the "can't save" are the same fact.`
 
 ## Attribute work to the person
 

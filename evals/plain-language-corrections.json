@@ -5,7 +5,7 @@
   "sources": [
     "plugins/plain-language/skills/plain-language/SKILL.md"
   ],
-  "reviewedSourceFingerprint": "578b0ac92bc0fdc7fc12ed9972333bdf59e265ef35b81add3831ad46d910309a",
+  "reviewedSourceFingerprint": "dd51efa847e7398dd0353d88974338650db685628a293b7e982a428cd9a56d2c",
   "requirements": [
     {
       "id": "no-chat-shorthand",
