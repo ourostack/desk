@@ -413,7 +413,8 @@ test("runIdleProxy starts index.js under the chosen Node with the host's own pid
 })
 
 test("bootstrap.cjs runs the proxy when its own Node is the right one, index.js in this process when the idle time is 0 or importIndex is given", async () => {
-  const current = { path: "/running/node", version: "v22.18.0", abi: "127" }
+  // This process's own Node: a made-up one is not found on Windows, where the selection then picks the real installed Node and starts a real server nothing stops.
+  const current = { path: process.execPath, version: process.version, abi: process.versions.modules }
   const base = { env: { PATH: "", HOME: "/nonexistent", DESK_NODE_SYSTEM_PREFIX: "/nonexistent-prefix" }, args: ["--root", "/d"], current, mcpRoot: path.dirname(bootstrapPath) }
   const spawns = []
   const stdin = new PassThrough()
