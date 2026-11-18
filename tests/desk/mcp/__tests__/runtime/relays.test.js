@@ -593,10 +593,10 @@ const STRICT_RELAY = { ...MERGE, strict: STRICT }
 const job = (name, conclusion = "success", status = "completed") => ({ name, status, conclusion: status === "completed" ? conclusion : null })
 
 /** A strict world: the ci workflow's jobs, a resource workflow, and where the head stands against main. */
-function strictWorld(world, { jobs = [job("typecheck"), job("npm test (ubuntu-latest, 1/2)"), job("budget")], resourceJobs = [job("resource-macos")], compare = "ahead", ciStatus = "completed", checks = GREEN } = {}) {
+function strictWorld(world, { jobs = [job("typecheck"), job("npm test (ubuntu-latest, 1/2)"), job("budget")], resourceJobs = [job("resource-macos")], compare = "ahead", ciStatus = "completed", checks = GREEN, runs = null, jobsTotal = null } = {}) {
   mergeWorld(world, { checks })
-  world.on("GET", /\/actions\/runs\?head_sha=a+/u, () => ({ total_count: 2, workflow_runs: [{ id: 101, workflow_id: 1, name: "ci", path: ".github/workflows/ci.yml", status: ciStatus, conclusion: ciStatus === "completed" ? "failure" : null, run_number: 5 }, { id: 102, workflow_id: 2, name: "resource", path: ".github/workflows/resource.yml", status: "completed", conclusion: "failure", run_number: 2 }] }))
-  world.on("GET", /\/actions\/runs\/101\/jobs/u, () => ({ total_count: jobs.length, jobs }))
+  world.on("GET", /\/actions\/runs\?head_sha=a+/u, () => ({ total_count: 2, workflow_runs: runs ?? [{ id: 100, workflow_id: 1, name: "ci", path: ".github/workflows/ci.yml", status: "completed", conclusion: "failure", run_number: 3 }, { id: 101, workflow_id: 1, name: "ci", path: ".github/workflows/ci.yml", status: ciStatus, conclusion: ciStatus === "completed" ? "failure" : null, run_number: 5 }, { id: 99, workflow_id: 1, name: "ci", path: ".github/workflows/ci.yml", status: "completed", conclusion: "failure", run_number: 4 }, { id: 102, workflow_id: 2, name: "resource", path: ".github/workflows/resource.yml", status: "completed", conclusion: "failure", run_number: 2 }] }))
+  world.on("GET", /\/actions\/runs\/101\/jobs/u, () => ({ total_count: jobsTotal ?? jobs.length, jobs }))
   world.on("GET", /\/actions\/runs\/102\/jobs/u, () => ({ total_count: resourceJobs.length, jobs: resourceJobs }))
   world.on("GET", /\/compare\/main\.\.\.a+/u, () => ({ status: compare }))
   world.on("PUT", /\/pulls\/7\/update-branch$/u, () => ({ ok: true, status: 202, body: { message: "Updating pull request branch." } }))
@@ -681,6 +681,37 @@ test("strict: a pull request GitHub's branch rules call behind is updated too, a
   strictWorld(current.world, { compare: "identical" })
   await current.poll()
   assert.equal(current.world.writes.some((write) => write.route.endsWith("/update-branch")), false)
+})
+
+test("strict: edge cases: no ci run yet, no jobs, a long job list, advisory jobs still running or skipped, and no currency check", async () => {
+  const none = await setup([STRICT_RELAY])
+  strictWorld(none.world, { runs: [] })
+  await none.poll()
+  assert.deepEqual(none.state("pages merge").prs["7"].waitingOn, ["ci has not started on this head"])
+
+  const empty = await setup([STRICT_RELAY])
+  strictWorld(empty.world, { jobs: [] })
+  await empty.poll()
+  assert.deepEqual(empty.state("pages merge").prs["7"].waitingOn, ["ci finished failure with no job to judge"])
+
+  const long = await setup([STRICT_RELAY])
+  strictWorld(long.world, { jobsTotal: 150 })
+  await long.poll()
+  assert.equal(long.world.reads.some((read) => read.route.includes("/runs/101/jobs") && read.route.endsWith("&page=2")), true)
+
+  const lenient = await setup([{ ...STRICT_RELAY, skippedPasses: true, strict: { ...STRICT, requireCurrentBase: false } }])
+  strictWorld(lenient.world, { compare: "behind", jobs: [job("typecheck"), job("e2e", "skipped"), job("budget", null, "in_progress")], checks: [...GREEN, check("budget", null, "in_progress")] })
+  await lenient.poll()
+  assert.equal(lenient.world.writes.some((write) => write.route.endsWith("/update-branch")), false, "without requireCurrentBase the head is not compared or updated")
+  assert.equal(prWrites(lenient.world).length, 1)
+  assert.match(comments(lenient.world)[0].body.body, /finished green, and every other check/u)
+  assert.match(comments(lenient.world)[0].body.body, /ci job budget in_progress \(advisory\)/u)
+
+  const refused = await setup([STRICT_RELAY])
+  strictWorld(refused.world, { compare: "behind" })
+  refused.world.on("PUT", /\/pulls\/7\/update-branch$/u, () => ({ ok: false, status: 500, body: {} }))
+  await refused.poll()
+  assert.match(refused.state("pages merge").prs["7"].waitingOn[0], /could not update the branch to main \(HTTP 500\)/u)
 })
 
 test("a strict block is validated: bad or unknown fields fail loudly", () => {

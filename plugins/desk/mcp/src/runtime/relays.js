@@ -438,11 +438,11 @@ function waitingOnPull(pr, { allowBehind = false } = {}) {
 
 const sameName = (a, b) => a.toLowerCase() === b.toLowerCase()
 /** A workflow is named by its `name:` or its file's name without the extension, so `ci` matches `ci.yml` and a workflow called `ci`. */
-const workflowNamed = (run, name) => sameName(run.name ?? "", name) || sameName(path.posix.basename(run.path ?? "").replace(/\.ya?ml$/iu, ""), name)
+const workflowNamed = (run, name) => sameName(run.name, name) || sameName(path.posix.basename(run.path).replace(/\.ya?ml$/iu, ""), name)
 /** A job is named exactly, or as a matrix job that starts with the name and a parenthesis (`resource-macos (14)`). */
 const jobNamed = (job, names) => names.some((name) => sameName(job, name) || job.toLowerCase().startsWith(`${name.toLowerCase()} (`))
 
-const workflowRunSummary = (run) => ({ id: run.id, workflowId: run.workflow_id, name: run.name, path: run.path, status: run.status, conclusion: run.conclusion ?? null, runNumber: run.run_number ?? 0 })
+const workflowRunSummary = (run) => ({ id: run.id, workflowId: run.workflow_id, name: run.name, path: run.path, status: run.status, conclusion: run.conclusion ?? null, runNumber: run.run_number })
 
 /** The newest run of each workflow on the head; an older run of the same workflow was superseded. */
 async function readWorkflowRuns(ctx, state, repo, sha) {
@@ -516,7 +516,7 @@ async function headIsBehind(ctx, state, relay, pr) {
 /** Brings the head up to the base once per head. A refusal (a conflict, say) is remembered and reported, never retried for that head. */
 async function updateBranch(ctx, state, relay, record, pr, number) {
   const response = await ctx.api.send("PUT", `/repos/${relay.repo}/pulls/${number}/update-branch`, { expected_head_sha: pr.headSha })
-  record.update = { from: pr.headSha, at: new Date(ctx.now).toISOString(), ...(response.ok ? {} : { failed: response.body?.message ?? `HTTP ${response.status}` }) }
+  record.update = { from: pr.headSha, at: new Date(ctx.now).toISOString(), ...(response.ok ? {} : { failed: response.body.message ?? `HTTP ${response.status}` }) }
   note(state, ctx.now, { event: "updated-branch", number, ok: response.ok, ...(record.update.failed ? { reason: record.update.failed } : {}) })
   return updateWaiting(record, pr)
 }
