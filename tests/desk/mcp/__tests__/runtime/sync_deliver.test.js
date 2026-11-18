@@ -720,7 +720,7 @@ test("boot starts delivery for local commits unless the remote cannot be used, a
   assert.deepEqual((await syncWorkspace({ root: desk, env: process.env, scheduleDelivery })).unpushed, { count: 1, delivering: true, reason: "conflict", paths: ["state.json"] })
   updateSyncStatus(desk, process.env, { blocked: true, reason: undefined, paths: "x", delivered: [] })
   assert.deepEqual((await syncWorkspace({ root: desk, env: process.env, scheduleDelivery })).unpushed, { count: 1, delivering: true, reason: null, paths: [] })
-  updateSyncStatus(desk, process.env, { blocked: false })
+  updateSyncStatus(desk, process.env, { blocked: false, fetchedAt: 0 })
 
   git(desk, ["remote", "set-url", "origin", path.join(desk, "no-such-origin")])
   const offline = await syncWorkspace({ root: desk, env: process.env, scheduleDelivery, fileProblem: () => ({ file: "none" }) })

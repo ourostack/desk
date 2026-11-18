@@ -11,7 +11,8 @@ import { spawn, spawnSync } from "node:child_process"
 
 import { commandArgument } from "./pr-publication.js"
 import { deskFailure } from "./desk-failure.js"
-import { hasRemoteConfigured, readSyncStatus, recordPullOutcome, schedulePush } from "./sync-worker.js"
+import { hasRemoteConfigured, readSyncStatus, recordPullOutcome, schedulePush, updateSyncStatus } from "./sync-worker.js"
+import { readUpstreamRefs } from "./fast-refs.js"
 import { catchUpBehind, classifyPullFailure, undeliveredCommits, upstreamOf } from "./deliver.js"
 import { remoteIdentityEnv } from "./remote-identity.js"
 import { applyPublicationMode } from "./publication-mode.js"
@@ -23,6 +24,8 @@ const GIT_TIMEOUT_MS = 10_000
 // The whole sequence's own wall-clock budget: session start cannot afford an unbounded sync step, so each git call gets
 // whatever of this remains, capped at `GIT_TIMEOUT_MS`, and the sequence gives up (as `unresolved`, never a hang) once it is gone.
 const SYNC_WORKSPACE_DEADLINE_MS = 20_000
+// A fetch this recent (this worker's, a save's delivery or an earlier pull) is what a pull reads instead of asking the remote again.
+const FETCH_FRESH_MS = 15_000
 
 
 // `GIT_SSH_COMMAND` gets the same treatment `GIT_TERMINAL_PROMPT=0` already
@@ -175,6 +178,9 @@ export async function syncWorkspace(options) {
 
 function withDelivery({ root, env, spawnGit = spawnSync, scheduleDelivery = schedulePush }, result) {
   if (result.nothingToSync !== undefined) return result
+  // Nothing the remote lacks: the checkout is exactly at its upstream, which two file reads can say without starting Git.
+  const refs = spawnGit === spawnSync ? readUpstreamRefs(root) : null
+  if (refs !== null && refs.head === refs.target) return result
   const recorded = readSyncStatus({ root, env })
   const left = undeliveredCommits({ root, spawnGit, delivered: Array.isArray(recorded?.delivered) ? recorded.delivered : [] })
   if (left === null || left.length === 0) return result
@@ -191,8 +197,10 @@ async function runSync({
   spawnPull = spawnGit === spawnSync ? spawnGitAsync : spawnGit,
 }) {
   // Nothing to sync against is "synced" for every caller, with `nothingToSync` saying which kind so boot never reports it as a sync that worked.
-  if (!hasRemoteConfigured(root, spawnGit)) return { state: "synced", nothingToSync: "no_remote" }
-  const upstream = upstreamOf((args) => run(spawnGit, root, args, GIT_TIMEOUT_MS))
+  // The real Git is asked only what the files cannot say; a caller's own `spawnGit` runs every call, as its tests expect.
+  const read = spawnGit === spawnSync ? readUpstreamRefs(root) : null
+  if (read === null && !hasRemoteConfigured(root, spawnGit)) return { state: "synced", nothingToSync: "no_remote" }
+  const upstream = read ?? upstreamOf((args) => run(spawnGit, root, args, GIT_TIMEOUT_MS))
   if (upstream === null) return { state: "synced", nothingToSync: "no_upstream" }
 
   const deadlineAt = now() + SYNC_WORKSPACE_DEADLINE_MS
@@ -200,14 +208,19 @@ async function runSync({
   const deadline = () => unresolved({ root, reason: "sync_deadline_exceeded", cause: "deadline", spawnGit, timeoutMs: GIT_TIMEOUT_MS })
   if (remaining() <= 0) return deadline()
 
-  const fetched = await fetchUpstream(root, upstream, spawnPull, Math.min(GIT_TIMEOUT_MS, remaining()))
+  const stamp = read === null ? undefined : readSyncStatus({ root, env })?.fetchedAt
+  const fresh = typeof stamp === "number" && now() - stamp >= 0 && now() - stamp < FETCH_FRESH_MS
+  const fetched = fresh ? { status: 0 } : await fetchUpstream(root, upstream, spawnPull, Math.min(GIT_TIMEOUT_MS, remaining()))
+  if (!fresh && fetched.status === 0 && read !== null) updateSyncStatus(root, env, { fetchedAt: now() })
   if (fetched.status !== 0) {
     const cause = classifyPullFailure({ stderr: fetched.stderr, timedOut: fetched.error?.code === "ETIMEDOUT" || fetched.signal === "SIGTERM" })
     return unresolved({ root, reason: "fetch_failed", cause, failed: fetched, spawnGit, timeoutMs: GIT_TIMEOUT_MS })
   }
   if (remaining() <= 0) return deadline()
 
-  const moved = catchUpBehind({ root, spawnGit })
+  const after = read === null ? null : readUpstreamRefs(root)
+  if (after !== null && after.head === after.target) return { state: "synced" }
+  const moved = catchUpBehind({ root, spawnGit, known: after })
   if (moved.state === "behind" && moved.reason === "local_changes") {
     return unresolved({ root, reason: "local_changes_in_the_way", cause: "local_changes", paths: moved.paths, spawnGit, timeoutMs: GIT_TIMEOUT_MS })
   }

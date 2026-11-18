@@ -4,11 +4,14 @@
 
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
-import { chmodSync, mkdirSync, writeFileSync } from "node:fs"
+import { chmodSync, mkdirSync, readFileSync, utimesSync, writeFileSync } from "node:fs"
 import * as path from "node:path"
 import { spawnSync } from "node:child_process"
 import { mkTempRoot } from "../_temp_roots.js"
 import { commitPaths, stagePaths } from "../../../../../plugins/desk/mcp/src/util/git-stage.js"
+import { installSessionTrailerHooks } from "../../../../../plugins/desk/mcp/src/runtime/session-trailer.js"
+import { readUpstreamRefs } from "../../../../../plugins/desk/mcp/src/runtime/fast-refs.js"
+import { syncWorkspace } from "../../../../../plugins/desk/mcp/src/runtime/session-sync.js"
 import { lfsSkipEnv } from "../../../../../plugins/desk/mcp/src/runtime/deliver.js"
 import { acquireSyncLock, readSyncStatus, runPushWorker, runSyncPushCli } from "../../../../../plugins/desk/mcp/src/runtime/sync-worker.js"
 
@@ -130,4 +133,106 @@ test("sync-push says what it does not know when the worker ends in an unrecogniz
   const code = await runSyncPushCli({ argv: ["--root", "/tmp/anywhere"], env: process.env, runWorker: async () => ({ result: "weird" }), io })
   assert.notEqual(code, 0)
   assert.match(stderr, /does not know/u)
+})
+
+test("Desk's commit and push hooks each run in under 50 ms", { skip: process.platform === "win32" ? "POSIX hooks" : false }, async () => {
+  const { root } = await bigRepo({ slowPostCommit: false })
+  assert.equal(installSessionTrailerHooks(root).state, "ok")
+  const hooks = path.join(root, ".git", "hooks")
+  const message = path.join(root, "message.txt")
+  writeFileSync(message, "save\n")
+  const env = { ...process.env, COPILOT_AGENT_SESSION_ID: "budget-session" }
+  const sha = git(root, ["rev-parse", "HEAD"]).trim()
+  const fastest = (name, args, input) => {
+    const times = []
+    for (let run = 0; run < 7; run += 1) {
+      const started = process.hrtime.bigint()
+      const result = spawnSync(path.join(hooks, name), args, { cwd: root, env, input, encoding: "utf8" })
+      times.push(Number(process.hrtime.bigint() - started) / 1e6)
+      assert.equal(result.status, 0, result.stderr)
+    }
+    return Math.min(...times)
+  }
+  const prepare = fastest("prepare-commit-msg", [message], undefined)
+  const push = fastest("pre-push", ["origin", "x"], `refs/heads/f ${sha} refs/heads/f ${sha}\n`)
+  assert.ok(prepare < 50, `prepare-commit-msg took ${prepare.toFixed(0)} ms`)
+  assert.ok(push < 50, `pre-push took ${push.toFixed(0)} ms`)
+})
+
+async function remoteChange(origin, file, text) {
+  const other = await mkTempRoot("desk-budget-other-")
+  git(other, ["clone", "-q", "-b", "main", origin, "."])
+  git(other, ["config", "user.email", "test@example.com"])
+  git(other, ["config", "user.name", "Test"])
+  writeFileSync(path.join(other, file), text)
+  git(other, ["add", "-A"])
+  git(other, ["commit", "-q", "-m", "remote change"])
+  git(other, ["push", "-q"])
+}
+
+const PULL_BUDGET_MS = 1000
+const pull = async (root, extra = {}) => {
+  const started = Date.now()
+  const result = await syncWorkspace({ root, env: process.env, scheduleDelivery: () => assert.fail("nothing is waiting to push"), ...extra })
+  return { result, ms: Date.now() - started }
+}
+
+test("a pull on a 12,000-file repository takes under a second, and one right after a fetch reads what was fetched", { skip: process.platform === "win32" ? "POSIX paths" : false }, async () => {
+  const { origin, root } = await bigRepo({ slowPostCommit: false })
+  await remoteChange(origin, "docs/d0/new.md", "from the remote\n")
+  const behind = await pull(root)
+  assert.equal(behind.result.state, "synced")
+  assert.equal(readFileSync(path.join(root, "docs", "d0", "new.md"), "utf8"), "from the remote\n")
+  assert.ok(behind.ms < PULL_BUDGET_MS, `a pull that fetched and fast-forwarded took ${behind.ms} ms; the budget is ${PULL_BUDGET_MS} ms`)
+
+  await remoteChange(origin, "docs/d0/newer.md", "later\n")
+  const fresh = await pull(root)
+  assert.equal(fresh.result.state, "synced")
+  assert.equal(git(root, ["ls-files", "docs/d0/newer.md"]), "", "a pull within the fetch cadence does not ask the remote again")
+  assert.ok(fresh.ms < 250, `a pull of what was already fetched took ${fresh.ms} ms`)
+
+  const later = await pull(root, { now: () => Date.now() + 60_000 })
+  assert.equal(later.result.state, "synced")
+  assert.equal(readFileSync(path.join(root, "docs", "d0", "newer.md"), "utf8"), "later\n")
+})
+
+test("a pull moves the checkout even when the index holds stale file stamps", { skip: process.platform === "win32" ? "POSIX paths" : false }, async () => {
+  const { origin, root } = await bigRepo({ slowPostCommit: false })
+  await remoteChange(origin, "docs/d1/f1.md", "changed upstream\n")
+  const stamp = new Date(Date.now() + 5000)
+  utimesSync(path.join(root, "docs", "d1", "f1.md"), stamp, stamp)
+  const { result } = await pull(root)
+  assert.equal(result.state, "synced")
+  assert.equal(readFileSync(path.join(root, "docs", "d1", "f1.md"), "utf8"), "changed upstream\n")
+})
+
+test("the branch and upstream are read from .git for a plain checkout and a linked worktree, and null whenever Git has to be asked", async () => {
+  const { root } = await bigRepo({ slowPostCommit: false })
+  const head = git(root, ["rev-parse", "HEAD"]).trim()
+  const plain = readUpstreamRefs(root)
+  assert.deepEqual(plain, { branch: "main", remote: "origin", merge: "refs/heads/main", tracking: "refs/remotes/origin/main", head, target: head })
+  git(root, ["pack-refs", "--all"])
+  assert.equal(readUpstreamRefs(root).target, head, "a packed ref is read too")
+
+  const linked = path.join(await mkTempRoot("desk-budget-linked-"), "w")
+  git(root, ["worktree", "add", "-q", "-b", "feature", linked, "main"])
+  assert.equal(readUpstreamRefs(linked), null, "a branch with no upstream is Git's to answer")
+  git(linked, ["branch", "--set-upstream-to=origin/main"])
+  assert.equal(readUpstreamRefs(linked).branch, "feature")
+  assert.equal(readUpstreamRefs(linked).target, head)
+  git(linked, ["checkout", "-q", "--detach"])
+  assert.equal(readUpstreamRefs(linked), null, "a detached HEAD has no branch")
+
+  git(root, ["config", "branch.main.remote", "."])
+  assert.equal(readUpstreamRefs(root), null, "a branch that follows a local branch has no remote-tracking ref")
+  git(root, ["config", "branch.main.remote", "origin"])
+  git(root, ["update-ref", "-d", "refs/remotes/origin/main"])
+  assert.equal(readUpstreamRefs(root), null, "an upstream that was never fetched")
+  assert.equal(readUpstreamRefs(await mkTempRoot("desk-budget-none-")), null, "not a git checkout")
+  const apart = await mkTempRoot("desk-budget-apart-")
+  git(apart, ["init", "-q", "-b", "main", "--separate-git-dir", path.join(await mkTempRoot("desk-budget-gitdir-"), "g")])
+  assert.equal(readUpstreamRefs(apart), null, "a checkout whose git directory is kept elsewhere is read, and has no upstream here")
+  const broken = await mkTempRoot("desk-budget-broken-")
+  writeFileSync(path.join(broken, ".git"), "not a pointer\n")
+  assert.equal(readUpstreamRefs(broken), null, "a .git file that points nowhere")
 })

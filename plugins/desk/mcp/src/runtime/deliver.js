@@ -20,6 +20,7 @@
 // Never `--force`, never a stash, never a rebase in the shared checkout. Every Git call runs with
 // `GIT_TERMINAL_PROMPT=0` and a timeout. `spawnGit` (over `spawnSync`) is a test seam.
 
+import { readUpstreamRefs } from "./fast-refs.js"
 import { spawnSync } from "node:child_process"
 import { mkdirSync, rmSync, unlinkSync, writeFileSync } from "node:fs"
 import * as path from "node:path"
@@ -321,12 +322,12 @@ function failure(result, reason) {
  * move instead of being overwritten. Returns `{ state: "current" | "caught_up" | "behind" | "diverged" | "other_branch" | "no_upstream", ... }`.
  * Local only: it never fetches, and `diverged` means the checkout holds commits the upstream does not, which it leaves alone.
  */
-export function catchUpBehind({ root, spawnGit = spawnSync }) {
+export function catchUpBehind({ root, spawnGit = spawnSync, known = null }) {
   const git = runner(spawnGit, root)
-  const upstream = upstreamOf(git)
+  const upstream = known ?? upstreamOf(git)
   if (upstream === null) return { state: "no_upstream" }
-  const head = git(["rev-parse", "HEAD"]).stdout.trim()
-  const target = git(["rev-parse", "--verify", "--quiet", `${upstream.tracking}^{commit}`]).stdout.trim()
+  const head = known?.head ?? git(["rev-parse", "HEAD"]).stdout.trim()
+  const target = known?.target ?? git(["rev-parse", "--verify", "--quiet", `${upstream.tracking}^{commit}`]).stdout.trim()
   if (head === target) return { state: "current" }
   if (git(["merge-base", "--is-ancestor", head, target]).status !== 0) return { state: "diverged" }
   return followsUpstream({ git, upstream, head, target })
@@ -340,11 +341,13 @@ export function catchUpBehind({ root, spawnGit = spawnSync }) {
  */
 export function deliver({ root, env = process.env, spawnGit = spawnSync, delivered = [], publicationClock }) {
   const git = runner(spawnGit, root)
-  const upstream = upstreamOf(git)
+  // Branch, upstream and head are read from `.git` when that is plain; each Git process saved is a delay not paid on a loaded machine.
+  const known = spawnGit === spawnSync ? readUpstreamRefs(root) : null
+  const upstream = known ?? upstreamOf(git)
   if (upstream === null) return { state: "failed", reason: "no_upstream", error: "", delivered: [], skipped: [] }
   const paths = deliveryPaths({ root, env })
   const prefix = git(["rev-parse", "--show-prefix"]).stdout.trim()
-  const head = git(["rev-parse", "HEAD"]).stdout.trim()
+  const head = known?.head ?? git(["rev-parse", "HEAD"]).stdout.trim()
   // Pull requests a rebuild replaced: closed once what replaced them is on main, with the evidence.
   const abandoned = []
   for (let attempt = 1; ; attempt += 1) {
@@ -444,8 +447,12 @@ function catchUp({ git, upstream, head, target }) {
   const now = git(["rev-parse", "HEAD"]).stdout.trim()
   if (now === target) return { state: "current" }
   if (now !== head) return { state: "behind", reason: "moved" }
-  git(["update-index", "-q", "--refresh"])
+  // Git's index may hold stale file stamps, and refreshing them stats every file; do it only when the move is refused for them.
   let moved = git(["read-tree", "-m", "-u", head, target], CHECKOUT_TIMEOUT_MS)
+  if (moved.status !== 0 && /not uptodate/u.test(moved.stderr)) {
+    git(["update-index", "-q", "--refresh"])
+    moved = git(["read-tree", "-m", "-u", head, target], CHECKOUT_TIMEOUT_MS)
+  }
   if (moved.status !== 0 && removeIdenticalUntracked(git, target, moved.stderr) > 0) moved = git(["read-tree", "-m", "-u", head, target], CHECKOUT_TIMEOUT_MS)
   if (moved.status !== 0) {
     const named = [...moved.stderr.matchAll(/^(?:error: )?Entry '(.+)' (?:not uptodate|would be overwritten)/gmu)].map((match) => match[1])
