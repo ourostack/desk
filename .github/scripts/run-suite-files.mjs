@@ -1,6 +1,6 @@
 // Runs the Desk unit test files one process each, with a per-file time limit, and writes a JSON result.
 // A file that hangs is killed (whole process tree) and recorded as a timeout instead of stalling the shard.
-// Usage: node run-suite-files.mjs --shard 1/6 --out <results.json> [--timeout-ms 1800000] [--only <file regex>] [--repeat <n>] [--tests-root <folder>] [--durations <table.json>]
+// Usage: node run-suite-files.mjs --shard 1/6 --out <results.json> [--timeout-ms 600000] [--only <file regex>] [--repeat <n>] [--tests-root <folder>] [--durations <table.json>]
 // --repeat runs each file n times in a row (for measuring how often a file fails); the file's result is its first failing run, or its last run, with every run's outcome in `runs`.
 // Exit code: 1 when any file failed, timed out or reported a failed test, so a job that runs this script is red whenever the suite is. 0 only when every file passed.
 import { spawn, spawnSync } from "node:child_process"
@@ -14,7 +14,7 @@ const args = process.argv.slice(2)
 const arg = (name, fallback) => (args.includes(name) ? args[args.indexOf(name) + 1] : fallback)
 const [index, total] = arg("--shard", "1/1").split("/").map(Number)
 const out = arg("--out", "suite-results.json")
-const timeoutMs = Number(arg("--timeout-ms", "1800000"))
+const timeoutMs = Number(arg("--timeout-ms", "600000"))
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..")
 const isolatedEnv = path.join(repoRoot, "tests", "desk", "mcp", "__tests__", "_isolated_env.mjs")
 // --tests-root points the runner at another folder of test files (the gate test uses a synthetic one).

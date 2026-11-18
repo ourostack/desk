@@ -78,7 +78,7 @@ jobs:
     needs: scope
     if: needs.scope.outputs.code == 'true'
     runs-on: windows-latest
-    timeout-minutes: 60
+    timeout-minutes: 25
     # The elevated mode is a diagnostic that fails by policy (see the comment at the top), so it never turns the run red; the standard mode does.
     continue-on-error: ${{ matrix.mode == 'elevated' }}
     strategy:

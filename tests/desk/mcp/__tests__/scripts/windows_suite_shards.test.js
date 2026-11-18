@@ -205,3 +205,12 @@ test("main keeps the Windows suite's installed dependencies cached under the key
   assert.ok(warm.on.push.paths.includes("plugins/desk/mcp/package-lock.json"))
   assert.ok("schedule" in warm.on, "a daily run restores a cache GitHub evicted")
 })
+
+test("a hung test file is killed within 10 minutes, well inside the shard job's own limit", () => {
+  const runner = readFileSync(path.join(scripts, "run-suite-files.mjs"), "utf8")
+  const fileMs = Number(/"--timeout-ms", "(\d+)"/u.exec(runner)[1])
+  assert.ok(fileMs <= 10 * 60_000, `a hung file may hold a shard for ${fileMs / 60_000} min`)
+  const workflow = load(readFileSync(path.join(scripts, "..", "workflows", "desk-windows-suite.yml"), "utf8"))
+  const jobMinutes = workflow.jobs["windows-suite"]["timeout-minutes"]
+  assert.ok(jobMinutes * 60_000 >= 2 * fileMs, "a job must outlast a timed-out file plus the rest of its shard")
+})
