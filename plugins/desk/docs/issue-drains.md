@@ -68,6 +68,8 @@ Every answer's `x-ratelimit-*` headers are kept per account. When an account has
 
 `replaces` is the prefix every wake for that repository starts with: a runner that can should take the session's older undelivered wakes with that prefix back before it sends the new one, since each wake carries the whole current state (Ouroboros does this through the app's session queue, so stale wakes never pile up). The runner sends each `message` to its `session`, then runs `done`; if the send failed it runs `done` with `--error <text>` added. Events are saved before `poll` prints them, so a wake that is never acknowledged comes back with the next poll, and a crash loses nothing. An acknowledgement for an older batch never clears a newer one. A failed poll (no token, network, GitHub error) wakes no one, moves no marker, and shows in `errors` and `status`.
 
+If a drain's `session` is archived or gone, the `--error` text from `done` says so and the drain recovers by itself: Desk starts a successor session with `shepherd create` (its first kickoff line is `Succeeds: <old id>`), keeps the new id in the drain's state (the config is never edited), and sends later wakes there. A failed start is retried after ten minutes, and a changed `session` in the config drops the override. `gh auth token` is read up to three times, so a timeout or a busy keyring is retried; only gh's own "no oauth token" says to sign in.
+
 One poll or ack runs at a time: a second one stops with an error while the first holds `poll.lock`, and takes over a lock whose process has died.
 
 ## Moving an Ouroboros drain list
