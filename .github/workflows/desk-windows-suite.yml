@@ -74,7 +74,7 @@ jobs:
           echo "code=${code#run=}" >> "$GITHUB_OUTPUT"
 
   windows-suite:
-    name: Windows ${{ matrix.mode }} (shard ${{ matrix.shard }}/19)
+    name: Windows ${{ matrix.mode }} (shard ${{ matrix.shard }}/26)
     needs: scope
     if: needs.scope.outputs.code == 'true'
     runs-on: windows-latest
@@ -83,12 +83,12 @@ jobs:
     continue-on-error: ${{ matrix.mode == 'elevated' }}
     strategy:
       fail-fast: false
-      # All nineteen shards run at once.
-      max-parallel: 19
+      # All twenty-six shards run at once.
+      max-parallel: 26
       matrix:
         mode: ${{ fromJSON(inputs.elevated && '["elevated","standard"]' || '["standard"]') }}
-        # Nineteen shards: the fewest that keep every shard's predicted test time within the 5 minute target (docs/ci.md), from the measured per-file times in .github/scripts/suite-durations.json (about 90 minutes of test time in all; the longest single file, crew/workspace_adoption.test.js, takes about 4.3). Each shard also pays about 1.75 minutes the table does not count (1.1 of setup, the rest starting the standard user and the runner), so every extra shard costs that again. This suite is the pull request's critical path (7.3 to 8.3 minutes wall at twenty shards against about 6.3 for the Linux workflow, 2026-11-17), so a shard count is never cut further than the target allows, and scripts/windows_suite_shards.test.js fails a count more than one shard above the fewest that meets it. Each shard runs its files one at a time: with three at once on the four-core runner, Git calls, sync and admission ran past their own time limits, and three of six runs failed (2026-10-26). The same test checks that this list, the shard arguments, the verdict and WINDOWS_SHARDS in suite-shards.mjs agree.
-        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
+        # Twenty-six shards: the fewest that keep every shard's predicted test time within the 3.5 minute target (docs/ci.md), from the measured per-file times in .github/scripts/suite-durations.json (about 90 minutes of test time in all; the longest single file, crew/workspace_adoption.test.js, takes about 4). Measured on 2026-11-18, a 5 minute shard (predicted) took 7 minutes wall and its setup only about 26 seconds, so the wall time follows the predicted test time and a shard count is worth adding until the setup and queueing dominate. scripts/windows_suite_shards.test.js fails a count more than one shard above the fewest that meets the target. Each shard runs its files one at a time: with three at once on the four-core runner, Git calls, sync and admission ran past their own time limits, and three of six runs failed (2026-10-26). The same test checks that this list, the shard arguments, the verdict and WINDOWS_SHARDS in suite-shards.mjs agree.
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26]
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -131,7 +131,7 @@ jobs:
       - name: Run the suite (elevated)
         if: matrix.mode == 'elevated'
         shell: pwsh
-        run: node .github/scripts/run-suite-files.mjs --shard ${{ matrix.shard }}/19 --out results.json --probe-acl --only "$env:ONLY_FILES" --repeat "$env:REPEAT"
+        run: node .github/scripts/run-suite-files.mjs --shard ${{ matrix.shard }}/26 --out results.json --probe-acl --only "$env:ONLY_FILES" --repeat "$env:REPEAT"
         env:
           GIT_TERMINAL_PROMPT: "0"
           ONLY_FILES: ${{ inputs.only }}
@@ -141,7 +141,7 @@ jobs:
         if: matrix.mode == 'standard'
         shell: pwsh
         run: |
-          $command = 'node .github\scripts\run-suite-files.mjs --shard ${{ matrix.shard }}/19 --out results.json --probe-acl --only "' + $env:ONLY_FILES + '" --repeat ' + $env:REPEAT
+          $command = 'node .github\scripts\run-suite-files.mjs --shard ${{ matrix.shard }}/26 --out results.json --probe-acl --only "' + $env:ONLY_FILES + '" --repeat ' + $env:REPEAT
           ./.github/scripts/run-as-standard-user.ps1 -WorkDir "$PWD" -Command $command
         env:
           ONLY_FILES: ${{ inputs.only }}
@@ -151,7 +151,7 @@ jobs:
         if: always()
         shell: pwsh
         run: |
-          "### Windows ${{ matrix.mode }}, shard ${{ matrix.shard }}/19" | Add-Content $env:GITHUB_STEP_SUMMARY
+          "### Windows ${{ matrix.mode }}, shard ${{ matrix.shard }}/26" | Add-Content $env:GITHUB_STEP_SUMMARY
           if (Test-Path results-summary.md) { Get-Content results-summary.md | Add-Content $env:GITHUB_STEP_SUMMARY } else { "No result was written." | Add-Content $env:GITHUB_STEP_SUMMARY }
 
       - name: Keep the per-file results
@@ -229,7 +229,7 @@ jobs:
 
       - name: Fail unless every shard reported and every file passed
         if: needs.scope.outputs.code == 'true'
-        run: node .github/scripts/windows-suite-verdict.mjs shard-results 19 tests/desk/mcp/__tests__ "$ONLY_FILES"
+        run: node .github/scripts/windows-suite-verdict.mjs shard-results 26 tests/desk/mcp/__tests__ "$ONLY_FILES"
         env:
           ONLY_FILES: ${{ inputs.only }}
 
