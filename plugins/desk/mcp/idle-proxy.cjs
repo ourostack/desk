@@ -282,7 +282,7 @@ function createIdleProxy(options) {
         else options.kill(process.pid, signal);
       });
     });
-    if (options.stdin.resume) options.stdin.resume();
+    options.stdin.resume();
     return start();
   }
 
