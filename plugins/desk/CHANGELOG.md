@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.280 — 2026-11-18
+
+Desk's MCP server now vendors Ouro UI v1.3.310, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.279 — 2026-11-18
 
 Browsers that `desk-web` opens for an agent now start muted. A page an agent visits can no longer play sound on the person's speakers, whether the browser is a fresh one or a copy of the person's own profile.
