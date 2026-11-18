@@ -4,12 +4,12 @@
 import { after, test } from "node:test"
 import { strict as assert } from "node:assert"
 import { spawnSync } from "node:child_process"
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
+import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 import { waitingLogs } from "../../../../../plugins/desk/mcp/src/runtime/append-lane.js"
 import { remoteIdentityEnv } from "../../../../../plugins/desk/mcp/src/runtime/remote-identity.js"
-import { fetchAhead, startBackgroundFetch } from "../../../../../plugins/desk/mcp/src/runtime/session-sync.js"
+import { fetchAhead, startBackgroundFetch, syncWorkspace } from "../../../../../plugins/desk/mcp/src/runtime/session-sync.js"
 import { fastGitAnswer, readUpstreamRefs, stripspace } from "../../../../../plugins/desk/mcp/src/runtime/fast-refs.js"
 
 const made = []
@@ -247,4 +247,61 @@ test("the background fetch repeats on a timer, once per root, and stops when ask
   const slow = startBackgroundFetch({ root, env: {}, intervalMs: 1, fetchFn: async () => { stop2(); await new Promise((resolve) => setTimeout(resolve, 20)) } })
   const stop2 = () => slow()
   await new Promise((resolve) => setTimeout(resolve, 80))
+})
+
+const run = (cwd, args) => {
+  const answer = spawnSync("git", ["-C", cwd, "-c", "user.email=t@example.com", "-c", "user.name=T", "-c", "commit.gpgsign=false", ...args], { encoding: "utf8" })
+  assert.equal(answer.status, 0, `git ${args.join(" ")}: ${answer.stderr}`)
+  return answer.stdout.trim()
+}
+
+function cloneOf(origin) {
+  const dir = mkTempRoot("fast-refs-clone-")
+  run(dir, ["clone", "-q", origin, "."])
+  return dir
+}
+
+test("fetchAhead records a fetch that found nothing, a fast-forward, a divergence and a lost remote", async () => {
+  await quiet(async () => {
+    const origin = mkTempRoot("fast-refs-origin-")
+    run(origin, ["init", "-q", "--bare", "-b", "main"])
+    const seed = cloneOf(origin)
+    writeFileSync(path.join(seed, "a.txt"), "one\n")
+    run(seed, ["add", "."])
+    run(seed, ["commit", "-q", "-m", "one"])
+    run(seed, ["push", "-q", "origin", "HEAD:main"])
+    const mine = cloneOf(origin)
+    const env = { ...process.env }
+    assert.equal(await fetchAhead({ root: mine, env }), "fetched")
+
+    writeFileSync(path.join(seed, "a.txt"), "two\n")
+    run(seed, ["commit", "-q", "-am", "two"])
+    run(seed, ["push", "-q", "origin", "HEAD:main"])
+    assert.equal(await fetchAhead({ root: mine, env }), "fetched")
+    assert.notEqual(readUpstreamRefs(mine).head, readUpstreamRefs(mine).target)
+
+    writeFileSync(path.join(mine, "b.txt"), "mine\n")
+    run(mine, ["add", "."])
+    run(mine, ["commit", "-q", "-m", "mine"])
+    assert.equal(await fetchAhead({ root: mine, env }), "fetched")
+
+    run(mine, ["remote", "set-url", "origin", path.join(origin, "gone")])
+    assert.equal(await fetchAhead({ root: mine, env }), "failed")
+  })
+})
+
+test("a pull whose waiting task log cannot be committed leaves the log for the next pull", async () => {
+  await quiet(async () => {
+    const root = mkTempRoot("fast-refs-log-")
+    run(root, ["init", "-q", "-b", "main"])
+    put(path.join(root, "t/task.md"), "card\n")
+    run(root, ["add", "."])
+    run(root, ["commit", "-q", "-m", "seed"])
+    put(path.join(root, "t/log.md"), "entry\n")
+    const hook = path.join(root, ".git/hooks/pre-commit")
+    put(hook, "#!/bin/sh\nexit 1\n")
+    chmodSync(hook, 0o755)
+    await syncWorkspace({ root, env: { ...process.env } })
+    assert.equal(run(root, ["status", "--porcelain", "--", "t/log.md"]).length > 0, true)
+  })
 })
