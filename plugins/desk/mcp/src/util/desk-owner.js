@@ -16,7 +16,7 @@ const WORK_REPO_OWNERS = Object.freeze(["microsoft", "gim-home", "teams-microsof
 
 /** `owner` and `repo` of a Git remote URL (https or scp style), or null. */
 function parseRemote(url) {
-  const match = /^(?:[a-z][a-z0-9+.-]*:\/\/(?:[^@/]*@)?[^/]+\/|(?:[^@/]*@)?[^:/]+:)([^/]+)\/([^/]+?)(?:\.git)?\/?$/iu.exec(String(url ?? "").trim())
+  const match = /^(?:[a-z][a-z0-9+.-]*:\/\/(?:[^@/]*@)?[^/]+\/|(?:[^@/]*@)?[^:/]+:)([^/]+)\/([^/]+?)(?:\.git)?\/?$/iu.exec(url.trim())
   return match === null ? null : { owner: match[1], repo: match[2] }
 }
 
@@ -35,7 +35,7 @@ export function repoOwnerOf(folder, spawn = spawnSync) {
 }
 
 /** Every desk workspace in the operator's home folder: `{ root, name, owner, kind }`; `kind` is "work" or "personal". */
-function knownDesks({ homeDir = os.homedir(), spawn = spawnSync } = {}) {
+function knownDesks({ homeDir, spawn }) {
   return DESK_FOLDERS
     .map((folder) => path.join(homeDir, folder))
     .filter((root) => isDeskWorkspace(root))
@@ -52,7 +52,7 @@ function deskKind(owner, root) {
 }
 
 /** The one desk whose kind matches the repository owner, or null when the owner or the match is not clear. */
-export function deskForRepoOwner(repoOwner, { homeDir = os.homedir(), spawn = spawnSync } = {}) {
+export function deskForRepoOwner(repoOwner, { homeDir, spawn = spawnSync }) {
   if (!repoOwner) return null
   const desks = knownDesks({ homeDir, spawn })
   const personalOwners = new Set([...PERSONAL_REPO_OWNERS, ...desks.filter((d) => d.kind === "personal" && d.owner).map((d) => d.owner)])

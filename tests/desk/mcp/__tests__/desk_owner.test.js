@@ -124,3 +124,12 @@ test("two personal desks, or a repository owner nobody claims, bind no desk by o
 test("the startup line says a desk bound by repository owner is the one matching the repository", () => {
   assert.match(deskStartupDirection({ root: "/h/personal-desk", source: "repo_owner_desk" }), /matching the session's repository owner/u)
 })
+
+test("a remote that is not a repository address names no owner", () => {
+  const w = mkWorld()
+  const odd = path.join(w.home, "odd")
+  mkdirSync(odd)
+  git(odd, "init", "-q")
+  git(odd, "remote", "add", "origin", "not-a-remote")
+  assert.throws(() => resolve(w, odd), /no desk workspace found/u)
+})
