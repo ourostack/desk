@@ -1,5 +1,15 @@
 # desk plugin — changelog
 
+## 3.2.279 — 2026-11-18
+
+Browsers that `desk-web` opens for an agent now start muted. A page an agent visits can no longer play sound on the person's speakers, whether the browser is a fresh one or a copy of the person's own profile.
+
+Desk's MCP server now vendors Ouro UI v1.3.309, moved by Ouro Current.
+
+Desk now stops an agent only for what a person must physically do (enter a passkey, password or MFA code) and for irreversible destruction. A certificate or unsafe-site warning on a host the agent knows is internal is the agent's call, and the issue-drain and curator gates name only those two cases.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.278 — 2026-11-18
 
 Desk's browser closes a headless browser that has sat unused for 5 minutes (`DESK_WEB_IDLE_MS`, 0 for never) and gives back the 100-350 MB it held; agents often forget to close one. The next command on it reopens a browser of the same kind by itself, goes back to the last page it was sent to, and says in that reply that it reopened. Scroll position, form input and extra tabs are not kept.

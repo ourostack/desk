@@ -1,1 +1,0 @@
-Desk now stops an agent only for what a person must physically do (enter a passkey, password or MFA code) and for irreversible destruction. A certificate or unsafe-site warning on a host the agent knows is internal is the agent's call, and the issue-drain and curator gates name only those two cases.
