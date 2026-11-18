@@ -283,7 +283,7 @@ function main() {
   // updating this digest.
   assert.equal(
     crypto.createHash("sha256").update(drain).digest("hex"),
-    "ae965974f7db3b2734a9ce74525dc92bb5e82ba1003809b6317bf7aee2b4ee5f",
+    "68350a876690da385cc316b66e77ac5db421f73cde7558026a56a6edd534150a",
     "draining-issues must match the reviewed copy",
   );
   assert.ok(fs.existsSync(skillPath), `missing skill file: ${path.relative(repoRoot, skillPath)}`);
