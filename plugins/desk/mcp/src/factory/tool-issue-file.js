@@ -28,7 +28,7 @@ export const OWNED_TOOLS = Object.freeze({
   desk: "ourostack/desk",
 })
 export const MAX_PER_DAY = 5
-export const LABEL = "tool-friction"
+const LABEL = "tool-friction"
 const MARKER_PREFIX = "<!-- desk-tool-issue: "
 const MAX_TITLE = 120
 const MAX_BODY = 8000
