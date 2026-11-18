@@ -9,6 +9,7 @@ import { mkdirSync, mkdtempSync, writeFileSync, realpathSync } from "node:fs"
 import { spawnSync } from "node:child_process"
 import { resolveDeskRootWithSource } from "../../../../plugins/desk/mcp/src/util/paths.js"
 import { desk_save } from "../../../../plugins/desk/mcp/src/tools/desk-save.js"
+import { taskFocus } from "../../../../plugins/desk/mcp/src/tools/task-focus.js"
 import { deskStartupDirection } from "../../../../plugins/desk/mcp/src/util/startup-direction.js"
 import { desk_search, desk_recall } from "../../../../plugins/desk/mcp/src/tools/search.js"
 
@@ -164,6 +165,23 @@ test("a desk with no remote is named by its folder and serves only the owners it
   process.env.HOME = process.env.USERPROFILE = w.home
   try {
     await assert.rejects(desk_save({ deskRoot: local, input: { paths: ["ouro-ui/notes.md"], message: "m" }, schedulePush: () => {} }), { code: "desk_save_path_belongs_to_another_desk" })
+  } finally {
+    restoreHome(home)
+  }
+})
+
+test("task_focus on a card another desk holds names that desk and the call to admit it", async () => {
+  const w = mkWorld()
+  mkdirSync(path.join(w.work, "teamscrawl", "drain"), { recursive: true })
+  writeFileSync(path.join(w.work, "teamscrawl", "drain", "task.md"), "---\ntitle: d\nstatus: processing\n---\n")
+  const home = [process.env.HOME, process.env.USERPROFILE]
+  process.env.HOME = process.env.USERPROFILE = w.home
+  try {
+    await assert.rejects(
+      taskFocus({ deskRoot: w.personal, input: { track: "teamscrawl", slug: "drain" } }),
+      (error) => error.code === "task_focus_card_in_another_desk" && error.message.includes(path.join(w.work, "teamscrawl", "drain")) && error.message.includes("task_update") && error.message.includes("cp -R"),
+    )
+    await assert.rejects(taskFocus({ deskRoot: w.personal, input: { track: "teamscrawl", slug: "nowhere" } }), { code: "task_focus_check_the_track_and_slug" })
   } finally {
     restoreHome(home)
   }

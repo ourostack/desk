@@ -20,6 +20,8 @@ import { makeSessionLabelProposal } from "../runtime/session-label.js"
 import { archiveDueAnswer } from "./task-archive-due.js"
 import { SHELF_FILE, readShelf, shelfForTask } from "../runtime/lessons-shelf.js"
 import { logSummary } from "./task-log.js"
+import { otherDeskHoldingCard } from "../util/desk-owner.js"
+import { deskFailure } from "../runtime/desk-failure.js"
 
 export const TASK_FOCUS_FIELDS = ["track", "slug", "clear", "display_label"]
 
@@ -108,7 +110,23 @@ export async function taskFocus({ deskRoot, input, person = null, statusContext 
   folderName("slug", slug)
 
   const found = await findCard({ deskRoot, person, track, slug })
-  if (found === null) throw Object.assign(new Error(`Check the track and slug, then try again: card not found: ${track}/${slug}`), { code: "task_focus_check_the_track_and_slug" })
+  if (found === null) {
+    const holder = otherDeskHoldingCard(deskRoot, track, slug)
+    if (holder !== null) {
+      const code = "task_focus_card_in_another_desk"
+      const from = path.join(holder.root, track, slug)
+      const into = path.join(path.resolve(deskRoot), track)
+      throw Object.assign(new Error(deskFailure({
+        code,
+        thing: "task_focus: card",
+        probably: `${track}/${slug} is in the ${holder.name} desk at ${holder.root}, not in the ${path.resolve(deskRoot)} desk this session is bound to`,
+        look: "call desk_status to see which desk this session is bound to and why",
+        keepWorking: `to admit the card here, run \`mkdir -p ${into} && cp -R ${from} ${into}/\`, then call task_update with {"track":"${track}","slug":"${slug}","note":"moved from ${holder.name}"} (it commits and publishes the card), then task_focus again; afterwards remove it from ${holder.root} with Git`,
+        fix: `or start the session from a repository the ${holder.name} desk serves, or pass --root ${holder.root}`,
+      })), { code, owner_desk: holder.root })
+    }
+    throw Object.assign(new Error(`Check the track and slug, then try again: card not found: ${track}/${slug}`), { code: "task_focus_check_the_track_and_slug" })
+  }
   const card = await readMarkdown(found.file)
   statusContext.focus?.set({ track, slug })
   const result = {
