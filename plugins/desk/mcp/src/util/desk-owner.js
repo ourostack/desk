@@ -1,19 +1,15 @@
 // Which desk owns a repository, a track or a path, for operators who keep more than one desk on a machine
-// (a personal desk and a work desk). Desks are found by their home-folder names, classified by their Git
-// remote's owner, and matched to a session's repository by that repository's owner.
+// (a personal desk and a work desk). Desks are found by their home-folder names and matched to a session's
+// repository by that repository's owner. Each desk declares the owners it serves in `_meta/desk.json`
+// (`{"repo_owners": ["acme"]}`), besides the owner of its own Git remote; Desk itself names no organization.
 
 import { spawnSync } from "node:child_process"
-import { existsSync } from "node:fs"
+import { existsSync, readFileSync } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 import { isDeskWorkspace } from "./paths.js"
 
 const DESK_FOLDERS = Object.freeze(["personal-desk", "ms-desk", "desk", "worker-workspace"])
-// Repository owners that are the operator's own, besides the owner of the personal desk's remote.
-const PERSONAL_REPO_OWNERS = Object.freeze(["ourostack"])
-// Microsoft organizations, besides the owner of the work desk's remote.
-const WORK_REPO_OWNERS = Object.freeze(["microsoft", "gim-home", "teams-microsoft", "shared-internal-tools", "azure", "office"])
-
 /** `owner` and `repo` of a Git remote URL (https or scp style), or null. */
 function parseRemote(url) {
   const match = /^(?:[a-z][a-z0-9+.-]*:\/\/(?:[^@/]*@)?[^/]+\/|(?:[^@/]*@)?[^:/]+:)([^/]+)\/([^/]+?)(?:\.git)?\/?$/iu.exec(url.trim())
@@ -34,32 +30,31 @@ export function repoOwnerOf(folder, spawn = spawnSync) {
   return originOf(folder, spawn)?.owner.toLowerCase() ?? null
 }
 
-/** Every desk workspace in the operator's home folder: `{ root, name, owner, kind }`; `kind` is "work" or "personal". */
+function declaredOwners(root) {
+  try {
+    const owners = JSON.parse(readFileSync(path.join(root, "_meta", "desk.json"), "utf8")).repo_owners
+    return Array.isArray(owners) ? owners.map((o) => String(o).toLowerCase()) : []
+  } catch {
+    return []
+  }
+}
+
+/** Every desk workspace in the operator's home folder: `{ root, name, owners }`; `owners` are the repository owners it serves. */
 function knownDesks({ homeDir, spawn }) {
   return DESK_FOLDERS
     .map((folder) => path.join(homeDir, folder))
     .filter((root) => isDeskWorkspace(root))
     .map((root) => {
       const remote = originOf(root, spawn)
-      const owner = remote?.owner.toLowerCase() ?? null
-      return { root, name: remote === null ? path.basename(root) : `${remote.owner}/${remote.repo}`, owner, kind: deskKind(owner, root) }
+      const own = remote === null ? [] : [remote.owner.toLowerCase()]
+      return { root, name: remote === null ? path.basename(root) : `${remote.owner}/${remote.repo}`, owners: [...own, ...declaredOwners(root)] }
     })
 }
 
-// A work desk's remote is owned by an EMU account (`<alias>_microsoft`); without a remote, the overlay's folder name says.
-function deskKind(owner, root) {
-  return /_microsoft$|^ms-desk$/u.test(owner ?? path.basename(root)) ? "work" : "personal"
-}
-
-/** The one desk whose kind matches the repository owner, or null when the owner or the match is not clear. */
+/** The one desk that serves the repository owner, or null when the owner or the match is not clear. */
 export function deskForRepoOwner(repoOwner, { homeDir, spawn = spawnSync }) {
   if (!repoOwner) return null
-  const desks = knownDesks({ homeDir, spawn })
-  const personalOwners = new Set([...PERSONAL_REPO_OWNERS, ...desks.filter((d) => d.kind === "personal" && d.owner).map((d) => d.owner)])
-  const workOwners = new Set([...WORK_REPO_OWNERS, ...desks.filter((d) => d.kind === "work" && d.owner).flatMap((d) => [d.owner, d.owner.replace(/_microsoft$/u, "")])])
-  const kind = personalOwners.has(repoOwner) ? "personal" : workOwners.has(repoOwner) ? "work" : null
-  if (kind === null) return null
-  const matches = desks.filter((d) => d.kind === kind)
+  const matches = knownDesks({ homeDir, spawn }).filter((d) => d.owners.includes(repoOwner))
   return matches.length === 1 ? matches[0] : null
 }
 

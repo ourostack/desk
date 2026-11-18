@@ -14,7 +14,7 @@ import { desk_search, desk_recall } from "../../../../plugins/desk/mcp/src/tools
 
 const git = (cwd, ...args) => spawnSync("git", ["-C", cwd, ...args], { encoding: "utf8" })
 
-function mkDesk(home, folder, remote) {
+function mkDesk(home, folder, remote, owners) {
   const root = path.join(home, folder)
   mkdirSync(path.join(root, "_meta"), { recursive: true })
   mkdirSync(path.join(root, "_archive"), { recursive: true })
@@ -23,6 +23,7 @@ function mkDesk(home, folder, remote) {
   git(root, "config", "user.name", "T")
   git(root, "remote", "add", "origin", remote)
   writeFileSync(path.join(root, "README.md"), "desk\n")
+  if (owners !== undefined) writeFileSync(path.join(root, "_meta", "desk.json"), typeof owners === "string" ? owners : JSON.stringify({ repo_owners: owners }))
   git(root, "add", "-A")
   git(root, "commit", "-q", "-m", "init")
   return root
@@ -30,8 +31,8 @@ function mkDesk(home, folder, remote) {
 
 function mkWorld() {
   const home = realpathSync(mkdtempSync(path.join(os.tmpdir(), "desk-owner-")))
-  const personal = mkDesk(home, "personal-desk", "https://arimendelow@github.com/arimendelow/desk.git")
-  const work = mkDesk(home, "ms-desk", "https://arimendelow_microsoft@github.com/arimendelow_microsoft/desk.git")
+  const personal = mkDesk(home, "personal-desk", "https://arimendelow@github.com/arimendelow/desk.git", ["ourostack"])
+  const work = mkDesk(home, "ms-desk", "https://arimendelow_microsoft@github.com/arimendelow_microsoft/desk.git", ["gim-home", "microsoft"])
   mkdirSync(path.join(personal, "ouro-ui"), { recursive: true })
   writeFileSync(path.join(personal, "ouro-ui", "notes.md"), "old\n")
   git(personal, "add", "-A")
@@ -109,10 +110,9 @@ test("desk_search and desk_recall say which desk they searched", async () => {
   ]) assert.deepEqual(result.desk_searched, { root: w.personal, name: "arimendelow/desk" })
 })
 
-test("two personal desks, or a repository owner nobody claims, bind no desk by owner", () => {
+test("two desks serving one owner, or a repository owner nobody claims, bind no desk by owner", () => {
   const w = mkWorld()
-  mkdirSync(path.join(w.home, "desk", "_meta"), { recursive: true })
-  mkdirSync(path.join(w.home, "desk", "_archive"), { recursive: true })
+  mkDesk(w.home, "desk", "https://github.com/arimendelow/desk2.git", ["ourostack"])
   assert.equal(resolve(w, w.ouro).source, "home_fallback")
   const stranger = path.join(w.home, "stranger")
   mkdirSync(stranger)
@@ -132,4 +132,39 @@ test("a remote that is not a repository address names no owner", () => {
   git(odd, "init", "-q")
   git(odd, "remote", "add", "origin", "not-a-remote")
   assert.throws(() => resolve(w, odd), /no desk workspace found/u)
+})
+
+test("a desk's own remote owner is served without config, and a malformed config adds nothing", () => {
+  for (const owners of [undefined, "not json", JSON.stringify({ repo_owners: "ourostack" })]) {
+    const w = mkWorld()
+    writeFileSync(path.join(w.personal, "_meta", "desk.json"), owners ?? "{}")
+    const own = path.join(w.home, "own")
+    mkdirSync(own)
+    git(own, "init", "-q")
+    git(own, "remote", "add", "origin", "https://github.com/arimendelow/other.git")
+    assert.equal(resolve(w, own).root, w.personal)
+    assert.throws(() => resolve(w, w.ouro), { code: "DESK_ROOT_NOT_FOUND" })
+  }
+})
+
+test("a desk with no remote is named by its folder and serves only the owners it declares", async () => {
+  const w = mkWorld()
+  const local = path.join(w.home, "worker-workspace")
+  mkdirSync(path.join(local, "_meta"), { recursive: true })
+  mkdirSync(path.join(local, "_archive"), { recursive: true })
+  writeFileSync(path.join(local, "_meta", "desk.json"), JSON.stringify({ repo_owners: ["Acme"] }))
+  const acme = path.join(w.home, "acme-app")
+  mkdirSync(acme)
+  git(acme, "init", "-q")
+  git(acme, "remote", "add", "origin", "https://github.com/acme/app.git")
+  assert.equal(resolve(w, acme).root, local)
+  const queryRouter = { lexical: async () => ({ results: [] }), semantic: async () => ({ results: [] }) }
+  assert.deepEqual((await desk_search({ deskRoot: local, input: { query: "x" }, queryRouter })).desk_searched, { root: local, name: "worker-workspace" })
+  const home = [process.env.HOME, process.env.USERPROFILE]
+  process.env.HOME = process.env.USERPROFILE = w.home
+  try {
+    await assert.rejects(desk_save({ deskRoot: local, input: { paths: ["ouro-ui/notes.md"], message: "m" }, schedulePush: () => {} }), { code: "desk_save_path_belongs_to_another_desk" })
+  } finally {
+    restoreHome(home)
+  }
 })
