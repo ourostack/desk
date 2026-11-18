@@ -1359,6 +1359,8 @@ test("conditional requests: a stored tag goes out as If-None-Match, a 304 is cou
     response({}, { status: 304, headers: { ...headers, "x-ratelimit-remaining": "4989" } }),
     response({}, { status: 403, headers: { ...headers, "x-ratelimit-remaining": "0" } }),
     response({ message: "forbidden" }, { status: 403, headers: { ...headers, "x-ratelimit-remaining": "4000" } }),
+    response({}, { status: 429 }),
+    { ...response({}, { status: 403, headers: { "x-ratelimit-remaining": "4000" } }), text: async () => { throw new Error("body lost") } },
   ]
   const fetchImpl = async (url, init) => { sent.push([url, init.headers["If-None-Match"]]); return answers.shift() }
   const api = await connectGithub("work", { spawn, fetchImpl, login: "work_microsoft" })
@@ -1379,6 +1381,8 @@ test("conditional requests: a stored tag goes out as If-None-Match, a 304 is cou
   await assert.rejects(api.changedIssues("o/r", "2026-11-13T00:58:00Z"), (error) => error.rateLimited === true && error.code === "drains_rate_limited" && /rate limited until 2026-/u.test(error.message) && !/gh auth/u.test(error.message))
   assert.equal(api.quota().remaining, 0, "the quota is read from the refusal too")
   await assert.rejects(api.changedIssues("o/r", "2026-11-13T00:58:00Z"), /Check gh auth status, then try again: GitHub answered HTTP 403 for \/repos\/o\/r\/issues$/u)
+  await assert.rejects(api.changedIssues("o/r", "2026-11-13T00:58:00Z"), /rate limited until the next window \(HTTP 429/u)
+  await assert.rejects(api.changedIssues("o/r", "2026-11-13T00:58:00Z"), /Check gh auth status/u, "a refusal whose body cannot be read is not called a rate limit")
 })
 
 test("asks GitHub who the active account is when none is configured", async () => {

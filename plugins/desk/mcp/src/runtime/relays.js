@@ -455,7 +455,7 @@ async function deleteBranch(ctx, relay, pr) {
   return response.ok || [404, 422].includes(response.status)
 }
 
-const waitReadMs = (record, now) => Math.min(WAIT_READ_MAX_MS, Math.max(WAIT_READ_MIN_MS, (now - Date.parse(record.firstReadAt ?? record.readAt)) / 4))
+const waitReadMs = (record, now) => Math.min(WAIT_READ_MAX_MS, Math.max(WAIT_READ_MIN_MS, (now - Date.parse(record.firstReadAt)) / 4))
 
 /** A waiting pull request not yet due for another read keeps its cached answers (and their tags) through this poll's cleanup. */
 function skipRead(relay, state, ctx, number) {
