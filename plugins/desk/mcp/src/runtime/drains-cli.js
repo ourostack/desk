@@ -1,6 +1,7 @@
 // The `drains` command line: `poll`, `ack`, `status`, `why`, `schedule`, `stalled`, `relays` and `runtimes`, defined once with Ouro AX, which
 // parses the arguments, writes the help and prints a usage error as one line on stderr with its fix (exit 2). Output is one JSON value
 // on stdout; a failure is the Desk failure line its code built on stderr (exit 1).
+import { spawnSync } from "node:child_process"
 import * as os from "node:os"
 import * as path from "node:path"
 import { AxError } from "../lib/ouro-ui/registry/ouro/ax/problem.ts"
@@ -11,6 +12,7 @@ import { pollRelays, readRelayConfig, readRelayStates, relayPaths, relayStatusLi
 import { findPluginlessRuntimes, listProcesses as psList, pluginlessRuntimeLines } from "./pluginless-runtimes.js"
 import { ackStalled, pollStalled, stalledPaths, stalledStatus } from "./stalled.js"
 import { ackSchedule, pollSchedules, readScheduleConfig, readScheduleStates, scheduleStatusLines, schedulePaths } from "./schedules.js"
+import { signedInAccounts } from "../factory/flush.js"
 import { ackWake, connectGithub, recoverDrainTarget, drainPaths, deskInUse, drainStatusLines, installLauncher, pollDrains, readDrainConfig, readDrainStates, whyOf, withDrainLock } from "./drains.js"
 
 /** The Desk a poll ran from, for the history: its version, and the release commit when the launcher's own copy ran. */
@@ -61,7 +63,15 @@ function withDesk(result, { script, env }) {
   return { ...result, desk, status: [line, ...result.status], launcher: refreshLauncher(env) }
 }
 
-function drainsCli({ script, env, now, connect, listProcesses }) {
+/** The github.com logins signed in to the GitHub CLI, active first; empty when it cannot be asked. */
+function ghSignedIn() {
+  const cleaned = { ...process.env, PATH: ["/opt/homebrew/bin", "/usr/local/bin", process.env.PATH].filter(Boolean).join(":") }
+  for (const name of ["GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GH_HOST"]) delete cleaned[name]
+  const result = spawnSync("gh", ["auth", "status", "--hostname", "github.com"], { encoding: "utf8", timeout: 10_000, env: cleaned, windowsHide: true })
+  return signedInAccounts(`${result.stdout}\n${result.stderr}`)
+}
+
+function drainsCli({ script, env, now, connect, listProcesses, signedIn }) {
   const ackFlags = (flags, paths) => (flags.state ? ["--state", paths.state] : [])
   const ackCommand = [process.execPath, path.resolve(script)]
   const command = (name, def, run) => defineCommand({ name, output: "one JSON value", text, ...def, run })
@@ -130,7 +140,7 @@ function drainsCli({ script, env, now, connect, listProcesses }) {
       }),
       command("relays poll", { effect: "private", summary: "Poll the relays in relays.json, act on what is found and print no wakes.", flags: { config: CONFIG, state: STATE } }, async (input) => {
         const paths = pathsOf(relayPaths({ env }), input)
-        return withDesk(await withDrainLock(paths.lock, () => pollRelays({ paths, drainFiles: drainPaths({ env }), connect, now: now() })), { script, env })
+        return withDesk(await withDrainLock(paths.lock, () => pollRelays({ paths, drainFiles: drainPaths({ env }), connect, now: now(), signedIn })), { script, env })
       }),
       command("relays status", { ...READ, summary: "List the relays without acting.", flags: { config: CONFIG, state: STATE } }, (input) => {
         const paths = pathsOf(relayPaths({ env }), input)
@@ -141,6 +151,6 @@ function drainsCli({ script, env, now, connect, listProcesses }) {
   })
 }
 
-export async function runDrainsCli({ argv, script, env = process.env, io = process, now = Date.now, connect = connectGithub, listProcesses = psList }) {
-  return runCli(drainsCli({ script, env, now, connect, listProcesses }), argv, { stdout: io.stdout, stderr: io.stderr })
+export async function runDrainsCli({ argv, script, env = process.env, io = process, now = Date.now, connect = connectGithub, listProcesses = psList, signedIn = ghSignedIn }) {
+  return runCli(drainsCli({ script, env, now, connect, listProcesses, signedIn }), argv, { stdout: io.stdout, stderr: io.stderr })
 }
