@@ -5,7 +5,7 @@
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import { spawn, spawnSync } from "node:child_process"
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs"
+import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs"
 import * as path from "node:path"
 import { bootstrapPath, isolatedEnv, makeIsolatedHome } from "../launch/_mcp_handshake.js"
 
@@ -58,7 +58,7 @@ function childPids(pid) {
 test("an idle Desk MCP server holds under 100 MB: its server process is released after the idle time and the next call brings it back", { skip: process.platform === "win32", timeout: 120000 }, async () => {
   const fixture = await makeIsolatedHome("desk-idle-memory-")
   syntheticDesk(fixture.desk)
-  const proxy = spawn(process.execPath, [bootstrapPath, "--root", fixture.desk], {
+  const proxy = spawn(process.execPath, ["--report-signal=SIGUSR2", "--report-compact", `--report-directory=${fixture.root}`, bootstrapPath, "--root", fixture.desk], {
     env: isolatedEnv(fixture, { DESK_MCP_IDLE_MS: String(IDLE_MS) }),
     stdio: ["pipe", "pipe", "pipe"],
   })
@@ -92,7 +92,16 @@ test("an idle Desk MCP server holds under 100 MB: its server process is released
 
     for (let waited = 0; childPids(proxy.pid).length > 0 && waited < 30000; waited += 250) await sleep(250)
     assert.equal(childPids(proxy.pid).length, 0, "the server is released after the idle time")
-    const idleMb = rssMb(proxy.pid)
+    const idleMb = rssMb(proxy.pid); 
+    if (idleMb >= IDLE_BUDGET_MB) {
+      proxy.kill("SIGUSR2")
+      await sleep(1500)
+      const reportFile = readdirSync(fixture.root).find((name) => name.endsWith(".json"))
+      const report = reportFile === undefined ? null : JSON.parse(readFileSync(path.join(fixture.root, reportFile), "utf8"))
+      const spaces = report === null ? "no report" : Object.entries(report.javascriptHeap.heapSpaces).map(([name, space]) => `${name}=${(space.committedMemory / 1e6).toFixed(1)}`).join(" ")
+      const handles = report === null ? "" : report.libuv.map((handle) => handle.type).join(",")
+      assert.fail(`diag: heap ${spaces}; total ${report?.javascriptHeap.totalMemory}; handles ${handles}; rss ${report?.resourceUsage.maxRss}`)
+    }
     assert.ok(idleMb < IDLE_BUDGET_MB, `an idle session holds ${idleMb.toFixed(1)} MB, budget ${IDLE_BUDGET_MB} MB (${memoryDetail(proxy.pid)}; node ${process.version})`)
 
     const resumed = await status()
