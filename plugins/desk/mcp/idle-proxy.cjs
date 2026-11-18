@@ -332,7 +332,6 @@ function runIdleProxy(o) {
   }
   var env = pick("env");
   var spawn = pick("spawn");
-  var lastIndexFile = o.indexFile;
   var proxy = createIdleProxy({
     launchChild: function () {
       var childEnv = Object.assign({}, env);
@@ -350,9 +349,8 @@ function runIdleProxy(o) {
         var ownRoot = path.dirname(path.dirname(o.indexFile));
         if (!childEnv.DESK_PLUGIN_ROOT || childEnv.DESK_PLUGIN_ROOT === ownRoot) childEnv.DESK_PLUGIN_ROOT = newest.pluginRoot;
         indexFile = newest.indexFile;
-        if (indexFile !== lastIndexFile) pick("stderr").write("[desk-mcp] idle proxy: running Desk " + newest.version + " from " + newest.pluginRoot + "\n");
+        pick("stderr").write("[desk-mcp] idle proxy: running Desk " + newest.version + " from " + newest.pluginRoot + "\n");
       }
-      lastIndexFile = indexFile;
       return spawn(o.node, [indexFile].concat(o.args), { stdio: ["pipe", "pipe", "inherit"], env: childEnv, windowsHide: true });
     },
     stdin: pick("stdin"),
