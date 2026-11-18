@@ -58,7 +58,7 @@ function childPids(pid) {
 test("an idle Desk MCP server holds under 100 MB: its server process is released after the idle time and the next call brings it back", { skip: process.platform === "win32", timeout: 120000 }, async () => {
   const fixture = await makeIsolatedHome("desk-idle-memory-")
   syntheticDesk(fixture.desk)
-  const proxy = spawn(process.execPath, ["--report-signal=SIGUSR2", "--report-compact", `--report-directory=${fixture.root}`, bootstrapPath, "--root", fixture.desk], {
+  const proxy = spawn(process.execPath, ["--heapsnapshot-signal=SIGUSR2", `--diagnostic-dir=${fixture.root}`, bootstrapPath, "--root", fixture.desk], {
     env: isolatedEnv(fixture, { DESK_MCP_IDLE_MS: String(IDLE_MS) }),
     stdio: ["pipe", "pipe", "pipe"],
   })
@@ -95,12 +95,20 @@ test("an idle Desk MCP server holds under 100 MB: its server process is released
     const idleMb = rssMb(proxy.pid); 
     if (idleMb >= IDLE_BUDGET_MB) {
       proxy.kill("SIGUSR2")
-      await sleep(1500)
-      const reportFile = readdirSync(fixture.root).find((name) => name.endsWith(".json"))
-      const report = reportFile === undefined ? null : JSON.parse(readFileSync(path.join(fixture.root, reportFile), "utf8"))
-      const spaces = report === null ? "no report" : Object.entries(report.javascriptHeap.heapSpaces).map(([name, space]) => `${name}=${(space.committedMemory / 1e6).toFixed(1)}`).join(" ")
-      const handles = report === null ? "" : report.libuv.map((handle) => handle.type).join(",")
-      assert.fail(`diag: heap ${spaces}; total ${report?.javascriptHeap.totalMemory}; handles ${handles}; rss ${report?.resourceUsage.maxRss}`)
+      await sleep(5000)
+      const file = readdirSync(fixture.root).find((name) => name.endsWith(".heapsnapshot"))
+      const snap = file === undefined ? null : JSON.parse(readFileSync(path.join(fixture.root, file), "utf8"))
+      let top = "no snapshot"
+      if (snap !== null) {
+        const f = snap.snapshot.meta.node_fields.length
+        const sums = new Map()
+        for (let i = 0; i < snap.nodes.length; i += f) {
+          const key = `${snap.snapshot.meta.node_types[0][snap.nodes[i]]}:${String(snap.strings[snap.nodes[i + 1]]).slice(0, 60)}`
+          sums.set(key, (sums.get(key) ?? 0) + snap.nodes[i + 3])
+        }
+        top = [...sums].sort((x, y) => y[1] - x[1]).slice(0, 12).map(([k, v]) => `${k}=${(v / 1e6).toFixed(1)}MB`).join(" | ")
+      }
+      assert.fail(`diag: ${top}`)
     }
     assert.ok(idleMb < IDLE_BUDGET_MB, `an idle session holds ${idleMb.toFixed(1)} MB, budget ${IDLE_BUDGET_MB} MB (${memoryDetail(proxy.pid)}; node ${process.version})`)
 
