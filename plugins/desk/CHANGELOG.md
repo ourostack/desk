@@ -1,5 +1,13 @@
 # desk plugin — changelog
 
+## 3.2.289 — 2026-11-18
+
+### task_focus names the desk that holds a card
+
+When the bound desk has no card a session names but another desk on the machine does, `task_focus` now says which desk holds it and gives the exact steps to admit the card here (copy the folder, then one `task_update`), instead of "card not found". A session whose repository owner was moved to another desk by `repo_owners` routing no longer has to stop.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.288 — 2026-11-18
 
 A session keeps its Desk tools when the Desk server crashes: the idle proxy now restarts a server that ended by itself or was killed, the same way it restarts an idle one. A call the dead server never answered gets a retryable error, the next message starts a new server and replays the handshake, and three crashes in a row within 10 seconds of starting still end the proxy, so a broken install does not loop. The card guard's refusal now also gives a command that makes the same `task_update` from a shell when the session's Desk tools are down (`scripts/local-recovery.js`, with the card's track and slug filled in).
