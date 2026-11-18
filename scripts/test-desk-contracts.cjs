@@ -1455,7 +1455,7 @@ contract("every improvement tool named in a skill or doc is registered, and the 
 requires(
   "plugins/desk/skills/curator/SKILL.md",
   "curator requires authorized maintenance scope and keeps the friction pass operator-asked",
-  /^description: [^\n]*improvement_next[^\n]*\n[\s\S]+## The improvement-card routine[\s\S]+this task's authorized scope[\s\S]+improvement_next[\s\S]+money on a human's payment method[\s\S]+credential or an account only a human can act in[\s\S]+irreversible destructive action[\s\S]+every ruling[\s\S]+countermeasure pull request[\s\S]+andon first[\s\S]+andon-dismissed[\s\S]+improvement_update[\s\S]+claim_id[\s\S]+`wont_fix`[\s\S]+`duplicate`[\s\S]+`not_reproducible`[\s\S]+## The friction backlog pass[\s\S]+only when the operator asks[\s\S]+## Process/mu,
+  /^description: [^\n]*improvement_next[^\n]*\n[\s\S]+## The improvement-card routine[\s\S]+this task's authorized scope[\s\S]+improvement_next[\s\S]+money on a human's payment method[\s\S]+passkey, password or MFA code only a human holds[\s\S]+irreversible destructive action[\s\S]+every ruling[\s\S]+countermeasure pull request[\s\S]+andon first[\s\S]+andon-dismissed[\s\S]+improvement_update[\s\S]+claim_id[\s\S]+`wont_fix`[\s\S]+`duplicate`[\s\S]+`not_reproducible`[\s\S]+## The friction backlog pass[\s\S]+only when the operator asks[\s\S]+## Process/mu,
 );
 requires(
   "plugins/desk/skills/curator/SKILL.md",

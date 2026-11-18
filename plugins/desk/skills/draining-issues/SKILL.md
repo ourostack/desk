@@ -45,7 +45,7 @@ If a helper fails, use an available permitted API/CLI path for the same authoriz
 | Merged code, release pending | Follow release/install and consumer acceptance; leave open. |
 | Fixtures pass, required native sample missing | Record the missing proof; keep acceptance open and continue eligible work. |
 | Existing writer or unmet dependency | Preserve ownership/order; resume when ready. |
-| Human-only decision or missing right | Record the blocker and required actor; do not invent authority. |
+| Needs a passkey, password or MFA code only the person holds, or an irreversible destructive step | Record the blocker and the person; do everything else. |
 
 ## Watch without idle model turns
 
