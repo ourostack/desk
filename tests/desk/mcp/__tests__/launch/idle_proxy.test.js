@@ -28,7 +28,7 @@ function harness({ idleMs: idle = IDLE, failSpawnAt = [] } = {}) {
   const children = []
   let spawns = 0
 
-  function spawnChild() {
+  function launchChild() {
     spawns += 1
     if (failSpawnAt.includes(spawns)) throw new Error(`spawn ${spawns} failed`)
     const child = new EventEmitter()
@@ -48,7 +48,7 @@ function harness({ idleMs: idle = IDLE, failSpawnAt = [] } = {}) {
   }
 
   const proxy = createIdleProxy({
-    spawnChild,
+    launchChild,
     stdin,
     stdout: { write: (text) => sent.push(text) },
     stderr: { write: (text) => stderr.push(text) },

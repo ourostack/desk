@@ -39,7 +39,7 @@ function hasId(message) {
   return message.id !== undefined && message.id !== null;
 }
 
-// options: { spawnChild() -> child, stdin, stdout, stderr, idleMs, now, setTimer, clearTimer, exit, signals, kill }
+// options: { launchChild() -> child, stdin, stdout, stderr, idleMs, now, setTimer, clearTimer, exit, signals, kill }
 // The child is { stdin, stdout, kill(signal), on(event, listener) } like a child_process child with piped stdin and stdout.
 function createIdleProxy(options) {
   var child = null;
@@ -129,7 +129,7 @@ function createIdleProxy(options) {
   function start() {
     var started;
     try {
-      started = options.spawnChild();
+      started = options.launchChild();
     } catch (error) {
       return error;
     }
@@ -318,7 +318,7 @@ function runIdleProxy(o) {
   var env = pick("env");
   var spawn = pick("spawn");
   var proxy = createIdleProxy({
-    spawnChild: function () {
+    launchChild: function () {
       var childEnv = Object.assign({}, env);
       // The child's parent is this proxy, not the host: the host's own pid is what "other sessions" must leave out.
       if (!childEnv.DESK_SESSION_HOST_PID) childEnv.DESK_SESSION_HOST_PID = String(process.ppid);
