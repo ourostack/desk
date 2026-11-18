@@ -1830,3 +1830,25 @@ test("real: fresh opens headless, loads a page, closes and its folder is gone", 
     page.close()
   }
 })
+
+test("a browser nobody has used for the idle time is closed, and a command on it says so", async () => {
+  const { options, calls } = await setup()
+  const controller = web.createController({ ...options, idleMs: 0 })
+  const opened = JSON.parse(text(await controller.call("browser_context", { action: "open" })))
+  const contextId = opened.contextId
+  const record = controller.settings.contexts[contextId]
+  controller.settings.idleMs = 60000
+  await controller.releaseIdle()
+  assert.ok(controller.settings.contexts[contextId], "a browser just used stays open")
+  record.lastUsed = Date.now() - 120000
+  record.busy = 1
+  await controller.releaseIdle()
+  assert.ok(controller.settings.contexts[contextId], "a browser with a command running stays open")
+  record.busy = 0
+  await controller.releaseIdle()
+  assert.equal(controller.settings.contexts[contextId], undefined, "an idle browser is closed")
+  assert.ok(calls().some((call) => call.args?.includes("close") || JSON.stringify(call).includes("close")), "its driver was told to close")
+  const after = await controller.call("browser_command", { contextId, args: ["snapshot"] })
+  assert.equal(after.isError, true)
+  assert.match(text(after), /closed after 1 minutes unused/u)
+})

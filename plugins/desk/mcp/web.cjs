@@ -132,6 +132,16 @@ function profileRoot(channel, platform, env, homeDir) {
   return path.join(env.XDG_CONFIG_HOME || path.join(homeDir, ".config"), chrome ? "google-chrome" : "microsoft-edge");
 }
 
+var DEFAULT_IDLE_MS = 300000;
+
+// How long an open browser may sit unused before it is closed: DESK_WEB_IDLE_MS, 0 for never. A headless Edge holds 100-350 MB.
+function idleMs(env, given) {
+  var text = given !== undefined ? given : env.DESK_WEB_IDLE_MS;
+  if (text === undefined || String(text).trim() === "") return DEFAULT_IDLE_MS;
+  var value = Number(text);
+  return isFinite(value) && value >= 0 ? Math.floor(value) : DEFAULT_IDLE_MS;
+}
+
 function settings(o) {
   var env = o.env || process.env;
   var homeDir = o.homeDir || os.homedir();
@@ -155,6 +165,8 @@ function settings(o) {
       return { execArgv: process.execArgv, inspectorActive: Boolean(require("node:inspector").url()) };
     },
     contexts: {},
+    idleClosed: {},
+    idleMs: idleMs(env, o.idleMs),
     evidenceId: new Date().toISOString().replace(/[:.]/g, "-") + "-" + process.pid,
     exitWaitMs: o.exitWaitMs || 5000,
     processTable: o.processTable || function () {
@@ -730,6 +742,7 @@ function checkArgs(args) {
 function command(s, id, args) {
   checkId(id);
   var dir = contextDir(s, id);
+  if (s.idleClosed[id]) throw plain("That browser was closed after " + Math.round(s.idleMs / 60000) + " minutes unused, to give its memory back. Open a new one with browser_context.");
   if (!fs.existsSync(path.join(dir, "config.json"))) throw plain("There is no open browser with that contextId. Open one with browser_context.");
   var record = s.contexts[id];
   var owner = readOwner(dir);
@@ -837,12 +850,32 @@ function createController(options) {
     checkId(input.contextId);
     return close(s, input.contextId);
   }
+  // Closes a browser nobody has used for the idle time and no command is running in; a browser still opening is left alone.
+  function releaseIdle() {
+    var now = Date.now();
+    return Promise.all(Object.keys(s.contexts).map(function (id) {
+      var record = s.contexts[id];
+      if (record.lastUsed === undefined) { record.lastUsed = now; return null; }
+      if (record.busy || now - record.lastUsed < s.idleMs) return null;
+      if (record.kind === "mine" ? !record.adapter : !fs.existsSync(path.join(contextDir(s, id), "owner.json"))) return null;
+      return close(s, id).then(function () { s.idleClosed[id] = true; }, function () { /* kept; the next pass tries again */ });
+    }));
+  }
+  if (s.idleMs > 0) setInterval(releaseIdle, Math.max(250, Math.min(30000, Math.floor(s.idleMs / 4)))).unref();
   return {
     settings: s,
+    releaseIdle: releaseIdle,
     call: function (name, input) {
       var given = input || {};
       if (name === "browser_context") return answer(function () { return context(given); });
-      if (name === "browser_command") return answer(function () { return command(s, given.contextId, given.args); });
+      if (name === "browser_command") {
+        var record = s.contexts[given.contextId];
+        if (record) { record.busy = (record.busy || 0) + 1; record.lastUsed = Date.now(); }
+        return answer(function () { return command(s, given.contextId, given.args); }).then(function (reply) {
+          if (record) { record.busy -= 1; record.lastUsed = Date.now(); }
+          return reply;
+        });
+      }
       return answer(function () { throw plain(unknownToolMessage(name, BROWSER_TOOL_NAMES, "Desk Browser's")); });
     },
     closeAll: function () {
