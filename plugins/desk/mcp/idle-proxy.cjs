@@ -20,6 +20,9 @@ var DEFAULT_IDLE_MS = 180000;
 var STOP_GRACE_MS = 5000;
 // A call the host never cancelled and the child never answered stops holding the child up after this long.
 var STALE_CALL_MS = 3600000;
+// A server that ends this soon after it started counts as crashing on start; this many in a row end the proxy instead of respawning forever.
+var QUICK_CRASH_MS = 10000;
+var MAX_QUICK_CRASHES = 3;
 var RESUME_ID = "desk-idle-proxy-resume";
 var FORWARDED_SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"];
 
@@ -61,6 +64,8 @@ function createIdleProxy(options) {
   var idleTimer = null;
   var killTimer = null;
   var finished = null;
+  var startedAt = 0;
+  var quickCrashes = 0;
 
   function touch() {
     lastTraffic = options.now();
@@ -140,6 +145,7 @@ function createIdleProxy(options) {
     }
     child = started;
     stopping = false;
+    startedAt = options.now();
     var buffered = "";
     started.stdout.setEncoding("utf8");
     started.stdout.on("data", function (chunk) {
@@ -194,9 +200,25 @@ function createIdleProxy(options) {
       if (queue.length > 0) ensureChild();
       return;
     }
-    // A child that ended by itself or by a crash takes the proxy with it, as it would have taken an in-process server.
-    if (signal) options.stderr.write("[desk-mcp] idle proxy: the server ended on " + signal + "\n");
-    finish(code === null || code === undefined ? 1 : code);
+    // A child that ended by itself or by a crash: the host keeps its tools. Calls it never answered get an error the host can retry, and the next message starts a new child, as after an idle stop.
+    var reason = signal ? "ended on " + signal : "exited with code " + code;
+    quickCrashes = options.now() - startedAt < QUICK_CRASH_MS ? quickCrashes + 1 : 1;
+    if (clientEnded || quickCrashes >= MAX_QUICK_CRASHES) {
+      options.stderr.write("[desk-mcp] idle proxy: the server " + reason + (clientEnded ? "\n" : " " + quickCrashes + " times in a row; not restarting it\n"));
+      return finish(code === null || code === undefined ? 1 : code);
+    }
+    options.stderr.write("[desk-mcp] idle proxy: the server " + reason + "; it restarts on the next message\n");
+    var lost = Object.keys(clientCalls);
+    clientCalls = {};
+    serverCalls = {};
+    lost.forEach(function (key) {
+      toClient(JSON.stringify({
+        jsonrpc: "2.0",
+        id: JSON.parse(key),
+        error: { code: -32603, message: "The Desk server ended " + reason + " before it answered. It restarts on the next call: retry this call. If it keeps happening, file it with friction_add (about: \"system\") including this message." }
+      }));
+    });
+    if (queue.length > 0) ensureChild();
   }
 
   function ensureChild() {

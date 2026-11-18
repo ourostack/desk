@@ -10,6 +10,7 @@ import * as path from "node:path"
 import {
   CHAINED_NAME,
   HOOK_MARKER,
+  RECOVERY_POINTER_NAME,
   TOOL_COMMIT_ENV,
   hookScript,
   installCardGuard,
@@ -126,6 +127,43 @@ test("a hand commit that edits a live card is refused, with a message that names
     assert.match(refused.stderr, /cannot reach/)
     const log = sh(root, ["log", "--oneline"]).stdout.trim().split("\n")
     assert.equal(log.length, 1, "nothing was committed")
+  } finally {
+    removeWithRetry(root, { recursive: true, force: true })
+  }
+})
+
+test("the refusal names a command that updates the card when the session's Desk tools are down: the real local-recovery script, with the card's track and slug", () => {
+  const root = makeDesk()
+  try {
+    installCardGuard(root)
+    writeFileSync(cardPath(root), CARD.replace("processing", "validating"))
+    const refused = commitAll(root)
+    const command = refused.stderr.split("\n").find((line) => line.includes("local-recovery.js"))
+    assert.match(command, /"track":"greenhouse","slug":"watering-api"/)
+    assert.match(command, /--operation task_update/)
+    const script = /node "([^"]+local-recovery\.js)" --root "([^"]+)"/.exec(command)
+    assert.ok(existsSync(script[1]), "the named script exists")
+    assert.equal(realpathSync(script[2]), root)
+    const help = spawnSync(process.execPath, [script[1], "--help"], { encoding: "utf8" })
+    assert.equal(help.status, 0)
+    assert.match(help.stdout, /task_update/)
+  } finally {
+    removeWithRetry(root, { recursive: true, force: true })
+  }
+})
+
+test("without the pointer file the refusal still names the script by its place in the plugin folder, and a card under desks/<alias> names --person", () => {
+  const root = makeDesk()
+  try {
+    installCardGuard(root)
+    rmSync(path.join(root, ".git", "hooks", RECOVERY_POINTER_NAME))
+    mkdirSync(path.join(root, "desks", "ari", "greenhouse", "pump"), { recursive: true })
+    writeFileSync(path.join(root, "desks", "ari", "greenhouse", "pump", "task.md"), CARD)
+    const refused = commitAll(root)
+    const command = refused.stderr.split("\n").find((line) => line.includes("local-recovery.js"))
+    assert.match(command, /<Desk plugin folder>\/mcp\/scripts\/local-recovery\.js/)
+    assert.match(command, /"track":"greenhouse","slug":"pump"/)
+    assert.match(command, /--person "ari"/)
   } finally {
     removeWithRetry(root, { recursive: true, force: true })
   }
