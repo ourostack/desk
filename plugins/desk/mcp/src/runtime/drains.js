@@ -580,7 +580,7 @@ export function ackWake({ paths, repo, wake, error, now }) {
   const state = states[repo]
   if (state && error && SESSION_GONE.test(error)) {
     const drain = readDrainConfig(paths.config).find((entry) => entry.repo === repo)
-    state.targetGone = { session: drain ? sessionOf(drain, state) : null, at: new Date(now).toISOString(), error: error.slice(0, 200) }
+    state.targetGone = { session: sessionOf(drain ?? {}, state), at: new Date(now).toISOString(), error: error.slice(0, 200) }
     writeDrainStates(paths.state, states)
   }
   if (!state || state.pending.length === 0) return { ok: true, changed: false, reason: "nothing is waiting" }
@@ -626,11 +626,11 @@ export function startSuccessor({ repo, predecessor, account }, { spawn = spawnSy
   const result = spawn(program, args, { encoding: "utf8", timeout: SHEPHERD_MS, env, windowsHide: true })
   let out = null
   try {
-    out = JSON.parse(String(result.stdout ?? ""))
+    out = JSON.parse(String(result.stdout))
   } catch {}
   if (out?.session_id) return { ok: true, session: String(out.session_id) }
-  const why = out?.error ?? String(result.stderr ?? "").trim().split("\n")[0] ?? result.error?.message
-  return { ok: false, error: String(why || result.error?.message || "shepherd create printed no session").slice(0, 200) }
+  const why = out?.error || String(result.stderr).trim().split("\n")[0] || result.error?.message || "shepherd create printed no session"
+  return { ok: false, error: String(why).slice(0, 200) }
 }
 
 /**
@@ -662,7 +662,7 @@ export function recoverDrainTarget({ paths, repo, now, start = startSuccessor })
 // ── GitHub ──
 
 /** The drain's GitHub access: its account's token from the `gh` CLI, then the REST API. `login` skips asking GitHub who the token is. */
-export async function connectGithub(account, { spawn = spawnSync, fetchImpl = fetch, env = process.env, login: knownLogin, sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)) } = {}) {
+export async function connectGithub(account, { spawn = spawnSync, fetchImpl = fetch, env = process.env, login: knownLogin, pauseMs = TOKEN_PAUSE_MS } = {}) {
   const tokenArgs = ["auth", "token", "--hostname", "github.com", ...(account ? ["--user", account] : [])]
   const cleaned = { ...env, PATH: ["/opt/homebrew/bin", "/usr/local/bin", env.PATH].filter(Boolean).join(":") }
   for (const name of ["GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GH_HOST"]) delete cleaned[name]
@@ -676,7 +676,7 @@ export async function connectGithub(account, { spawn = spawnSync, fetchImpl = fe
     // Only gh's own "no oauth token" (or a clean empty answer) means the account is not signed in; a timeout, a signal, a keyring that is busy or locked, or any other message is a read that failed and is tried again.
     transient = (result.status === null && result.error?.code !== "ENOENT") || (result.status !== 0 && said && !NO_TOKEN.test(said)) ? (said || result.error?.message || `gh stopped (${result.signal ?? "no status"})`) : ""
     if (!transient) break
-    if (attempt < TOKEN_TRIES) await sleep(TOKEN_PAUSE_MS * attempt)
+    if (attempt < TOKEN_TRIES) await new Promise((resolve) => setTimeout(resolve, pauseMs * attempt))
   }
   if (!token && transient) throw Object.assign(new Error(`Wait for the next poll, which reads the token again: the GitHub CLI's token read for ${account ?? "its active account"} gave no answer, probably because the keyring was busy or slow (${transient.slice(0, 160)})`), { code: "drains_github_cli_token_unavailable", transient: true })
   if (!token) throw Object.assign(new Error(`Sign in the GitHub CLI: the GitHub CLI has no token for ${account ?? "its active account"} (run \`gh auth login --hostname github.com\`)`), { code: "drains_sign_in_the_github_cli" })

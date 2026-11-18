@@ -1614,7 +1614,7 @@ test("a successor lapses when the config names a new session, and an ordinary fa
   assert.equal((await pollDrains({ paths: w.paths, connect: w.connect, now: NOW, ackCommand: [] })).status.some((line) => line.includes("-> 44444444: ")), true)
 })
 
-test("startSuccessor asks Shepherd to create the drain's session with a Succeeds line first, and reports why it could not", () => {
+test("startSuccessor asks Shepherd to create the drain's session with a Succeeds line first, and reports why it could not", async () => {
   const seen = []
   const ok = startSuccessor({ repo: "acme/widgets", predecessor: DRAIN.session, account: "me" }, { env: { DESK_DRAINS_SHEPHERD: "shep" }, spawn: (...call) => { seen.push(call); return { status: 0, stdout: '{"ok":true,"session_id":"abc"}' } } })
   assert.deepEqual(ok, { ok: true, session: "abc" })
@@ -1626,24 +1626,44 @@ test("startSuccessor asks Shepherd to create the drain's session with a Succeeds
   const bad = startSuccessor({ repo: "a/b", predecessor: "x" }, { env: { DESK_DRAINS_SHEPHERD: "shep" }, spawn: () => ({ status: 1, stdout: '{"ok":false,"error":"no project \'a/b\'"}' }) })
   assert.deepEqual(bad, { ok: false, error: "no project 'a/b'" })
   assert.equal(startSuccessor({ repo: "a/b", predecessor: "x" }, { env: { DESK_DRAINS_SHEPHERD: "shep" }, spawn: () => ({ status: 1, stdout: "", stderr: "boom\nmore" }) }).error, "boom")
+  assert.equal(startSuccessor({ repo: "a/b", predecessor: "x" }, { env: { DESK_DRAINS_SHEPHERD: "shep" }, spawn: () => ({ status: null, stdout: "", stderr: "", error: new Error("spawn shep ENOENT") }) }).error, "spawn shep ENOENT")
+  assert.equal(startSuccessor({ repo: "a/b", predecessor: "x" }, { env: { DESK_DRAINS_SHEPHERD: "shep" }, spawn: () => ({ status: 1, stdout: "", stderr: "" }) }).error, "shepherd create printed no session")
+  // Without an override: the housesitter release when it is installed, else shepherd on PATH.
+  const home = await mkTempRoot("desk-drains-")
+  const bin = path.join(home, "Library", "Application Support", "housesitter", "releases", "shepherd", "current", "bin")
+  const programs = []
+  const spawn = (program, args) => { programs.push([program, args[0]]); return { status: 0, stdout: '{"ok":true,"session_id":"s"}' } }
+  startSuccessor({ repo: "a/b", predecessor: "x" }, { env: {}, homeDir: home, spawn })
+  mkdirSync(bin, { recursive: true })
+  writeFileSync(path.join(bin, "shepherd.mjs"), "")
+  startSuccessor({ repo: "a/b", predecessor: "x" }, { env: {}, homeDir: home, spawn })
+  assert.deepEqual(programs, [["shepherd", "create"], [process.execPath, path.join(bin, "shepherd.mjs")]])
 })
 
 test("a token read that times out or hits a busy keyring is retried and never says to sign in", async () => {
   const tries = []
-  const slept = []
-  const sleep = async (ms) => { slept.push(ms) }
   const flaky = [{ status: null, signal: "SIGTERM", stdout: "" }, { status: 1, stdout: "", stderr: "keychain is locked\n" }, { status: 0, stdout: "tok\n" }]
   const spawn = () => { tries.push(1); return flaky[tries.length - 1] }
-  const api = await connectGithub("me", { spawn, sleep, fetchImpl: async () => response({ login: "me" }) })
+  const api = await connectGithub("me", { spawn, pauseMs: 1, fetchImpl: async () => response({ login: "me" }) })
   assert.equal(api.login, "me")
   assert.equal(tries.length, 3)
-  assert.equal(slept.length, 2)
-  const never = { spawn: () => ({ status: null, signal: "SIGTERM" }), sleep }
+  const never = { spawn: () => ({ status: null, signal: "SIGTERM" }), pauseMs: 1 }
   const failure = await connectGithub("me", never).catch((error) => error)
   assert.equal(failure.code, "drains_github_cli_token_unavailable")
   assert.doesNotMatch(failure.message, /Sign in|gh auth login/u)
   const missing = []
-  const signedOut = await connectGithub("me", { spawn: () => { missing.push(1); return { status: 1, stdout: "", stderr: "no oauth token found for github.com account me" } }, sleep }).catch((error) => error)
+  const signedOut = await connectGithub("me", { spawn: () => { missing.push(1); return { status: 1, stdout: "", stderr: "no oauth token found for github.com account me" } }, pauseMs: 1 }).catch((error) => error)
   assert.equal(signedOut.code, "drains_sign_in_the_github_cli")
   assert.equal(missing.length, 1, "a signed-out account is not retried")
+})
+
+test("an archived-session error for a drain no longer in the config is still recorded", async () => {
+  const w = await world([issue(1, "2026-11-13T01:00:00Z")])
+  await w.poll()
+  w.issues.push(issue(2, "2026-11-13T03:00:00Z", "New thing"))
+  await w.poll()
+  const config = JSON.parse(readFileSync(w.paths.config, "utf8"))
+  writeFileSync(w.paths.config, JSON.stringify({ ...config, drains: [{ ...config.drains[0], repo: "other/repo" }] }))
+  ackWake({ paths: w.paths, repo: DRAIN.repo, wake: wakeId(DRAIN.repo, w.state().pending), error: ARCHIVED, now: NOW })
+  assert.match(w.state().targetGone.error, /archived/u)
 })
