@@ -47,6 +47,8 @@ function fixture(options = {}) {
       return ok(options.rules ?? [[]])
     }
     if (operation === "branch") return ok(options.branch ?? { protected: false, protection: { enabled: false, required_status_checks: { contexts: [], checks: [] } } })
+    if (operation === "list" && args.includes("open")) return ok(options.open ?? [])
+    if (operation === "close") return { status: 0, stdout: "" }
     if (operation === "list") return ok(options.list ?? (options.noReadback || !created && options.create ? [] : [pr]))
     if (operation === "create") { created = true; return { status: 0, stdout: pr.url } }
     if (operation === "view") {
@@ -410,4 +412,23 @@ test("a branch push cut off twice says it was cut off and shows no remote line",
     assert.match(error.message, /the contribution branch push was cut off twice, and the upstream branch was not pushed\.$/u)
     return true
   })
+})
+
+test("a newer publication closes the earlier publication PRs it supersedes and leaves other PRs alone", () => {
+  const open = [
+    { number: 7, headRefName: `desk/publish/${"d".repeat(40)}` },
+    { number: 8, headRefName: "feature/x" },
+    { number: 42, headRefName: `desk/publish/${head}` },
+  ]
+  const f = fixture({ create: true, open })
+  publishPullRequest(f.request)
+  const closed = f.calls.filter((call) => call[2] === "close").map((call) => call[3])
+  assert.deepEqual(closed, ["7"])
+  const close = f.calls.find((call) => call[2] === "close")
+  assert.ok(close.includes("--delete-branch") && close.some((arg) => /Superseded by .*\/pull\/42/u.test(arg)))
+})
+
+test("a failure while closing superseded PRs does not stop publishing", () => {
+  const f = fixture({ create: true, open: [{ number: 7, headRefName: `desk/publish/${"d".repeat(40)}` }], fail: "close" })
+  assert.equal(publishPullRequest(f.request).receipt.merge, merged)
 })

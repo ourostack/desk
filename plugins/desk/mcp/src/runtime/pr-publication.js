@@ -160,6 +160,16 @@ export function publishPullRequest({ git, spawnGit, root, upstream, head, onto, 
   }
   if (pr === undefined) throw Object.assign(new Error("Run it again: The created publication PR could not be read back"), { code: "pr_publication_run_it_again_the_created" })
   const receipt = { url: pr.url, head, branch, base }
+  // Each candidate has its own branch, so an earlier candidate's PR that never merged would stay open until someone closes it by hand. This one carries its work, so close the others; best effort.
+  if (pr.state === "OPEN") {
+    try {
+      const open = gh(["pr", "list", "--repo", repo.full, "--base", base, "--state", "open", "--json", "number,headRefName"])
+      for (const old of Array.isArray(open) ? open : []) {
+        if (typeof old?.headRefName !== "string" || !old.headRefName.startsWith("desk/publish/") || old.headRefName === branch || !Number.isSafeInteger(old.number)) continue
+        try { gh(["pr", "close", String(old.number), "--repo", repo.full, "--delete-branch", "--comment", `Superseded by ${pr.url}, which publishes a newer candidate that includes this one's work.`], false) } catch { /* the next publication tries again */ }
+      }
+    } catch { /* closing is housekeeping; it never blocks publishing */ }
+  }
   // Merging must not depend on one repository setting: the relay's label goes on every publication PR, and auto-merge is asked for where the repository allows it. Both are best effort; the checks below still gate Desk's own merge.
   if (pr.state !== "MERGED") {
     const label = MERGE_LABEL
