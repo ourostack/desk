@@ -10,7 +10,7 @@ import { createHash, randomBytes } from "node:crypto"
 import { fileURLToPath } from "node:url"
 import { mkTempRoot } from "../_temp_roots.js"
 import { prepareArchiveState } from "../../../../../plugins/desk/mcp/src/tools/archive-state.js"
-import { moveArchive } from "./_legacy_directory_move.mjs"
+import { moveArchive, NATIVE_READINESS_MS } from "./_legacy_directory_move.mjs"
 import { nativeMoveObserver } from "./archive_handoff_qualification_child.mjs"
 import { observeIdentity, decodeFileIdInfo, identityArtifactPath } from "./_windows_archive_identity.mjs"
 
@@ -1174,3 +1174,14 @@ for (const nodeReference of [false, true]) for (const nativeBaseline of [false, 
     }, { nodeReference, diagnostic: true })
   }
 }
+
+test("the native move waits for PowerShell's readiness longer than a loaded runner's slow start", async () => {
+  const bounds = []
+  const child = Object.assign(new EventEmitter(), { pid: 1, stdin: Object.assign(new EventEmitter(), { write() {}, end() {} }), stdout: new EventEmitter(), stderr: new EventEmitter(), kill() {} })
+  const timers = (fn, ms) => { bounds.push(ms); return setTimeout(fn, 1) }
+  await assert.rejects(moveArchive("C:\\owned\\source", "C:\\owned\\destination", async () => {}, {
+    platform: "win32", env: { SystemRoot: "C:\\Windows" }, realpath: async (file) => file, spawn: () => child, setTimeout: timers, clearTimeout,
+  }), /readiness exceeded its bound/u)
+  assert.equal(bounds[0], NATIVE_READINESS_MS)
+  assert.ok(NATIVE_READINESS_MS >= 20000, "readiness outlasts PowerShell's worst measured start")
+})
