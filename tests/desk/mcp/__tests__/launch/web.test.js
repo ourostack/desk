@@ -1917,6 +1917,9 @@ test("a mine browser is closed when idle, and one still opening is left alone", 
   record.adapter = undefined
   await controller.releaseIdle()
   assert.ok(controller.settings.contexts[contextId], "a mine browser without its handle yet is left alone")
+  record.adapter = { close: () => Promise.reject(new Error("stuck")) }
+  await controller.releaseIdle()
+  assert.ok(controller.settings.contexts[contextId], "a browser that will not close stays, to be tried again")
   record.adapter = adapter
   await controller.releaseIdle()
   assert.equal(controller.settings.contexts[contextId], undefined)
@@ -1934,5 +1937,17 @@ test("a fresh browser still being started is left alone by the idle release", as
   await controller.releaseIdle()
   assert.ok(controller.settings.contexts[contextId], "no owner file yet means it is still opening")
   fs.renameSync(`${owner}.hold`, owner)
+  await controller.closeAll()
+})
+
+test("a reopened browser still answers when it cannot go back to the last page", async () => {
+  const { options } = await setup()
+  const controller = web.createController({ ...options, idleMs: 60000 })
+  const { contextId } = JSON.parse(text(await controller.call("browser_context", { action: "open" })))
+  controller.settings.contexts[contextId].lastUsed = Date.now() - 120000
+  await controller.releaseIdle()
+  controller.settings.idleClosed[contextId].url = "--help"
+  const reply = await controller.call("browser_command", { contextId, args: ["snapshot"] })
+  assert.equal(reply.isError, false, text(reply))
   await controller.closeAll()
 })

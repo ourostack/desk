@@ -866,7 +866,7 @@ function createController(options) {
         var fresh = opened.contextId;
         s.aliases[id] = fresh;
         delete s.idleClosed[id];
-        var back = gone.url ? command(s, fresh, ["goto", gone.url]).catch(function () { /* the command that follows reports what the page does */ }) : Promise.resolve();
+        var back = gone.url ? Promise.resolve().then(function () { return command(s, fresh, ["goto", gone.url]); }).catch(function () { /* the command that follows reports what the page does */ }) : Promise.resolve();
         return back.then(function () {
           if (s.contexts[fresh] && gone.url) s.contexts[fresh].url = gone.url;
           return { id: fresh, text: "Desk reopened this browser, which had been closed after " + Math.round(s.idleMs / 60000) + " minutes unused" + (gone.url ? ", and went back to " + gone.url : "") + ". Page state such as scroll position, form input and open tabs was not kept." };
