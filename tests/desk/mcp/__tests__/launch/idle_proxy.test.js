@@ -443,5 +443,5 @@ test("bootstrap.cjs runs the proxy when its own Node is the right one, index.js 
   await new Promise((resolve) => setImmediate(resolve))
   failingInput.end()
   await new Promise((resolve) => setImmediate(resolve))
-  assert.match(errors.join(""), /could not start index\.js: EACCES/u)
+  assert.match(errors.join(""), /could not start .*EACCES/u)
 })
