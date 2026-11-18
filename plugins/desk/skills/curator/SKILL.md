@@ -9,7 +9,7 @@ Curator has two jobs within authorized maintenance scope: the improvement-card r
 
 ## The improvement-card routine
 
-An improvement card is one file under `_meta/improvement/`, opened by the factory loop or system friction. Establish that tooling maintenance is in this task's authorized scope before taking one; no repeat approval is needed when that scope already exists. `improvement_next` claims the oldest available card and returns its `claim_id` and authority text. It refuses in a noninteractive or headless session. Existing bounds remain: 1 live claim per machine, 2 new claims per machine per day, a claim lasts 4 hours. A refusal (`claim_held`, `cap_reached`, `none_open`) says why; never hunt for card files to work around it.
+An improvement card is one file under `_meta/improvement/`, opened by the factory loop or system friction. Establish that tooling maintenance is in this task's authorized scope before taking one; no repeat approval is needed when that scope already exists. `improvement_next` claims the oldest available card and returns its `claim_id` and authority text. It refuses in a noninteractive or headless session. Existing bounds remain: 1 live claim per machine (no daily cap), a claim lasts 4 hours. A refusal (`claim_held`, `none_open`) says why; never hunt for card files to work around it.
 
 the authority, in short: decide and fix. a human is asked only for a true gate: money on a human's payment method, a passkey, password or MFA code only a human holds, or an irreversible destructive action. every ruling you make while working the card goes in the countermeasure pull request, and the card links to it.
 

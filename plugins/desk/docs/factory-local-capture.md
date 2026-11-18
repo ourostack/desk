@@ -457,7 +457,7 @@ The plugin starts the evaluator itself only on a subscription sign-in. Under per
 ### Bounds
 
 - At most 30 evaluator runs a day per machine, less the ledger's unused triage windows (see [Shared launch ledger](#shared-launch-ledger)), a safety ceiling rather than a pace; one job at most once a day, and at most three times in a row without an accepted answer (an accepted run starts the count again).
-- 1 live claim per machine and 2 new claims per machine per day; a claim lasts 4 hours, then the card is open again.
+- 1 live claim per machine and no daily cap; a claim lasts 4 hours, then the card is open again.
 - The 72-hour freshness rule: a reading older than 72 hours decides nothing, and a step that last succeeded more than 72 hours ago, or failed three times in a row, is stale.
 - Two age alarms: the oldest open card is older than 7 days (`loop_alarm:improvement_age`), or a card has been in verification for more than 21 days (`loop_alarm:improvement_stuck`). Loop alarm cards are not counted in either age.
 - Verify checks a card at most once every 23 hours and at most 25 cards a run.
@@ -491,7 +491,8 @@ Closing needs evidence, and a reading that failed decides nothing.
 
 - A card mirrored to a store issue closes only on the store's verdict: `closed_confirmed` when the build confirms the change, `closed_unverified` when it cannot.
 - A card with no store issue closes on its source's own recovery: an andon issue closing, a reconcile reason at zero on two runs, a store build passing again, a loop condition clearing.
-- A Desk problem closes after 7 days quiet from the version that shipped the fix, with its issue closed: `closed_confirmed` when the known-hit reading is measured and shows no hit, `closed_unverified` otherwise.
+- An open or claimed Desk problem whose own issue is closed closes at once as `closed_unverified` with `source_recovered`, the issue staying as its evidence.
+- A Desk problem that shipped a fix closes after 7 days quiet from the version that shipped the fix, with its issue closed: `closed_confirmed` when the known-hit reading is measured and shows no hit, `closed_unverified` otherwise.
 - Thin data never confirms a card. A card still reading thin data after 14 checks closes `closed_unverified` (`thin_data_after_14_checks`) when its pull request is merged with green checks, and goes back to `open` when it is not merged.
 - A condition that is measured present again at 3 verifying checks reopens the card.
 
