@@ -24,14 +24,25 @@ function git(spawnGit, root, args, { env, input, timeout = GIT_TIMEOUT_MS } = {}
   return { ok: !answer.error && answer.status === 0, status: answer.status, cut: Boolean(answer.error || answer.signal), notRun: answer === NOT_RUN, skipped: answer.skipped === true, stdout: String(answer.stdout ?? ""), stderr: String(answer.stderr ?? answer.error?.message ?? "").trim() }
 }
 
+// A tree named by its hash never changes, so a save that reads the same tree twice asks Git once.
+let lastTree = { key: "", lines: [] }
+
+const memoKey = (root, commit, paths) => `${root}\0${commit}\0${paths.join("\0")}`
+const isRealGit = (spawnGit) => spawnGit === spawnSync || spawnGit.real === spawnSync
+
 function treeLines(spawnGit, root, commit, paths) {
+  const memo = isRealGit(spawnGit)
+  const key = memoKey(root, commit, paths)
+  if (memo && lastTree.key === key) return [...lastTree.lines]
   const tree = git(spawnGit, root, ["ls-tree", "-r", "-z", commit, "--", ...paths])
   if (!tree.ok) return null
-  return tree.stdout.split("\0").filter(Boolean).map((record) => {
+  const lines = tree.stdout.split("\0").filter(Boolean).map((record) => {
     const [meta, entryPath] = record.split("\t")
     const [mode, , sha] = meta.split(" ")
     return `${mode} ${sha}\t${entryPath}`
   }).sort()
+  if (memo) lastTree = { key, lines }
+  return [...lines]
 }
 
 // What git commit refuses to commit partially, or commits with more than one parent (0972 #4 on ae1395e4). The finish makes a
