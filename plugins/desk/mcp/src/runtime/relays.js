@@ -131,7 +131,7 @@ function parseStrict(strict, at, bad) {
   }
 }
 
-function parseMerge({ repo, label, method, deleteBranch, requiredChecks, requireMainWorkflowGreen, skippedPasses, strict }, at, bad) {
+function parseMerge({ repo, label, method, deleteBranch, requiredChecks, requireMainWorkflowGreen, skippedPasses, updateBehind, strict }, at, bad) {
   if (!isRepo(repo)) throw bad(`${at}.repo is not "owner/name"`)
   if (label !== undefined && !isText(label)) throw bad(`${at}.label is not a label name`)
   if (method !== undefined && !METHODS.includes(method)) throw bad(`${at}.method is not "squash", "merge" or "rebase"`)
@@ -139,6 +139,7 @@ function parseMerge({ repo, label, method, deleteBranch, requiredChecks, require
   if (!textList(requiredChecks)) throw bad(`${at}.requiredChecks is not a non-empty list of check names (a "*" matches any text)`)
   if (requireMainWorkflowGreen !== undefined && !isText(requireMainWorkflowGreen)) throw bad(`${at}.requireMainWorkflowGreen is not a workflow file name such as ci.yml`)
   if (skippedPasses !== undefined && typeof skippedPasses !== "boolean") throw bad(`${at}.skippedPasses is not true or false`)
+  if (updateBehind !== undefined && typeof updateBehind !== "boolean") throw bad(`${at}.updateBehind is not true or false`)
   return {
     repo,
     label: (label ?? "merge-when-green").trim(),
@@ -147,6 +148,7 @@ function parseMerge({ repo, label, method, deleteBranch, requiredChecks, require
     requiredChecks: requiredChecks.map((check) => check.trim()),
     ...(requireMainWorkflowGreen === undefined ? {} : { requireMainWorkflowGreen: requireMainWorkflowGreen.trim() }),
     ...(skippedPasses === undefined ? {} : { skippedPasses }),
+    ...(updateBehind === undefined ? {} : { updateBehind }),
     ...(strict === undefined ? {} : { strict: parseStrict(strict, at, bad) }),
   }
 }
@@ -422,6 +424,7 @@ export function waitingOnChecks(requiredChecks, runs, skippedPasses = false, sta
   return others.length === 0 ? required : [...required, `${others.length} other check${others.length === 1 ? "" : "s"} on the head not green (${shown(others)})`]
 }
 
+const RED = new Set(["failure", "timed_out", "cancelled", "startup_failure"])
 const MERGEABLE = new Set(["clean", "unstable", "has_hooks"])
 
 function waitingOnPull(pr, allowBehind) {
@@ -587,7 +590,7 @@ async function handlePull(relay, state, ctx, number) {
   record.readAt = new Date(ctx.now).toISOString()
   record.headSha = pr.headSha
   const { strict } = relay
-  let waiting = waitingOnPull(pr, Boolean(strict?.requireCurrentBase))
+  let waiting = waitingOnPull(pr, Boolean(strict?.requireCurrentBase || relay.updateBehind))
   let mainBranch
   let judged
   let warnings = []
@@ -601,6 +604,9 @@ async function handlePull(relay, state, ctx, number) {
       const { runs } = await readChecks(ctx, state, relay.repo, pr.headSha)
       const { statuses } = await readStatuses(ctx, state, relay.repo, pr.headSha)
       waiting = waitingOnChecks(relay.requiredChecks, runs, relay.skippedPasses, statuses)
+      // A red head that is behind may already be fixed on the base, and a rerun reuses the old tree: bring it up to date. A pending or green head is left, so a busy base does not restart every pull request's checks.
+      const red = runs.some((run) => run.status === "completed" && RED.has(run.conclusion))
+      if (relay.updateBehind && waiting.length > 0 && red && (await headIsBehind(ctx, state, relay, pr))) waiting = record.update?.from === pr.headSha ? updateWaiting(record, pr) : await updateBranch(ctx, state, relay, record, pr, number)
     }
     if (relay.requireMainWorkflowGreen) {
       mainBranch = await cached(ctx, state, `/repos/${relay.repo}`, (body) => body.default_branch)

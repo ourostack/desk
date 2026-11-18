@@ -20,9 +20,9 @@ test("only a red required check calls for a message; a red optional check or a p
 })
 
 test("the message names the files or checks, says to merge main when behind, and is recognised once sent", () => {
-  const conflict = message({ kind: "conflict", author: "ari", sha: "abc1234567", files: ["a.js", "b.js"] })
-  assert.match(conflict, /@ari.*`a\.js`, `b\.js`/su)
-  const red = message({ kind: "red", author: "ari", sha: "abc1234567", red: ["Windows suite"], behind: true })
+  const conflict = message({ kind: "conflict", sha: "abc1234567", files: ["a.js", "b.js"] })
+  assert.match(conflict, /`a\.js`, `b\.js`/su)
+  const red = message({ kind: "red", sha: "abc1234567", red: ["Windows suite"], behind: true })
   assert.match(red, /`Windows suite`.*abc123456.*merge main in/su)
   assert.ok(alreadySent([{ body: conflict }], "conflict", "abc1234567"))
   assert.ok(!alreadySent([{ body: conflict }], "conflict", "def"), "a new head commit is told again")

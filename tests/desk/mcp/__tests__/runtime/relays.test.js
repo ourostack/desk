@@ -484,6 +484,7 @@ test("skippedPasses is true or false on a merge relay, and anything else is name
   const merge = (extra) => parseRelayConfig(JSON.stringify({ relays: [{ ...MERGE, ...extra }] }), "relays.json")[0]
   assert.equal(merge({ skippedPasses: true }).skippedPasses, true)
   assert.throws(() => merge({ skippedPasses: "yes" }), /relays\[0\]\.skippedPasses is not true or false/u)
+  assert.throws(() => merge({ updateBehind: "yes" }), /relays\[0\]\.updateBehind is not true or false/u)
 })
 
 test("merge-when-green: with skippedPasses a skipped or neutral check merges, and a cancelled one still holds the pull request", async () => {
@@ -1180,4 +1181,26 @@ test("cost: a merge relay with nothing labelled stretches its interval, and goes
   await w.poll(NOW + 24 * 30 * SECOND)
   await w.poll(NOW + 25 * 30 * SECOND)
   assert.equal(w.state(MERGE.name).idlePolls, 0)
+})
+
+test("updateBehind: a red head that is behind main is updated once; a pending, green or current head is left alone", async () => {
+  const relay = { ...MERGE, updateBehind: true }
+  const redChecks = [check("typecheck", "failure"), check("npm test (ubuntu-latest, 1/2)"), check("npm test (ubuntu-latest, 2/2)")]
+  const red = await setup([relay])
+  mergeWorld(red.world, { checks: redChecks })
+  red.world.on("GET", /\/compare\/main\.\.\.a+/u, () => ({ status: "behind" }))
+  red.world.on("PUT", /\/pulls\/7\/update-branch$/u, () => ({ ok: true, status: 202, body: { message: "Updating pull request branch." } }))
+  await red.poll(NOW)
+  assert.deepEqual(prWrites(red.world), [{ method: "PUT", route: "/repos/o/pages/pulls/7/update-branch", body: { expected_head_sha: SHA } }])
+  await red.poll(NOW + 5 * MIN)
+  assert.equal(prWrites(red.world).length, 1, "the same head is not updated twice")
+
+  for (const [why, checks, compare] of [["pending", [check("typecheck", null, "in_progress")], "behind"], ["green", GREEN, "behind"], ["current", redChecks, "ahead"]]) {
+    const w = await setup([relay])
+    mergeWorld(w.world, { checks })
+    w.world.on("GET", /\/compare\/main\.\.\.a+/u, () => ({ status: compare }))
+    w.world.on("PUT", /\/pulls\/7\/update-branch$/u, () => ({ ok: true, status: 202, body: {} }))
+    await w.poll(NOW)
+    assert.ok(!prWrites(w.world).some((write) => write.route.endsWith("/update-branch")), `a ${why} head is not updated`)
+  }
 })
