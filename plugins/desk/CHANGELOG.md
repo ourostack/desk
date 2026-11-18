@@ -1,5 +1,31 @@
 # desk plugin — changelog
 
+## 3.2.278 — 2026-11-18
+
+Desk's browser closes a headless browser that has sat unused for 5 minutes (`DESK_WEB_IDLE_MS`, 0 for never) and gives back the 100-350 MB it held; agents often forget to close one. The next command on it reopens a browser of the same kind by itself, goes back to the last page it was sent to, and says in that reply that it reopened. Scroll position, form input and extra tabs are not kept.
+
+Desk's MCP server now vendors Ouro UI v1.3.306, moved by Ouro Current.
+
+**Ship as you go.** `work-orchestration` now says each increment goes live once reviewed and green, with every surface it touches updated in the same change and its live place reported, never held for the end of a pass or for a sibling change, following ourostack's [ship as you go](https://github.com/ourostack/.github/blob/main/agents/ship-the-smallest-unit.md) rule. `using-desk` says the same in a phrase.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.277 — 2026-11-18
+
+### Durable work goes on the desk, not in the host's session folder
+
+The GitHub Copilot app tells agents to write plans and notes in the session's `files/` folder, and its image tool saves to the session's `images/` folder. Both vanish with the session and nobody else can find them, so a lane wrote an inventory, a generated test and reference images there and handed the person host paths. Three changes:
+
+The boot text's last rule now says durable work (reports, evidence, images others must find) goes in the focused task's desk folder and the host's session `files/` is scratch, overriding the host's artifacts instruction. It replaces wording in place, so the boot text stays within its 1.4 KB budget.
+
+A new Copilot `preToolUse` hook, [`hooks/copilot-durable-files.cjs`](hooks/copilot-durable-files.cjs), watches `create`, `edit` and the image tools. When one targets a durable-looking file (`.md`, an image, `.svg`, `.pdf`, `.csv`, `.json`, `.html`) under `~/.copilot/session-state/*/files` or `*/images`, it allows the call and adds a note naming the focused task's folder, or telling the agent to run start-task first when no task is focused. It never blocks and fails open.
+
+`desk_status`'s "details are still loading" answer now says what to do meanwhile: `task_focus` the task or `task_create` one with `focus: true`, so the work has a desk folder.
+
+An idle Desk MCP server now gives its memory back. A host keeps one server per hosted Copilot session, and each held 200 to 460 MB (33 of them took 15 GB on the Mac mini, which then swapped). `bootstrap.cjs` now runs the server under [`mcp/idle-proxy.cjs`](mcp/idle-proxy.cjs), a process of about 50 MB that passes the MCP stream through. After 3 minutes with no traffic and no call waiting, it closes the server's stdin and the server's memory is released; the next message starts a new server, replays the handshake and delivers the message, so the host sees one server throughout. The first call after a release takes about a second longer; calls on a running server are unchanged. `DESK_MCP_IDLE_MS` sets the idle time in milliseconds, and `0` keeps the server running as before. See the [MCP README](mcp/README.md).
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.276 — 2026-11-18
 
 Desk's MCP server now vendors Ouro UI v1.3.301, moved by Ouro Current.

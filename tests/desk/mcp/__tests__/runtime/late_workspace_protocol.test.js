@@ -16,6 +16,8 @@ let sequence = 0
 const update = { track: "work", slug: "one", status: "processing" }
 const text = "---\nname: One\nstatus: drafting\n---\n\n# One\n"
 const payload = (result) => JSON.parse(result.content[0].text)
+// A tool call on a loaded hosted Windows runner has taken longer than 15 s; a real hang still fails at this bound, and the file has its own 30-minute limit.
+const RPC_DEADLINE_MS = 60000
 const assertWritten = (result) => assert.notEqual(result.isError, true, JSON.stringify(result))
 // A search engine may legitimately be started again for B (a failed start retries), so the starts are A once,
 // then only B: never A again after the session moved to B.
@@ -87,7 +89,7 @@ async function fixture(t, { explicit = false, person = null, capturedFolder = fa
   })
   const rpc = (method, params) => new Promise((resolve, reject) => {
     const requestId = ++id
-    const deadline = setTimeout(() => reject(new Error(`${method} did not answer`)), 15000)
+    const deadline = setTimeout(() => reject(new Error(`${method} did not answer`)), RPC_DEADLINE_MS)
     waiting.set(requestId, (result) => {
       clearTimeout(deadline)
       waiting.delete(requestId)

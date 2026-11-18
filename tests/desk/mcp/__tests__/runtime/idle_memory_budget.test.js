@@ -95,3 +95,41 @@ test("an idle Desk MCP server holds under 100 MB: its server process is released
     clearTimeout(killer)
   }
 })
+
+test("an idle desk-web server holds under 100 MB: no browser stays open past the idle time and the process itself stays small", { skip: process.platform === "win32", timeout: 60000 }, async () => {
+  const webFile = path.join(path.dirname(bootstrapPath), "web.cjs")
+  const server = spawn(process.execPath, [webFile], { stdio: ["pipe", "pipe", "pipe"] })
+  const waiting = new Map()
+  let buffered = ""
+  server.stdout.on("data", (chunk) => {
+    buffered += chunk
+    for (let end = buffered.indexOf("\n"); end >= 0; end = buffered.indexOf("\n")) {
+      const line = buffered.slice(0, end)
+      buffered = buffered.slice(end + 1)
+      try { const message = JSON.parse(line); waiting.get(message.id)?.(message) } catch { /* not a message */ }
+    }
+  })
+  let nextId = 1
+  const request = (method, params = {}) => new Promise((resolve, reject) => {
+    const id = nextId++
+    const timer = setTimeout(() => reject(new Error(`no answer to ${method}`)), 30000)
+    waiting.set(id, (message) => { clearTimeout(timer); resolve(message) })
+    server.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`)
+  })
+  try {
+    await request("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "budget", version: "1" } })
+    const listed = await request("tools/list")
+    assert.ok(listed.result.tools.length > 0, "the tools are listed")
+    await sleep(IDLE_MS)
+    const instrumented = Object.keys(process.env).some((name) => name.startsWith("NYC_"))
+    const idleMb = rssMb(server.pid)
+    if (!instrumented) assert.ok(idleMb < IDLE_BUDGET_MB, `an idle desk-web holds ${idleMb.toFixed(1)} MB, budget ${IDLE_BUDGET_MB} MB`)
+    assert.equal(childPids(server.pid).length, 0, "no browser or helper process is left running")
+  } finally {
+    const closed = new Promise((resolve) => server.once("exit", resolve))
+    server.stdin.end()
+    const killer = setTimeout(() => server.kill("SIGKILL"), 10000)
+    await closed
+    clearTimeout(killer)
+  }
+})
