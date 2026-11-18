@@ -25,7 +25,7 @@ const GIT_TIMEOUT_MS = 10_000
 // whatever of this remains, capped at `GIT_TIMEOUT_MS`, and the sequence gives up (as `unresolved`, never a hang) once it is gone.
 const SYNC_WORKSPACE_DEADLINE_MS = 20_000
 // A fetch this recent (this worker's, a save's delivery or an earlier pull) is what a pull reads instead of asking the remote again.
-export const FETCH_FRESH_MS = 15_000
+const FETCH_FRESH_MS = 15_000
 
 
 // `GIT_SSH_COMMAND` gets the same treatment `GIT_TERMINAL_PROMPT=0` already
