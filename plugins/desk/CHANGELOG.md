@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.304 — 2026-11-19
+
+The merge relay now serves labelled pull requests oldest first. While main is moving, only the oldest one behind it is brought up to date; younger ones queue behind it, so they no longer all restart their checks at once and a pull request that was green can no longer be starved.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.303 — 2026-11-19
 
 Desk's MCP server now vendors Ouro UI v1.3.321, moved by Ouro Current.

@@ -1,1 +1,0 @@
-The merge relay now serves labelled pull requests oldest first. While main is moving, only the oldest one behind it is brought up to date; younger ones queue behind it, so they no longer all restart their checks at once and a pull request that was green can no longer be starved.
