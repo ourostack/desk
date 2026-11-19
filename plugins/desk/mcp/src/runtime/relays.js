@@ -114,7 +114,7 @@ function parseDispatch({ watch, fire, settleSeconds }, at, bad) {
   }
 }
 
-const STRICT_FIELDS = ["requiredWorkflows", "advisoryJobs", "advisoryWorkflows", "requireCurrentBase"]
+const STRICT_FIELDS = ["requiredWorkflows", "advisoryJobs", "advisoryWorkflows", "requireCurrentBase", "serial"]
 
 /** The strict-mode block: a bad field fails loudly, an unknown field too (a misspelt advisory list would otherwise make an advisory job block, or worse, silently not apply). */
 function parseStrict(strict, at, bad) {
@@ -122,12 +122,13 @@ function parseStrict(strict, at, bad) {
   for (const key of Object.keys(strict)) if (!STRICT_FIELDS.includes(key)) throw bad(`${at}.strict.${key} is not a strict field; use ${STRICT_FIELDS.join(", ")}`)
   if (!textList(strict.requiredWorkflows)) throw bad(`${at}.strict.requiredWorkflows is not a non-empty list of workflow names or file names such as ci`)
   for (const key of ["advisoryJobs", "advisoryWorkflows"]) if (strict[key] !== undefined && !(Array.isArray(strict[key]) && strict[key].every(isText))) throw bad(`${at}.strict.${key} is not a list of names`)
-  if (strict.requireCurrentBase !== undefined && typeof strict.requireCurrentBase !== "boolean") throw bad(`${at}.strict.requireCurrentBase is not true or false`)
+  for (const key of ["requireCurrentBase", "serial"]) if (strict[key] !== undefined && typeof strict[key] !== "boolean") throw bad(`${at}.strict.${key} is not true or false`)
   return {
     requiredWorkflows: strict.requiredWorkflows.map((name) => name.trim()),
     advisoryJobs: (strict.advisoryJobs ?? []).map((name) => name.trim()),
     advisoryWorkflows: (strict.advisoryWorkflows ?? []).map((name) => name.trim()),
     requireCurrentBase: strict.requireCurrentBase ?? true,
+    serial: strict.serial ?? true,
   }
 }
 
@@ -561,7 +562,7 @@ async function dispatchMissing(ctx, state, relay, record, pr, missing) {
 /** Brings the head up to the base once per head. A refusal (a conflict, say) is remembered and reported, never retried for that head. */
 /** Brings a behind head up to date, but only for the oldest pull request in line: a younger one waits, so that merging in arrival order does not restart every head's checks at once. */
 async function updateInTurn(ctx, state, relay, record, pr, number) {
-  if (ctx.line.head !== undefined && ctx.line.head !== number) return [`queued behind #${ctx.line.head}: the oldest labelled pull request is brought up to date first, so a busy ${pr.baseRef} cannot starve it`]
+  if (relay.strict?.serial !== false && ctx.line.head !== undefined && ctx.line.head !== number) return [`queued behind #${ctx.line.head}: the oldest labelled pull request is brought up to date first, so a busy ${pr.baseRef} cannot starve it`]
   const waiting = await updateBranch(ctx, state, relay, record, pr, number)
   if (!record.update.failed) ctx.line.head = number
   return waiting
@@ -640,7 +641,7 @@ async function handlePull(relay, state, ctx, number) {
   record.readAt = new Date(ctx.now).toISOString()
   record.headSha = pr.headSha
   const { strict } = relay
-  let waiting = waitingOnPull(pr, Boolean(strict?.requireCurrentBase || relay.updateBehind))
+  let waiting = waitingOnPull(pr, Boolean(strict || relay.updateBehind))
   let mainBranch
   let judged
   let warnings = []

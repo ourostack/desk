@@ -1030,7 +1030,8 @@ test("a hosted native lane produces every host-bound runtime pack target without
   for (const lane of hostedNativePackLanes) {
     for (const { name, job } of matrixEntriesForTarget(jobs, lane.target)) {
       assert.equal(job.needs ?? null, null, `${name} produces ${lane.target} and must not wait on another job`)
-      assert.equal(job.if ?? null, null, `${name} produces ${lane.target} and must run on every change`)
+      // The one exception: the macOS job is skipped on a pull request (its runners are scarce) and runs on main after the merge.
+      assert.ok([null, "github.event_name != 'pull_request'"].includes(job.if ?? null), `${name} produces ${lane.target} and must run on every change but a pull request's`)
     }
   }
 
