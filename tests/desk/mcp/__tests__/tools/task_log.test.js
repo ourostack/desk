@@ -10,6 +10,8 @@ import { desk_save } from "../../../../../plugins/desk/mcp/src/tools/desk-save.j
 import { commitWaitingLogs, waitingLogs } from "../../../../../plugins/desk/mcp/src/runtime/append-lane.js"
 import { logSummary } from "../../../../../plugins/desk/mcp/src/tools/task-log.js"
 import { activeTasks } from "../../../../../plugins/desk/mcp/src/desk/active-tasks.js"
+import { resolveSyncLockPath } from "../../../../../plugins/desk/mcp/src/runtime/sync-worker.js"
+import { readFileSync } from "node:fs"
 import { formatBootText } from "../../../../../plugins/desk/mcp/src/runtime/boot-text.js"
 
 const POLICY = {
@@ -24,6 +26,21 @@ const git = (root, args) => {
   const result = spawnSync("git", ["-C", root, ...args], { encoding: "utf8", windowsHide: true })
   assert.equal(result.status, 0, `git ${args[0]}: ${result.stderr}`)
   return result.stdout.trim()
+}
+const workerPid = (root) => {
+  try {
+    return JSON.parse(readFileSync(resolveSyncLockPath({ root, env: process.env }), "utf8")).pid ?? null
+  } catch {
+    return null
+  }
+}
+const pidAlive = (pid) => {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error) {
+    return error.code === "EPERM"
+  }
 }
 async function fixture(t, { policy = false } = {}) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "desk-task-log-"))
@@ -88,8 +105,17 @@ test("a log entry reaches a commit and the remote when the server is killed insi
   `], { stdio: "inherit" })
   await new Promise((resolve) => server.once("exit", resolve))
   const landed = () => spawnSync("git", ["--git-dir", origin, "log", "-1", "--format=%s", "main"], { encoding: "utf8" }).stdout.trim()
-  for (let waited = 0; landed() !== "task_update: log track/work" && waited < 60_000; waited += 250) await new Promise((resolve) => setTimeout(resolve, 250))
+  // The detached push worker runs with the desk as its working directory, and Windows will not remove a folder a live process is in.
+  // The worker names itself in its sync lock while it works, so note it and wait for that process to exit before the cleanup runs.
+  let worker = null
+  for (let waited = 0; landed() !== "task_update: log track/work" && waited < 60_000; waited += 250) {
+    worker ??= workerPid(root)
+    await new Promise((resolve) => setTimeout(resolve, 250))
+  }
   assert.equal(landed(), "task_update: log track/work")
+  worker ??= workerPid(root)
+  for (let waited = 0; worker !== null && pidAlive(worker) && waited < 60_000; waited += 100) await new Promise((resolve) => setTimeout(resolve, 100))
+  assert.ok(worker === null || !pidAlive(worker), "the push worker is still running")
   assert.equal(git(root, ["status", "--porcelain"]), "")
 })
 
