@@ -7,7 +7,7 @@ import { test } from "node:test"
 import { fileURLToPath } from "node:url"
 import { mkTempRoot } from "../_temp_roots.js"
 import { installLauncher } from "../../../../../plugins/desk/mcp/src/runtime/drains.js"
-import { launch } from "../../../../../plugins/desk/mcp/scripts/drains-launcher.mjs"
+import { launch, makeGit } from "../../../../../plugins/desk/mcp/scripts/drains-launcher.mjs"
 
 const SPEC = (channel) => `copilot:github:ourostack/desk:plugins/desk@${channel}`
 
@@ -271,4 +271,19 @@ test("a release branch without the script is not run; the Agency cache is", asyn
   const broken = run(root, path.join(root, "nope"), { env: { DESK_DRAINS_RELEASE_URL: repo }, git: undefined })
   assert.equal(broken.status, 0)
   assert.match(broken.err[0], /could not resolve the released Desk \(ENOENT/u)
+})
+
+test("git is retried without GIT_EXEC_PATH when that variable hides git-remote-https, and only then", () => {
+  const stale = { PATH: "/bin", GIT_EXEC_PATH: "/gone/libexec/git-core" }
+  const missing = { status: 128, stderr: "git: 'remote-https' is not a git command. See 'git --help'.\n" }
+  const calls = []
+  const spawn = (cmd, args, options) => { calls.push(options.env); return options.env.GIT_EXEC_PATH ? missing : { status: 0, stdout: "ok" } }
+  assert.equal(makeGit(spawn, stale)(["ls-remote"], 5).stdout, "ok")
+  assert.deepEqual(calls, [{ ...stale, GIT_TERMINAL_PROMPT: "0" }, { PATH: "/bin", GIT_TERMINAL_PROMPT: "0" }])
+  // No retry for other failures, or when the variable was never set.
+  calls.length = 0
+  assert.equal(makeGit(() => { calls.push(1); return { status: 1, stderr: "offline\n" } }, stale)([], 5).status, 1)
+  assert.equal(makeGit(() => { calls.push(2); return missing }, { PATH: "/bin" })([], 5).status, 128)
+  assert.equal(makeGit(() => { calls.push(3); return { status: 0 } }, stale)([], 5).status, 0)
+  assert.equal(calls.length, 3)
 })

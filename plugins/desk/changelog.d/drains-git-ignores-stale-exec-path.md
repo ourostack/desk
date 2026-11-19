@@ -1,0 +1,1 @@
+The drains runner no longer passes an inherited `GIT_EXEC_PATH` to git. A stale one made every fetch of the released Desk fail with "'remote-https' is not a git command", so the relay could keep running an old Desk.
