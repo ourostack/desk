@@ -662,6 +662,18 @@ test("strict: a head behind main is updated once with its expected head, never m
   assert.deepEqual(w.state("pages merge").prs["7"].waitingOn.slice(0, 2), [`updated branch to main (the head was ${SHA.slice(0, 7)}); waiting for ci on the new head`, "ci job typecheck to finish (in_progress)"])
 })
 
+test("strict: pull requests are served in arrival order, and only the oldest behind head is updated while the others queue", async () => {
+  const w = await setup([STRICT_RELAY])
+  strictWorld(w.world, { compare: "behind" })
+  w.world.on("GET", /\/issues\?state=open&labels=merge-when-green/u, () => [{ number: 9, pull_request: {} }, { number: 7, pull_request: {} }])
+  w.world.pull(9)
+  w.world.on("PUT", /\/pulls\/9\/update-branch$/u, () => ({ ok: true, status: 202, body: { message: "Updating pull request branch." } }))
+  await w.poll(NOW)
+  assert.deepEqual(prWrites(w.world).map((write) => write.route), ["/repos/o/pages/pulls/7/update-branch"])
+  assert.match(w.state("pages merge").prs["9"].waitingOn[0], /^queued behind #7: /u)
+  assert.match(w.state("pages merge").prs["7"].waitingOn[0], /^updated branch to main/u)
+})
+
 test("strict: a conflict from update-branch is reported once and not retried for that head", async () => {
   const w = await setup([STRICT_RELAY])
   strictWorld(w.world, { compare: "diverged" })
