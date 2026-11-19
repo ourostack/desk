@@ -1,0 +1,1 @@
+Desk's web launcher now stops a headless browser politely. After the exit wait it sends SIGTERM and waits again before SIGKILL, so Chromium removes its own `code_sign_clone` app-bundle copy instead of leaking one per launch.

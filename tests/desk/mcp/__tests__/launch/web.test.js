@@ -762,7 +762,7 @@ test("legacy cleanup uses only qualified synthetic process rows and an owned fak
   const signals = []
   process.kill = (pid, signal) => {
     assert.equal(pid, row.pid)
-    assert.equal(signal, "SIGKILL")
+    assert.ok(signal === "SIGTERM" || signal === "SIGKILL")
     signals.push([pid, signal])
     throw new Error(PASSWORD)
   }
@@ -774,7 +774,7 @@ test("legacy cleanup uses only qualified synthetic process rows and an owned fak
       const controller = web.createController({ ...options, exitWaitMs: 1,
         processTable: async () => {
           reads++
-          if (mode === "stays") clock = 2
+          if (mode === "stays") clock += 2
           return mode === "unreadable" ? null : mode === "gone" || (mode === "exits" && reads > 1) ? [] : [row]
         } })
       const opened = json(await controller.call("browser_context", { action: "open" }))
@@ -789,7 +789,8 @@ test("legacy cleanup uses only qualified synthetic process rows and an owned fak
       assert.equal(result.isError, false, text(result))
       assert.equal(fs.existsSync(path.dirname(file)), false)
     }
-    assert.deepEqual(signals, [[row.pid, "SIGKILL"]])
+    // A browser that will not exit is asked to stop first (it then removes its own code-sign clone) and killed only if it stays.
+    assert.deepEqual(signals, [[row.pid, "SIGTERM"], [row.pid, "SIGKILL"]])
   } finally { process.kill = originalKill; Date.now = originalNow }
 })
 
