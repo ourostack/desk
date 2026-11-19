@@ -536,6 +536,14 @@ async function headHealsMain(ctx, state, relay, pr, main) {
 }
 
 /** Brings the head up to the base once per head. A refusal (a conflict, say) is remembered and reported, never retried for that head. */
+/** Brings a behind head up to date, but only for the oldest pull request in line: a younger one waits, so that merging in arrival order does not restart every head's checks at once. */
+async function updateInTurn(ctx, state, relay, record, pr, number) {
+  if (ctx.line.head !== undefined && ctx.line.head !== number) return [`queued behind #${ctx.line.head}: the oldest labelled pull request is brought up to date first, so a busy ${pr.baseRef} cannot starve it`]
+  const waiting = await updateBranch(ctx, state, relay, record, pr, number)
+  if (!record.update.failed) ctx.line.head = number
+  return waiting
+}
+
 async function updateBranch(ctx, state, relay, record, pr, number) {
   const response = await ctx.api.send("PUT", `/repos/${relay.repo}/pulls/${number}/update-branch`, { expected_head_sha: pr.headSha })
   record.update = { from: pr.headSha, at: new Date(ctx.now).toISOString(), ...(response.ok ? {} : { failed: response.body.message ?? `HTTP ${response.status}` }) }
@@ -614,7 +622,7 @@ async function handlePull(relay, state, ctx, number) {
   let judged
   let warnings = []
   if (!pr.labels.includes(relay.label)) waiting = [`the ${relay.label} label is gone`]
-  if (waiting.length === 0 && strict?.requireCurrentBase && (await headIsBehind(ctx, state, relay, pr))) waiting = record.update?.from === pr.headSha ? updateWaiting(record, pr) : await updateBranch(ctx, state, relay, record, pr, number)
+  if (waiting.length === 0 && strict?.requireCurrentBase && (await headIsBehind(ctx, state, relay, pr))) waiting = record.update?.from === pr.headSha ? updateWaiting(record, pr) : await updateInTurn(ctx, state, relay, record, pr, number)
   if (waiting.length === 0) {
     if (strict) {
       ;({ waiting, warnings } = await strictChecks(relay, state, ctx, pr.headSha))
@@ -625,7 +633,7 @@ async function handlePull(relay, state, ctx, number) {
       waiting = waitingOnChecks(relay.requiredChecks, runs, relay.skippedPasses, statuses)
       // A red head that is behind may already be fixed on the base, and a rerun reuses the old tree: bring it up to date. A pending or green head is left, so a busy base does not restart every pull request's checks.
       const red = runs.some((run) => run.status === "completed" && RED.has(run.conclusion))
-      if (relay.updateBehind && waiting.length > 0 && red && (await headIsBehind(ctx, state, relay, pr))) waiting = record.update?.from === pr.headSha ? updateWaiting(record, pr) : await updateBranch(ctx, state, relay, record, pr, number)
+      if (relay.updateBehind && waiting.length > 0 && red && (await headIsBehind(ctx, state, relay, pr))) waiting = record.update?.from === pr.headSha ? updateWaiting(record, pr) : await updateInTurn(ctx, state, relay, record, pr, number)
     }
     if (relay.requireMainWorkflowGreen) {
       mainBranch = await cached(ctx, state, `/repos/${relay.repo}`, (body) => body.default_branch)
@@ -673,7 +681,8 @@ async function runMerge(relay, state, ctx) {
   const merged = Object.entries(state.prs).filter(([, record]) => record.status === "merged").sort((a, b) => b[1].at.localeCompare(a[1].at))
   for (const [number] of merged.slice(MERGED_KEPT)) delete state.prs[number]
   const errors = []
-  for (const number of labelled) {
+  ctx.line = {}
+  for (const number of [...labelled].sort((a, b) => a - b)) {
     try {
       await handlePull(relay, state, ctx, number)
     } catch (error) {
