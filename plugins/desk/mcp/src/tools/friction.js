@@ -245,7 +245,7 @@ export async function friction_add({ deskRoot, input, person = null, search, env
   if (toolIssue) {
     filed = await fileIssue(env, { tool: card.plugin, title: card.title, body })
     entry = filed.result === "filed" || filed.result === "known"
-      ? `Issue for "${card.title}" on ${filed.repo}: ${filed.result === "filed" ? "filed" : "already open or closed"} at ${filed.url}`
+      ? `Issue for "${card.title}" on ${filed.repo}: ${filed.result === "filed" ? "filed" : "already open, new evidence added"} at ${filed.url}`
       : `Issue for "${card.title}" on ${filed.repo ?? card.plugin}: not filed (${filed.reason ?? filed.result}); file it by hand with the text below.\n\n${filed.body ?? body}`
   } else if (card !== null && fileNow) {
     filed = await fileCard(env, { deskRoot, title: card.title, body, plugin: card.plugin, frictionClass: card.frictionClass, signal: card.signal, evidenceJobs: card.evidenceJobs })

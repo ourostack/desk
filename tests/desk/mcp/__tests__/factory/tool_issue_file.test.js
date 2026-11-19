@@ -4,9 +4,8 @@ import assert from "node:assert/strict"
 import { promises as fs } from "node:fs"
 import * as path from "node:path"
 
-import { MAX_PER_DAY, OWNED_TOOLS, fileToolIssue, toolIssueFingerprint } from "../../../../../plugins/desk/mcp/src/factory/tool-issue-file.js"
+import { OWNED_TOOLS, fileToolIssue, toolIssueFingerprint } from "../../../../../plugins/desk/mcp/src/factory/tool-issue-file.js"
 import { friction_add } from "../../../../../plugins/desk/mcp/src/tools/friction.js"
-import { readStatus } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 import { osEnv } from "../_os_env.js"
 import { mkTempRoot } from "../_temp_roots.js"
 import { mkTempDeskRoot } from "../tools/_helpers.js"
@@ -27,6 +26,7 @@ function fakeGh({ repo, issues = [] }) {
       const route = args[7]
       if (route === `repos/${repo}`) return { code: 0, stdout: JSON.stringify({ full_name: repo, private: false, allow_forking: true, default_branch: "main", permissions: { push: true, pull: true } }), stderr: "" }
       if (route.startsWith(`repos/${repo}/issues?`)) return { code: 0, stdout: JSON.stringify(issues), stderr: "" }
+      if (args[2] === "POST" && route.startsWith(`repos/${repo}/issues/`) && route.endsWith("/comments")) return { code: 0, stdout: "{}", stderr: "" }
       if (args[2] === "POST" && route === `repos/${repo}/issues`) return { code: 0, stdout: JSON.stringify({ number: 404, html_url: `https://github.com/${repo}/issues/404` }), stderr: "" }
     }
     return { code: 1, stdout: "", stderr: "unexpected call\n" }
@@ -54,26 +54,28 @@ test("a failure of m365crawl becomes a real issue on ourostack/m365crawl, with t
   assert.deepEqual(sent.labels, ["bug", "tool-friction"])
   assert.ok(sent.body.startsWith(BODY))
   assert.ok(sent.body.includes(`<!-- desk-tool-issue: ${toolIssueFingerprint("m365crawl", TITLE)} -->`))
-  assert.equal((await readStatus(env)).tool_issue_filed["ourostack/m365crawl"].length, 1)
 }))
 
-test("the same failure again is known, open or closed, and files nothing new", () => scratch(async ({ env }) => {
+test("the same failure again comments on the open issue instead of opening a duplicate; a closed one is filed afresh", () => scratch(async ({ env }) => {
   const marker = `<!-- desk-tool-issue: ${toolIssueFingerprint("shepherd", TITLE)} -->`
-  const issues = [{ number: 7, html_url: "https://github.com/ourostack/shepherd/issues/7", title: "t", body: `x\n${marker}`, labels: [], state: "closed", pull_request: null }]
-  const { runner, calls } = fakeGh({ repo: "ourostack/shepherd", issues })
-  assert.deepEqual(await fileToolIssue(env, { tool: "shepherd", title: TITLE, body: BODY, runner }), { result: "known", repo: "ourostack/shepherd", url: "https://github.com/ourostack/shepherd/issues/7" })
-  assert.equal(created(calls).length, 0)
+  const issue = (state) => ({ number: 7, html_url: "https://github.com/ourostack/shepherd/issues/7", title: "t", body: `x\n${marker}`, labels: [], state, pull_request: null })
+  const open = fakeGh({ repo: "ourostack/shepherd", issues: [issue("open")] })
+  assert.deepEqual(await fileToolIssue(env, { tool: "shepherd", title: TITLE, body: BODY, runner: open.runner }), { result: "known", repo: "ourostack/shepherd", url: "https://github.com/ourostack/shepherd/issues/7" })
+  assert.equal(created(open.calls).length, 1)
+  assert.equal(created(open.calls)[0].args[7], "repos/ourostack/shepherd/issues/7/comments")
+  assert.ok(JSON.parse(created(open.calls)[0].input).body.includes(BODY))
+  const closed = fakeGh({ repo: "ourostack/shepherd", issues: [] })
+  assert.equal((await fileToolIssue(env, { tool: "shepherd", title: TITLE, body: BODY, runner: closed.runner })).result, "filed")
 }))
 
-test("text with a home path is not filed and comes back paste-ready; an unowned tool and a past-cap day are refused", () => scratch(async ({ env }) => {
+test("text with a home path is not filed and comes back paste-ready; an unowned tool is refused", () => scratch(async ({ env }) => {
   const { runner, calls } = fakeGh({ repo: "ourostack/hackamore" })
   const leaky = await fileToolIssue(env, { tool: "hackamore", title: TITLE, body: "crashed at /home/ari/x", runner })
   assert.deepEqual([leaky.result, leaky.reason], ["not_filed", "not_generic"])
   assert.ok(leaky.body.includes("crashed at /home/ari/x"))
   assert.deepEqual(await fileToolIssue(env, { tool: "someone-elses", title: TITLE, body: BODY, runner }), { result: "not_filed", reason: "unknown_tool" })
-  for (let n = 0; n < MAX_PER_DAY; n += 1) assert.equal((await fileToolIssue(env, { tool: "hackamore", title: `${TITLE} ${"abcdefghij"[n]}`, body: BODY, runner })).result, "filed")
-  assert.equal((await fileToolIssue(env, { tool: "hackamore", title: `${TITLE} z`, body: BODY, runner })).result, "held_cap")
-  assert.equal(created(calls).length, MAX_PER_DAY)
+  for (let n = 0; n < 8; n += 1) assert.equal((await fileToolIssue(env, { tool: "hackamore", title: `${TITLE} ${"abcdefghij"[n]}`, body: BODY, runner })).result, "filed")
+  assert.equal(created(calls).length, 8)
 }))
 
 test("friction_add with an owned tool as plugin files the issue, opens no Desk card, and keeps the issue link on the desk", async () => {
@@ -118,17 +120,12 @@ test("no signed-in account, or an account with no token, is not filed and comes 
   }
 }))
 
-test("a pull request carrying the marker is not the issue; stale or malformed filing records do not count toward the cap", () => scratch(async ({ env }) => {
+test("a pull request carrying the marker is not the issue", () => scratch(async ({ env }) => {
   const marker = `<!-- desk-tool-issue: ${toolIssueFingerprint("shepherd", TITLE)} -->`
   const issues = [{ number: 8, html_url: "https://github.com/ourostack/shepherd/issues/8", title: "t", body: marker, labels: [], state: "open", pull_request: {} }]
   const { runner, calls } = fakeGh({ repo: "ourostack/shepherd", issues })
-  const old = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString()
-  const { writeStatus } = await import("../../../../../plugins/desk/mcp/src/factory/outbox.js")
-  await writeStatus(env, { tool_issue_filed: { "ourostack/shepherd": [old, 7, old] } })
   assert.equal((await fileToolIssue(env, { tool: "shepherd", title: TITLE, body: BODY, runner })).result, "filed")
   assert.equal(created(calls).length, 1)
-  await writeStatus(env, { tool_issue_filed: { "ourostack/shepherd": "not a list" } })
-  assert.equal((await fileToolIssue(env, { tool: "shepherd", title: `${TITLE} again`, body: BODY, runner })).result, "filed")
 }))
 
 test("a refused create comes back as its code with paste-ready text; an unexpected error still throws", () => scratch(async ({ env }) => {
@@ -145,7 +142,7 @@ test("a refused create comes back as its code with paste-ready text; an unexpect
 test("friction_add names the reason, repo and text of a filing result however much of it is missing", async () => {
   const root = await mkTempDeskRoot()
   const run = (filed) => friction_add({ deskRoot: root, input: { about: "system", plugin: "m365crawl", title: TITLE, body: BODY }, fileIssue: async () => filed })
-  assert.deepEqual(await run({ result: "held_cap" }), { status: "added", path: "_meta/friction.md", issue: "held_cap", repo: undefined })
-  assert.match(await fs.readFile(path.join(root, "_meta", "friction.md"), "utf8"), /on m365crawl: not filed \(held_cap\)[\s\S]*admits chats only/u)
+  assert.deepEqual(await run({ result: "no_suitable_account" }), { status: "added", path: "_meta/friction.md", issue: "no_suitable_account", repo: undefined })
+  assert.match(await fs.readFile(path.join(root, "_meta", "friction.md"), "utf8"), /on m365crawl: not filed \(no_suitable_account\)[\s\S]*admits chats only/u)
   assert.equal((await run({ result: "known", repo: "ourostack/m365crawl", url: "https://github.com/ourostack/m365crawl/issues/1" })).issue, "known")
 })
