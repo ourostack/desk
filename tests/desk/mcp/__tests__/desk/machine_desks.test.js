@@ -4,12 +4,13 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { promises as fs } from "node:fs"
+import * as os from "node:os"
 import * as path from "node:path"
 import { mkTempRoot } from "../_temp_roots.js"
 import { readMachineDesks, resolveMachineDesk, machineDesksLine, parseDeskRegistry } from "../../../../../plugins/desk/mcp/src/desk/machine-desks.js"
 import { formatBootText } from "../../../../../plugins/desk/mcp/src/runtime/boot-text.js"
 import { bootOnce } from "../../../../../plugins/desk/mcp/src/runtime/boot.js"
-import { otherDeskContaining } from "../../../../../plugins/desk/mcp/src/util/desk-owner.js"
+import { otherDeskContaining, otherDeskOwning } from "../../../../../plugins/desk/mcp/src/util/desk-owner.js"
 
 const REGISTRY = `# Desks
 
@@ -115,4 +116,37 @@ test("a session booted in a crew desk lists the personal desk's path in its boot
   })
   assert.equal(result.machine_desks.some((desk) => desk.path === path.join(home, "personal-desk")), true)
   assert.match(formatBootText(result), /Other desks on this machine .*personal \S*personal-desk/u)
+})
+
+test("odd registries and requests: owner-only and ambiguous matches, unknown names, bare rows, an explicit registry file, paths outside home", async () => {
+  const home = await machine()
+  const odd = "| desk | local path | repo |\n|---|---|---|\n| | `~/x` | a/b |\n| bare | | a/b |\n| solo-one | `~` | nobody |\n| short |\n| twin-a | `~/twin-a` | pair/a |\n| twin-b | /somewhere/twin-b | pair/b |\n"
+  await fs.writeFile(path.join(home, "odd.md"), odd)
+  const desks = readMachineDesks({ homeDir: home, env: { DESK_REGISTRY: path.join(home, "odd.md") } })
+  assert.deepEqual(desks.slice(0, 3).map((desk) => [desk.name, desk.owner, "launch" in desk]), [["solo-one", "nobody", false], ["twin-a", "pair", false], ["twin-b", "pair", false]])
+  assert.equal(resolveMachineDesk("personal", desks).desk.owner, "ari")
+  assert.match(resolveMachineDesk("pair", desks).problem, /names 2 registered desks.*name one by its desk name/u)
+  assert.match(resolveMachineDesk(undefined, desks).problem, /No desk named "undefined"/u)
+  assert.match(resolveMachineDesk("anything", []).problem, /no desks are registered on this machine/u)
+  const line = machineDesksLine([{ name: "far", path: "/somewhere/far", present: true, current: false }], { homeDir: home })
+  assert.match(line, /far \/somewhere\/far\./u)
+  assert.deepEqual(readMachineDesks({ homeDir: home, env: { DESK_REGISTRY: path.join(home, "missing.md") } }).filter((desk) => desk.name === "solo-one"), [])
+})
+
+test("a desk named both by its home folder and by the registry counts once, and the defaults read the real machine without failing", async () => {
+  const home = await machine()
+  await fs.mkdir(path.join(home, "ms-desk", "_archive"), { recursive: true })
+  const found = otherDeskContaining(path.join(home, "personal-desk"), path.join(home, "ms-desk", "x.md"), { homeDir: home, spawn: () => ({ status: 1 }) })
+  assert.equal(found.root, path.join(home, "ms-desk"))
+  assert.equal(otherDeskContaining(path.join(home, "personal-desk"), "/nowhere/x.md", { homeDir: home, spawn: () => ({ status: 1 }) }), null)
+  await fs.mkdir(path.join(home, "ms-desk", "work-track"), { recursive: true })
+  assert.equal(otherDeskOwning(path.join(home, "personal-desk"), "work-track/a.md", { homeDir: home, spawn: () => ({ status: 1 }) }).root, path.join(home, "ms-desk"))
+  await fs.mkdir(path.join(home, "personal-desk", "work-track"), { recursive: true })
+  assert.equal(otherDeskOwning(path.join(home, "personal-desk"), "work-track/a.md", { homeDir: home, spawn: () => ({ status: 1 }) }), null)
+  await fs.rm(path.join(home, "personal-desk", "work-track"), { recursive: true })
+  assert.equal(otherDeskOwning(path.join(home, "personal-desk"), "no-such-track", { homeDir: home, spawn: () => ({ status: 1 }) }), null)
+  assert.equal(Array.isArray(readMachineDesks()), true)
+  assert.equal(parseDeskRegistry("no table here"). length, 0)
+  const alone = machineDesksLine([{ name: "x", path: path.join(os.homedir(), "x"), present: true, current: false }])
+  assert.match(alone, /x ~\/x\./u)
 })
