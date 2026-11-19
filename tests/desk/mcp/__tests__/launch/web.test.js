@@ -827,6 +827,10 @@ test("an open answers within its record budget when the process table never answ
   assert.equal(opened.isError, false, text(opened))
   assert.ok(Date.now() - started < 3000, `open took ${Date.now() - started} ms`)
   await controller.closeAll()
+  const failing = web.createController({ ...options, processTable: () => Promise.reject(new Error("table failed")) })
+  const reopened = await failing.call("browser_context", { action: "open" })
+  assert.equal(reopened.isError, false, text(reopened))
+  await failing.closeAll()
 })
 
 test("startup keeps a fresh context whose own process is still alive", async () => {
