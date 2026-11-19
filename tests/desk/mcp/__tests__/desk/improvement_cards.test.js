@@ -484,10 +484,10 @@ test("claimNext takes the open card with the oldest last_opened_at and sets a cl
   assert.equal(isClaimLive(stored, at(10, 15)), true)
   assert.equal(isClaimLive(stored, at(10, 16)), false)
   assert.equal(isClaimLive({ claim: null }, at(10)), false)
-  // the next oldest, by key order on equal age, once the first claim is released
+  // once the first claim is released the card goes behind the others, so the next oldest is served
   await updateCard({ ...where, key: got.card.key, claim_id: got.claim_id, now, patch: { state: "open" } })
   const next = await claim(where, { now: at(11) })
-  assert.equal(next.card.key, `reconcile_class:${reason(1)}`)
+  assert.equal(next.card.key, `reconcile_class:${reason(0)}`)
 })
 
 test("equal ages are taken in key order", async () => {
@@ -535,6 +535,23 @@ test("claimNext says claim_held for a live claim, no cap on claims in a day and 
   assert.equal(three.result, "claimed")
   await updateCard({ ...where, key: three.card.key, claim_id: three.claim_id, now: at(2, 23), patch: { state: "open" } })
   assert.equal((await claim(where, { now: at(3, 0) })).result, "claimed")
+})
+
+test("a card released through updateCard goes behind the other open cards, so the next claim serves another one", async () => {
+  const where = await desk()
+  for (let i = 0; i < 3; i += 1) await open(where, { key: cardKey("reconcile_class", reason(i)), evidence: [], now: at(1) })
+  const first = await claim(where, { now: at(2, 8) })
+  await updateCard({ ...where, key: first.card.key, claim_id: first.claim_id, now: at(2, 9), patch: { state: "open" } })
+  const seen = [first.card.key]
+  for (let i = 0; i < 2; i += 1) {
+    const next = await claim(where, { now: at(2, 10 + i) })
+    assert.equal(next.result, "claimed")
+    assert.ok(!seen.includes(next.card.key), "a released card is not served again before the others")
+    seen.push(next.card.key)
+    await updateCard({ ...where, key: next.card.key, claim_id: next.claim_id, now: at(2, 10 + i), patch: { state: "open" } })
+  }
+  // the queue wraps: the first released card is the oldest again
+  assert.equal((await claim(where, { now: at(2, 20) })).card.key, first.card.key)
 })
 
 test("the live claim and the day cap are per machine, and a card with another machine's live claim is not offered", async () => {
@@ -828,7 +845,7 @@ test("updateCard accepts the edges it may make, refuses the others with invalid_
   for (const field of ["countermeasure", "shipped_version", "last_check_at", "last_check_result"]) assert.equal(reopened[field], null, field)
   assert.equal(reopened.checks_run, 0)
   assert.equal(reopened.kaizen_url, ISSUE_URL)
-  assert.equal(reopened.last_opened_at, iso(at(1)))
+  assert.equal(reopened.last_opened_at, iso(at(2, 3)))
   // shipped -> open counts too
   const c3 = await claim(where, { now: at(3, 5) })
   await upd({ state: "shipped", countermeasure: PR_URL }, c3.claim_id)
