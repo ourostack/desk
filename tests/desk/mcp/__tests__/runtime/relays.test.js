@@ -745,10 +745,10 @@ test("merge-when-green: a red latest completed main run holds the merge back and
 
 test("merge-when-green: a red main does not hold a head that holds main and is green on every job that failed there; anything else still waits", async () => {
   const mainJobs = [{ name: "typecheck", status: "completed", conclusion: "failure" }, { name: "lint", status: "completed", conclusion: "success" }]
-  const run = async ({ compare = "ahead", jobs = mainJobs, checks = GREEN } = {}) => {
+  const run = async ({ compare = "ahead", jobs = mainJobs, checks = GREEN, pr = {} } = {}) => {
     const w = await setup([MERGE])
-    mergeWorld(w.world, { checks, main: [{ id: 9, conclusion: "failure" }] })
-    w.world.on("GET", /\/compare\/main\.\.\.a+/u, () => ({ status: compare }))
+    mergeWorld(w.world, { checks, pr, main: [{ id: 9, conclusion: "failure" }] })
+    w.world.on("GET", /\/compare\/[^/]+\.\.\.a+/u, () => ({ status: compare }))
     w.world.on("GET", /\/actions\/runs\/9\/jobs/u, () => ({ total_count: jobs.length, jobs }))
     await w.poll()
     return w
@@ -759,6 +759,7 @@ test("merge-when-green: a red main does not hold a head that holds main and is g
   for (const held of [
     await run({ compare: "behind" }),
     await run({ compare: "diverged" }),
+    await run({ pr: { base: { ref: "release" } } }),
     await run({ jobs: [] }),
     await run({ jobs: [{ name: "e2e", status: "completed", conclusion: "failure" }] }),
   ]) {

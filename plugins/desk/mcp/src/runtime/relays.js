@@ -634,7 +634,7 @@ async function handlePull(relay, state, ctx, number) {
       else {
         judged = { branch: mainBranch, id: main.id, url: main.url }
         if (main.conclusion !== "success") {
-          const healed = await headHealsMain(ctx, state, relay, pr, main)
+          const healed = pr.baseRef === mainBranch && (await headHealsMain(ctx, state, relay, pr, main))
           if (healed) judged.healedBy = healed
           else waiting.push(`${mainBranch}'s latest completed ${relay.requireMainWorkflowGreen} run ${main.id} (${main.url}) is ${main.conclusion}`)
         }
