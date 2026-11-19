@@ -73,6 +73,8 @@ Only check runs are read, so a check that reports as a commit status never count
 
 ## Quota
 
+A repository can own its merge predicate: when the base branch has `.github/merge-checks.json` with a `required` list of check names (globs allowed), the relay judges only those checks, in place of the relay's `requiredChecks` and every other check on the head, and a check that has not reported counts as missing. The file is read from the base branch with a conditional request, and a base without it is asked again every five minutes; without the file the configured checks apply.
+
 Each poll sends the stored `ETag` as `If-None-Match`, and what a `304` means is kept next to the tag, so a quiet relay costs no quota. A labelled pull request still waiting on checks is read again no sooner than every 30 seconds, growing to every minute as it waits, because every read of running checks is a full answer that counts; a green head still merges on the read that sees it. When GitHub has not yet worked out whether a green head merges cleanly (`mergeable` is null), the relay does not wait for that: it sends the merge, which makes GitHub work it out. A `405` then means "not yet" and the pull request is read and tried again on the next poll; a real conflict shows up on that read and is reported as a conflict. A `merge-when-green` relay with nothing labelled polls up to four times less often. `relays status` shows what each relay has spent in the current hour, as counted calls and free `304`s. A relay shares its account's window with the issue drains: at 25 calls left it pauses until the window resets, and under 10% (or 200 calls) it polls at most every 15 minutes.
 
 ## Running it from Ouroboros
