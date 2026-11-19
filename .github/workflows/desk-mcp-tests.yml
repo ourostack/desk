@@ -443,6 +443,8 @@ jobs:
   # (the scope step is the one Quick checks runs).
   macos-checks:
     name: macOS checks
+    # Not on a pull request: macOS runners are scarce, so a PR never waits for one. It runs on main after the merge, and a red run opens a "main is red" issue.
+    if: github.event_name != 'pull_request'
     runs-on: macos-latest
     timeout-minutes: 25
     permissions:
@@ -847,16 +849,17 @@ jobs:
       - name: Require every job that had to run to have succeeded
         env:
           RESULTS: ${{ toJSON(needs) }}
+          EVENT: ${{ github.event_name }}
         run: |
           printf '%s\n' "$RESULTS" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
-          if printf '%s\n' "$RESULTS" | jq -e '
+          if printf '%s\n' "$RESULTS" | jq -e --arg event "$EVENT" '
             (.["quick-checks"].outputs.code == "true") as $code
             | (.["quick-checks"].outputs.evals == "true") as $evals
             | {
                 "quick-checks": true,
                 "offline-eval-tests": $evals,
                 "desk-runtime-packs": true,
-                "macos-checks": true
+                "macos-checks": ($event != "pull_request")
               } as $special
             | .["quick-checks"].result == "success"
               and all(to_entries[]; .key as $job
