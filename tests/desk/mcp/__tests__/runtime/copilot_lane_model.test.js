@@ -58,6 +58,14 @@ test("an explicit mode is never changed, and a missing one becomes autopilot", a
   assert.deepEqual(invoke(env, call("open_issue_session", { kickoff: { prompt: "p", model: "m" } })).modifiedArgs.kickoff, { prompt: "p", model: "m", mode: "autopilot" })
 })
 
+test("a cloud session is started locally so it loads the plugin bundle, unless DESK_ALLOW_CLOUD_SESSIONS=1", async () => {
+  const env = await envWith()
+  const args = { project_id: "p", execution_location: "cloud", kickoff: { prompt: "p", model: "m", mode: "autopilot" } }
+  assert.deepEqual(invoke(env, call("create_session", args)).modifiedArgs, { project_id: "p", kickoff: args.kickoff })
+  assert.deepEqual(invoke(env, call("create_session", { ...args, execution_location: "local" })), {})
+  assert.deepEqual(invoke({ ...env, DESK_ALLOW_CLOUD_SESSIONS: "1" }, call("create_session", args)), {})
+})
+
 test("other tools and unreadable input are left alone", async () => {
   const env = await envWith("not an object")
   for (const payload of [call("bash", { command: "ls" }), call("create_session_x", {}), call("create_session", "{"), call("create_session", { kickoff: "x" }), null, []])

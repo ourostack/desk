@@ -4,7 +4,8 @@
 // `kickoff.model` the app starts the new session on the model of the session that asked, and coordinators run on the most
 // expensive one, so every lane inherits it. When the call names no model, this adds Desk's lane default through `modifiedArgs`;
 // the app also starts a kickoff in plan mode when `kickoff.mode` is absent, which leaves a lane waiting on a plan approval
-// nobody sees, so a missing mode becomes autopilot. A model or mode the caller named is never touched. Fail-open: any problem leaves the call as it was.
+// nobody sees, so a missing mode becomes autopilot. A model or mode the caller named is never touched.
+// `execution_location: "cloud"` is dropped (the session runs locally), because the cloud sandbox loads no plugins. Fail-open: any problem leaves the call as it was.
 
 const fs = require("node:fs");
 const os = require("node:os");
@@ -41,6 +42,11 @@ function laneModel({ env = process.env, homeDir = os.homedir() } = {}) {
   }
 }
 
+/** `DESK_ALLOW_CLOUD_SESSIONS=1` keeps `execution_location: "cloud"` for a lane that really must run in the cloud. */
+function allowCloud({ env = process.env } = {}) {
+  return text(env.DESK_ALLOW_CLOUD_SESSIONS) === "1";
+}
+
 /** The hook's answer for one payload: `{}` to leave the call alone, or an allow with the arguments plus the default model. */
 function decide(payload, options = {}) {
   try {
@@ -52,8 +58,11 @@ function decide(payload, options = {}) {
     const kickoff = { ...(args.kickoff ?? {}) };
     if (text(kickoff.model) === null) kickoff.model = laneModel(options);
     if (text(kickoff.mode) === null) kickoff.mode = DEFAULT_LANE_MODE;
-    if (isRecord(args.kickoff) && kickoff.model === args.kickoff.model && kickoff.mode === args.kickoff.mode) return {};
-    return { permissionDecision: "allow", modifiedArgs: { ...args, kickoff } };
+    // A cloud session runs in a sandbox that never loads the Desk, MS Desk and Superpowers plugin bundle, so it is started locally.
+    const { execution_location: location, ...rest } = args;
+    const dropCloud = text(location) === "cloud" && !allowCloud(options);
+    if (!dropCloud && isRecord(args.kickoff) && kickoff.model === args.kickoff.model && kickoff.mode === args.kickoff.mode) return {};
+    return { permissionDecision: "allow", modifiedArgs: { ...(dropCloud ? rest : args), kickoff } };
   } catch {
     return {};
   }
