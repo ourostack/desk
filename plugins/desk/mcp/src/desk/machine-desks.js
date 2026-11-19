@@ -110,13 +110,6 @@ export function resolveMachineDesk(query, desks) {
   return { problem: `No desk named "${query}" is registered on this machine (${list}). Ask the operator, then add it with register-desk; do not clone it.` }
 }
 
-/** The registered desk whose folder holds `target`, or null. */
-export function deskHoldingPath(target, desks) {
-  if (typeof target !== "string" || !path.isAbsolute(target)) return null
-  const real = realOrSelf(target)
-  return desks.find((desk) => desk.present && (real === realOrSelf(desk.path) || real.startsWith(realOrSelf(desk.path) + path.sep))) ?? null
-}
-
 /** One line for session start naming the other desks and where they are, or null when there are none. */
 export function machineDesksLine(desks, { homeDir = os.homedir() } = {}) {
   const others = desks.filter((desk) => desk.present && !desk.current)
