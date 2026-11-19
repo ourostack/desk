@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.325 — 2026-11-19
+
+`fast-honest-ci` now states the goal it serves: a shorter loop needs no savings case, so measurements choose the order of work, not whether a faster loop is worth having. It points to ourostack/.github's loop clock (PR opened to live, and the default branch's red share) for step one. It also says that dropping a merge queue needs a replacement that still builds the merged tree, with the measured cost of going without one. And it adds one trunk-based rule: fix on the default branch and cherry-pick to a release branch, then delete the release branch once it has shipped.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.324 — 2026-11-19
 
 `lesson-capture` ships [`agents-md-budget.mjs`](skills/lesson-capture/agents-md-budget.mjs), a script any repository can copy in and run in CI to hold its always-loaded instructions (AGENTS.md, CLAUDE.md, GEMINI.md and `.github/copilot-instructions.md`) to a byte budget. A file over its budget, or without one, fails with the fix: turn a rule into a check, or delete one. Raising a budget is a choice a pull request makes with `--set` and states, and `--set` also locks in a cut. It needs only Node, so it works in repositories whose organization blocks outside Actions.
