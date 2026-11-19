@@ -835,6 +835,26 @@ test("merge-when-green: a job that failed on main and never ran on the head is d
   assert.equal(red.state("pages merge").prs["7"].waitingOn.length, 2)
 })
 
+test("merge-when-green: Tandem's red main (push-only jobs failed, none on the PR head) is dispatched, waited for, and the fix merges once the dispatched run is green", async () => {
+  const pushOnly = ["smoke, compose, new chat, setup (macos-latest)", "smoke, compose (windows-latest)", "npm test (macos-latest, 1/1)", "test (windows-latest)", "test (macos-latest)"]
+  const w = await setup([MERGE])
+  mergeWorld(w.world, { main: [{ id: 44509870089, conclusion: "failure" }] })
+  w.world.on("GET", /\/compare\/[^/]+\.\.\.a+/u, () => ({ status: "ahead" }))
+  w.world.on("GET", /\/actions\/runs\/44509870089\/jobs/u, () => ({ total_count: 6, jobs: [{ name: "engine", status: "completed", conclusion: "success" }, ...pushOnly.map((name) => ({ name, status: "completed", conclusion: "failure" }))] }))
+  w.world.on("POST", /\/workflows\/ci\.yml\/dispatches$/u, () => ({ ok: true, status: 204, body: {} }))
+  await w.poll()
+  const dispatches = () => w.world.writes.filter((write) => /\/workflows\/ci\.yml\/dispatches$/u.test(write.route))
+  assert.deepEqual(dispatches().map((write) => write.body), [{ ref: "feature/x" }])
+  assert.deepEqual(prWrites(w.world), [], "held while the dispatched run has not finished")
+  assert.match(w.state("pages merge").prs["7"].waitingOn[1], /^smoke, compose, new chat, setup \(macos-latest\), smoke, compose \(windows-latest\), npm test \(macos-latest, 1\/1\), test \(windows-latest\), test \(macos-latest\) failed on main but have not run on this head; dispatched ci\.yml on `feature\/x`/u)
+
+  w.world.on("GET", /\/commits\/a+\/check-runs/u, () => ({ total_count: 6, check_runs: [...GREEN, ...pushOnly.map((name, index) => ({ ...check(name), id: 100 + index }))] }))
+  await w.poll(NOW + 3600_000)
+  assert.equal(dispatches().length, 1, "dispatched once for the head")
+  assert.deepEqual(prWrites(w.world).map((write) => write.method), ["PUT"])
+  assert.match(comments(w.world).at(-1).body.body, /green on every job that failed there \(smoke, compose, new chat, setup \(macos-latest\), smoke, compose \(windows-latest\), npm test \(macos-latest, 1\/1\), test \(windows-latest\), test \(macos-latest\)\)/u)
+})
+
 test("merge-when-green: a failed or unfinished check that is not required, or a failed commit status, holds the merge", async () => {
   const cases = [
     { checks: [...GREEN, check("weekly-page", "failure")], waiting: "weekly-page failure" },
