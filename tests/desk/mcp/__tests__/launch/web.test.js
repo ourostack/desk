@@ -833,6 +833,12 @@ test("an open answers within its record budget when the process table never answ
   fs.writeFileSync(file, JSON.stringify({ ...JSON.parse(fs.readFileSync(file, "utf8")), processes: [{ pid: 42420003, start: "2026-01-01" }] }))
   const closed = await failing.call("browser_context", { action: "close", contextId: reopened.contextId })
   assert.equal(closed.isError, false, text(closed))
+  const spent = web.createController({ ...options, closeMs: 1, processTable: () => Promise.resolve([]) })
+  const late = json(await spent.call("browser_context", { action: "open" }))
+  const lateFile = path.join(options.tmpDir, `desk-browser-${late.contextId}`, "owner.json")
+  fs.writeFileSync(lateFile, JSON.stringify({ ...JSON.parse(fs.readFileSync(lateFile, "utf8")), processes: [{ pid: 42420004, start: "2026-01-01" }] }))
+  await new Promise((resolve) => setTimeout(resolve, 5))
+  assert.equal((await spent.call("browser_context", { action: "close", contextId: late.contextId })).isError, false)
 })
 
 test("startup keeps a fresh context whose own process is still alive", async () => {
