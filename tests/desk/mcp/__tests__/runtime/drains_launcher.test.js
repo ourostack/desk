@@ -1,7 +1,7 @@
 // The launcher a wake runner calls: it fetches the release branch into its own clone, and without one resolves the released Desk through Agency's plugin cache, falls back to the last good path and says so.
 import assert from "node:assert/strict"
-import { spawnSync } from "node:child_process"
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
+import { spawn as spawnAsync, spawnSync } from "node:child_process"
+import { existsSync, mkdirSync, readFileSync, utimesSync, writeFileSync } from "node:fs"
 import path from "node:path"
 import { test } from "node:test"
 import { fileURLToPath } from "node:url"
@@ -295,4 +295,66 @@ test("a git that cannot find git-remote-https is retried with the helper directo
   assert.equal(seen.length, 2)
   // The default environment has a PATH.
   assert.equal(makeGit(() => ({ status: 0 }), {}, () => true)([], 5).status, 0)
+})
+
+test("the fetch is single-flight: a fresh fetch or a live lock means the current copy is used with no git call and no error line", async () => {
+  const root = await mkTempRoot("desk-launcher-")
+  const { repo, commit } = releaseRepo(root)
+  const first = commit("3.2.122")
+  const dir = path.join(root, "state", "ouroboros-skills", "desk", "drains")
+  const real = (args, ms) => spawnSync("git", args, { encoding: "utf8", timeout: ms })
+  const go = (git) => {
+    const calls = []
+    const err = []
+    launch({ argv: ["poll"], env: { XDG_STATE_HOME: path.join(root, "state"), DESK_DRAINS_RELEASE_URL: repo }, home: root, git: (args, ms) => { const verb = args.find((a) => ["ls-remote", "fetch", "clone"].includes(a)); if (verb) calls.push(verb); return git(args, ms) }, spawn: () => ({ status: 0 }), stderr: { write: (t) => err.push(t) }, execPath: "/node" })
+    return { calls, err }
+  }
+  assert.deepEqual(go(real).calls, ["ls-remote", "clone"])
+  commit("3.2.123")
+  // Under a minute since the last success: no network at all.
+  assert.deepEqual(go(real), { calls: [], err: [] })
+  // Older than that but another live runner (this process) holds the lock: still no fetch, no error.
+  const old = new Date(Date.now() - 120_000)
+  utimesSync(path.join(dir, "last-fetch"), old, old)
+  mkdirSync(path.join(dir, "fetch.lock"))
+  writeFileSync(path.join(dir, "fetch.lock", "pid"), String(process.pid))
+  assert.deepEqual(go(real), { calls: [], err: [] })
+  // A lock whose owner is gone, or that has no readable owner and is old, is cleared and the fetch goes ahead.
+  writeFileSync(path.join(dir, "fetch.lock", "pid"), "2147483646")
+  assert.deepEqual(go(real).calls, ["ls-remote", "fetch"])
+  assert.equal(existsSync(path.join(dir, "fetch.lock")), false, "the lock is released")
+  utimesSync(path.join(dir, "last-fetch"), old, old)
+  mkdirSync(path.join(dir, "fetch.lock"))
+  utimesSync(path.join(dir, "fetch.lock"), old, old)
+  assert.deepEqual(go(real).calls, ["ls-remote"])
+  assert.equal(existsSync(path.join(dir, "fetch.lock")), false)
+  assert.notEqual(first, undefined)
+})
+
+test("runners started together share one clone without a shallow.lock error or a stray line", async () => {
+  const root = await mkTempRoot("desk-launcher-")
+  const { repo, commit } = releaseRepo(root)
+  commit("3.2.122")
+  const dir = path.join(root, "state", "ouroboros-skills", "desk", "drains")
+  // The first install has no clone yet, so it is made alone; the overlapping ticks are the steady state.
+  launch({ argv: ["poll"], env: { XDG_STATE_HOME: path.join(root, "state"), DESK_DRAINS_RELEASE_URL: repo }, home: root, spawn: () => ({ status: 0 }), stderr: { write() {} }, execPath: "/node" })
+  const old = new Date(Date.now() - 120_000)
+  utimesSync(path.join(dir, "last-fetch"), old, old)
+  commit("3.2.123")
+  const launcher = new URL("../../../../../plugins/desk/mcp/scripts/drains-launcher.mjs", import.meta.url).href
+  const code = `import(${JSON.stringify(launcher)}).then(({ launch }) => { process.exitCode = launch({ argv: ["poll"], spawn: () => ({ status: 0 }), execPath: "/node" }) })`
+  const env = { ...process.env, XDG_STATE_HOME: path.join(root, "state"), DESK_DRAINS_RELEASE_URL: repo, AGENCY_PLUGIN_CACHE: path.join(root, "none") }
+  const runs = Array.from({ length: 8 }, () => new Promise((resolve) => {
+    let err = ""
+    const child = spawnAsync(process.execPath, ["--input-type=module", "-e", code], { env, windowsHide: true })
+    child.stderr.on("data", (d) => { err += d })
+    child.on("close", (status) => resolve({ status, err }))
+  }))
+  for (const { status, err } of await Promise.all(runs)) {
+    assert.equal(err.includes("shallow.lock"), false, err)
+    assert.equal(status, 0, err)
+  }
+  assert.equal(existsSync(path.join(dir, "fetch.lock")), false)
+  assert.equal(readFileSync(path.join(dir, "desk-release", "plugins", "desk", "mcp", "scripts", "drains.js"), "utf8"), "// 3.2.123\n")
+  assert.equal(existsSync(path.join(dir, "resolve.log")), false)
 })

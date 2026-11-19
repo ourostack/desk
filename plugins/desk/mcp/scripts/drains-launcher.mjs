@@ -7,7 +7,7 @@
 // to stderr and to resolve.log whenever the fetch or the cache resolution fails.
 // This file must stay standalone: the installed copy has no neighbours to import.
 import { spawnSync } from "node:child_process"
-import { appendFileSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
+import { appendFileSync, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs"
 import { homedir } from "node:os"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
@@ -93,6 +93,75 @@ function fetchRelease({ own, url, git }) {
   return remote
 }
 
+const FRESH_MS = 60_000
+const STALE_LOCK_MS = 10 * 60_000
+
+function alive(pid) {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error) {
+    return error.code === "EPERM"
+  }
+}
+
+/** Takes the fetch lock (an atomic mkdir holding the owner's pid) and returns a release function, or null when another live runner holds it. A lock whose owner is gone, or that is older than any fetch can last, is cleared. */
+function takeLock(lock, now) {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      mkdirSync(path.dirname(lock), { recursive: true })
+      mkdirSync(lock)
+      writeFileSync(path.join(lock, "pid"), String(process.pid))
+      return () => {
+        try {
+          if (readFileSync(path.join(lock, "pid"), "utf8") === String(process.pid)) rmSync(lock, { recursive: true, force: true })
+        } catch {}
+      }
+    } catch (error) {
+      if (error.code !== "EEXIST") return null
+    }
+    let age = Infinity
+    let owner = NaN
+    try {
+      age = Math.abs(now() - statSync(lock).mtimeMs)
+      owner = Number(readFileSync(path.join(lock, "pid"), "utf8"))
+    } catch {}
+    // An owner that has not written its pid yet is only a few milliseconds old, so it is not cleared.
+    if (age < STALE_LOCK_MS && (Number.isInteger(owner) && owner > 0 ? alive(owner) : age < 5000)) return null
+    // Only one runner wins the rename, so two cannot both clear a stale lock and then both take a fresh one.
+    const aside = `${lock}.${process.pid}.${Date.now()}`
+    try {
+      renameSync(lock, aside)
+      rmSync(aside, { recursive: true, force: true })
+    } catch {}
+  }
+  return null
+}
+
+/** Single-flight fetch: skipped when the last success is under a minute old or another runner is fetching, in which case the current copy is used. */
+function fetchOnce({ dir, own, url, git, now }) {
+  const stamp = path.join(dir, "last-fetch")
+  const fresh = () => {
+    try {
+      const age = now() - statSync(stamp).mtimeMs
+      return age >= 0 && age < FRESH_MS && headOf(own, git) !== null
+    } catch {
+      return false
+    }
+  }
+  if (fresh()) return headOf(own, git)
+  const release = takeLock(path.join(dir, "fetch.lock"), now)
+  if (!release) return existsSync(stamp) ? headOf(own, git) : null
+  try {
+    if (fresh()) return headOf(own, git)
+    const remote = fetchRelease({ own, url, git })
+    writeFileSync(stamp, remote)
+    return remote
+  } finally {
+    release()
+  }
+}
+
 /** Resolves the script, runs it and returns its exit status. The commit it runs from, when it is the own clone, goes to it as DESK_DRAINS_RELEASE. */
 export function launch({ argv, env = process.env, home = homedir(), spawn = spawnSync, git = runGit, stderr = process.stderr, execPath = process.execPath, now = () => new Date() }) {
   const dir = stateDir(env, home)
@@ -109,7 +178,7 @@ export function launch({ argv, env = process.env, home = homedir(), spawn = spaw
   let release = null
   let fetchError = null
   try {
-    release = fetchRelease({ own, url: env.DESK_DRAINS_RELEASE_URL ?? RELEASE_URL, git })
+    release = fetchOnce({ dir, own, url: env.DESK_DRAINS_RELEASE_URL ?? RELEASE_URL, git, now })
   } catch (error) {
     fetchError = error.message
     release = headOf(own, git)
