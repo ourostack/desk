@@ -968,6 +968,8 @@ test("merge-when-green: .github/merge-checks.json on the base replaces the confi
     assert.deepEqual(prWrites(red.world), [], "a red check the list does not name still holds the head")
     assert.match(red.state("pages merge").prs["7"].waitingOn[0], /1 other check on the head failed \(test \(3\)/u)
   }
+  const two = await withFile(["ci checks"], [check("ci checks"), check("test (1)", "failure"), check("test (2)", "failure")])
+  assert.match(two.state("pages merge").prs["7"].waitingOn[0], /2 other checks on the head failed/u)
   const missing = await withFile(["ci checks"], [check("typecheck")])
   assert.deepEqual(prWrites(missing.world), [])
   assert.equal(missing.state("pages merge").prs["7"].waitingOn[0], "ci checks: not started")
