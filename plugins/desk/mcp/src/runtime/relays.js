@@ -516,6 +516,25 @@ async function headIsBehind(ctx, state, relay, pr) {
   return status === "behind" || status === "diverged"
 }
 
+/**
+ * A red main never holds a head that already answers it: the head holds main's tip and every job that failed on main's run is green on the head.
+ * A revert of the breaking commit, a fix and a flake that passed this time all qualify; an unrelated head that still fails the job does not.
+ * Returns the names of those jobs, or null when the head does not answer main (or main's failed jobs cannot be read).
+ */
+async function headHealsMain(ctx, state, relay, pr, main) {
+  try {
+    if (await headIsBehind(ctx, state, relay, pr)) return null
+    const { jobs } = await readJobs(ctx, state, relay.repo, main.id)
+    const failed = jobs.filter((job) => job.status === "completed" && RED.has(job.conclusion)).map((job) => job.name)
+    if (failed.length === 0) return null
+    const { runs } = await readChecks(ctx, state, relay.repo, pr.headSha)
+    const newest = (name) => runs.filter((run) => sameName(run.name, name)).sort((a, b) => b.id - a.id)[0]
+    return failed.every((name) => newest(name)?.status === "completed" && newest(name).conclusion === "success") ? failed : null
+  } catch {
+    return null
+  }
+}
+
 /** Brings the head up to the base once per head. A refusal (a conflict, say) is remembered and reported, never retried for that head. */
 async function updateBranch(ctx, state, relay, record, pr, number) {
   const response = await ctx.api.send("PUT", `/repos/${relay.repo}/pulls/${number}/update-branch`, { expected_head_sha: pr.headSha })
@@ -561,7 +580,7 @@ async function writeStatus(ctx, relay, number, record, text, { final }) {
 const short = (sha) => String(sha).slice(0, 7)
 const advisoryText = (warnings) => (warnings?.length > 0 ? `\n\nAdvisory, not judged: ${warnings.join("; ")}.` : "")
 const waitingText = (relay, pr, waiting, warnings) => `**${relay.label}** has not merged this yet (head \`${short(pr.headSha)}\`). Waiting on:\n${waiting.map((line) => `- ${line}`).join("\n")}${advisoryText(warnings)}\n\nThis comment is edited as that changes.`
-const mergedText = (relay, pr, sha, deleted, judged, warnings) => `**${relay.label}** merged this (${relay.method}, head \`${short(pr.headSha)}\`, now \`${short(sha)}\`). ${relay.strict ? `Every job of ${relay.strict.requiredWorkflows.join(", ")} on the head finished green${relay.strict.requireCurrentBase ? ` and the head contained ${pr.baseRef}` : ""}, and every other check and status was green` : "Every check and status on the head was green"}${judged ? ` and ${judged.branch}'s latest completed ${relay.requireMainWorkflowGreen} run ${judged.id} (${judged.url}) was green` : ""}${deleted ? "; the branch is deleted" : ""}.${advisoryText(warnings)}`
+const mergedText = (relay, pr, sha, deleted, judged, warnings) => `**${relay.label}** merged this (${relay.method}, head \`${short(pr.headSha)}\`, now \`${short(sha)}\`). ${relay.strict ? `Every job of ${relay.strict.requiredWorkflows.join(", ")} on the head finished green${relay.strict.requireCurrentBase ? ` and the head contained ${pr.baseRef}` : ""}, and every other check and status was green` : "Every check and status on the head was green"}${judged ? (judged.healedBy ? ` and, although ${judged.branch}'s latest completed ${relay.requireMainWorkflowGreen} run ${judged.id} (${judged.url}) was red, the head held ${judged.branch} and was green on every job that failed there (${judged.healedBy.join(", ")})` : ` and ${judged.branch}'s latest completed ${relay.requireMainWorkflowGreen} run ${judged.id} (${judged.url}) was green`) : ""}${deleted ? "; the branch is deleted" : ""}.${advisoryText(warnings)}`
 
 async function deleteBranch(ctx, relay, pr) {
   if (!relay.deleteBranch || !pr.headRepo || pr.headRepo.toLowerCase() !== pr.baseRepo.toLowerCase() || pr.headRef === pr.baseRef) return false
@@ -614,7 +633,11 @@ async function handlePull(relay, state, ctx, number) {
       if (!main) waiting.push(`${mainBranch} has no completed ${relay.requireMainWorkflowGreen} run that was not cancelled yet`)
       else {
         judged = { branch: mainBranch, id: main.id, url: main.url }
-        if (main.conclusion !== "success") waiting.push(`${mainBranch}'s latest completed ${relay.requireMainWorkflowGreen} run ${main.id} (${main.url}) is ${main.conclusion}`)
+        if (main.conclusion !== "success") {
+          const healed = pr.baseRef === mainBranch && (await headHealsMain(ctx, state, relay, pr, main))
+          if (healed) judged.healedBy = healed
+          else waiting.push(`${mainBranch}'s latest completed ${relay.requireMainWorkflowGreen} run ${main.id} (${main.url}) is ${main.conclusion}`)
+        }
       }
     }
   }

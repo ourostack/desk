@@ -743,6 +743,34 @@ test("merge-when-green: a red latest completed main run holds the merge back and
   assert.deepEqual(w.state("pages merge").prs["7"].waitingOn, ["main's latest completed ci.yml run 9 (https://github.test/runs/9) is failure"])
 })
 
+test("merge-when-green: a red main does not hold a head that holds main and is green on every job that failed there; anything else still waits", async () => {
+  const mainJobs = [{ name: "typecheck", status: "completed", conclusion: "failure" }, { name: "lint", status: "completed", conclusion: "success" }]
+  const run = async ({ compare = "ahead", jobs = mainJobs, checks = GREEN, pr = {} } = {}) => {
+    const w = await setup([MERGE])
+    mergeWorld(w.world, { checks, pr, main: [{ id: 9, conclusion: "failure" }] })
+    w.world.on("GET", /\/compare\/[^/]+\.\.\.a+/u, () => ({ status: compare }))
+    w.world.on("GET", /\/actions\/runs\/9\/jobs/u, () => ({ total_count: jobs.length, jobs }))
+    await w.poll()
+    return w
+  }
+  const healed = await run()
+  assert.deepEqual(prWrites(healed.world).map((write) => write.method), ["PUT"])
+  assert.match(comments(healed.world)[0].body.body, /was red, the head held main and was green on every job that failed there \(typecheck\)/u)
+  const rerun = await run({ checks: [...GREEN.slice(1), { ...check("typecheck", "failure"), id: 1 }, { ...check("typecheck"), id: 3 }, { ...check("typecheck", "failure"), id: 2 }] })
+  assert.deepEqual(prWrites(rerun.world).map((write) => write.method), ["PUT"], "the newest check run of a name decides")
+  assert.deepEqual(prWrites((await run({ checks: [...GREEN.slice(1), { ...check("typecheck"), id: 1 }, { ...check("typecheck", "failure"), id: 2 }] })).world), [], "a newer failing run of the job holds it")
+  for (const held of [
+    await run({ compare: "behind" }),
+    await run({ compare: "diverged" }),
+    await run({ pr: { base: { ref: "release" } } }),
+    await run({ jobs: [] }),
+    await run({ jobs: [{ name: "e2e", status: "completed", conclusion: "failure" }] }),
+  ]) {
+    assert.deepEqual(prWrites(held.world), [])
+    assert.match(held.state("pages merge").prs["7"].waitingOn[0], /^main's latest completed ci\.yml run 9 .* is failure$/u)
+  }
+})
+
 test("merge-when-green: a failed or unfinished check that is not required, or a failed commit status, holds the merge", async () => {
   const cases = [
     { checks: [...GREEN, check("weekly-page", "failure")], waiting: "weekly-page failure" },
