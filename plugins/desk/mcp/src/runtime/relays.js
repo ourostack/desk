@@ -539,8 +539,9 @@ async function headHealsMain(ctx, state, relay, pr, main) {
 /** Brings a behind head up to date, but only for the oldest pull request in line: a younger one waits, so that merging in arrival order does not restart every head's checks at once. */
 async function updateInTurn(ctx, state, relay, record, pr, number) {
   if (ctx.line.head !== undefined && ctx.line.head !== number) return [`queued behind #${ctx.line.head}: the oldest labelled pull request is brought up to date first, so a busy ${pr.baseRef} cannot starve it`]
-  ctx.line.head = number
-  return updateBranch(ctx, state, relay, record, pr, number)
+  const waiting = await updateBranch(ctx, state, relay, record, pr, number)
+  if (!record.update.failed) ctx.line.head = number
+  return waiting
 }
 
 async function updateBranch(ctx, state, relay, record, pr, number) {
