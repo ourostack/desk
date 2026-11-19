@@ -756,6 +756,9 @@ test("merge-when-green: a red main does not hold a head that holds main and is g
   const healed = await run()
   assert.deepEqual(prWrites(healed.world).map((write) => write.method), ["PUT"])
   assert.match(comments(healed.world)[0].body.body, /was red, the head held main and was green on every job that failed there \(typecheck\)/u)
+  const rerun = await run({ checks: [...GREEN.slice(1), { ...check("typecheck", "failure"), id: 1 }, { ...check("typecheck"), id: 3 }, { ...check("typecheck", "failure"), id: 2 }] })
+  assert.deepEqual(prWrites(rerun.world).map((write) => write.method), ["PUT"], "the newest check run of a name decides")
+  assert.deepEqual(prWrites((await run({ checks: [...GREEN.slice(1), { ...check("typecheck"), id: 1 }, { ...check("typecheck", "failure"), id: 2 }] })).world), [], "a newer failing run of the job holds it")
   for (const held of [
     await run({ compare: "behind" }),
     await run({ compare: "diverged" }),

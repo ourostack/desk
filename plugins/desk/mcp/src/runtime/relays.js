@@ -528,7 +528,7 @@ async function headHealsMain(ctx, state, relay, pr, main) {
     const failed = jobs.filter((job) => job.status === "completed" && RED.has(job.conclusion)).map((job) => job.name)
     if (failed.length === 0) return null
     const { runs } = await readChecks(ctx, state, relay.repo, pr.headSha)
-    const newest = (name) => runs.filter((run) => sameName(run.name, name)).sort((a, b) => (b.id ?? 0) - (a.id ?? 0))[0]
+    const newest = (name) => runs.filter((run) => sameName(run.name, name)).sort((a, b) => b.id - a.id)[0]
     return failed.every((name) => newest(name)?.status === "completed" && newest(name).conclusion === "success") ? failed : null
   } catch {
     return null
