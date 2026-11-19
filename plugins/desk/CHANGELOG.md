@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.330 — 2026-11-19
+
+`fast-honest-ci` corrects its merge-queue advice: before adding a queue against a red default branch, read which checks turn it red. Measured on a busy component library, most red commits were flaky checks the next commit passed, and a queue only turns those into dequeues.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.329 — 2026-11-19
 
 Desk's MCP server now vendors Ouro UI v1.3.351, moved by Ouro Current.

@@ -1,1 +1,0 @@
-`fast-honest-ci` corrects its merge-queue advice: before adding a queue against a red default branch, read which checks turn it red. Measured on a busy component library, most red commits were flaky checks the next commit passed, and a queue only turns those into dequeues.
