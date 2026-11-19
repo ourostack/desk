@@ -32,8 +32,8 @@ const COMMENT_MS = 10 * 60_000
  * A labelled pull request still waiting is read again no sooner than this, growing to the cap as it waits: while its checks run, every read of
  * them is a full (counted) answer, so reading each 30 s poll would spend most of the account's hourly quota on CI that takes minutes.
  */
-const WAIT_READ_MIN_MS = 60_000
-const WAIT_READ_MAX_MS = 240_000
+const WAIT_READ_MIN_MS = 30_000
+const WAIT_READ_MAX_MS = 60_000
 /** A merge relay with nothing labelled polls less often: its interval stretches by one step per this many empty polls, up to `MAX_IDLE_STRETCH` times. */
 const IDLE_POLLS_PER_STEP = 20
 const MAX_IDLE_STRETCH = 4
@@ -427,13 +427,14 @@ export function waitingOnChecks(requiredChecks, runs, skippedPasses = false, sta
 
 const RED = new Set(["failure", "timed_out", "cancelled", "startup_failure"])
 const MERGEABLE = new Set(["clean", "unstable", "has_hooks"])
+const mergeabilityUnknown = (pr) => pr.mergeable === null || pr.mergeableState === "unknown"
 
 function waitingOnPull(pr, allowBehind) {
   if (pr.draft) return ["it is a draft"]
   if (pr.mergeable === false || pr.mergeableState === "dirty") return ["it has merge conflicts"]
-  if (pr.mergeable === null || pr.mergeableState === "unknown") return ["GitHub has not yet worked out whether it merges cleanly"]
+  // An unknown answer is not waited out: the merge request itself makes GitHub work it out (see `mergeabilityUnknown`).
   if (pr.mergeableState === "behind" && !allowBehind) return [`it is behind ${pr.baseRef}`]
-  if (!MERGEABLE.has(pr.mergeableState) && pr.mergeableState !== "behind") return [`GitHub reports it as ${pr.mergeableState}, so the branch rules do not let it merge`]
+  if (!MERGEABLE.has(pr.mergeableState) && pr.mergeableState !== "behind" && !mergeabilityUnknown(pr)) return [`GitHub reports it as ${pr.mergeableState}, so the branch rules do not let it merge`]
   return []
 }
 
@@ -682,6 +683,14 @@ async function handlePull(relay, state, ctx, number) {
   }
   // The head sha makes GitHub refuse the merge if a push landed after the checks were read.
   const response = await ctx.api.send("PUT", `/repos/${relay.repo}/pulls/${number}/merge`, { merge_method: relay.method, sha: pr.headSha, ...mergeMessage(pr, number, relay.method) })
+  if (!response.ok && response.status === 405 && mergeabilityUnknown(pr)) {
+    // GitHub works mergeability out when asked, so this refusal is "not yet": read the pull request again next poll, never after the five-minute pause.
+    delete state.cache[`/repos/${relay.repo}/pulls/${number}`]
+    delete record.readAt
+    Object.assign(record, { status: "waiting", waitingOn: ["GitHub is still working out whether it merges cleanly; the merge is tried again on the next poll"], at: new Date(ctx.now).toISOString() })
+    note(state, ctx.now, { event: "mergeability-pending", number })
+    return
+  }
   if (!response.ok) {
     const reason = response.body.message ?? `HTTP ${response.status}`
     record.refused = { sha: pr.headSha, at: new Date(ctx.now).toISOString(), reason }
