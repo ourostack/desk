@@ -1,5 +1,13 @@
 # desk plugin — changelog
 
+## 3.2.331 — 2026-11-19
+
+The merge-when-green relay now reads `.github/merge-checks.json` from the pull request's base branch. When the file is there, its `required` list (check names or globs) is the only thing judged, in place of the relay's `requiredChecks` and its other checks, and a required check that has not reported counts as missing. Without the file, the relay's configured checks apply as before.
+
+The merge-when-green relay no longer waits for GitHub to work out whether a green pull request merges cleanly: it sends the merge, which makes GitHub work it out, and a 405 is tried again on the next poll. A waiting pull request is also read every 30 to 60 seconds instead of every 1 to 4 minutes.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.330 — 2026-11-19
 
 `fast-honest-ci` corrects its merge-queue advice: before adding a queue against a red default branch, read which checks turn it red. Measured on a busy component library, most red commits were flaky checks the next commit passed, and a queue only turns those into dequeues.

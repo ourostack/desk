@@ -1,1 +1,0 @@
-The merge-when-green relay no longer waits for GitHub to work out whether a green pull request merges cleanly: it sends the merge, which makes GitHub work it out, and a 405 is tried again on the next poll. A waiting pull request is also read every 30 to 60 seconds instead of every 1 to 4 minutes.
