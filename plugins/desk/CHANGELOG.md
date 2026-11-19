@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.305 — 2026-11-19
+
+The drains runner now finds the helper directory of the git on PATH when git cannot find `git-remote-https`. Callers such as the Ouro app sessions run it with the GitHub Copilot app's cached git on PATH but without `GIT_EXEC_PATH`, so every fetch of the released Desk failed and the relay could keep running an old Desk.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.304 — 2026-11-19
 
 The merge relay now serves labelled pull requests oldest first. While main is moving, only the oldest one behind it is brought up to date; younger ones queue behind it, so they no longer all restart their checks at once and a pull request that was green can no longer be starved.

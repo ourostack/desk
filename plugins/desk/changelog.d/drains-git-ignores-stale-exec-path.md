@@ -1,1 +1,0 @@
-The drains runner now finds the helper directory of the git on PATH when git cannot find `git-remote-https`. Callers such as the Ouro app sessions run it with the GitHub Copilot app's cached git on PATH but without `GIT_EXEC_PATH`, so every fetch of the released Desk failed and the relay could keep running an old Desk.
