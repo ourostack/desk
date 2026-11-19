@@ -27,6 +27,7 @@ test("the repository owner picks the login", () => {
   assert.equal(ownerOfRepo("/x", () => ({ stdout: "" })), "")
   assert.equal(ownerOfRepo(repo) === "" || typeof ownerOfRepo(repo) === "string", true)
   assert.equal(typeof copilotLogin(repo, { env: {} }), "string")
+  assert.equal(typeof copilotLogin(repo), "string")
 })
 
 test("the child env drops ambient tokens and carries the owner's account token", () => {
