@@ -1,1 +1,0 @@
-A desk with no consenting store now stays silent. The loop worker returns `no_consenting_store` without recording an outcome, and reconcile no longer reports `not_bound`, `receipt_too_old` or `own_activity_cut` for a task when no store has opted in, because no session can be bound then. Opting in is unchanged; an unreadable `consent.json` still reports as before.

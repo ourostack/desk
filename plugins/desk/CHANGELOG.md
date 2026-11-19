@@ -1,5 +1,26 @@
 # desk plugin — changelog
 
+## 3.2.291 — 2026-11-19
+
+A drain now starts its successor session in the project the app lists for the repository, and keeps the reason when a start fails, so a failed successor says why instead of going quiet.
+
+A desk with no consenting store now stays silent. The loop worker returns `no_consenting_store` without recording an outcome, and reconcile no longer reports `not_bound`, `receipt_too_old` or `own_activity_cut` for a task when no store has opted in, because no session can be bound then. Opting in is unchanged; an unreadable `consent.json` still reports as before.
+
+A session the Copilot app starts from `create_session`, `open_pr_session` or `open_issue_session` now begins in autopilot when the call names no `kickoff.mode`. The app's own default is plan mode, which left lanes waiting on a plan approval nobody saw. An explicit mode is never changed.
+A session start that asks for `execution_location: "cloud"` now runs locally. The cloud sandbox loads none of the Desk, MS Desk or Superpowers skills, so a lane started there (the Ouroboros context-reduction lane) had no Desk, no Superpowers and no plugin tools. Set `DESK_ALLOW_CLOUD_SESSIONS=1` to keep a cloud session.
+
+Desk's MCP server now vendors Ouro UI v1.3.313, moved by Ouro Current.
+
+Desk's MCP server now vendors Ouro UI v1.3.314, moved by Ouro Current.
+
+Plain Language now tells an agent to explain a cause, a design or a number from first principles: lead with the fundamental reason in one or two everyday sentences, and give mechanics only if asked. Asked why a static site took about 7 minutes to show a change, the right answer is that it is a photograph taken when it is built, so nothing can save and any change needs a new photograph, not a list of pipeline steps. The skill description now names explaining why something is so, and Plain Language is 0.2.14.
+
+A card an agent lets go of with `improvement_update` (`state: "open"`) now goes behind every other open card. `improvement_next` always serves the card with the oldest `last_opened_at`, so a released card used to come straight back and a card nobody could finish at the head of the queue blocked every card behind it. The queue now wraps: the released card is served again after the others.
+
+Desk's web launcher now stops a headless browser politely. After the exit wait it sends SIGTERM and waits again before SIGKILL, so Chromium removes its own `code_sign_clone` app-bundle copy instead of leaking one per launch.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.290 — 2026-11-18
 
 `improvement_next` no longer stops after 2 claims a day; the live claim (one per machine, 4 hours) still keeps two agents off the same card. The loop now closes an open or claimed Desk problem card as soon as its own GitHub issue is closed, as `closed_unverified` with reason `source_recovered` and the issue kept as evidence, instead of waiting 7 quiet days.
