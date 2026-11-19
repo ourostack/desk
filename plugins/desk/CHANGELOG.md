@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.326 — 2026-11-19
+
+Desk's MCP server now vendors Ouro UI v1.3.348, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.325 — 2026-11-19
 
 `fast-honest-ci` now states the goal it serves: a shorter loop needs no savings case, so measurements choose the order of work, not whether a faster loop is worth having. It points to ourostack/.github's loop clock (PR opened to live, and the default branch's red share) for step one. It also says that dropping a merge queue needs a replacement that still builds the merged tree, with the measured cost of going without one. And it adds one trunk-based rule: fix on the default branch and cherry-pick to a release branch, then delete the release branch once it has shipped.
