@@ -410,7 +410,10 @@ export function cardProblems(data, { nested = true } = {}) {
           problems.push(`repos[${index}] is not an object`)
           return
         }
+        // A remote repo has no local checkout, so `local_path` is required only for a local (or unset) mode.
+        const needsLocalPath = entry.mode !== "remote"
         for (const field of ["name", "local_path", "mode"]) {
+          if (field === "local_path" && !needsLocalPath && entry[field] === undefined) continue
           if (typeof entry[field] !== "string") problems.push(`repos[${index}].${field} is missing or not a string`)
         }
         if (entry.url !== undefined && typeof entry.url !== "string") problems.push(`repos[${index}].url is not a string`)

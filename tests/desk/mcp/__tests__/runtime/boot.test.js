@@ -978,6 +978,26 @@ test("bootOnce: a crew-workspace (desk-set) corrupted card is located under desk
   )
 })
 
+test("bootOnce: a remote repo entry with no local_path is a valid card and does not degrade boot", async () => {
+  const root = await mkDeskWorkspace()
+  const card = VALID_CARD.replace("repos: []", "repos:\n  - name: acme/widgets\n    mode: remote")
+  await writeCard(root, "track-a", "remote-task", card)
+  const { gh, jq } = okPrereqRunners()
+  const result = await bootOnce({
+    env: { DESK: root }, cwd: root, homeDir: root, gh, jq,
+    syncFn: async () => ({ state: "synced" }),
+    factoryStatusFn: () => ({ store: null, source: "no_remote", consent: "held", stores: [], warnings: [] }),
+  })
+  assert.equal(result.card_validation.length, 0)
+  assert.ok(result.degraded.every((line) => !line.includes("corrupted frontmatter")))
+})
+
+test("cardProblems: local_path is required for a local repo entry, not a remote one", () => {
+  const base = { schema_version: 1, title: "t", status: "processing", created: "2026-01-01T00:00:00Z", updated: "2026-01-02T00:00:00Z", track: "x" }
+  assert.deepEqual(cardProblems({ ...base, repos: [{ name: "a/b", mode: "remote" }] }), [])
+  assert.deepEqual(cardProblems({ ...base, repos: [{ name: "a/b", mode: "local" }] }), ["repos[0].local_path is missing or not a string"])
+})
+
 test("bootOnce: two or more corrupted task cards are summarized in the plural", async () => {
   const root = await mkDeskWorkspace()
   await writeCard(root, "track-a", "corrupted-one", "title: Broken\nstatus: not-a-status\n")
