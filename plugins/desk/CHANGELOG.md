@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.295 — 2026-11-19
+
+`friction_add` no longer caps the issues it files for an owned tool. Every distinct failure is filed. A failure that already has an open `tool-friction` issue on that repo (matched by its fingerprint) gets the new evidence as a comment on it instead of a duplicate issue; a closed issue does not match, so a failure that returns is filed again. The five-a-day limit and its `held_cap` answer are gone.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.294 — 2026-11-19
 
 ### Own the stack: file it where it lives
