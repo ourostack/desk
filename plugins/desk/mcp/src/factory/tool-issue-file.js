@@ -4,10 +4,11 @@
 // evidence, so the text is held to the kaizen filer's scrub (`isGeneric`): a title or body with a credential, a home
 // path or an email address is `not_filed: not_generic`, with the paste-ready text to file by hand.
 //
-// Once only: the issue is labelled `tool-friction` and carries a fingerprint marker (a hash of the tool and the normalized title), and the repo's
-// issues, open or closed, are read for it first; a match is `known` with its URL. Account: `chooseAccount`'s own pick
-// (never a managed login, never one that cannot see the repo). At most `MAX_PER_DAY` issues per repo from this machine
-// in 24 hours; past it the result is `held_cap`.
+// Every distinct failure is filed; none is held back by a count. The issue is labelled `tool-friction` and carries a
+// fingerprint marker (a hash of the tool and the normalized title). The repo's open issues are read for it first; a match
+// gets the new evidence as a comment and the result is `known` with its URL, so a repeat never opens a duplicate. A closed
+// issue does not match: the failure came back, so it is filed again. Account: `chooseAccount`'s own pick (never a managed
+// login, never one that cannot see the repo).
 //
 // `src/factory/**` imports only `node:` built-ins and other `src/factory/` files.
 
@@ -15,7 +16,7 @@ import { createHash } from "node:crypto"
 
 import { chooseAccount, ghRunner } from "./flush.js"
 import { isGeneric, normalizeTitle } from "./kaizen-file.js"
-import { readStatus, withNamedLock, writeStatus } from "./outbox.js"
+import { withNamedLock } from "./outbox.js"
 import { issuesClient } from "./store-issues.js"
 
 // Every tool owned in `ourostack`, by the name an agent knows it by, with the repo its issue drain reads.
@@ -27,12 +28,10 @@ export const OWNED_TOOLS = Object.freeze({
   ouroboros: "ourostack/ouroboros",
   desk: "ourostack/desk",
 })
-export const MAX_PER_DAY = 5
 const LABEL = "tool-friction"
 const MARKER_PREFIX = "<!-- desk-tool-issue: "
 const MAX_TITLE = 120
 const MAX_BODY = 8000
-const DAY_MS = 24 * 60 * 60 * 1000
 
 /** `isOwnedTool(name) -> boolean`: whether `name` is a tool owned in ourostack. */
 export const isOwnedTool = (name) => typeof name === "string" && Object.hasOwn(OWNED_TOOLS, name)
@@ -40,15 +39,9 @@ export const isOwnedTool = (name) => typeof name === "string" && Object.hasOwn(O
 /** `toolIssueFingerprint(tool, title) -> string`: the 32 hex the issue's marker carries. */
 export const toolIssueFingerprint = (tool, title) => createHash("sha256").update(`${tool}\n${normalizeTitle(title)}`).digest("hex").slice(0, 32)
 
-async function recentFilings(env, repo, at) {
-  const filed = (await readStatus(env)).tool_issue_filed ?? {}
-  const times = Array.isArray(filed[repo]) ? filed[repo].filter((time) => typeof time === "string" && at - Date.parse(time) < DAY_MS) : []
-  return { filed, times }
-}
-
 /**
  * `fileToolIssue(env, { tool, title, body, runner, now }) -> { result, repo?, url?, body? }`. `result` is `filed`, `known`
- * (both with `url`), `held_cap`, or `not_filed` with `reason` (`unknown_tool`, `invalid_title`, `invalid_body`,
+ * (both with `url`; `known` means the open issue got the new evidence as a comment), or `not_filed` with `reason` (`unknown_tool`, `invalid_title`, `invalid_body`,
  * `not_generic`, `no_suitable_account`, or the issues client's code) and, once the text is valid, a paste-ready `body`.
  * Never throws for a filing failure.
  */
@@ -70,13 +63,12 @@ export async function fileToolIssue(env, { tool, title, body, runner = ghRunner(
     if (token === "") return { result: "not_filed", reason: "no_suitable_account", repo, body: pasteReady }
     return await withNamedLock(env, `tool-issue-${tool}`, async () => {
       const client = issuesClient({ runner, repo, token })
-      const existing = (await client.listIssues({ label: LABEL, state: "all" })).find((issue) => !issue.pull_request && issue.body.includes(marker))
-      if (existing !== undefined) return { result: "known", repo, url: existing.url }
-      const at = now()
-      const { filed, times } = await recentFilings(env, repo, at)
-      if (times.length >= MAX_PER_DAY) return { result: "held_cap", repo, body: pasteReady }
+      const existing = (await client.listIssues({ label: LABEL, state: "open" })).find((issue) => !issue.pull_request && issue.body.includes(marker))
+      if (existing !== undefined) {
+        await client.createComment(existing.number, `The same failure again:\n\n${body.trimEnd()}`)
+        return { result: "known", repo, url: existing.url }
+      }
       const { url } = await client.createIssue({ title: title.trim(), body: text, labels: ["bug", LABEL] })
-      await writeStatus(env, { tool_issue_filed: { ...filed, [repo]: [...times, new Date(at).toISOString()] } })
       return { result: "filed", repo, url }
     })
   } catch (error) {
