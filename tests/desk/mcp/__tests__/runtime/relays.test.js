@@ -811,6 +811,22 @@ test("merge-when-green: a job that failed on main and never ran on the head is d
   assert.deepEqual(prWrites(noTrigger.world), [])
   assert.match(noTrigger.state("pages merge").prs["7"].waitingOn[1], /smoke failed on main but never ran on this head, and ci\.yml has no `workflow_dispatch` trigger.*Add `workflow_dispatch:` under `on:`/u)
 
+  const refused = await run({ dispatch: () => ({ ok: false, status: 403, body: { message: "Resource not accessible" } }) })
+  assert.match(refused.state("pages merge").prs["7"].waitingOn[1], /dispatching ci\.yml answered HTTP 403 \(Resource not accessible\)/u)
+  const other422 = await run({ dispatch: () => ({ ok: false, status: 422, body: { message: "No ref found" } }) })
+  assert.match(other422.state("pages merge").prs["7"].waitingOn[1], /answered HTTP 422 \(No ref found\)/u)
+
+  const fork = await setup([MERGE])
+  mergeWorld(fork.world, { main: [{ id: 9, conclusion: "failure" }], pr: { head: { sha: SHA, ref: "x", repo: { full_name: "someone/pages" } } } })
+  fork.world.on("GET", /\/compare\/[^/]+\.\.\.a+/u, () => ({ status: "ahead" }))
+  fork.world.on("GET", /\/actions\/runs\/9\/jobs/u, () => ({ total_count: 1, jobs: mainJobs }))
+  await fork.poll()
+  assert.equal(dispatches(fork).length, 0)
+  assert.match(fork.state("pages merge").prs["7"].waitingOn[1], /its branch is in a fork/u)
+
+  const pending = await run({ checks: [...GREEN, check("smoke", null, "in_progress")] })
+  assert.equal(dispatches(pending).length, 0, "a job already running on the head is waited for, not dispatched")
+
   const red = await run({ checks: [...GREEN, check("smoke", "failure")] })
   assert.equal(dispatches(red).length, 0)
   assert.deepEqual(prWrites(red.world), [])

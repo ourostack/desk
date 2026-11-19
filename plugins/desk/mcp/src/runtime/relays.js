@@ -532,10 +532,8 @@ async function headHealsMain(ctx, state, relay, record, pr, main) {
     const { runs } = await readChecks(ctx, state, relay.repo, pr.headSha)
     const newest = (name) => runs.filter((run) => sameName(run.name, name)).sort((a, b) => b.id - a.id)[0]
     if (failed.every((name) => newest(name)?.status === "completed" && newest(name).conclusion === "success")) return { healedBy: failed }
-    if (failed.some((name) => newest(name) && !(newest(name).status === "completed" ? newest(name).conclusion === "success" : true))) return null
-    const missing = failed.filter((name) => !newest(name))
-    if (missing.length === 0) return null
-    return { notes: [await dispatchMissing(ctx, state, relay, record, pr, missing)] }
+    if (failed.some((name) => newest(name) && !(newest(name).status === "completed" && newest(name).conclusion === "success"))) return null
+    return { notes: [await dispatchMissing(ctx, state, relay, record, pr, failed.filter((name) => !newest(name)))] }
   } catch {
     return null
   }
@@ -550,8 +548,8 @@ async function dispatchMissing(ctx, state, relay, record, pr, missing) {
     const response = sameRepo ? await ctx.api.send("POST", `/repos/${relay.repo}/actions/workflows/${encodeURIComponent(workflow)}/dispatches`, { ref: pr.headRef }) : null
     const reason = !sameRepo ? "its branch is in a fork, which cannot be dispatched"
       : response.ok ? null
-        : response.status === 422 && /workflow_dispatch/iu.test(response.body?.message ?? "") ? `${workflow} has no \`workflow_dispatch\` trigger, so nothing can run those jobs on a pull request head. Add \`workflow_dispatch:\` under \`on:\` in ${workflow}`
-          : `dispatching ${workflow} answered HTTP ${response.status}${response.body?.message ? ` (${response.body.message})` : ""}`
+        : response.status === 422 && /workflow_dispatch/iu.test(response.body.message) ? `${workflow} has no \`workflow_dispatch\` trigger, so nothing can run those jobs on a pull request head. Add \`workflow_dispatch:\` under \`on:\` in ${workflow}`
+          : `dispatching ${workflow} answered HTTP ${response.status} (${response.body.message})`
     record.dispatch = { sha: pr.headSha, at: new Date(ctx.now).toISOString(), ...(reason ? { failed: reason } : {}) }
     note(state, ctx.now, { event: "dispatched-missing-jobs", head: short(pr.headSha), ok: !reason, jobs: missing, ...(reason ? { reason } : {}) })
   }
