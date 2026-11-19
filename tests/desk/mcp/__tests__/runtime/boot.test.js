@@ -1600,7 +1600,7 @@ for (const association of ["activation", "DESK"]) {
       }
       const before = await fs.readFile(path.join(associated, "work/sample/task.md"), "utf8")
       const result = await healthyBoot(associated, {
-        env, cwd: opened, homeDir: home, pluginRoot: fixturePlugin, migrationsFn: pendingMigrations,
+        env, cwd: opened, homeDir: home, pluginRoot: fixturePlugin, migrationsFn: (options) => pendingMigrations({ ...options, budgetMs: 60_000, blockLimitMs: 60_000 }),
         cardGuardFn: () => ({ state: "skipped" }), staleDeskFn: () => null, releaseAlertFn: () => null,
       })
       assert.equal(result.root.path, associated)
