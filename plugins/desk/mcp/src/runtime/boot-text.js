@@ -14,6 +14,7 @@ import { readSyncStatus } from "./sync-worker.js"
 import { blockedWords } from "./deliver.js"
 import { unsignedLines } from "../desk/unsigned-deliveries.js"
 import { memberSourceLabel } from "../desk/crew-member.js"
+import { machineDesksLine } from "../desk/machine-desks.js"
 
 // The AGENTS.md reader lives in its own dependency-free module so the hosted front door can use it too.
 export { AGENTS_MD_CAP_BYTES, readAgentsMd } from "./agents-md.js"
@@ -420,6 +421,8 @@ export function formatBootText(result) {
   if (typeof result.stale_desk?.line === "string") lines.push(result.stale_desk.line)
   if (typeof result.plugin_update?.line === "string") lines.push(result.plugin_update.line)
   if (Array.isArray(result.other_sessions?.lines)) lines.push(...result.other_sessions.lines)
+  const desksLine = machineDesksLine(result.machine_desks ?? [])
+  if (desksLine !== null) lines.push(desksLine)
   if (typeof result.release_alert?.line === "string") lines.push(result.release_alert.line)
   if (typeof result.desk_problems?.line === "string") lines.push(result.desk_problems.line)
   // The headline already says why the sync failed and what else failed (up to three short entries), so those entries would only repeat it.
