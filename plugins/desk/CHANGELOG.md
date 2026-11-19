@@ -1,5 +1,15 @@
 # desk plugin — changelog
 
+## 3.2.324 — 2026-11-19
+
+`lesson-capture` ships [`agents-md-budget.mjs`](skills/lesson-capture/agents-md-budget.mjs), a script any repository can copy in and run in CI to hold its always-loaded instructions (AGENTS.md, CLAUDE.md, GEMINI.md and `.github/copilot-instructions.md`) to a byte budget. A file over its budget, or without one, fails with the fix: turn a rule into a check, or delete one. Raising a budget is a choice a pull request makes with `--set` and states, and `--set` also locks in a cut. It needs only Node, so it works in repositories whose organization blocks outside Actions.
+
+Desk's MCP server now vendors Ouro UI v1.3.347, moved by Ouro Current.
+
+A merge-when-green relay's `strict` block takes `requireCurrentBase: false` to merge a head that is green on its own checks at once, however far behind its base it is, any number in parallel, without updating it. Main is then protected after the merge by post-merge checks and auto-revert, and the red-main exemption still applies. The new `strict.serial` (default `true`) lets `false` drop the oldest-first update queue. Relays that leave both unset behave as before. See [relays](docs/relays.md).
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.323 — 2026-11-19
 
 Desk's MCP server now vendors Ouro UI v1.3.343, moved by Ouro Current.
