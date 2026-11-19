@@ -1,0 +1,1 @@
+A session the Copilot app starts from `create_session`, `open_pr_session` or `open_issue_session` now begins in autopilot when the call names no `kickoff.mode`. The app's own default is plan mode, which left lanes waiting on a plan approval nobody saw. An explicit mode is never changed.

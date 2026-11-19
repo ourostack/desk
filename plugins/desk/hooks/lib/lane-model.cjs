@@ -3,13 +3,15 @@
 // Copilot preToolUse for the app's session-starting tools (create_session, open_issue_session, open_pr_session). Without
 // `kickoff.model` the app starts the new session on the model of the session that asked, and coordinators run on the most
 // expensive one, so every lane inherits it. When the call names no model, this adds Desk's lane default through `modifiedArgs`;
-// a model the caller named is never touched. Fail-open: any problem leaves the call as it was.
+// the app also starts a kickoff in plan mode when `kickoff.mode` is absent, which leaves a lane waiting on a plan approval
+// nobody sees, so a missing mode becomes autopilot. A model or mode the caller named is never touched. Fail-open: any problem leaves the call as it was.
 
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 
 const DEFAULT_LANE_MODEL = "claude-sonnet-5.5";
+const DEFAULT_LANE_MODE = "autopilot";
 const SESSION_TOOL = /(?:^|[^a-z_])(?:create_session|open_issue_session|open_pr_session)$/u;
 
 const text = (value) => (typeof value === "string" && value.trim() !== "" ? value.trim() : null);
@@ -47,9 +49,11 @@ function decide(payload, options = {}) {
     if (typeof args === "string") args = JSON.parse(args);
     if (!isRecord(args)) return {};
     if (args.kickoff !== undefined && !isRecord(args.kickoff)) return {};
-    if (text(args.kickoff?.model) !== null) return {};
-    const model = laneModel(options);
-    return { permissionDecision: "allow", modifiedArgs: { ...args, kickoff: { ...(args.kickoff ?? {}), model } } };
+    const kickoff = { ...(args.kickoff ?? {}) };
+    if (text(kickoff.model) === null) kickoff.model = laneModel(options);
+    if (text(kickoff.mode) === null) kickoff.mode = DEFAULT_LANE_MODE;
+    if (isRecord(args.kickoff) && kickoff.model === args.kickoff.model && kickoff.mode === args.kickoff.mode) return {};
+    return { permissionDecision: "allow", modifiedArgs: { ...args, kickoff } };
   } catch {
     return {};
   }
