@@ -1,1 +1,0 @@
-The drains runner now fetches the released Desk once at a time: a runner that finds a fetch under way, or a successful one less than a minute old, uses the current copy with no wait and no error line, so overlapping ticks no longer collide on shallow.lock or time out together.

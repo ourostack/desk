@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.307 — 2026-11-19
+
+The drains runner now fetches the released Desk once at a time: a runner that finds a fetch under way, or a successful one less than a minute old, uses the current copy with no wait and no error line, so overlapping ticks no longer collide on shallow.lock or time out together.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.306 — 2026-11-19
 
 Desk's MCP server now vendors Ouro UI v1.3.323, moved by Ouro Current.
