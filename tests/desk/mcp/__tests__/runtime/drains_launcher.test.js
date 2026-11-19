@@ -341,7 +341,7 @@ test("runners started together share one clone without a shallow.lock error or a
   const old = new Date(Date.now() - 120_000)
   utimesSync(path.join(dir, "last-fetch"), old, old)
   commit("3.2.123")
-  const launcher = fileURLToPath(new URL("../../../../../plugins/desk/mcp/scripts/drains-launcher.mjs", import.meta.url))
+  const launcher = new URL("../../../../../plugins/desk/mcp/scripts/drains-launcher.mjs", import.meta.url).href
   const code = `import(${JSON.stringify(launcher)}).then(({ launch }) => { process.exitCode = launch({ argv: ["poll"], spawn: () => ({ status: 0 }), execPath: "/node" }) })`
   const env = { ...process.env, XDG_STATE_HOME: path.join(root, "state"), DESK_DRAINS_RELEASE_URL: repo, AGENCY_PLUGIN_CACHE: path.join(root, "none") }
   const runs = Array.from({ length: 8 }, () => new Promise((resolve) => {
