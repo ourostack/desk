@@ -114,6 +114,6 @@ export function resolveMachineDesk(query, desks) {
 export function machineDesksLine(desks, { homeDir = os.homedir() } = {}) {
   const others = desks.filter((desk) => desk.present && !desk.current)
   if (others.length === 0) return null
-  const short = (p) => (p.startsWith(homeDir + path.sep) ? `~${p.slice(homeDir.length)}` : p)
+  const short = (p) => (p.startsWith(homeDir + path.sep) ? `~${p.slice(homeDir.length).split(path.sep).join("/")}` : p)
   return `Other desks on this machine (read them there, never clone): ${others.map((desk) => `${desk.name} ${short(desk.path)}`).join("; ")}. desk_status with desk set resolves one.`
 }

@@ -200,7 +200,7 @@ test("Desk running from an Agency session that loads the ms-desk overlay still n
       mkdirSync(path.join(util, "..", "factory"), { recursive: true })
       copyFileSync(path.join(mcpRoot, "src", "factory", "credential.js"), path.join(util, "..", "factory", "credential.js"))
       mkdirSync(path.join(util, "..", "desk"), { recursive: true })
-      copyFileSync(path.join(mcpRoot, "src", "desk", "crew-roster.js"), path.join(util, "..", "desk", "crew-roster.js"))
+      for (const file of ["crew-roster.js", "machine-desks.js"]) copyFileSync(path.join(mcpRoot, "src", "desk", file), path.join(util, "..", "desk", file))
       writeFileSync(path.join(scratch, container, "desk", "mcp", "package.json"), JSON.stringify({ type: "module" }))
       for (const overlay of overlays) {
         mkdirSync(path.join(scratch, container, overlay), { recursive: true })
