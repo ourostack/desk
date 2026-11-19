@@ -801,6 +801,8 @@ test("merge-when-green: a job that failed on main and never ran on the head is d
   assert.deepEqual(prWrites(dispatched.world), [])
   assert.match(dispatched.state("pages merge").prs["7"].waitingOn[1], /smoke failed on main but have not run on this head; dispatched ci\.yml on `feature\/x` and waiting for it/u)
   dispatched.world.writes.length = 0
+  await dispatched.poll(NOW + 1800_000)
+  assert.equal(dispatches(dispatched).length, 0, "once per head, even while the run has not appeared yet")
   dispatched.world.on("GET", /\/commits\/a+\/check-runs/u, () => ({ total_count: 2, check_runs: [...GREEN, { ...check("smoke"), id: 50 }] }))
   await dispatched.poll(NOW + 3600_000)
   assert.equal(dispatches(dispatched).length, 0, "once per head")
