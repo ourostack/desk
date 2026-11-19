@@ -273,17 +273,26 @@ test("a release branch without the script is not run; the Agency cache is", asyn
   assert.match(broken.err[0], /could not resolve the released Desk \(ENOENT/u)
 })
 
-test("git is retried without GIT_EXEC_PATH when that variable hides git-remote-https, and only then", () => {
-  const stale = { PATH: "/bin", GIT_EXEC_PATH: "/gone/libexec/git-core" }
+test("a git that cannot find git-remote-https is retried with the helper directory beside a git on PATH, then without GIT_EXEC_PATH", () => {
   const missing = { status: 128, stderr: "git: 'remote-https' is not a git command. See 'git --help'.\n" }
-  const calls = []
-  const spawn = (cmd, args, options) => { calls.push(options.env); return options.env.GIT_EXEC_PATH ? missing : { status: 0, stdout: "ok" } }
-  assert.equal(makeGit(spawn, stale)(["ls-remote"], 5).stdout, "ok")
-  assert.deepEqual(calls, [{ ...stale, GIT_TERMINAL_PROMPT: "0" }, { PATH: "/bin", GIT_TERMINAL_PROMPT: "0" }])
-  // No retry for other failures, or when the variable was never set.
-  calls.length = 0
-  assert.equal(makeGit(() => { calls.push(1); return { status: 1, stderr: "offline\n" } }, stale)([], 5).status, 1)
-  assert.equal(makeGit(() => { calls.push(2); return missing }, { PATH: "/bin" })([], 5).status, 128)
-  assert.equal(makeGit(() => { calls.push(3); return { status: 0 } }, stale)([], 5).status, 0)
-  assert.equal(calls.length, 3)
+  const helper = path.join("/cache/bin", "..", "libexec", "git-core")
+  const seen = []
+  const spawn = (cmd, args, options) => { seen.push(options.env.GIT_EXEC_PATH); return options.env.GIT_EXEC_PATH === helper ? { status: 0, stdout: "ok" } : missing }
+  const exists = (file) => file === path.join(helper, "git-remote-http")
+  // The background caller has the git on PATH but no GIT_EXEC_PATH.
+  assert.equal(makeGit(spawn, { PATH: ["/usr/bin", "/cache/bin"].join(path.delimiter) }, exists)(["ls-remote"], 5).stdout, "ok")
+  assert.deepEqual(seen, [undefined, helper])
+  // A stale inherited value is replaced, and with no helper directory anywhere it is dropped as the last resort.
+  seen.length = 0
+  const none = (cmd, args, options) => { seen.push(options.env.GIT_EXEC_PATH); return options.env.GIT_EXEC_PATH ? missing : { status: 0, stdout: "own" } }
+  assert.equal(makeGit(none, { PATH: "/usr/bin", GIT_EXEC_PATH: "/gone" }, () => false)([], 5).stdout, "own")
+  assert.deepEqual(seen, ["/gone", undefined])
+  // Still failing after every retry: the last failure is returned. Other failures and successes run once.
+  assert.equal(makeGit(() => missing, { PATH: "/usr/bin" }, () => false)([], 5).status, 128)
+  seen.length = 0
+  assert.equal(makeGit((c, a, o) => { seen.push(1); return { status: 1, stderr: "offline\n" } }, { PATH: "/x" }, () => true)([], 5).status, 1)
+  assert.equal(makeGit((c, a, o) => { seen.push(2); return { status: 0 } }, { PATH: "/x" }, () => true)([], 5).status, 0)
+  assert.equal(seen.length, 2)
+  // The default environment has a PATH.
+  assert.equal(makeGit(() => ({ status: 0 }), {}, () => true)([], 5).status, 0)
 })

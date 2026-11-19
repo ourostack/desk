@@ -34,16 +34,28 @@ function released(cache) {
   return found
 }
 
+/** Helper directories (`<prefix>/libexec/git-core`) of the gits on PATH, for a git that was relocated without GIT_EXEC_PATH. */
+function execPaths(env, exists) {
+  const dirs = String(env.PATH ?? env.Path ?? "").split(path.delimiter).filter(Boolean)
+  return dirs.map((dir) => path.join(dir, "..", "libexec", "git-core")).filter((dir) => exists(path.join(dir, "git-remote-http")))
+}
+
 /**
- * Runs git. An inherited GIT_EXEC_PATH names the libexec of whichever git the launching app used. When it is gone or belongs to another
- * git, `git ls-remote` fails with "'remote-https' is not a git command" on every run, so that one failure is retried with git's own
- * helper directory. A git that needs the variable still gets it on the first try.
+ * Runs git. Some gits (the GitHub Copilot app's cached one) find their helpers only through GIT_EXEC_PATH, which the app sets and a
+ * background caller may lack; others fail when an inherited GIT_EXEC_PATH names a git that is gone. Either way `git ls-remote` fails on
+ * every run with "'remote-https' is not a git command", so that one failure is retried with each helper directory found next to a git on
+ * PATH, then with the variable removed. A git that works as it is runs once.
  */
-export const makeGit = (spawn = spawnSync, env = process.env) => (args, timeout) => {
-  const result = spawn("git", args, { encoding: "utf8", timeout, windowsHide: true, env: { ...env, GIT_TERMINAL_PROMPT: "0" } })
-  if (!("GIT_EXEC_PATH" in env) || !/is not a git command/u.test(String(result.stderr ?? ""))) return result
+export const makeGit = (spawn = spawnSync, env = process.env, exists = existsSync) => (args, timeout) => {
+  const attempt = (e) => spawn("git", args, { encoding: "utf8", timeout, windowsHide: true, env: { ...e, GIT_TERMINAL_PROMPT: "0" } })
+  let result = attempt(env)
+  if (!/is not a git command/u.test(String(result.stderr ?? ""))) return result
   const { GIT_EXEC_PATH: _stale, ...own } = env
-  return spawn("git", args, { encoding: "utf8", timeout, windowsHide: true, env: { ...own, GIT_TERMINAL_PROMPT: "0" } })
+  for (const e of [...execPaths(env, exists).map((GIT_EXEC_PATH) => ({ ...own, GIT_EXEC_PATH })), own]) {
+    result = attempt(e)
+    if (!/is not a git command/u.test(String(result.stderr ?? ""))) break
+  }
+  return result
 }
 
 const runGit = makeGit()
