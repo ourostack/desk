@@ -34,7 +34,19 @@ function released(cache) {
   return found
 }
 
-const runGit = (args, timeout) => spawnSync("git", args, { encoding: "utf8", timeout, windowsHide: true, env: { ...process.env, GIT_TERMINAL_PROMPT: "0" } })
+/**
+ * Runs git. An inherited GIT_EXEC_PATH names the libexec of whichever git the launching app used. When it is gone or belongs to another
+ * git, `git ls-remote` fails with "'remote-https' is not a git command" on every run, so that one failure is retried with git's own
+ * helper directory. A git that needs the variable still gets it on the first try.
+ */
+export const makeGit = (spawn = spawnSync, env = process.env) => (args, timeout) => {
+  const result = spawn("git", args, { encoding: "utf8", timeout, windowsHide: true, env: { ...env, GIT_TERMINAL_PROMPT: "0" } })
+  if (!("GIT_EXEC_PATH" in env) || !/is not a git command/u.test(String(result.stderr ?? ""))) return result
+  const { GIT_EXEC_PATH: _stale, ...own } = env
+  return spawn("git", args, { encoding: "utf8", timeout, windowsHide: true, env: { ...own, GIT_TERMINAL_PROMPT: "0" } })
+}
+
+const runGit = makeGit()
 
 function gitOut(git, args, timeout) {
   const result = git(args, timeout)
