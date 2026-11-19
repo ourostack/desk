@@ -783,6 +783,40 @@ test("merge-when-green: a red main does not hold a head that holds main and is g
   }
 })
 
+test("merge-when-green: a job that failed on main and never ran on the head is dispatched once; it merges when the dispatched run is green, and holds with a reason when it cannot run or is red", async () => {
+  const mainJobs = [{ name: "smoke", status: "completed", conclusion: "failure" }]
+  const dispatches = (w) => w.world.writes.filter((write) => /\/workflows\/ci\.yml\/dispatches$/u.test(write.route))
+  const run = async ({ checks = GREEN, dispatch = () => ({ ok: true, status: 204, body: {} }) } = {}) => {
+    const w = await setup([MERGE])
+    mergeWorld(w.world, { checks, main: [{ id: 9, conclusion: "failure" }] })
+    w.world.on("GET", /\/compare\/[^/]+\.\.\.a+/u, () => ({ status: "ahead" }))
+    w.world.on("GET", /\/actions\/runs\/9\/jobs/u, () => ({ total_count: 1, jobs: mainJobs }))
+    w.world.on("POST", /\/workflows\/ci\.yml\/dispatches$/u, dispatch)
+    await w.poll()
+    return w
+  }
+  const dispatched = await run()
+  assert.equal(dispatches(dispatched).length, 1)
+  assert.equal(dispatches(dispatched)[0].body.ref, "feature/x")
+  assert.deepEqual(prWrites(dispatched.world), [])
+  assert.match(dispatched.state("pages merge").prs["7"].waitingOn[1], /smoke failed on main but have not run on this head; dispatched ci\.yml on `feature\/x` and waiting for it/u)
+  dispatched.world.writes.length = 0
+  dispatched.world.on("GET", /\/commits\/a+\/check-runs/u, () => ({ total_count: 2, check_runs: [...GREEN, { ...check("smoke"), id: 50 }] }))
+  await dispatched.poll(NOW + 3600_000)
+  assert.equal(dispatches(dispatched).length, 0, "once per head")
+  assert.deepEqual(prWrites(dispatched.world).map((write) => write.method), ["PUT"], "the dispatched run's green job heals main's red")
+  assert.match(comments(dispatched.world)[0].body.body, /green on every job that failed there \(smoke\)/u)
+
+  const noTrigger = await run({ dispatch: () => ({ ok: false, status: 422, body: { message: "Workflow does not have 'workflow_dispatch' trigger" } }) })
+  assert.deepEqual(prWrites(noTrigger.world), [])
+  assert.match(noTrigger.state("pages merge").prs["7"].waitingOn[1], /smoke failed on main but never ran on this head, and ci\.yml has no `workflow_dispatch` trigger.*Add `workflow_dispatch:` under `on:`/u)
+
+  const red = await run({ checks: [...GREEN, check("smoke", "failure")] })
+  assert.equal(dispatches(red).length, 0)
+  assert.deepEqual(prWrites(red.world), [])
+  assert.equal(red.state("pages merge").prs["7"].waitingOn.length, 2)
+})
+
 test("merge-when-green: a failed or unfinished check that is not required, or a failed commit status, holds the merge", async () => {
   const cases = [
     { checks: [...GREEN, check("weekly-page", "failure")], waiting: "weekly-page failure" },
