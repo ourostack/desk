@@ -583,7 +583,6 @@ test("merge-when-green: a red or missing main run, a draft, a conflict and branc
   assert.equal(await why(NOW, { main: [] }), "main has no completed ci.yml run that was not cancelled yet")
   assert.equal(await why(NOW, { pr: { draft: true } }), "it is a draft")
   assert.equal(await why(NOW, { pr: { mergeable: false, mergeable_state: "dirty" } }), "it has merge conflicts")
-  assert.equal(await why(NOW, { pr: { mergeable: null, mergeable_state: "unknown" } }), "GitHub has not yet worked out whether it merges cleanly")
   assert.equal(await why(NOW, { pr: { mergeable_state: "behind" } }), "it is behind main")
   assert.equal(await why(NOW, { pr: { mergeable_state: "blocked" } }), "GitHub reports it as blocked, so the branch rules do not let it merge")
   assert.equal(await why(NOW, { pr: { labels: [] } }), "the merge-when-green label is gone")
@@ -926,6 +925,68 @@ test("merge-when-green: a check read cached before attempts carried ids is read 
   assert.deepEqual(prWrites(w.world).map((write) => write.method), ["PUT"])
 })
 
+test("merge-when-green: an unknown mergeability does not hold a green head; the merge is attempted, and a 405 retries on the next poll", async () => {
+  const unknown = { mergeable: null, mergeable_state: "unknown" }
+  const ok = await setup([MERGE])
+  mergeWorld(ok.world, { pr: unknown })
+  await ok.poll(NOW)
+  assert.equal(ok.state("pages merge").prs["7"].status, "merged")
+
+  const w = await setup([MERGE])
+  mergeWorld(w.world, { pr: unknown })
+  let answers = 0
+  w.world.on("PUT", /\/pulls\/7\/merge$/u, () => (++answers === 1 ? { ok: false, status: 405, body: { message: "Pull Request is not mergeable" } } : { ok: true, status: 200, body: { sha: "m1", merged: true } }))
+  assert.deepEqual((await w.poll(NOW)).errors, [])
+  assert.match(w.state("pages merge").prs["7"].waitingOn[0], /still working out whether it merges cleanly/u)
+  await w.poll(NOW + 30_000)
+  assert.equal(w.state("pages merge").prs["7"].status, "merged")
+  assert.equal(answers, 2)
+
+  const conflict = await setup([MERGE])
+  mergeWorld(conflict.world, { pr: unknown })
+  conflict.world.on("PUT", /\/pulls\/7\/merge$/u, () => ({ ok: false, status: 405, body: { message: "Pull Request is not mergeable" } }))
+  await conflict.poll(NOW)
+  mergeWorld(conflict.world, { pr: { mergeable: false, mergeable_state: "dirty" } })
+  await conflict.poll(NOW + 30_000)
+  assert.equal(conflict.state("pages merge").prs["7"].waitingOn[0], "it has merge conflicts")
+})
+
+test("merge-when-green: .github/merge-checks.json on the base replaces the configured checks, and a required check that has not reported is missing", async () => {
+  const file = (required) => ({ content: Buffer.from(JSON.stringify({ required })).toString("base64"), encoding: "base64" })
+  const withFile = async (required, checks) => {
+    const w = await setup([MERGE])
+    mergeWorld(w.world, { checks })
+    w.world.on("GET", /\/contents\/\.github\/merge-checks\.json\?ref=main$/u, () => file(required))
+    await w.poll(NOW)
+    return w
+  }
+  // Only the file's list counts: the configured typecheck is absent and a red check the file does not name is ignored.
+  const merged = await withFile(["ci checks"], [check("ci checks"), check("attribution", "failure")])
+  assert.equal(merged.state("pages merge").prs["7"].status, "merged")
+  const missing = await withFile(["ci checks"], [check("typecheck")])
+  assert.deepEqual(prWrites(missing.world), [])
+  assert.equal(missing.state("pages merge").prs["7"].waitingOn[0], "ci checks: not started")
+  const broken = await setup([MERGE])
+  mergeWorld(broken.world, { checks: [check("ci checks")] })
+  broken.world.on("GET", /\/contents\/\.github\/merge-checks\.json/u, () => ({ content: Buffer.from("{not json").toString("base64") }))
+  await broken.poll(NOW)
+  assert.match(broken.state("pages merge").prs["7"].waitingOn[0], /^typecheck: not started/u, "an unreadable file is as good as none")
+  const notAList = await setup([MERGE])
+  mergeWorld(notAList.world, { checks: [check("ci checks")] })
+  notAList.world.on("GET", /\/contents\/\.github\/merge-checks\.json/u, () => file("ci checks"))
+  await notAList.poll(NOW)
+  assert.match(notAList.state("pages merge").prs["7"].waitingOn[0], /^typecheck: not started/u, "a required that is not a list is no list")
+  const down = await setup([MERGE])
+  mergeWorld(down.world, { checks: [check("ci checks")] })
+  down.world.on("GET", /\/contents\/\.github\/merge-checks\.json/u, () => { throw Object.assign(new Error("boom"), { status: 500 }) })
+  await down.poll(NOW)
+  assert.deepEqual(prWrites(down.world), [], "a failed read of the file never falls back to a looser list")
+  const absent = await setup([MERGE])
+  mergeWorld(absent.world, { checks: [check("ci checks")] })
+  await absent.poll(NOW)
+  assert.match(absent.state("pages merge").prs["7"].waitingOn[0], /^typecheck: not started/u, "without the file the configured checks apply")
+})
+
 test("merge-when-green: a refused merge is reported, not repeated for five minutes, and tried again at once for a new head", async () => {
   const w = await setup([MERGE])
   mergeWorld(w.world)
@@ -1260,7 +1321,7 @@ test("cost: an idle merge relay and an idle dispatch relay read once per poll an
   assert.equal(w.state(MERGE.name).lastPoll.free, 1)
 })
 
-test("cost: a labelled pull request whose checks keep changing is read once a minute, not on every 30 s poll", async () => {
+test("cost: a labelled pull request whose checks keep changing is read every 30 to 60 s, not on every poll", async () => {
   const w = await setup([MERGE])
   let queued = 1
   mergeWorld(w.world)
@@ -1271,8 +1332,8 @@ test("cost: a labelled pull request whose checks keep changing is read once a mi
     spend.push((await w.poll(NOW + at)).spent)
   }
   const total = spend.reduce((sum, value) => sum + value, 0)
-  assert.ok(total <= 40, `ten minutes of churning CI cost ${total} counted calls; reading every poll costs about 75`)
-  assert.ok(spend.filter((value) => value === 0).length >= 10, "polls between reads cost nothing")
+  assert.ok(total <= 55, `ten minutes of churning CI cost ${total} counted calls; reading every poll costs about 75`)
+  assert.ok(spend.filter((value) => value === 0).length >= 6, "polls between reads cost nothing")
   assert.equal(w.world.writes.filter((write) => write.method === "PUT").length, 0)
 })
 
@@ -1281,7 +1342,7 @@ test("cost: a skipped read keeps the tags, so the next read of an unchanged pull
   mergeWorld(w.world, { checks: [{ ...check("typecheck", null, "queued"), id: 1, started_at: "2026-11-14T11:00:00Z" }] })
   await w.poll(NOW)
   await w.poll(NOW + 30 * SECOND)
-  assert.equal(await countedSince(w, NOW + 5 * MIN), 0, "every answer is unchanged, so every read is a 304")
+  assert.equal(await countedSince(w, NOW + 5 * MIN), 1, "every answer is unchanged, so every read is a 304, except the 404 for a merge-checks.json the base does not have, asked again every five minutes")
   mergeWorld(w.world)
   await w.poll(NOW + 5 * MIN + 30 * SECOND)
   assert.equal(w.world.writes.filter((write) => write.method === "PUT").length, 0, "inside the interval it is not read yet")

@@ -32,8 +32,8 @@ const COMMENT_MS = 10 * 60_000
  * A labelled pull request still waiting is read again no sooner than this, growing to the cap as it waits: while its checks run, every read of
  * them is a full (counted) answer, so reading each 30 s poll would spend most of the account's hourly quota on CI that takes minutes.
  */
-const WAIT_READ_MIN_MS = 60_000
-const WAIT_READ_MAX_MS = 240_000
+const WAIT_READ_MIN_MS = 30_000
+const WAIT_READ_MAX_MS = 60_000
 /** A merge relay with nothing labelled polls less often: its interval stretches by one step per this many empty polls, up to `MAX_IDLE_STRETCH` times. */
 const IDLE_POLLS_PER_STEP = 20
 const MAX_IDLE_STRETCH = 4
@@ -407,7 +407,7 @@ const isCancelledTemplate = (run, newest) => {
  * Every other check run and commit status on the head must be green too: a check that is not required (a path-filtered one, say) still blocks while it fails or runs, whatever `skippedPasses` says.
  * Only a required check needs `skippedPasses` for a skip: a skipped or neutral check that nothing requires never holds the head.
  */
-export function waitingOnChecks(requiredChecks, runs, skippedPasses = false, statuses = []) {
+export function waitingOnChecks(requiredChecks, runs, skippedPasses = false, statuses = [], { onlyRequired = false } = {}) {
   const green = (run) => run.status === "completed" && (run.conclusion === "success" || (skippedPasses && SKIPPED_PASSES.has(run.conclusion)))
   const newest = [...latestCheckRuns(runs), ...statuses.map(statusAsRun)]
   const counted = new Set()
@@ -422,18 +422,50 @@ export function waitingOnChecks(requiredChecks, runs, skippedPasses = false, sta
   })
   // A check nobody required that a path filter skipped says nothing against the head, so only a failure, a cancellation or a run still going holds it.
   const others = newest.filter((run) => !counted.has(run) && !green(run) && !isCancelledTemplate(run, newest) && !(run.status === "completed" && SKIPPED_PASSES.has(run.conclusion)))
-  return others.length === 0 ? required : [...required, `${others.length} other check${others.length === 1 ? "" : "s"} on the head not green (${shown(others)})`]
+  return onlyRequired || others.length === 0 ? required : [...required, `${others.length} other check${others.length === 1 ? "" : "s"} on the head not green (${shown(others)})`]
+}
+
+const MERGE_CHECKS_FILE = ".github/merge-checks.json"
+/** A base branch without the file is asked again no sooner than this; each answer of 404 is a counted call. */
+const NO_MERGE_CHECKS_MS = 5 * 60_000
+
+/**
+ * The repository's own merge predicate: `required` in `.github/merge-checks.json` on the base branch. When the file is there, those names (globs) are the only checks
+ * judged, in place of the relay's `requiredChecks` and of every other check on the head, and a check that has not reported counts as missing. The answer is kept
+ * with its ETag, so an unchanged file on an unchanged base is a free 304. Returns the list, or null when the base has no usable file.
+ */
+async function readMergeChecks(ctx, state, relay, baseRef) {
+  const missing = (state.noMergeChecks ??= {})
+  if (missing[baseRef] && ctx.now - Date.parse(missing[baseRef]) < NO_MERGE_CHECKS_MS) return null
+  const route = `/repos/${relay.repo}/contents/${MERGE_CHECKS_FILE}?ref=${encodeURIComponent(baseRef)}`
+  try {
+    const required = await cached(ctx, state, route, (body) => {
+      try {
+        const list = JSON.parse(Buffer.from(body.content, "base64").toString("utf8")).required
+        return { required: textList(list) ? list.map((name) => name.trim()) : null }
+      } catch {
+        return { required: null }
+      }
+    })
+    delete missing[baseRef]
+    return required.required
+  } catch (error) {
+    if (error.status !== 404) throw error
+    missing[baseRef] = new Date(ctx.now).toISOString()
+    return null
+  }
 }
 
 const RED = new Set(["failure", "timed_out", "cancelled", "startup_failure"])
 const MERGEABLE = new Set(["clean", "unstable", "has_hooks"])
+const mergeabilityUnknown = (pr) => pr.mergeable === null || pr.mergeableState === "unknown"
 
 function waitingOnPull(pr, allowBehind) {
   if (pr.draft) return ["it is a draft"]
   if (pr.mergeable === false || pr.mergeableState === "dirty") return ["it has merge conflicts"]
-  if (pr.mergeable === null || pr.mergeableState === "unknown") return ["GitHub has not yet worked out whether it merges cleanly"]
+  // An unknown answer is not waited out: the merge request itself makes GitHub work it out (see `mergeabilityUnknown`).
   if (pr.mergeableState === "behind" && !allowBehind) return [`it is behind ${pr.baseRef}`]
-  if (!MERGEABLE.has(pr.mergeableState) && pr.mergeableState !== "behind") return [`GitHub reports it as ${pr.mergeableState}, so the branch rules do not let it merge`]
+  if (!MERGEABLE.has(pr.mergeableState) && pr.mergeableState !== "behind" && !mergeabilityUnknown(pr)) return [`GitHub reports it as ${pr.mergeableState}, so the branch rules do not let it merge`]
   return []
 }
 
@@ -627,7 +659,7 @@ const waitReadMs = (record, now) => Math.min(WAIT_READ_MAX_MS, Math.max(WAIT_REA
 function skipRead(relay, state, ctx, number) {
   const record = state.prs[number]
   if (record?.status !== "waiting" || !record.readAt || ctx.now >= Date.parse(record.readAt) + waitReadMs(record, ctx.now)) return false
-  for (const route of Object.keys(state.cache)) if (route.endsWith(`/pulls/${number}`) || (record.headSha && route.includes(`/commits/${record.headSha}/`)) || route === `/repos/${relay.repo}` || route.includes("/workflows/") || route.includes("/actions/runs") || route.includes("/compare/")) ctx.touched.add(route)
+  for (const route of Object.keys(state.cache)) if (route.endsWith(`/pulls/${number}`) || (record.headSha && route.includes(`/commits/${record.headSha}/`)) || route === `/repos/${relay.repo}` || route.includes("/workflows/") || route.includes("/contents/") || route.includes("/actions/runs") || route.includes("/compare/")) ctx.touched.add(route)
   return true
 }
 
@@ -648,7 +680,12 @@ async function handlePull(relay, state, ctx, number) {
   if (!pr.labels.includes(relay.label)) waiting = [`the ${relay.label} label is gone`]
   if (waiting.length === 0 && strict?.requireCurrentBase && (await headIsBehind(ctx, state, relay, pr))) waiting = record.update?.from === pr.headSha ? updateWaiting(record, pr) : await updateInTurn(ctx, state, relay, record, pr, number)
   if (waiting.length === 0) {
-    if (strict) {
+    const repoChecks = await readMergeChecks(ctx, state, relay, pr.baseRef)
+    if (repoChecks) {
+      const { runs } = await readChecks(ctx, state, relay.repo, pr.headSha)
+      const { statuses } = await readStatuses(ctx, state, relay.repo, pr.headSha)
+      waiting = waitingOnChecks(repoChecks, runs, relay.skippedPasses, statuses, { onlyRequired: true })
+    } else if (strict) {
       ;({ waiting, warnings } = await strictChecks(relay, state, ctx, pr.headSha))
       if (waiting.length > 0 && record.update && !record.update.failed && record.update.from !== pr.headSha) waiting.unshift(`updated branch to ${pr.baseRef} (the head was ${short(record.update.from)}); waiting for ${strict.requiredWorkflows.join(", ")} on the new head`)
     } else {
@@ -682,6 +719,14 @@ async function handlePull(relay, state, ctx, number) {
   }
   // The head sha makes GitHub refuse the merge if a push landed after the checks were read.
   const response = await ctx.api.send("PUT", `/repos/${relay.repo}/pulls/${number}/merge`, { merge_method: relay.method, sha: pr.headSha, ...mergeMessage(pr, number, relay.method) })
+  if (!response.ok && response.status === 405 && mergeabilityUnknown(pr)) {
+    // GitHub works mergeability out when asked, so this refusal is "not yet": read the pull request again next poll, never after the five-minute pause.
+    delete state.cache[`/repos/${relay.repo}/pulls/${number}`]
+    delete record.readAt
+    Object.assign(record, { status: "waiting", waitingOn: ["GitHub is still working out whether it merges cleanly; the merge is tried again on the next poll"], at: new Date(ctx.now).toISOString() })
+    note(state, ctx.now, { event: "mergeability-pending", number })
+    return
+  }
   if (!response.ok) {
     const reason = response.body.message ?? `HTTP ${response.status}`
     record.refused = { sha: pr.headSha, at: new Date(ctx.now).toISOString(), reason }
