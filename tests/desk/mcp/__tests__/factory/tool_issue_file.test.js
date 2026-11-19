@@ -93,3 +93,59 @@ test("friction_add keeps the paste-ready text on the desk when the issue could n
   assert.deepEqual(result, { status: "added", path: "_meta/friction.md", issue: "no_suitable_account", repo: "ourostack/m365crawl" })
   assert.match(await fs.readFile(path.join(root, "_meta", "friction.md"), "utf8"), /not filed \(no_suitable_account\)[\s\S]*admits chats only/u)
 })
+
+test("invalid titles and bodies are refused before any account is asked", () => scratch(async ({ env }) => {
+  const never = async () => { throw new Error("no gh call expected") }
+  const refused = (title, body) => fileToolIssue(env, { tool: "shepherd", title, body, runner: never, now: () => 0 })
+  for (const title of [undefined, "  ", "two\nlines", "x".repeat(121)]) assert.deepEqual(await refused(title, BODY), { result: "not_filed", reason: "invalid_title", repo: "ourostack/shepherd" })
+  for (const body of [undefined, "  ", "x".repeat(8001)]) assert.deepEqual(await refused(TITLE, body), { result: "not_filed", reason: "invalid_body", repo: "ourostack/shepherd" })
+  assert.deepEqual(await fileToolIssue(env, { tool: "someone-elses", title: TITLE, body: BODY }), { result: "not_filed", reason: "unknown_tool" })
+}))
+
+test("no signed-in account, or an account with no token, is not filed and comes back paste-ready", () => scratch(async ({ env }) => {
+  const signedOut = async (args) => (args[0] === "--version" ? { code: 0, stdout: "gh version 2.54.0 (2024-07-31)\n", stderr: "" } : { code: 1, stdout: "", stderr: "not logged in\n" })
+  const none = await fileToolIssue(env, { tool: "shepherd", title: TITLE, body: BODY, runner: signedOut })
+  assert.deepEqual([none.result, none.reason], ["not_filed", "no_suitable_account"])
+  const { runner } = fakeGh({ repo: "ourostack/shepherd" })
+  const tokenless = (answer) => {
+    let asked = 0
+    return async (args, options) => (args[0] === "auth" && args[1] === "token" && (asked += 1) > 1 ? answer : runner(args, options))
+  }
+  for (const answer of [{ code: 1, stdout: "", stderr: "" }, { code: 0, stdout: undefined, stderr: "" }]) {
+    const empty = await fileToolIssue(env, { tool: "shepherd", title: TITLE, body: BODY, runner: tokenless(answer) })
+    assert.deepEqual([empty.result, empty.reason], ["not_filed", "no_suitable_account"])
+    assert.ok(empty.body.includes(BODY))
+  }
+}))
+
+test("a pull request carrying the marker is not the issue; stale or malformed filing records do not count toward the cap", () => scratch(async ({ env }) => {
+  const marker = `<!-- desk-tool-issue: ${toolIssueFingerprint("shepherd", TITLE)} -->`
+  const issues = [{ number: 8, html_url: "https://github.com/ourostack/shepherd/issues/8", title: "t", body: marker, labels: [], state: "open", pull_request: {} }]
+  const { runner, calls } = fakeGh({ repo: "ourostack/shepherd", issues })
+  const old = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString()
+  const { writeStatus } = await import("../../../../../plugins/desk/mcp/src/factory/outbox.js")
+  await writeStatus(env, { tool_issue_filed: { "ourostack/shepherd": [old, 7, old] } })
+  assert.equal((await fileToolIssue(env, { tool: "shepherd", title: TITLE, body: BODY, runner })).result, "filed")
+  assert.equal(created(calls).length, 1)
+  await writeStatus(env, { tool_issue_filed: { "ourostack/shepherd": "not a list" } })
+  assert.equal((await fileToolIssue(env, { tool: "shepherd", title: `${TITLE} again`, body: BODY, runner })).result, "filed")
+}))
+
+test("a refused create comes back as its code with paste-ready text; an unexpected error still throws", () => scratch(async ({ env }) => {
+  const { runner } = fakeGh({ repo: "ourostack/shepherd" })
+  const refusing = async (args, options) => (args[2] === "POST" ? { code: 1, stdout: "", stderr: "HTTP 403: forbidden\n" } : runner(args, options))
+  const refused = await fileToolIssue(env, { tool: "shepherd", title: TITLE, body: BODY, runner: refusing })
+  assert.equal(refused.result, "not_filed")
+  assert.equal(typeof refused.reason, "string")
+  assert.ok(refused.body.includes(BODY))
+  const broken = async (args, options) => { if (args[2] === "POST") throw new Error("boom"); return runner(args, options) }
+  await assert.rejects(fileToolIssue(env, { tool: "shepherd", title: `${TITLE} two`, body: BODY, runner: broken }), /boom/u)
+}))
+
+test("friction_add names the reason, repo and text of a filing result however much of it is missing", async () => {
+  const root = await mkTempDeskRoot()
+  const run = (filed) => friction_add({ deskRoot: root, input: { about: "system", plugin: "m365crawl", title: TITLE, body: BODY }, fileIssue: async () => filed })
+  assert.deepEqual(await run({ result: "held_cap" }), { status: "added", path: "_meta/friction.md", issue: "held_cap", repo: undefined })
+  assert.match(await fs.readFile(path.join(root, "_meta", "friction.md"), "utf8"), /on m365crawl: not filed \(held_cap\)[\s\S]*admits chats only/u)
+  assert.equal((await run({ result: "known", repo: "ourostack/m365crawl", url: "https://github.com/ourostack/m365crawl/issues/1" })).issue, "known")
+})
