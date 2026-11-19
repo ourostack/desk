@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.292 — 2026-11-19
+
+Desk's MCP server now vendors Ouro UI core v0.20.0, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.291 — 2026-11-19
 
 A drain now starts its successor session in the project the app lists for the repository, and keeps the reason when a start fails, so a failed successor says why instead of going quiet.
