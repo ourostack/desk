@@ -280,7 +280,7 @@ test("a marker routed to a store with no consent is not_opted_in, and a store-le
   await writeFile(logPath, SENTINEL)
   await writeMarker(root, { name: `claude-code-${sessionId(1)}.json`, host: "claude-code", id: sessionId(1), desk, logPath, store: "acme/unconsented" })
   const result = reconcile({ deskRoot: desk, since: SINCE, until: UNTIL, env })
-  assert.deepEqual(reasonsOf(result, "nope"), ["not_bound"])
+  assert.deepEqual(reasonsOf(result, "nope"), [], "a desk with no consenting store says nothing")
   assert.deepEqual(result.unbound_markers, [{ session: `claude-code-${sessionId(1)}`, reason: "not_opted_in", detail: "store_without_consent" }])
   await writeFile(path.join(root, "markers", `claude-code-${sessionId(1)}.json`), JSON.stringify({
     schema_version: 1, host: "claude-code", session_id: sessionId(1), log_path: logPath, cwd: desk, desk_root: desk, end_reason: null,
@@ -288,7 +288,7 @@ test("a marker routed to a store with no consent is not_opted_in, and a store-le
     routing: { store: null, source: "invalid_declaration", warnings: [] },
   }))
   const declared = reconcile({ deskRoot: desk, since: SINCE, until: UNTIL, env })
-  assert.equal(mismatchOf(declared, "decl")[0].reason, "not_bound")
+  assert.deepEqual(reasonsOf(declared, "decl"), [])
   assert.deepEqual(declared.unbound_markers, [{ session: `claude-code-${sessionId(1)}`, reason: "held", detail: "store_unresolved" }])
 }))
 
@@ -318,8 +318,8 @@ test("a task with no card is card_missing, a marker with a missing desk root is 
   repo.commit("2026-09-25T10:00:00Z", { "t/kept/work.md": "x\n", "t/gone/work.md": "x\n", "_friction/note.md": "not a task\n", "t/track.md": "x\n" })
   const result = reconcile({ deskRoot: desk, since: SINCE, until: UNTIL, env })
   assert.deepEqual(reasonsOf(result, "gone"), ["card_missing"])
-  assert.deepEqual(reasonsOf(result, "kept"), ["not_bound"])
-  assert.equal(mismatchOf(result, "kept")[0].detail, "unbound_markers_0")
+  assert.deepEqual(reasonsOf(result, "kept"), [], "no consenting store: an unbound task is silent")
+  assert.equal(result.unbound_markers.length, 0)
   assert.equal(result.tasks.length, 2, "only task folders are tasks")
   const root = await factoryStateRoot(env)
   await mkdir(path.join(root, "markers"), { recursive: true })
@@ -327,7 +327,7 @@ test("a task with no card is card_missing, a marker with a missing desk root is 
     schema_version: 1, host: "claude-code", session_id: sessionId(1), log_path: path.join(desk, "x.jsonl"), cwd: desk, desk_root: null, end_reason: null,
     ended_at: "2026-09-25T09:30:00.000Z", plugins: [{ name: "desk", version: "1.0.0" }], updated_at: "2026-09-25T09:30:00.000Z",
   }))
-  assert.equal(reasonsOf(reconcile({ deskRoot: desk, since: SINCE, until: UNTIL, env }), "kept")[0], "not_bound", "a marker with no desk root is not this desk's")
+  assert.deepEqual(reasonsOf(reconcile({ deskRoot: desk, since: SINCE, until: UNTIL, env }), "kept"), [], "a marker with no desk root is not this desk's")
 }))
 
 test("a crew desk reads desks/<alias> only", () => scratch(async (context) => {
@@ -336,7 +336,7 @@ test("a crew desk reads desks/<alias> only", () => scratch(async (context) => {
   repo.commit("2026-09-20T00:00:00Z", { "desks/ari/t/mine/task.md": cardText(), "desks/bo/t/theirs/task.md": cardText(), "t/root/task.md": cardText() }, "seed")
   repo.commit("2026-09-25T10:00:00Z", { "desks/ari/t/mine/work.md": "x\n", "desks/bo/t/theirs/work.md": "x\n", "t/root/work.md": "x\n" })
   const result = reconcile({ deskRoot: desk, personPrefix: "desks/ari", since: SINCE, until: UNTIL, env })
-  assert.deepEqual(result.mismatches.map((item) => item.slug), ["mine"])
+  assert.deepEqual(result.tasks.map((item) => item.slug), ["mine"])
   assert.equal(result.desk.person, "ari")
   assert.equal(reconcile({ deskRoot: desk, personPrefix: "desks", since: SINCE, until: UNTIL, env }).ok, false)
 }))
@@ -383,9 +383,9 @@ test("a store job in the window with no desk activity is store_only; a private d
   assert.deepEqual(reasonsOf(result, "idle"), ["store_only"], "a card-only edit is no real work, so the store's session is the only mismatch")
   assert.ok(!result.housekeeping_cards.some((card) => card.slug === "idle"), "a card listed in tasks is not listed as housekeeping")
   assert.equal(result.tasks.find((task) => task.slug === "idle2").activity.length, 0)
-  assert.deepEqual(reasonsOf(result, "busy"), ["not_bound"])
+  assert.deepEqual(reasonsOf(result, "busy"), [])
   const bare = reconcile({ deskRoot: desk, since: SINCE, until: UNTIL, env })
-  assert.deepEqual(bare.mismatches.map((item) => item.reason), ["not_bound"], "without --store the store is not read")
+  assert.deepEqual(bare.mismatches.map((item) => item.reason), [], "without --store the store is not read")
   assert.deepEqual(bare.housekeeping_cards, [{ track: "t", slug: "idle" }], "the idle card is housekeeping when nothing places a store session")
   assert.deepEqual(bare.tasks[0].store, { checked: false })
 }))
@@ -544,7 +544,7 @@ test("the command runs end to end, accepts offset times and prints one JSON valu
   const output = JSON.parse(written.join(""))
   assert.equal(output.ok, true)
   assert.equal(output.window.since, SINCE)
-  assert.deepEqual(output.mismatches.map((item) => item.reason), ["not_bound"])
+  assert.deepEqual(output.mismatches.map((item) => item.reason), [])
   assert.deepEqual(output.warnings, ["machine_secret_unavailable", "store_facts_missing"], "a desk with no known-private remote needs the secret to compare keyed IDs")
 }))
 
@@ -575,7 +575,7 @@ test("a git that dies partway, or prints nonsense, gives what parsed and no thro
   chmodSync(odd, 0o755)
   const result = reconcile({ deskRoot: desk, since: SINCE, until: UNTIL, env, git: odd })
   assert.equal(result.ok, true)
-  assert.deepEqual(result.mismatches.map((item) => item.reason), ["not_bound"])
+  assert.deepEqual(result.mismatches.map((item) => item.reason), [])
 }))
 
 test("bad local state files are warnings, not failures", () => scratch(async (context) => {

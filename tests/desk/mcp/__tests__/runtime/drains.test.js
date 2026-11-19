@@ -1719,3 +1719,28 @@ test("a drain whose session lost its workspace folder starts a successor like an
   assert.equal(started.length, 1)
   assert.equal((await w.poll()).wakes[0].session, "11111111-2222-3333-4444-555555555555")
 })
+
+test("startSuccessor finds the app's project by the repository its sessions list when the repository is not a project name", () => {
+  const seen = []
+  const spawn = (_program, args) => {
+    seen.push(args)
+    if (args.includes("sessions")) return { status: 0, stdout: JSON.stringify({ sessions: [{ project_repo: "o/other", project_id: "p0" }, { project_repo: "gim/CIT", project_id: "p1" }] }) }
+    return args[args.indexOf("--project") + 1] === "p1" ? { status: 0, stdout: '{"ok":true,"session_id":"new"}' } : { status: 1, stdout: '{"ok":false,"code":"no-project","error":"no project"}' }
+  }
+  assert.deepEqual(startSuccessor({ repo: "gim/CIT", predecessor: "old" }, { env: { DESK_DRAINS_SHEPHERD: "shep" }, spawn }), { ok: true, session: "new" })
+  assert.deepEqual(seen.map((args) => args[0]), ["create", "sessions", "create"])
+  const none = startSuccessor({ repo: "x/y", predecessor: "old" }, { env: { DESK_DRAINS_SHEPHERD: "shep" }, spawn: (_p, args) => args.includes("sessions") ? { status: 0, stdout: "not json" } : { status: 1, stdout: '{"ok":false,"code":"no-project","error":"no project \'x/y\'"}' } })
+  assert.deepEqual(none, { ok: false, error: "no project 'x/y'" })
+})
+
+test("a failed successor start keeps its reason when the next wake is refused as archived again", async () => {
+  const w = await world([issue(1, "2026-11-13T01:00:00Z")])
+  await w.poll()
+  w.issues.push(issue(2, "2026-11-13T03:00:00Z", "New thing"))
+  await w.poll()
+  const wake = wakeId(DRAIN.repo, w.state().pending)
+  ackWake({ paths: w.paths, repo: DRAIN.repo, wake, error: ARCHIVED, now: NOW })
+  recoverDrainTarget({ paths: w.paths, repo: DRAIN.repo, now: NOW, start: () => ({ ok: false, error: "no project" }) })
+  ackWake({ paths: w.paths, repo: DRAIN.repo, wake, error: ARCHIVED, now: NOW + 1000 })
+  assert.match(w.state().targetGone.error, /starting its successor failed: no project/u)
+})

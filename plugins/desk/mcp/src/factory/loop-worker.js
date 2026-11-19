@@ -175,7 +175,8 @@ export async function runLoopWorker(env, {
   if (!isLoopEnabled(env)) return ended(answer("disabled"))
   if (deskRoot === null) return ended(answer("no_desk"))
   if (root === null) return answer("no_factory_state")
-  if (!hasContributingStore(env)) return ended(answer("no_consenting_store"))
+  // A desk that has not opted in stays silent: nothing is recorded, so no health line or card follows from it.
+  if (!hasContributingStore(env)) return answer("no_consenting_store")
   const lock = await takeLock(root, { name: LOCK_NAME, alive, clock, record: { children: [] } })
   if (lock === null) return ended(answer("busy"))
 

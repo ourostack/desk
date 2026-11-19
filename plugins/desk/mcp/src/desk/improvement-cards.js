@@ -683,6 +683,8 @@ export async function updateCard({ deskRoot, personPrefix, key, claim_id: claimI
       const allowed = updateMoves(old.state)
       if (!allowed.includes(card.state)) return { result: "invalid_move", allowed }
       if (old.state === "claimed") card.claim = { ...old.claim, expires_at: null }
+      // A card let go of goes behind every other open card, so the next claim serves another one instead of the same card again.
+      if (old.state === "claimed" && card.state === "open") card.last_opened_at = date.toISOString()
       if (card.state.startsWith("closed_")) card.closed_at = date.toISOString()
       if (card.state === "open" && old.state !== "claimed") {
         Object.assign(card, { reopened: old.reopened + 1, countermeasure: null, shipped_version: null, checks_run: 0, last_check_at: null, last_check_result: null, verifying_since: null })

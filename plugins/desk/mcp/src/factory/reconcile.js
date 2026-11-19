@@ -345,6 +345,7 @@ function run({ deskRoot, personPrefix = "", since, until, storeDir = null, env, 
   const dir = factoryStateDir(env)
   const consent = consentRecords(dir)
   if (consent === null) warn("consent_unreadable")
+  const consenting = consent === null || Object.values(consent).some((record) => record !== null && typeof record === "object" && record.contribute === true)
   const status = readState(path.join(dir, "status.json"), {}) ?? (warn("status_unreadable"), {})
   const deliveredCache = new Map()
   const deliveredOf = (slug) => {
@@ -683,9 +684,10 @@ function run({ deskRoot, personPrefix = "", since, until, storeDir = null, env, 
     } else if (task.card === null) push(task, "card_missing", "no_card")
     else {
       if (bound.length === 0) {
-        if (unowned > 0) push(task, "not_bound", `unbound_markers_${deskMarkers.length}`)
-        if (undetermined.size > 0) push(task, "receipt_too_old", `own_activity_not_recorded_${undetermined.size}`)
-        if (cut.size > 0) push(task, "own_activity_cut", `sessions_${cut.size}`)
+        // With no consenting store no session can be bound, so an unbound task is the expected state and says nothing.
+        if (consenting && unowned > 0) push(task, "not_bound", `unbound_markers_${deskMarkers.length}`)
+        if (consenting && undetermined.size > 0) push(task, "receipt_too_old", `own_activity_not_recorded_${undetermined.size}`)
+        if (consenting && cut.size > 0) push(task, "own_activity_cut", `sessions_${cut.size}`)
       } else {
         const problem = taskProblem(bound, storeSessions !== null && storeSessions.length > 0)
         if (problem !== null) push(task, problem.reason, problem.detail)

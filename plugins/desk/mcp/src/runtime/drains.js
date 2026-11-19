@@ -580,7 +580,10 @@ export function ackWake({ paths, repo, wake, error, now }) {
   const state = states[repo]
   if (state && error && SESSION_GONE.test(error)) {
     const drain = readDrainConfig(paths.config).find((entry) => entry.repo === repo)
-    state.targetGone = { session: sessionOf(drain ?? {}, state), at: new Date(now).toISOString(), error: error.slice(0, 200) }
+    const session = sessionOf(drain ?? {}, state)
+    // A failed successor start leaves its reason on the record; the next failed wake must not replace it with the app's archived message.
+    if (state.targetGone?.session === session && state.recoverAt) state.targetGone.at = new Date(now).toISOString()
+    else state.targetGone = { session, at: new Date(now).toISOString(), error: error.slice(0, 200) }
     writeDrainStates(paths.state, states)
   }
   if (!state || state.pending.length === 0) return { ok: true, changed: false, reason: "nothing is waiting" }
@@ -622,12 +625,25 @@ export function successorKickoff({ repo, predecessor, account }) {
 /** Starts a session in the drain's project through Shepherd. Returns { ok, session } or { ok: false, error }. */
 export function startSuccessor({ repo, predecessor, account }, { spawn = spawnSync, env = process.env, homeDir = os.homedir() } = {}) {
   const [program, ...lead] = shepherdCommand({ env, homeDir })
-  const args = [...lead, "create", "--project", repo, "--name", `Drain: ${repo}`, "--prompt", successorKickoff({ repo, predecessor, account }), "--mode", "autopilot", "--why", `Desk starts the successor of the archived drain ${predecessor} for ${repo}`, "--json"]
-  const result = spawn(program, args, { encoding: "utf8", timeout: SHEPHERD_MS, env, windowsHide: true })
-  let out = null
-  try {
-    out = JSON.parse(String(result.stdout))
-  } catch {}
+  const create = (project) => {
+    const args = [...lead, "create", "--project", project, "--name", `Drain: ${repo}`, "--prompt", successorKickoff({ repo, predecessor, account }), "--mode", "autopilot", "--why", `Desk starts the successor of the archived drain ${predecessor} for ${repo}`, "--json"]
+    const result = spawn(program, args, { encoding: "utf8", timeout: SHEPHERD_MS, env, windowsHide: true })
+    let out = null
+    try {
+      out = JSON.parse(String(result.stdout))
+    } catch {}
+    return { result, out }
+  }
+  let { result, out } = create(repo)
+  // The app names a project by its own title ("CIT shared workspace"), not by its repository, so a repository that names no project is looked up by the repository the app lists on its sessions.
+  if (out?.code === "no-project") {
+    const listed = spawn(program, [...lead, "sessions", "--json"], { encoding: "utf8", timeout: SHEPHERD_MS, env, windowsHide: true })
+    let project = null
+    try {
+      project = JSON.parse(String(listed.stdout)).sessions.find((entry) => entry.project_repo === repo && entry.project_id)?.project_id
+    } catch {}
+    if (project) ({ result, out } = create(project))
+  }
   if (out?.session_id) return { ok: true, session: String(out.session_id) }
   // On a loaded Mac the app can create the session and still answer too late, so look for it before reporting a failure that would start a second one.
   const name = `Drain: ${repo}`

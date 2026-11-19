@@ -693,3 +693,12 @@ test("a continuation an earlier Desk left is consumed under the lock and removed
   await runLoopWorker(ctx.env, { deskRoot: ctx.desk, pluginVersion: "9.9.9", clock: clock.read, impls })
   assert.deepEqual((await readStatus(ctx.env)).loop.evaluation_continuation, { serial: 2 })
 }))
+
+test("a desk that has not opted in records nothing for the loop worker", async () => {
+  await scratch(async (ctx) => {
+    await setConsent(ctx.env, { store: STORE, contribute: false })
+    assert.equal((await run(ctx, [])).result, "no_consenting_store")
+    const status = await fs.readFile(path.join(ctx.base, "state", "factory", "status.json"), "utf8").catch(() => "")
+    assert.ok(!status.includes("no_consenting_store"), "the outcome is not recorded, so no health line or card follows")
+  }, { consent: false })
+})
