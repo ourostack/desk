@@ -828,9 +828,11 @@ test("an open answers within its record budget when the process table never answ
   assert.ok(Date.now() - started < 3000, `open took ${Date.now() - started} ms`)
   await controller.closeAll()
   const failing = web.createController({ ...options, processTable: () => Promise.reject(new Error("table failed")) })
-  const reopened = await failing.call("browser_context", { action: "open" })
-  assert.equal(reopened.isError, false, text(reopened))
-  await failing.closeAll()
+  const reopened = json(await failing.call("browser_context", { action: "open" }))
+  const file = path.join(options.tmpDir, `desk-browser-${reopened.contextId}`, "owner.json")
+  fs.writeFileSync(file, JSON.stringify({ ...JSON.parse(fs.readFileSync(file, "utf8")), processes: [{ pid: 42420003, start: "2026-01-01" }] }))
+  const closed = await failing.call("browser_context", { action: "close", contextId: reopened.contextId })
+  assert.equal(closed.isError, false, text(closed))
 })
 
 test("startup keeps a fresh context whose own process is still alive", async () => {
