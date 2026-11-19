@@ -50,7 +50,7 @@ jobs:
         run: node scripts/check-release-integrity.cjs
 
       - name: Validate skill eval contracts
-        run: node scripts/test-skill-evals.cjs && node scripts/skill-evals.cjs validate
+        run: node scripts/test-skill-evals.cjs && node scripts/test-copilot-account.cjs && node scripts/skill-evals.cjs validate
 
       - name: Check the always-on context budget
         run: node scripts/check-context-budget.mjs
