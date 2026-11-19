@@ -441,7 +441,7 @@ async function readMergeChecks(ctx, state, relay, baseRef) {
   try {
     const required = await cached(ctx, state, route, (body) => {
       try {
-        const list = JSON.parse(Buffer.from(body.content ?? "", "base64").toString("utf8")).required
+        const list = JSON.parse(Buffer.from(body.content, "base64").toString("utf8")).required
         return { required: textList(list) ? list.map((name) => name.trim()) : null }
       } catch {
         return { required: null }
