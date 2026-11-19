@@ -794,6 +794,54 @@ test("legacy cleanup uses only qualified synthetic process rows and an owned fak
   } finally { process.kill = originalKill; Date.now = originalNow }
 })
 
+test("a close answers within its own budget when the process table never answers (#763)", async () => {
+  const originalKill = process.kill
+  const row = { pid: 42420002, ppid: 1, start: "2026-01-01" }
+  const signals = []
+  process.kill = (pid, signal) => { signals.push([pid, signal]) }
+  try {
+    const { options, tmp } = await setup()
+    let reads = 0
+    // The first read lists the browser; every later read hangs, as a PowerShell process table on a starved Windows runner can.
+    const controller = web.createController({ ...options, exitWaitMs: 100, closeMs: 400, recordMs: 400,
+      processTable: () => (reads++ === 0 ? Promise.resolve([row]) : new Promise(() => {})) })
+    const opened = json(await controller.call("browser_context", { action: "open" }))
+    const file = path.join(tmp, `desk-browser-${opened.contextId}`, "owner.json")
+    const owner = JSON.parse(fs.readFileSync(file, "utf8"))
+    owner.processes = [{ pid: row.pid, start: row.start }]
+    fs.writeFileSync(file, JSON.stringify(owner))
+    reads = 0
+    const started = Date.now()
+    const result = await controller.call("browser_context", { action: "close", contextId: opened.contextId })
+    assert.equal(result.isError, false, text(result))
+    assert.ok(Date.now() - started < 2000, `close took ${Date.now() - started} ms`)
+    assert.equal(fs.existsSync(path.dirname(file)), false)
+    assert.deepEqual(signals, [[row.pid, "SIGKILL"]])
+  } finally { process.kill = originalKill }
+})
+
+test("an open answers within its record budget when the process table never answers (#763)", async () => {
+  const { options } = await setup()
+  const controller = web.createController({ ...options, recordMs: 300, processTable: () => new Promise(() => {}) })
+  const started = Date.now()
+  const opened = await controller.call("browser_context", { action: "open" })
+  assert.equal(opened.isError, false, text(opened))
+  assert.ok(Date.now() - started < 3000, `open took ${Date.now() - started} ms`)
+  await controller.closeAll()
+  const failing = web.createController({ ...options, processTable: () => Promise.reject(new Error("table failed")) })
+  const reopened = json(await failing.call("browser_context", { action: "open" }))
+  const file = path.join(options.tmpDir, `desk-browser-${reopened.contextId}`, "owner.json")
+  fs.writeFileSync(file, JSON.stringify({ ...JSON.parse(fs.readFileSync(file, "utf8")), processes: [{ pid: 42420003, start: "2026-01-01" }] }))
+  const closed = await failing.call("browser_context", { action: "close", contextId: reopened.contextId })
+  assert.equal(closed.isError, false, text(closed))
+  const spent = web.createController({ ...options, closeMs: 1, processTable: () => Promise.resolve([]) })
+  const late = json(await spent.call("browser_context", { action: "open" }))
+  const lateFile = path.join(options.tmpDir, `desk-browser-${late.contextId}`, "owner.json")
+  fs.writeFileSync(lateFile, JSON.stringify({ ...JSON.parse(fs.readFileSync(lateFile, "utf8")), processes: [{ pid: 42420004, start: "2026-01-01" }] }))
+  await new Promise((resolve) => setTimeout(resolve, 5))
+  assert.equal((await spent.call("browser_context", { action: "close", contextId: late.contextId })).isError, false)
+})
+
 test("startup keeps a fresh context whose own process is still alive", async () => {
   const { options, tmp } = await setup()
   const dir = path.join(tmp, "desk-browser-11111111-1111-4111-8111-111111111111")

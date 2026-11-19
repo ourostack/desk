@@ -170,6 +170,8 @@ function settings(o) {
     idleMs: idleMs(env, o.idleMs),
     evidenceId: new Date().toISOString().replace(/[:.]/g, "-") + "-" + process.pid,
     exitWaitMs: o.exitWaitMs || 5000,
+    closeMs: o.closeMs || 40000,
+    recordMs: o.recordMs || 15000,
     processTable: o.processTable || function () {
       return readProcessTable(platform, env);
     }
@@ -640,13 +642,14 @@ function recordProcesses(s, dir, text) {
   var match = /(?:opened with pid |Daemon pid=)(\d+)/.exec(text);
   if (!match) return Promise.resolve();
   var daemon = Number(match[1]);
+  var until = Date.now() + s.recordMs;
   function read(attempt) {
-    return Promise.resolve(s.processTable()).then(function (table) {
+    return tableBefore(s, until).then(function (table) {
       var row = (table || []).filter(function (entry) { return entry.pid === daemon; })[0];
       var owner = readOwner(dir);
       if (row) {
         owner.processes = liveTree(table, [row]);
-      } else if (attempt < PROCESS_READS) {
+      } else if (attempt < PROCESS_READS && Date.now() < until) {
         return pause(PROCESS_READ_PAUSE_MS).then(function () { return read(attempt + 1); });
       } else {
         owner.processesUnknown = true;
@@ -657,6 +660,23 @@ function recordProcesses(s, dir, text) {
   return read(1);
 }
 
+// One read of the process table that gives up (null) at `until`. A slow read (a cold PowerShell on a busy Windows runner can take
+// tens of seconds) must not hold an answer past the host's own call timeout, which is shorter than the table read's own limit.
+function tableBefore(s, until) {
+  var left = until - Date.now();
+  if (left <= 0) return Promise.resolve(null);
+  return new Promise(function (resolve) {
+    var timer = setTimeout(function () { resolve(null); }, left);
+    Promise.resolve().then(function () { return s.processTable(); }).then(function (table) {
+      clearTimeout(timer);
+      resolve(table);
+    }, function () {
+      clearTimeout(timer);
+      resolve(null);
+    });
+  });
+}
+
 function pause(ms) {
   return new Promise(function (resolve) { setTimeout(resolve, ms); });
 }
@@ -664,10 +684,12 @@ function pause(ms) {
 // Waits up to exitWaitMs for the recorded processes to exit, asks what is left to stop (SIGTERM), waits up to exitWaitMs again,
 // then kills what is still there; resolves the PIDs it killed. The polite stop matters: a Chromium browser removes its ~1 GiB
 // code-sign clone ($TMPDIR/../X/<bundle id>.code_sign_clone/) when it exits on its own or on SIGTERM, and leaks it when it is killed.
-function endProcesses(s, recorded) {
+// It never runs past `until`: when time is out it kills what its last good read showed alive, and gives up on the rest.
+function endProcesses(s, recorded, until) {
   if (!recorded || !recorded.length) return Promise.resolve([]);
   var deadline = Date.now() + s.exitWaitMs;
   var asked = false;
+  var lastLive = [];
   function signal(entry, name) {
     try {
       process.kill(entry.pid, name);
@@ -676,12 +698,16 @@ function endProcesses(s, recorded) {
     }
   }
   function check() {
-    return Promise.resolve(s.processTable()).then(function (table) {
-      if (!table) return [];
+    return tableBefore(s, until).then(function (table) {
+      if (!table) {
+        lastLive.forEach(function (entry) { signal(entry, "SIGKILL"); });
+        return lastLive.map(function (entry) { return entry.pid; });
+      }
       var live = liveTree(table, recorded);
+      lastLive = live;
       if (!live.length) return [];
-      if (Date.now() < deadline) return pause(250).then(check);
-      if (!asked) {
+      if (Date.now() < deadline && Date.now() + 250 < until) return pause(250).then(check);
+      if (!asked && Date.now() + s.exitWaitMs < until) {
         asked = true;
         live.forEach(function (entry) { signal(entry, "SIGTERM"); });
         deadline = Date.now() + s.exitWaitMs;
@@ -719,9 +745,11 @@ function close(s, id) {
     throw plain("AUTH_CONTEXT_REFUSED: No current owned native handle exists for this authenticated context.");
   }
   var recorded = owner.processes;
-  var stop = fs.existsSync(path.join(dir, "config.json")) && exists(cliPath(s)) ? runCli(s, dir, ["close"], 30000) : Promise.resolve();
+  // The whole close answers within closeMs: the CLI's own close gets half, and the processes the rest.
+  var until = Date.now() + s.closeMs;
+  var stop = fs.existsSync(path.join(dir, "config.json")) && exists(cliPath(s)) ? runCli(s, dir, ["close"], Math.min(30000, Math.floor(s.closeMs / 2))) : Promise.resolve();
   return stop.then(function () {
-    return endProcesses(s, recorded);
+    return endProcesses(s, recorded, until);
   }).then(function () {
     removeDir(dir);
     delete s.contexts[id];

@@ -910,17 +910,23 @@ async function webServer(ctx, world, options) {
     for (const browser of options.mine ? ["fresh", "mine"] : ["fresh"]) {
       await check(ctx, `browser.${browser}.open_use_close`, "browser", async () => {
         const started = performance.now()
-        const opened = await session.call("browser_context", { action: "open", browser }, 240000)
+        // A stall names its step and how long every earlier step took, so a repeat of #763 says where the time went.
+        const steps = []
+        const step = async (name, run) => {
+          const at = performance.now()
+          try { return await run() } catch (error) { error.message = `${name} (after ${steps.join(", ") || "no earlier step"}): ${error.message}`; throw error } finally { steps.push(`${name} ${Math.round(performance.now() - at)} ms`) }
+        }
+        const opened = await step("open", () => session.call("browser_context", { action: "open", browser }, 240000))
         assert(!opened.isError && opened.json?.contextId, `open ${browser}: ${opened.text.slice(0, 400)}`)
         metric(ctx, `browser_${browser}_open_ms`, performance.now() - started, "ms")
         const { contextId } = opened.json
         try {
-          const goto = await session.call("browser_command", { contextId, args: ["goto", url] }, 60000)
+          const goto = await step("goto", () => session.call("browser_command", { contextId, args: ["goto", url] }, 60000))
           assert(!goto.isError && goto.text.includes("Blackbox page"), `goto: ${goto.text.slice(0, 300)}`)
-          const snapshot = await session.call("browser_command", { contextId, args: ["snapshot"] }, 60000)
+          const snapshot = await step("snapshot", () => session.call("browser_command", { contextId, args: ["snapshot"] }, 60000))
           assert(/button "Press me"/u.test(snapshot.text), `snapshot: ${snapshot.text.slice(0, 300)}`)
         } finally {
-          const closed = await session.call("browser_context", { action: "close", contextId }, 60000)
+          const closed = await step("close", () => session.call("browser_context", { action: "close", contextId }, 60000))
           assert(!closed.isError, `close: ${closed.text.slice(0, 300)}`)
         }
         const after = await session.call("browser_command", { contextId, args: ["snapshot"] }, 30000)
