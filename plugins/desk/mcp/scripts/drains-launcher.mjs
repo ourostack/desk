@@ -7,7 +7,7 @@
 // to stderr and to resolve.log whenever the fetch or the cache resolution fails.
 // This file must stay standalone: the installed copy has no neighbours to import.
 import { spawnSync } from "node:child_process"
-import { appendFileSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs"
+import { appendFileSync, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs"
 import { homedir } from "node:os"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
@@ -112,7 +112,11 @@ function takeLock(lock, now) {
       mkdirSync(path.dirname(lock), { recursive: true })
       mkdirSync(lock)
       writeFileSync(path.join(lock, "pid"), String(process.pid))
-      return () => rmSync(lock, { recursive: true, force: true })
+      return () => {
+        try {
+          if (readFileSync(path.join(lock, "pid"), "utf8") === String(process.pid)) rmSync(lock, { recursive: true, force: true })
+        } catch {}
+      }
     } catch (error) {
       if (error.code !== "EEXIST") return null
     }
@@ -124,7 +128,12 @@ function takeLock(lock, now) {
     } catch {}
     // An owner that has not written its pid yet is only a few milliseconds old, so it is not cleared.
     if (age < STALE_LOCK_MS && (Number.isInteger(owner) && owner > 0 ? alive(owner) : age < 5000)) return null
-    rmSync(lock, { recursive: true, force: true })
+    // Only one runner wins the rename, so two cannot both clear a stale lock and then both take a fresh one.
+    const aside = `${lock}.${process.pid}.${Date.now()}`
+    try {
+      renameSync(lock, aside)
+      rmSync(aside, { recursive: true, force: true })
+    } catch {}
   }
   return null
 }
@@ -142,7 +151,7 @@ function fetchOnce({ dir, own, url, git, now }) {
   }
   if (fresh()) return headOf(own, git)
   const release = takeLock(path.join(dir, "fetch.lock"), now)
-  if (!release) return headOf(own, git)
+  if (!release) return existsSync(stamp) ? headOf(own, git) : null
   try {
     if (fresh()) return headOf(own, git)
     const remote = fetchRelease({ own, url, git })
