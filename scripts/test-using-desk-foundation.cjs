@@ -496,7 +496,8 @@ function main() {
 
   assertSectionPhrases(section(skill, "Cite every factual claim"), "using-desk Cite every factual claim", [
     "Every factual claim to a human or an agent",
-    "inline link to its primary source",
+    "drafts included",
+    "inline link to its primary source and the why behind any number",
     "labeled inference or unverified",
     "`evidence-discipline`",
   ]);
@@ -506,6 +507,9 @@ function main() {
     "never past a safeguard or permission denial",
     "Start no unrequested repair work",
     "`desk-problem`",
+    "then file the tool's bug with evidence: `friction_add`",
+    "opens an issue on its repo for its drain",
+    "others' agents file it and ping Ari",
   ]);
 
   // The long forms of these two rules moved to the skills that own their procedures (round AJ size budget); the foundation keeps the rule and the pointer.

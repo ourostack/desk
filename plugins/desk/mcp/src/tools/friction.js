@@ -33,6 +33,7 @@ import { unfinishedNext } from "../util/route-around.js"
 import { cardKey, openImprovement } from "../desk/improvement-cards.js"
 import { FRICTION_CLASSES, fileKaizenCard, fingerprintOf } from "../factory/kaizen-file.js"
 import { PATTERNS } from "../factory/schema.js"
+import { fileToolIssue, isOwnedTool } from "../factory/tool-issue-file.js"
 import { factoryStateRoot } from "../factory/outbox.js"
 import { failureEvidence } from "../runtime/failure-evidence.js"
 
@@ -169,13 +170,18 @@ async function openCard({ deskRoot, person, card, fingerprint, lesson, now, comm
  * the card from the lesson. A refused or failed card never loses the entry.
  * The call behaves the same in a noninteractive session; only picking a card up is refused there.
  *
+ * A `plugin` that names a tool owned in ourostack other than Desk (m365crawl, shepherd, housesitter, hackamore, ouroboros)
+ * files a GitHub issue on that tool's repo for its drain (`src/factory/tool-issue-file.js`): the title and `body` are the
+ * issue, so the body carries the evidence; no improvement card opens. The result gains `repo` and `issue`: "filed" | "known",
+ * or the reason it was not filed (the entry then holds the paste-ready text).
+ *
  * Returns: { status: "added", path, commit? }; { status: "added", path,
  * kaizen: "candidate", commit? } for system friction; with `file_card`,
  * { status: "filed", path, url, kaizen: "filed" | "duplicate", commit? } or
  * { status: "added", path, kaizen: <code>, commit? } when the card was not
  * filed.
  */
-export async function friction_add({ deskRoot, input, person = null, search, env = process.env, now, fileCard = fileKaizenCard, commitCard = writeCardCommitted, spawnGit = spawnSync, schedulePush = schedulePushDefault, lesson }) {
+export async function friction_add({ deskRoot, input, person = null, search, env = process.env, now, fileCard = fileKaizenCard, fileIssue = fileToolIssue, commitCard = writeCardCommitted, spawnGit = spawnSync, schedulePush = schedulePushDefault, lesson }) {
   const values = input ?? {}
   const { track, theme } = values
   const errorCode = values.error_code
@@ -231,10 +237,17 @@ export async function friction_add({ deskRoot, input, person = null, search, env
   // whether another session already left this file dirty.
   const stage = stagingAllowed(filePath, spawnGit)
 
-  const fingerprint = card === null ? null : await fingerprintIfReady(env, deskRoot, card)
+  // A tool owned in ourostack other than Desk gets its issue on its own repo, where its drain reads it; no Desk card opens for it.
+  const toolIssue = card !== null && card.plugin !== "desk" && isOwnedTool(card.plugin)
+  const fingerprint = card === null || toolIssue ? null : await fingerprintIfReady(env, deskRoot, card)
   let filed = null
   let entry = body
-  if (card !== null && fileNow) {
+  if (toolIssue) {
+    filed = await fileIssue(env, { tool: card.plugin, title: card.title, body })
+    entry = filed.result === "filed" || filed.result === "known"
+      ? `Issue for "${card.title}" on ${filed.repo}: ${filed.result === "filed" ? "filed" : "already open or closed"} at ${filed.url}`
+      : `Issue for "${card.title}" on ${filed.repo ?? card.plugin}: not filed (${filed.reason ?? filed.result}); file it by hand with the text below.\n\n${filed.body ?? body}`
+  } else if (card !== null && fileNow) {
     filed = await fileCard(env, { deskRoot, title: card.title, body, plugin: card.plugin, frictionClass: card.frictionClass, signal: card.signal, evidenceJobs: card.evidenceJobs })
     entry = filed.result === "filed" || filed.result === "duplicate"
       ? `Kaizen card for "${card.title}": ${filed.result === "filed" ? "filed" : "already open"} at ${filed.url}`
@@ -272,6 +285,8 @@ export async function friction_add({ deskRoot, input, person = null, search, env
   let result
   if (card === null) {
     result = { status: "added", path: written }
+  } else if (toolIssue) {
+    result = filed.url ? { status: "filed", path: written, url: filed.url, issue: filed.result, repo: filed.repo } : { status: "added", path: written, issue: filed.reason ?? filed.result, repo: filed.repo }
   } else if (filed === null) {
     result = { status: "added", path: written, kaizen: "candidate" }
   } else if (filed.result === "filed" || filed.result === "duplicate") {
@@ -280,7 +295,7 @@ export async function friction_add({ deskRoot, input, person = null, search, env
     result = { status: "added", path: written, kaizen: filed.result }
   }
   if (commit) result.commit = commit
-  if (card !== null) {
+  if (card !== null && !toolIssue) {
     const opened = await openCard({ deskRoot, person, card, fingerprint, lesson, now, commitCard, spawnGit, schedulePush })
     // A card whose commit did not finish says what to do first, as the answer's first key (#623).
     result = opened.next === undefined ? { ...result, ...opened } : { next: opened.next, ...result, ...opened }
