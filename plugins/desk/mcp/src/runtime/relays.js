@@ -422,7 +422,10 @@ export function waitingOnChecks(requiredChecks, runs, skippedPasses = false, sta
   })
   // A check nobody required that a path filter skipped says nothing against the head, so only a failure, a cancellation or a run still going holds it.
   const others = newest.filter((run) => !counted.has(run) && !green(run) && !isCancelledTemplate(run, newest) && !(run.status === "completed" && SKIPPED_PASSES.has(run.conclusion)))
-  return onlyRequired || others.length === 0 ? required : [...required, `${others.length} other check${others.length === 1 ? "" : "s"} on the head not green (${shown(others)})`]
+  // Under a repository's own list only a check that ended in failure still holds the head; one still running or cancelled that the list does not name does not.
+  const failed = others.filter((run) => run.status === "completed" && (run.conclusion === "failure" || run.conclusion === "timed_out"))
+  if (onlyRequired) return failed.length === 0 ? required : [...required, `${failed.length} other check${failed.length === 1 ? "" : "s"} on the head failed (${shown(failed)})`]
+  return others.length === 0 ? required : [...required, `${others.length} other check${others.length === 1 ? "" : "s"} on the head not green (${shown(others)})`]
 }
 
 const MERGE_CHECKS_FILE = ".github/merge-checks.json"

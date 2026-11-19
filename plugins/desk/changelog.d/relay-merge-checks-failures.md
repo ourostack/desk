@@ -1,0 +1,1 @@
+Under a repository's `.github/merge-checks.json`, the merge-when-green relay now also holds a head while any other check on it has failed or timed out, even when the file does not name that check. A red optional check is still red; one that is merely running or cancelled and not named does not hold the head.
