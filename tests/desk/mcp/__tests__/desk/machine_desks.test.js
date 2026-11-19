@@ -145,6 +145,8 @@ test("a desk named both by its home folder and by the registry counts once, and 
   assert.equal(otherDeskOwning(path.join(home, "personal-desk"), path.join("work-track", "a.md"), { homeDir: home, spawn: () => ({ status: 1 }) }), null)
   await fs.rm(path.join(home, "personal-desk", "work-track"), { recursive: true })
   assert.equal(otherDeskOwning(path.join(home, "personal-desk"), "no-such-track", { homeDir: home, spawn: () => ({ status: 1 }) }), null)
+  const twice = readMachineDesks({ homeDir: home, env: { DESK_REGISTRY: path.join(home, "ms-desk", "_meta", "desks.md") } })
+  assert.deepEqual(twice.map((desk) => desk.name), ["work-default", "personal", "gone", "cit"])
   assert.equal(Array.isArray(readMachineDesks()), true)
   assert.equal(parseDeskRegistry("no table here"). length, 0)
   const alone = machineDesksLine([{ name: "x", path: path.join(os.homedir(), "x"), present: true, current: false }])
