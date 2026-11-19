@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -494,6 +494,7 @@ async function runListToolsSession({ command, args, cwd, env, waitForAdmission =
   });
   child.stderr.on("data", (chunk) => stderrChunks.push(chunk.toString("utf8")));
   const closePromise = new Promise((resolve) => child.once("close", resolve));
+  const exitPromise = child.exitCode === null && child.signalCode === null ? new Promise((resolve) => child.once("exit", resolve)) : Promise.resolve();
 
   try {
     child.stdin.write(makeMcpEnvelope(1, "initialize", {
@@ -517,8 +518,10 @@ async function runListToolsSession({ command, args, cwd, env, waitForAdmission =
     }
     return tools;
   } finally {
-    child.kill("SIGTERM");
-    await closePromise;
+    // On Windows kill() ends only this process; a worker it started keeps the temp folder open and the later removal fails with EPERM. Ending the whole tree and waiting for the exit leaves nothing holding the folder.
+    if (process.platform === "win32" && child.pid !== undefined) spawnSync("taskkill", ["/pid", String(child.pid), "/t", "/f"], { stdio: "ignore", windowsHide: true });
+    else child.kill("SIGTERM");
+    await Promise.all([closePromise, exitPromise]);
   }
 }
 
