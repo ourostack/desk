@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.312 — 2026-11-19
+
+The merge relay's red-main exemption now works when the jobs that failed on main run only on push. Check runs of any event on a pull request's head count; when a job that failed on main has no run on the head, the relay dispatches the main workflow (`workflow_dispatch`) on the pull request's branch once per head and waits for that run. If the workflow has no `workflow_dispatch` trigger, or the branch is in a fork, the status comment names the missing jobs and suggests adding the trigger instead of holding silently. See [relays](docs/relays.md).
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.311 — 2026-11-19
 
 Desk's MCP server now vendors Ouro UI v1.3.326, moved by Ouro Current.
