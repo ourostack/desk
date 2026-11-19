@@ -613,6 +613,16 @@ test("strict: a green current head merges, naming advisory jobs that are red as 
   assert.match(comments(w.world)[0].body.body, /Every job of ci on the head finished green and the head contained main.*Advisory, not judged: ci job budget failure \(advisory\); budget failure \(advisory\); resource-macos failure \(advisory\)\./su)
 })
 
+test("strict: requireCurrentBase false merges a green head that is behind, in parallel, with no update and no queue", async () => {
+  const w = await setup([{ ...STRICT_RELAY, strict: { ...STRICT, requireCurrentBase: false, serial: false } }])
+  strictWorld(w.world, { compare: "behind" })
+  w.world.pull(7, { mergeable_state: "behind" })
+  const polled = await w.poll()
+  assert.deepEqual(polled.errors, [])
+  assert.equal(prWrites(w.world).length, 1)
+  assert.equal(w.world.writes.some((write) => write.route.endsWith("/update-branch")), false)
+})
+
 test("strict: a job an advisory workflow shares a name with a required job of ci stays judged", async () => {
   const w = await setup([STRICT_RELAY])
   strictWorld(w.world, { jobs: [job("typecheck", "failure"), job("budget")], resourceJobs: [job("typecheck", "failure")], checks: [check("typecheck", "failure"), check("npm test (ubuntu-latest, 1/2)")] })
@@ -732,11 +742,12 @@ test("a strict block is validated: bad or unknown fields fail loudly", () => {
   bad("ci", /strict is not an object/u)
   bad({}, /strict\.requiredWorkflows is not a non-empty list/u)
   bad({ requiredWorkflows: ["ci"], advisoryJob: ["x"] }, /strict\.advisoryJob is not a strict field/u)
+  bad({ requiredWorkflows: ["ci"], serial: "no" }, /strict\.serial is not true or false/u)
   bad({ requiredWorkflows: ["ci"], advisoryJobs: "x" }, /advisoryJobs is not a list of names/u)
   bad({ requiredWorkflows: ["ci"], advisoryWorkflows: [5] }, /advisoryWorkflows is not a list of names/u)
   bad({ requiredWorkflows: ["ci"], requireCurrentBase: "yes" }, /requireCurrentBase is not true or false/u)
   const [parsed] = parseRelayConfig(JSON.stringify({ relays: [{ ...MERGE, strict: { requiredWorkflows: [" ci "] } }] }), "relays.json")
-  assert.deepEqual(parsed.strict, { requiredWorkflows: ["ci"], advisoryJobs: [], advisoryWorkflows: [], requireCurrentBase: true })
+  assert.deepEqual(parsed.strict, { requiredWorkflows: ["ci"], advisoryJobs: [], advisoryWorkflows: [], requireCurrentBase: true, serial: true })
 })
 
 test("merge-when-green: a queued or in-progress main run is not judged, so the latest completed green one counts and is named", async () => {
