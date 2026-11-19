@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.332 — 2026-11-19
+
+Under a repository's `.github/merge-checks.json`, the merge-when-green relay now also holds a head while any other check on it has failed or timed out, even when the file does not name that check. A red optional check is still red; one that is merely running or cancelled and not named does not hold the head.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.331 — 2026-11-19
 
 The merge-when-green relay now reads `.github/merge-checks.json` from the pull request's base branch. When the file is there, its `required` list (check names or globs) is the only thing judged, in place of the relay's `requiredChecks` and its other checks, and a required check that has not reported counts as missing. Without the file, the relay's configured checks apply as before.
