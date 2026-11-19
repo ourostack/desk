@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.306 — 2026-11-19
+
+Desk's MCP server now vendors Ouro UI v1.3.323, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.305 — 2026-11-19
 
 The drains runner now finds the helper directory of the git on PATH when git cannot find `git-remote-https`. Callers such as the Ouro app sessions run it with the GitHub Copilot app's cached git on PATH but without `GIT_EXEC_PATH`, so every fetch of the released Desk failed and the relay could keep running an old Desk.
