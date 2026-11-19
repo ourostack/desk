@@ -1,0 +1,1 @@
+Session boot no longer reports a task card as corrupted when a `mode: remote` repo entry has no `local_path`. A remote repository has no local checkout, so `local_path` is now required only for local entries.
