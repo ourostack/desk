@@ -810,12 +810,13 @@ test("a close answers within its own budget when the process table never answers
     const owner = JSON.parse(fs.readFileSync(file, "utf8"))
     owner.processes = [{ pid: row.pid, start: row.start }]
     fs.writeFileSync(file, JSON.stringify(owner))
-    reads = 1
+    reads = 0
     const started = Date.now()
     const result = await controller.call("browser_context", { action: "close", contextId: opened.contextId })
     assert.equal(result.isError, false, text(result))
     assert.ok(Date.now() - started < 2000, `close took ${Date.now() - started} ms`)
     assert.equal(fs.existsSync(path.dirname(file)), false)
+    assert.deepEqual(signals, [[row.pid, "SIGKILL"]])
   } finally { process.kill = originalKill }
 })
 
