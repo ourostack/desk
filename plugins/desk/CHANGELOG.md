@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.301 — 2026-11-19
+
+Desk's MCP server now vendors Ouro UI v1.3.319, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.300 — 2026-11-19
 
 ### The merge relay lets a PR that heals a red main through
