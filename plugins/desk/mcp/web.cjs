@@ -661,23 +661,33 @@ function pause(ms) {
   return new Promise(function (resolve) { setTimeout(resolve, ms); });
 }
 
-// Waits up to exitWaitMs for the recorded processes to exit, then kills what is left of them; resolves the PIDs it killed.
+// Waits up to exitWaitMs for the recorded processes to exit, asks what is left to stop (SIGTERM), waits up to exitWaitMs again,
+// then kills what is still there; resolves the PIDs it killed. The polite stop matters: a Chromium browser removes its ~1 GiB
+// code-sign clone ($TMPDIR/../X/<bundle id>.code_sign_clone/) when it exits on its own or on SIGTERM, and leaks it when it is killed.
 function endProcesses(s, recorded) {
   if (!recorded || !recorded.length) return Promise.resolve([]);
   var deadline = Date.now() + s.exitWaitMs;
+  var asked = false;
+  function signal(entry, name) {
+    try {
+      process.kill(entry.pid, name);
+    } catch (error) {
+      // It exited after the table was read.
+    }
+  }
   function check() {
     return Promise.resolve(s.processTable()).then(function (table) {
       if (!table) return [];
       var live = liveTree(table, recorded);
       if (!live.length) return [];
       if (Date.now() < deadline) return pause(250).then(check);
-      live.forEach(function (entry) {
-        try {
-          process.kill(entry.pid, "SIGKILL");
-        } catch (error) {
-          // It exited after the table was read.
-        }
-      });
+      if (!asked) {
+        asked = true;
+        live.forEach(function (entry) { signal(entry, "SIGTERM"); });
+        deadline = Date.now() + s.exitWaitMs;
+        return pause(250).then(check);
+      }
+      live.forEach(function (entry) { signal(entry, "SIGKILL"); });
       return pause(250).then(function () {
         return live.map(function (entry) { return entry.pid; });
       });
