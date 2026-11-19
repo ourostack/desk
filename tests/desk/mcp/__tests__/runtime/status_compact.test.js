@@ -3,7 +3,7 @@
 
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
-import { mkdirSync } from "node:fs"
+import { mkdirSync, writeFileSync } from "node:fs"
 import * as path from "node:path"
 import { compactStatus } from "../../../../../plugins/desk/mcp/src/runtime/status-compact.js"
 import { createDeskSession } from "../../../../../plugins/desk/mcp/src/runtime/desk-session.js"
@@ -211,6 +211,19 @@ test("desk_status carries the plugin-update line, compact and full, and nothing 
   assert.ok(!("plugin_update" in payload(await current.callTool({ name: "desk_status", input: { detail: true } }))))
 })
 
+test("desk_status lists the desks on this machine and resolves one by name, even when this desk can't be found", async (t) => {
+  const home = await mkTempRoot("desk-status-machine-")
+  mkdirSync(path.join(home, "personal-desk"), { recursive: true })
+  mkdirSync(path.join(home, ".config", "desk"), { recursive: true })
+  writeFileSync(path.join(home, "reg.md"), "| desk | local path | repo | account | launch |\n|---|---|---|---|---|\n| personal | `~/personal-desk` | `ari/desk` | personal | `desk:worker` |\n")
+  writeFileSync(path.join(home, ".config", "desk", "registry-path"), `${path.join(home, "reg.md")}\n`)
+  const session = await makeSession(t, ready, { env: { HOME: home } })
+  const status = payload(await session.callTool({ name: "desk_status", input: { desk: "personal desk" } }))
+  assert.deepEqual(status.machine_desks.map((desk) => [desk.name, desk.path, desk.owner, desk.remote]), [["personal", path.join(home, "personal-desk"), "ari", "ari/desk"]])
+  assert.equal(status.machine_desk.path, path.join(home, "personal-desk"))
+  assert.match(payload(await session.callTool({ name: "desk_status", input: { desk: "eng-system" } })).machine_desk.problem, /register-desk; do not clone/u)
+})
+
 test("the desk_status tool is compact by default and returns the full payload only for detail: true", async (t) => {
   const full = { ...ready, active_embedding_spec: { id: "spec" }, snapshots: { module_state: "available" }, document_vectors: { chunks_total: 1 } }
   const session = await makeSession(t, full)
@@ -225,8 +238,8 @@ test("the desk_status tool is compact by default and returns the full payload on
   assert.ok(JSON.stringify(compact).length < JSON.stringify(detailed).length)
 })
 
-test("desk_status declares its two optional inputs: detail, and has_instructions for a hosted Desk", () => {
-  assert.deepEqual(Object.keys(TOOL_INPUT_SCHEMAS.desk_status.properties), ["detail", "has_instructions"])
+test("desk_status declares its optional inputs: detail, desk (find another desk on this machine), and has_instructions for a hosted Desk", () => {
+  assert.deepEqual(Object.keys(TOOL_INPUT_SCHEMAS.desk_status.properties), ["detail", "desk", "has_instructions"])
   assert.deepEqual(TOOL_INPUT_SCHEMAS.desk_status.required, [])
 })
 

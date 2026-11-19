@@ -25,6 +25,7 @@ import { deskSkill } from "./skills.js"
 import { appendRepairLog, createLastStartWriter, lastStartPath } from "./last-start.js"
 import { diagnosticFormat, previewRuntimeSnapshot } from "./preview-snapshot.js"
 import { compactStatus } from "./status-compact.js"
+import { readMachineDesks, resolveMachineDesk } from "../desk/machine-desks.js"
 import { runtimeIdentity } from "./runtime-identity.js"
 import { checkPluginUpdate } from "./plugin-update.js"
 import { deskPluginRoot } from "../package-metadata.js"
@@ -998,6 +999,7 @@ export function createDeskSession(deps) {
     }
     // Compact unless asked: the full payload is tens of KB, and an agent only wants "ready or not, and what do I do".
     const answer = input?.detail === true ? full : compactStatus(full)
+    Object.assign(answer, machineDeskAnswer({ root: full.root?.path ?? context.root?.root ?? null, env, wanted: input?.desk }))
     return jsonResult(withStaleCardLead(answer, context.root ? staleCard.lead() : null))
   }
 
@@ -1435,4 +1437,15 @@ function launcherReadOnlyOutcome(launcher) {
     fix: `The launcher could not prove this session's write identity or checkout state (${launcher.code}: ${launcher.reason}). Reads keep working. Fix what that names, then reconnect the Desk MCP server so the launcher checks again.`,
     diagnostic: { mode: "read_only", launcher: { code: launcher.code, reason: launcher.reason } },
   }
+}
+
+// The desks registered on this machine, read from the registry file (never the desk root, so it answers while admitting too); `desk` resolves one by name, repo or owner.
+function machineDeskAnswer({ root, env, wanted }) {
+  const machine = readMachineDesks({ homeDir: env.HOME || os.homedir(), root, env })
+  const answer = { machine_desks: machine.map(({ name, path, owner, remote, kind, present, current }) => ({ name, path, owner, remote, kind, present, current })) }
+  if (typeof wanted === "string" && wanted.trim() !== "") {
+    const found = resolveMachineDesk(wanted, machine)
+    answer.machine_desk = found.desk === undefined ? { problem: found.problem } : { name: found.desk.name, path: found.desk.path, owner: found.desk.owner, remote: found.desk.remote }
+  }
+  return answer
 }

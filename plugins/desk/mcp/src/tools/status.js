@@ -13,7 +13,7 @@ import { createStatusInspection, waitForStatusInspection as waitForInspectionChi
 // compacts the payload built here unless `detail: true`), and `has_instructions` by a hosted Desk's startup wrapper
 // (runtime/hosted.js); this function always builds the full payload. Listed here so
 // __tests__/tool_schema_parity.test.js checks the schema against it like every other tool.
-export const DESK_STATUS_FIELDS = ["detail", "has_instructions"]
+export const DESK_STATUS_FIELDS = ["detail", "desk", "has_instructions"]
 
 /**
  * `desk_status`'s own read of sync state (spec §2's "desk_status surfaces

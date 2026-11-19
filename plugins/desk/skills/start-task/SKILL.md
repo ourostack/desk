@@ -9,6 +9,8 @@ description: Use for 'start a task', 'track this' or 'work on X', or when work i
 
 Resolve the canonical task and its actual intake proposal before entering the adapter. Follow the lookup/create steps below first, then invoke `desk:using-superpowers-with-desk` at its `start` entry for the engineering handoff. Desk retains outcome identity, scope and the explicit go; Superpowers consumes them without another intake or lifecycle.
 
+Before designing a capability, search the repo history for one that existed (`git log -S`, closed PRs and issues). If it did, the work is a regression: find the change that broke it and restore it.
+
 A task enters the workspace through one of two paths. Both end in the same place: a new `task.md` under a track directory in `$DESK/`. The agent names and files the task itself and never asks the human to choose a name, a track or a location (`interaction-style` section 2).
 
 For overlays with their own work-item tracker (and a work-item ID), consumer overlays typically ship a tracker-aware `start-task` variant that also captures the tracker's ID + URL and walks the work-item-relations chain to find the parent Feature's track.

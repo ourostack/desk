@@ -8,6 +8,7 @@ import { existsSync, readFileSync } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 import { isDeskWorkspace } from "./paths.js"
+import { readMachineDesks } from "../desk/machine-desks.js"
 
 const DESK_FOLDERS = Object.freeze(["personal-desk", "ms-desk", "desk", "worker-workspace"])
 /** `owner` and `repo` of a Git remote URL (https or scp style), or null. */
@@ -39,22 +40,28 @@ function declaredOwners(root) {
   }
 }
 
-/** Every desk workspace in the operator's home folder: `{ root, name, owners }`; `owners` are the repository owners it serves. */
+/**
+ * Every desk workspace on this machine: `{ root, name, kind, owners }`; `owners` are the repository owners it serves. Found by
+ * their home-folder names and by the operator's desk registry (so a crew desk anywhere on disk counts).
+ */
 function knownDesks({ homeDir, spawn }) {
-  return DESK_FOLDERS
-    .map((folder) => path.join(homeDir, folder))
-    .filter((root) => isDeskWorkspace(root))
-    .map((root) => {
-      const remote = originOf(root, spawn)
-      const own = remote === null ? [] : [remote.owner.toLowerCase()]
-      return { root, name: remote === null ? path.basename(root) : `${remote.owner}/${remote.repo}`, owners: [...own, ...declaredOwners(root)] }
-    })
+  const found = new Map()
+  const add = (root, kind = "solo") => {
+    const key = path.resolve(root).toLowerCase()
+    if (found.has(key)) return
+    const remote = originOf(root, spawn)
+    const own = remote === null ? [] : [remote.owner.toLowerCase()]
+    found.set(key, { root, name: remote === null ? path.basename(root) : `${remote.owner}/${remote.repo}`, kind, owners: [...own, ...declaredOwners(root)] })
+  }
+  for (const root of DESK_FOLDERS.map((folder) => path.join(homeDir, folder)).filter((root) => isDeskWorkspace(root))) add(root)
+  for (const desk of readMachineDesks({ homeDir, env: {} })) if (desk.present) add(desk.path, desk.kind)
+  return [...found.values()]
 }
 
 /** The one desk that serves the repository owner, or null when the owner or the match is not clear. */
 export function deskForRepoOwner(repoOwner, { homeDir, spawn = spawnSync }) {
   if (!repoOwner) return null
-  const matches = knownDesks({ homeDir, spawn }).filter((d) => d.owners.includes(repoOwner))
+  const matches = knownDesks({ homeDir, spawn }).filter((d) => d.kind === "solo" && d.owners.includes(repoOwner))
   return matches.length === 1 ? matches[0] : null
 }
 
