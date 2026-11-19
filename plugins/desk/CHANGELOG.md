@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.302 — 2026-11-19
+
+The drains runner no longer passes an inherited `GIT_EXEC_PATH` to git. A stale one made every fetch of the released Desk fail with "'remote-https' is not a git command", so the relay could keep running an old Desk.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.301 — 2026-11-19
 
 Desk's MCP server now vendors Ouro UI v1.3.319, moved by Ouro Current.
