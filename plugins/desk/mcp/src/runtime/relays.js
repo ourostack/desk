@@ -519,9 +519,11 @@ async function headIsBehind(ctx, state, relay, pr) {
 /**
  * A red main never holds a head that already answers it: the head holds main's tip and every job that failed on main's run is green on the head.
  * A revert of the breaking commit, a fix and a flake that passed this time all qualify; an unrelated head that still fails the job does not.
- * Returns the names of those jobs, or null when the head does not answer main (or main's failed jobs cannot be read).
+ * Check runs of any event count (push, pull_request or a dispatch). A job that failed on main but has no run on the head (it runs only on push, say)
+ * is asked for once per head with a `workflow_dispatch` of the main workflow on the head's branch; a workflow that cannot be dispatched is named in the reason.
+ * Returns `{ healedBy }` (the failed jobs' names) when the head answers main, `{ notes }` (lines for the status comment) when it may yet, or null when it does not.
  */
-async function headHealsMain(ctx, state, relay, pr, main) {
+async function headHealsMain(ctx, state, relay, record, pr, main) {
   try {
     if (await headIsBehind(ctx, state, relay, pr)) return null
     const { jobs } = await readJobs(ctx, state, relay.repo, main.id)
@@ -529,10 +531,31 @@ async function headHealsMain(ctx, state, relay, pr, main) {
     if (failed.length === 0) return null
     const { runs } = await readChecks(ctx, state, relay.repo, pr.headSha)
     const newest = (name) => runs.filter((run) => sameName(run.name, name)).sort((a, b) => b.id - a.id)[0]
-    return failed.every((name) => newest(name)?.status === "completed" && newest(name).conclusion === "success") ? failed : null
+    if (failed.every((name) => newest(name)?.status === "completed" && newest(name).conclusion === "success")) return { healedBy: failed }
+    if (failed.some((name) => newest(name) && !(newest(name).status === "completed" && newest(name).conclusion === "success"))) return null
+    return { notes: [await dispatchMissing(ctx, state, relay, record, pr, failed.filter((name) => !newest(name)))] }
   } catch {
     return null
   }
+}
+
+/** Asks for the main workflow on the head's branch once per head, and says in a line what the head waits for or why nothing can be done. */
+async function dispatchMissing(ctx, state, relay, record, pr, missing) {
+  const workflow = relay.requireMainWorkflowGreen
+  const names = missing.join(", ")
+  if (record.dispatch?.sha !== pr.headSha) {
+    const sameRepo = pr.headRepo && pr.headRepo.toLowerCase() === pr.baseRepo.toLowerCase()
+    const response = sameRepo ? await ctx.api.send("POST", `/repos/${relay.repo}/actions/workflows/${encodeURIComponent(workflow)}/dispatches`, { ref: pr.headRef }) : null
+    const reason = !sameRepo ? "its branch is in a fork, which cannot be dispatched"
+      : response.ok ? null
+        : response.status === 422 && /workflow_dispatch/iu.test(response.body.message) ? `${workflow} has no \`workflow_dispatch\` trigger, so nothing can run those jobs on a pull request head. Add \`workflow_dispatch:\` under \`on:\` in ${workflow}`
+          : `dispatching ${workflow} answered HTTP ${response.status} (${response.body.message})`
+    record.dispatch = { sha: pr.headSha, at: new Date(ctx.now).toISOString(), ...(reason ? { failed: reason } : {}) }
+    note(state, ctx.now, { event: "dispatched-missing-jobs", head: short(pr.headSha), ok: !reason, jobs: missing, ...(reason ? { reason } : {}) })
+  }
+  return record.dispatch.failed
+    ? `${names} failed on ${pr.baseRef} but never ran on this head, and ${record.dispatch.failed}`
+    : `${names} failed on ${pr.baseRef} but have not run on this head; dispatched ${workflow} on \`${pr.headRef}\` and waiting for it`
 }
 
 /** Brings the head up to the base once per head. A refusal (a conflict, say) is remembered and reported, never retried for that head. */
@@ -642,9 +665,9 @@ async function handlePull(relay, state, ctx, number) {
       else {
         judged = { branch: mainBranch, id: main.id, url: main.url }
         if (main.conclusion !== "success") {
-          const healed = pr.baseRef === mainBranch && (await headHealsMain(ctx, state, relay, pr, main))
-          if (healed) judged.healedBy = healed
-          else waiting.push(`${mainBranch}'s latest completed ${relay.requireMainWorkflowGreen} run ${main.id} (${main.url}) is ${main.conclusion}`)
+          const healed = pr.baseRef === mainBranch && (await headHealsMain(ctx, state, relay, record, pr, main))
+          if (healed?.healedBy) judged.healedBy = healed.healedBy
+          else waiting.push(`${mainBranch}'s latest completed ${relay.requireMainWorkflowGreen} run ${main.id} (${main.url}) is ${main.conclusion}`, ...(healed?.notes ?? []))
         }
       }
     }
