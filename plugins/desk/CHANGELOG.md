@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.298 — 2026-11-19
+
+Session boot no longer reports a task card as corrupted when a `mode: remote` repo entry has no `local_path`. A remote repository has no local checkout, so `local_path` is now required only for local entries.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.297 — 2026-11-19
 
 Desk's MCP server now vendors Ouro UI v1.3.317, moved by Ouro Current.
