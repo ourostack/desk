@@ -1,4 +1,4 @@
-// The `drains` command line: `poll`, `ack`, `status`, `why`, `schedule`, `stalled`, `relays` and `runtimes`, defined once with Ouro AX, which
+// The `drains` command line: `poll`, `ack`, `status`, `why`, `schedule`, `stalled`, `relays`, `hooks` and `runtimes`, defined once with Ouro AX, which
 // parses the arguments, writes the help and prints a usage error as one line on stderr with its fix (exit 2). Output is one JSON value
 // on stdout; a failure is the Desk failure line its code built on stderr (exit 1).
 import { spawnSync } from "node:child_process"
@@ -11,6 +11,7 @@ import { allStuckSaves, stuckLine } from "./unmerged-saves.js"
 import { pollRelays, readRelayConfig, readRelayStates, relayPaths, relayStatusLines, relaysOfPull, whyRelay } from "./relays.js"
 import { findPluginlessRuntimes, listProcesses as psList, pluginlessRuntimeLines } from "./pluginless-runtimes.js"
 import { ackStalled, pollStalled, stalledPaths, stalledStatus } from "./stalled.js"
+import { ackHooks, createHook, deleteHook, ghToken, hookPaths, hookStatus, listHooks, pollHooks } from "./hooks.js"
 import { ackSchedule, pollSchedules, readScheduleConfig, readScheduleStates, scheduleStatusLines, schedulePaths } from "./schedules.js"
 import { signedInAccounts } from "../factory/flush.js"
 import { ackWake, connectGithub, recoverDrainTarget, drainPaths, deskInUse, drainStatusLines, installLauncher, pollDrains, readDrainConfig, readDrainStates, whyOf, withDrainLock } from "./drains.js"
@@ -71,7 +72,11 @@ function ghSignedIn() {
   return signedInAccounts(`${result.stdout}\n${result.stderr}`)
 }
 
-function drainsCli({ script, env, now, connect, listProcesses, signedIn }) {
+const HOOK_PRESETS = ["standard", "svix", "resend", "clerk", "stripe", "github", "sentry", "linear", "none"]
+const ACCOUNT = { type: "string", placeholder: "<login>", description: "The GitHub login whose token signs in; defaults to the one account hooks.json names, else the GitHub CLI's active account." }
+const SERVER = { type: "string", placeholder: "<https origin>", description: "The hooks receiver, when hooks.json has no \"server\" yet." }
+
+function drainsCli({ script, env, now, connect, listProcesses, signedIn, fetchHooks, hookToken }) {
   const ackFlags = (flags, paths) => (flags.state ? ["--state", paths.state] : [])
   const ackCommand = [process.execPath, path.resolve(script)]
   const command = (name, def, run) => defineCommand({ name, output: "one JSON value", text, ...def, run })
@@ -85,6 +90,7 @@ function drainsCli({ script, env, now, connect, listProcesses, signedIn }) {
       schedule: "The prompts due to a session (schedules.json), at most one per schedule however many intervals were missed; see docs/schedules.md.",
       stalled: "The nudges due to sessions that went idle with their focused task card unfinished and nothing running, once per idle stretch; see docs/stalled-nudges.md.",
       relays: "The dispatch and merge-when-green relays in relays.json: poll acts on what it finds and prints no wakes; see docs/relays.md.",
+      hooks: "Webhooks: events any service posts to the hooks receiver become wakes for the session hooks.json names; see docs/webhooks.md.",
       runtimes: "Copilot server runtimes started without Desk's plugin, whose sessions have no desk-* tools, and how to recover; see docs/schedules.md.",
     },
     commands: [
@@ -146,11 +152,36 @@ function drainsCli({ script, env, now, connect, listProcesses, signedIn }) {
         const paths = pathsOf(relayPaths({ env }), input)
         return withDesk({ status: relayStatusLines(readRelayConfig(paths.config), readRelayStates(paths.state), now()) }, { script, env })
       }),
+      command("hooks poll", { effect: "private", summary: "Save each configured hook's pending events and print one wake per hook that has any.", flags: { config: CONFIG, state: STATE } }, async (input) => {
+        const paths = pathsOf(hookPaths({ env }), input)
+        return withDesk(await withDrainLock(paths.lock, () => pollHooks({ paths, now: now(), ackCommand, ackFlags: [...(input.config ? ["--config", paths.config] : []), ...ackFlags(input, paths)], fetchImpl: fetchHooks, token: hookToken, env })), { script, env })
+      }),
+      command("hooks ack", { effect: "private", summary: "Acknowledge the events a delivered wake listed (or keep them all, with --error).", flags: { name: { type: "string", required: true, placeholder: "<hook>", description: "The hook the wake was for." }, events: { type: "string", required: true, placeholder: "<id,id>", description: "The event ids the wake listed, comma-separated." }, error: ERROR, config: CONFIG, state: STATE } }, (input) => {
+        const paths = pathsOf(hookPaths({ env }), input)
+        return withDrainLock(paths.lock, () => ackHooks({ paths, name: input.name, events: input.events, error: input.error, now: now(), fetchImpl: fetchHooks, token: hookToken, env }))
+      }),
+      command("hooks create", { effect: "private", summary: "Make a hook and print its address and, when the receiver makes it, its signing secret, once.", args: [{ name: "name", required: true, description: "The hook's name: lower-case letters, digits and hyphens." }], flags: { verify: { type: "enum", values: HOOK_PRESETS, default: "standard", description: "How the sender signs its events." }, "secret-stdin": { type: "boolean", description: "Read the sender's signing secret from stdin (stripe, sentry, linear, svix, resend, clerk)." }, account: ACCOUNT, server: SERVER, config: CONFIG }, examples: ["hooks create spoonjoy-sentry --verify sentry --secret-stdin"] }, async (input, ctx) => {
+        const paths = pathsOf(hookPaths({ env }), input)
+        const secret = input["secret-stdin"] ? await ctx.stdin() : undefined
+        return createHook({ name: input.name, verify: input.verify, secret, paths, account: input.account, server: input.server, env, fetchImpl: fetchHooks, token: hookToken })
+      }),
+      command("hooks list", { ...READ, summary: "List your hooks on the receiver: scheme, last event, pending count and last refusal.", flags: { account: ACCOUNT, server: SERVER, config: CONFIG } }, (input) => {
+        const paths = pathsOf(hookPaths({ env }), input)
+        return listHooks({ paths, account: input.account, server: input.server, env, fetchImpl: fetchHooks, token: hookToken })
+      }),
+      command("hooks delete", { effect: "private", summary: "Delete a hook and its pending events from the receiver.", args: [{ name: "name", required: true, description: "The hook to delete." }], flags: { account: ACCOUNT, server: SERVER, config: CONFIG } }, (input) => {
+        const paths = pathsOf(hookPaths({ env }), input)
+        return deleteHook({ name: input.name, paths, account: input.account, server: input.server, env, fetchImpl: fetchHooks, token: hookToken })
+      }),
+      command("hooks status", { ...READ, summary: "List each hook's route, pending count and last error, and any hook nobody routes, without saving or acknowledging.", flags: { config: CONFIG, state: STATE } }, async (input) => {
+        const paths = pathsOf(hookPaths({ env }), input)
+        return withDesk({ status: await hookStatus({ paths, now: now(), fetchImpl: fetchHooks, token: hookToken, env }) }, { script, env })
+      }),
       command("runtimes status", { ...READ, summary: "Name the Copilot server runtimes started without Desk's plugin, and how to recover." }, () => ({ status: pluginlessRuntimeLines(findPluginlessRuntimes(listProcesses())) })),
     ],
   })
 }
 
-export async function runDrainsCli({ argv, script, env = process.env, io = process, now = Date.now, connect = connectGithub, listProcesses = psList, signedIn = ghSignedIn }) {
-  return runCli(drainsCli({ script, env, now, connect, listProcesses, signedIn }), argv, { stdout: io.stdout, stderr: io.stderr })
+export async function runDrainsCli({ argv, script, env = process.env, io = process, now = Date.now, connect = connectGithub, listProcesses = psList, signedIn = ghSignedIn, fetchHooks = fetch, hookToken = ghToken }) {
+  return runCli(drainsCli({ script, env, now, connect, listProcesses, signedIn, fetchHooks, hookToken }), argv, { stdout: io.stdout, stderr: io.stderr, stdin: io.stdin })
 }

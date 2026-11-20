@@ -1,6 +1,6 @@
 # Relays
 
-A relay is a small GitHub automation the always-on runtime runs when a repository's own settings cannot do the job: for example, when changing a repository's settings needs an administrator. Like [issue drains](issue-drains.md) and [schedules](schedules.md), it spends no model turn. `relays poll` reads GitHub with conditional requests (an unchanged answer is a free `304`), acts, and prints no wakes. The code is [relays.js](../mcp/src/runtime/relays.js) and the `relays` command of [drains.js](../mcp/scripts/drains.js).
+A relay is a small GitHub automation the always-on runtime runs when a repository's own settings cannot do the job: for example, when changing a repository's settings needs an administrator. Like [issue drains](issue-drains.md), [schedules](schedules.md) and [webhooks](webhooks.md), it spends no model turn. `relays poll` reads GitHub with conditional requests (an unchanged answer is a free `304`), acts, and prints no wakes. The code is [relays.js](../mcp/src/runtime/relays.js) and the `relays` command of [drains.js](../mcp/scripts/drains.js).
 
 ```sh
 node <state>/ouroboros-skills/desk/drains/run.mjs relays poll      # poll the relays that are due and act
