@@ -6,7 +6,7 @@ import { strict as assert } from "node:assert"
 import * as os from "node:os"
 import { spawnSync } from "node:child_process"
 import * as path from "node:path"
-import { mkdtempSync, mkdirSync, rmSync, existsSync, realpathSync } from "node:fs"
+import { mkdtempSync, mkdirSync, existsSync, realpathSync } from "node:fs"
 import { promises as fs } from "node:fs"
 import { task_archive, task_create, task_update } from "../../../../../plugins/desk/mcp/src/tools/task.js"
 import { applyResource, canonicalIdentity, dueResources, openResources, readResources, shellQuote } from "../../../../../plugins/desk/mcp/src/desk/resources.js"
@@ -15,7 +15,7 @@ import { activeTasks } from "../../../../../plugins/desk/mcp/src/desk/active-tas
 import { formatBootText } from "../../../../../plugins/desk/mcp/src/runtime/boot-text.js"
 import { mkTempDeskRoot } from "./_helpers.js"
 import { NO_POSIX_MODES } from "../_platform.js"
-import { removeTree } from "../_remove_tree.js"
+import { removeTree, removeTreeSync } from "../_remove_tree.js"
 
 // A path as a regular expression that matches it literally, whatever separator or characters it holds.
 const literal = (value) => value.replace(/[.*+?^${}()|[\]\\/]/gu, "\\$&")
@@ -141,7 +141,7 @@ test("a card moving to done or cancelled lists its due rows, and a deleted workt
     await update(root, { resource: { identity: `worktree:${where}`, step: "api" } })
     await update(root, { resource: { identity: "branch:o/widgets#feat/end" } })
     assert.equal("cleanup_due" in (await update(root, { note: "working" })), false)
-    rmSync(where, { recursive: true })
+    removeTreeSync(where)
     const answer = await update(root, status === "done" ? { status, evidence: { kind: "steps" }, step: { id: "api", evidence: PR } } : { status })
     assert.deepEqual(answer.cleanup_due.map((item) => [item.identity, item.why, item.stale]), [[`worktree:${where}`, status === "done" ? "step api is delivered and the task is done" : `the task is ${status}`, true], ["branch:o/widgets#feat/end", `the task is ${status}`, undefined]])
     assert.match(answer.cleanup_due[0].action, /^stale row: .* is not on this machine/u)
