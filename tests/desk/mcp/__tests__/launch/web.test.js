@@ -232,6 +232,11 @@ test("copyProfile stores copied cookie values as plain values so a newer browser
   db.exec("CREATE TABLE cookies (host_key TEXT, name TEXT, value TEXT, encrypted_value BLOB)")
   const insert = db.prepare("INSERT INTO cookies VALUES (?, ?, ?, ?)")
   insert.run("github.com", "user_session", "", seal("github.com", "secret-session"))
+  const bare = crypto.createCipheriv("aes-128-cbc", key, Buffer.alloc(16, 0x20))
+  insert.run("old.example", "bare", "", Buffer.concat([Buffer.from("v10"), bare.update("plain-no-digest-prefix-padding-xx"), bare.final()]))
+  insert.run("v11.example", "v11", "", Buffer.from("v11-something-longer-than-19"))
+  insert.run("null.example", "nothing", "", null)
+  insert.run("text.example", "text", "", "v10-stored-as-text-not-bytes")
   insert.run("example.com", "broken", "", Buffer.from("v10not-decryptable-bytes"))
   db.close()
   const before = fs.readFileSync(cookies)
@@ -240,8 +245,23 @@ test("copyProfile stores copied cookie values as plain values so a newer browser
   const copy = new DatabaseSync(path.join(dest, "Profile 1", "Network", "Cookies"))
   const rows = copy.prepare("SELECT name, value, length(encrypted_value) AS n FROM cookies ORDER BY name").all()
   copy.close()
-  assert.deepEqual(rows.map((row) => [row.name, row.value, row.n]), [["broken", "", 24], ["user_session", "secret-session", 0]])
+  assert.deepEqual(rows.map((row) => [row.name, row.value, row.n]), [["bare", "plain-no-digest-prefix-padding-xx", 0], ["broken", "", 24], ["nothing", "", null], ["text", "", 28], ["user_session", "secret-session", 0], ["v11", "", 28]])
   assert.deepEqual(fs.readFileSync(cookies), before)
+  web.copyProfile(source, path.join(root, "dest2"), "Microsoft Edge", { cookieKey: key })
+  fs.writeFileSync(path.join(source, "Profile 1", "Network", "Cookies"), "not a database")
+  web.copyProfile(source, path.join(root, "dest3"), "Microsoft Edge", { cookieKey: key })
+  assert.equal(fs.readFileSync(path.join(root, "dest3", "Profile 1", "Network", "Cookies"), "utf8"), "not a database")
+})
+
+test("keychainCookieKey derives the browser's cookie key on macOS and gives none anywhere else or when the keychain refuses", () => {
+  const seen = []
+  const run = (command, args) => { seen.push([command, ...args]); return Buffer.from("secret\n") }
+  const key = web.keychainCookieKey("Microsoft Edge", "darwin", run)
+  assert.deepEqual(key, crypto.pbkdf2Sync("secret", "saltysalt", 1003, 16, "sha1"))
+  assert.deepEqual(seen, [["security", "find-generic-password", "-w", "-s", "Microsoft Edge Safe Storage", "-a", "Microsoft Edge"]])
+  assert.equal(web.keychainCookieKey("Microsoft Edge", "linux", run), null)
+  assert.equal(web.keychainCookieKey("Other", "darwin", run), null)
+  assert.equal(web.keychainCookieKey("Google Chrome", "darwin", () => { throw new Error("denied") }), null)
 })
 
 test("copyProfile falls back to Default for a missing, unsafe or malformed last_used", async () => {

@@ -261,11 +261,11 @@ function readProfileFile(file) {
 // private copy, which any version reads and which is deleted with the context.
 var SAFE_STORAGE = { "Microsoft Edge": ["Microsoft Edge Safe Storage", "Microsoft Edge"], "Google Chrome": ["Chrome Safe Storage", "Chrome"] };
 
-function keychainCookieKey(app) {
+function keychainCookieKey(app, platform, run) {
   var item = SAFE_STORAGE[app];
-  if (process.platform !== "darwin" || !item) return null;
+  if (platform !== "darwin" || !item) return null;
   try {
-    var secret = childProcess.execFileSync("security", ["find-generic-password", "-w", "-s", item[0], "-a", item[1]], { timeout: 10000, windowsHide: true, stdio: ["ignore", "pipe", "ignore"] });
+    var secret = run("security", ["find-generic-password", "-w", "-s", item[0], "-a", item[1]], { timeout: 10000, windowsHide: true, stdio: ["ignore", "pipe", "ignore"] });
     return crypto.pbkdf2Sync(secret.toString("utf8").trim(), "saltysalt", 1003, 16, "sha1");
   } catch (error) {
     return null;
@@ -309,7 +309,7 @@ function transcodeCookies(file, key) {
 // Admission precedes both parsing and copying. The opened descriptor supplies the bytes;
 // a later pathname copy would undo identity/link qualification.
 function copyProfile(source, dest, app, options) {
-  var cookieKey = options && "cookieKey" in options ? options.cookieKey : keychainCookieKey(app);
+  var cookieKey = options && "cookieKey" in options ? options.cookieKey : keychainCookieKey(app, process.platform, childProcess.execFileSync);
   var state;
   try { state = readProfileFile(path.join(source, "Local State")); } catch (error) {
     if (error && error.permissionDenied) throw copyPermissionError(app);
@@ -1193,6 +1193,7 @@ module.exports = {
   npmCli: npmCli,
   profileRoot: profileRoot,
   copyProfile: copyProfile,
+  keychainCookieKey: keychainCookieKey,
   processTableCommand: processTableCommand,
   parseProcessTable: parseProcessTable,
   readProcessTable: readProcessTable,
