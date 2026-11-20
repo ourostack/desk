@@ -76,6 +76,43 @@ test("organizationFindings tolerates a desk root that does not exist yet", async
   assert.deepEqual(findings, [])
 })
 
+test("declared track operating files are not loose, while undeclared entries and task checks remain visible", async () => {
+  const root = await mkTempRoot()
+  await writeCard(root, "billing-disputes/track.md", {
+    scope: "billing disputes; not payroll",
+    operating_files: ["README.md", "policy.md", "state/", "old-task/"],
+  })
+  for (const file of ["README.md", "policy.md", "state/latest.json", "stray.md", "scratch/notes.md"]) {
+    await writeFile(root, `billing-disputes/${file}`)
+  }
+  await writeCard(root, "billing-disputes/old-task/task.md", { status: "processing", updated: STALE })
+
+  const findings = organizationFindings(root, { now: NOW })
+  assert.deepEqual(findByCode(findings, "loose_file").map(f => f.path).sort(), [
+    "billing-disputes/scratch", "billing-disputes/stray.md",
+  ])
+  assert.equal(findByCode(findings, "stale_task")[0]?.path, "billing-disputes/old-task/task.md")
+})
+
+test("invalid track operating file declarations are actionable and do not exempt loose entries", async () => {
+  const root = await mkTempRoot()
+  await writeFile(root, "billing-disputes/stray.md")
+  for (const operating_files of [
+    "stray.md", ["../stray.md"], ["/stray.md"], ["nested/stray.md"],
+    ["state\\stray.md"], ["*.md"], ["."], [null], ["stray.md", ""],
+  ]) {
+    await writeCard(root, "billing-disputes/track.md", {
+      scope: "billing disputes; not payroll", operating_files,
+    })
+    const findings = organizationFindings(root, { now: NOW })
+    const invalid = findByCode(findings, "track_operating_files_invalid")
+    assert.equal(invalid.length, 1, JSON.stringify(operating_files))
+    assert.equal(invalid[0].path, "billing-disputes/track.md")
+    assert.match(invalid[0].hint, /track_update.*operating_files/u)
+    assert.deepEqual(findByCode(findings, "loose_file").map(f => f.path), ["billing-disputes/stray.md"])
+  }
+})
+
 // ── One-of-each fixture ──────────────────────────────────────────────────
 
 async function buildOneOfEachFixture() {

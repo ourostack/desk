@@ -25,7 +25,8 @@
 //     shared `artifacts/` folder `directory-structure` defines (M4-5),
 //     `AGENTS.md`, `README.md`, `CLAUDE.md`, `agency.toml` (the workspace
 //     MCP config MS Desk keeps where Agency finds it), dotfiles.
-//   - track root: `track.md`, task folders, underscore folders.
+//   - track root: `track.md`, task folders, underscore folders, declared
+//     `operating_files` (immediate entry names, not patterns).
 // At the desk root, dotfiles include dot-folders such as `.git/` (M4-5): a
 // Git desk always has one, and the tidy's Detect must not fire on every Git
 // desk because of it. A dot-folder at a track root is still loose.
@@ -356,7 +357,23 @@ function trackHasContent(trackDirAbs, atRoot = true) {
   return false
 }
 
-function walkTrackRoot({ trackDirAbs, deskRoot, findings, liveTaskCards, now }) {
+function trackOperatingFiles(parsed, trackDirRel, findings) {
+  if (!parsed || !Object.hasOwn(parsed.data, "operating_files")) return new Set()
+  const entries = parsed.data.operating_files
+  const valid = Array.isArray(entries) && entries.every(entry =>
+    typeof entry === "string" && entry.trim() === entry &&
+    /^(?!\.{1,2}\/?$)[^/\\:*?"<>|[\]{}\u0000-\u001f]+\/?$/u.test(entry))
+  if (!valid) {
+    findings.push({
+      code: "track_operating_files_invalid",
+      path: `${trackDirRel}/track.md`,
+      hint: "use track_update frontmatter.operating_files with a list of immediate filenames or folders (for example state/), without nested paths or globs; no exemptions applied",
+    })
+  }
+  return new Set(valid ? entries : [])
+}
+
+function walkTrackRoot({ trackDirAbs, deskRoot, findings, liveTaskCards, now, operatingFiles }) {
   let liveTaskCount = 0
   let archivedTaskCount = 0
 
@@ -364,7 +381,7 @@ function walkTrackRoot({ trackDirAbs, deskRoot, findings, liveTaskCards, now }) 
     const entryAbs = path.join(trackDirAbs, entry.name)
 
     if (entry.isFile()) {
-      if (entry.name === "track.md" || isDotfile(entry.name)) continue
+      if (entry.name === "track.md" || isDotfile(entry.name) || operatingFiles.has(entry.name)) continue
       findings.push(looseFinding(deskRoot, entryAbs, "loose at a track root — file it under a task folder or an underscore folder"))
       continue
     }
@@ -394,6 +411,7 @@ function walkTrackRoot({ trackDirAbs, deskRoot, findings, liveTaskCards, now }) 
 
     const hasTaskMd = safeReaddir(entryAbs).some((e) => e.isFile() && e.name === "task.md")
     if (!hasTaskMd) {
+      if (operatingFiles.has(entry.name) || operatingFiles.has(`${entry.name}/`)) continue
       findings.push(looseFinding(deskRoot, entryAbs, "loose at a track root — this directory has no task.md; file it under a task folder or an underscore folder"))
       continue
     }
@@ -448,6 +466,7 @@ function processTrackDir({ trackDirAbs, deskRoot, operatorNames, findings, liveT
     findings,
     liveTaskCards,
     now,
+    operatingFiles: trackOperatingFiles(parsed, trackDirRel, findings),
   })
 
   if (liveTaskCount === 0 && archivedTaskCount === 0 && !trackHasContent(trackDirAbs)) {
