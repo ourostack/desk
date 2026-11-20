@@ -92,7 +92,7 @@ test("the parent watch fires once when the parent's pid changes or the parent is
   assert.equal(armed, true)
   stop()
   assert.equal(armed, false, "stopping the watch clears its timer")
-  watchParent({ onGone() {}, initialPpid: 1, setTimer: () => { armed = true } })
+  watchParent({ onGone() {}, initialPpid: 1, setTimer: () => { armed = true } })()
   assert.equal(armed, false, "a process started by init has no parent to wait for")
 })
 
@@ -112,6 +112,27 @@ test("watchParent's default liveness check treats a missing parent as gone and a
     process.kill = realKill
   }
   assert.deepEqual(outcomes, [1, 0, 0])
+})
+
+test("main closes the session when the host's input fails", async () => {
+  const { main } = await import("../../../../../plugins/desk/mcp/index.js")
+  const { PassThrough } = await import("node:stream")
+  const { mkTempRoot } = await import("../_temp_roots.js")
+  const { idleSearchEngine } = await import("./_in_process_desk.js")
+  const root = await mkTempRoot("desk-main-input-failed-")
+  const input = new PassThrough()
+  const writes = []
+  const closedWith = []
+  const handle = await main({
+    argv: ["--root", root], env: {}, cwd: root, homeDir: root, stateHome: path.join(root, "state"),
+    input, output: new PassThrough(), stderr: { write(text) { writes.push(text); return true } }, admissionKickoffMs: 0,
+    runtimeInspector: null, runtimeImporter: async () => ({ createSearchEngine: () => idleSearchEngine() }),
+    onClosed: (code) => closedWith.push(code),
+  })
+  input.destroy(new Error("read ECONNRESET"))
+  await within(handle.closed, 5000, "the close")
+  assert.deepEqual(closedWith, [0])
+  assert.match(writes.join(""), /the host's input failed/u)
 })
 
 test("watchParent reads the real parent by default and stays quiet while it is there", () => {
