@@ -410,6 +410,7 @@ export function unreadAlarms(loop, signals = {}) {
   if (evaluator.labels_quarantined.state === "unavailable") unread.push("labels_quarantined")
   if (evaluator.label_lag_minutes.state === "unavailable") unread.push("label_lag")
   if (typeof signals.facts_quarantine_not_settling !== "boolean") unread.push("facts_quarantine_not_settling")
+  if (!Array.isArray(signals.held_sessions)) unread.push("held_sessions")
   const attempted = signals.attempted ?? []
   for (const step of STEPS) if (!attempted.includes(step)) unread.push(`step_stale:${step}`)
   return unread
