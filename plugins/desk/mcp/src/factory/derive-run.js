@@ -208,7 +208,7 @@ export async function deriveMarker(env, marker, { claude = deriveClaudeSession, 
   if (!validMarker(marker)) return { result: "invalid", store: null }
   // A controlled proof session (`DESK_FACTORY_PROOF`, issue #578) is never derived, whichever run asks.
   if (marker.proof === true) return { result: "skipped", store: null }
-  if (marker.desk_root === null) return { result: "held", store: null }
+  if (marker.desk_root === null) return { result: "held", store: null, reason: "no_desk_root" }
   const name = `${marker.host}-${marker.session_id}.json`
   const diag = { failed: false }
   try {
@@ -255,15 +255,15 @@ async function deriveUnlocked(env, input, { claude, copilot, codex, quietMs, req
     // The stored mark is read under the lock: a proof mark written after the sweep listed this session still stops the derivation.
     if (marker.proof === true) return { result: "skipped", store }
     logs.add(marker.log_path)
-    if (marker.desk_root === null) return { result: "held", store }
-    if (isStaleDeriver(ownVersion, marker.plugins, marker.updated_at, now)) return { result: "held", store }
+    if (marker.desk_root === null) return { result: "held", store, reason: "no_desk_root" }
+    if (isStaleDeriver(ownVersion, marker.plugins, marker.updated_at, now)) return { result: "held", store, reason: "newer_desk_recorded" }
     await factoryStateRoot(env, { deskRoot: marker.desk_root })
     const route = markerRoute(marker)
     store = route.store
     const refusal = admit === null ? null : await admit()
     if (refusal !== null) return { result: "refused", store, reason: refusal }
     const name = `${marker.host}-${marker.session_id}.json`
-    if (store === null) return { result: "held", store }
+    if (store === null) return { result: "held", store, reason: "route_unreadable" }
     if ((await readConsent(env)).stores[store]?.contribute !== true) return { result: "not_opted_in", store }
     if (marker.host === "codex-cli" && route.source === "default" && !provenBy(marker, await siblings())) return { result: "held", store: null, reason: "route_unverified" }
     step = "source"
@@ -677,6 +677,25 @@ async function keepRoute(marker, { receipts, session, markers, find }) {
   return [marker?.desk_root, deskRoot].some((root) => typeof root === "string" && isFolder(root)) ? undefined : null
 }
 
+/** `{ at, groups: [{ route, reason, sessions, oldest_at }] }`: the sweep's held sessions by the route they hold for (`unresolved` when it cannot be read) and the cause. */
+export function heldSessions(held, at) {
+  const groups = new Map()
+  for (const { marker, reason } of held) {
+    let route = "unresolved"
+    try {
+      route = markerRoute(marker).store ?? "unresolved"
+    } catch {
+      // A route that cannot be read is named unresolved.
+    }
+    const key = `${route}\n${reason}`
+    const group = groups.get(key) ?? { route, reason, sessions: 0, oldest_at: marker.updated_at }
+    group.sessions += 1
+    if (Date.parse(marker.updated_at) < Date.parse(group.oldest_at)) group.oldest_at = marker.updated_at
+    groups.set(key, group)
+  }
+  return { at, groups: [...groups.values()] }
+}
+
 export async function sweep(env, { quietMs = 600000 } = {}) {
   const summary = { written: 0, held: 0, route_unverified: 0, skipped: 0, not_opted_in: 0, log_missing: 0, source_unreadable: 0, invalid: 0, coverage: null }
   try {
@@ -686,11 +705,15 @@ export async function sweep(env, { quietMs = 600000 } = {}) {
   }
   const markers = await listMarkers(env)
   const siblings = lazyProofIndex(async () => markers)
+  const held = []
   for (const marker of markers) {
     const { result, reason } = await deriveMarker(env, marker, { quietMs, requireStored: true, siblings })
     summary[result] += 1
     if (reason === "route_unverified") summary.route_unverified += 1
+    if (result === "held") held.push({ marker, reason: reason ?? "held" })
   }
+  // Held sessions by route and cause, with the oldest hold: the loop raises `held_sessions` for a hold that outlasts a day. Local status only.
+  await writeStatus(env, { held_sessions: heldSessions(held, new Date().toISOString()) }).catch(() => {})
   // Every held route is counted with its reason (`held-route.js`), for `desk_doctor` and the boot line: a hold is never silent.
   await writeStatus(env, { route_holds: { ...routeHolds(markers), at: new Date().toISOString() } }).catch(() => {})
   // The orphan pass records its own failure (`orphans.failed`) and never throws, so it cannot stop a sweep.

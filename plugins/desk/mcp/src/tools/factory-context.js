@@ -150,8 +150,16 @@ export function factoryFindingLines(status) {
     lines.push(`${status.route_holds.count} ended ${status.route_holds.count === 1 ? "session is" : "sessions are"} held because the store they route to cannot be read; they are never published until it can.`)
     for (const hold of status.route_holds.reasons) lines.push(`  ${holdText(hold)} (${hold.sessions} ${hold.sessions === 1 ? "session" : "sessions"})`)
   }
+  for (const { route, reason, sessions, oldest_at: oldest } of status.held_groups ?? []) lines.push(`${sessions} ended ${sessions === 1 ? "session is" : "sessions are"} held for the route ${route} (${reason}), the oldest since ${String(oldest).slice(0, 10)}; ${HELD_CAUSES[reason] ?? "see desk_doctor"}`)
   if (status.held_pruned !== undefined) lines.push(`${status.held_pruned.count} held ${status.held_pruned.count === 1 ? "session was" : "sessions were"} pruned after 90 days without being captured, the last on ${status.held_pruned.last_at.slice(0, 10)}.`)
   return lines
+}
+
+const HELD_CAUSES = {
+  no_desk_root: "the session recorded no desk folder, so it never derives; a new session in the desk records one",
+  newer_desk_recorded: "the session ran a newer Desk than this one, so this one waits; update Desk (it derives on the next sweep)",
+  route_unreadable: "the route's declaration cannot be read; fix the desk's _meta/factory.json or the plugin manifest it names",
+  route_unverified: "a Codex session's default route is not proven yet",
 }
 
 // One hold: its reason, the manifest or plugin folder to fix, and the remedy.
