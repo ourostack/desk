@@ -32,6 +32,8 @@ The receipt's `run` records the harness command and version, the plugins loaded,
 
 `--case <id[,id...]>` runs only those cases and never writes a receipt, and `--keep <directory>` saves each case's ordered replies, final response, tool requests, workspace evidence and verdicts there as JSON, so a case that passes only some runs can be read run by run. `--dry-run` runs and judges without writing. `--harness <command>` replaces `copilot` with another command that accepts the same flags (a `.js`, `.cjs` or `.mjs` path runs under Node), which is how `scripts/test-skill-evals.cjs` tests the runner with a fake. `--base <ref>` changes the `--changed` comparison point from `origin/main`, then `main`.
 
+The judge evaluates each requirement as written, including prohibitions such as "Do not ask for a new go"; it must not negate them again. It writes the evidence before the pass/fail field and makes that field agree with its evidence. Verdicts are still model judgments: retain the outputs with `--keep` when investigating variation rather than rerunning until a passing receipt replaces the failure.
+
 Add scenarios from observed regressions, not to inflate counts.
 
 ## Core meeting capture

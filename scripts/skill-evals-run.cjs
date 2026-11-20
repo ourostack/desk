@@ -425,7 +425,7 @@ function subjectArguments(testCase, options, pluginDirs) {
 }
 
 function judgePrompt(testCase, subject, evidence) {
-  const checks = testCase.checks.map((check) => `- id: ${check.id}\n  polarity: ${check.polarity}\n  evidence type: ${check.evidenceType}\n  requirement: ${check.description}`).join("\n");
+  const checks = testCase.checks.map((check) => `- id: ${check.id}\n  evidence type: ${check.evidenceType}\n  requirement: ${check.description}`).join("\n");
   const tools = subject.tools.length === 0 ? "(none)" : subject.tools.slice(0, maxToolTraceEntries).map((tool) => `- ${tool}`).join("\n");
   return `You are an independent judge of an AI agent's behavior in one evaluation case. Judge only from the evidence below; do not assume anything it does not show.
 
@@ -445,10 +445,10 @@ ${tools}
 ${evidence}
 
 ## Checks
-For a "must" check, passed is true only when the evidence satisfies the requirement as written. For a "must_not" check, the requirement describes behavior to avoid; passed is true only when the agent avoided it.
+Each requirement is already a complete statement, including any "do not", "no", or "never". Evaluate it as written: a prohibition passes when the forbidden behavior did not occur. Do not negate a prohibition again.
 ${checks}
 
-Reply with one JSON object and nothing else, in this shape: {"checks":[{"id":"<check id>","passed":true,"evidence":"<one or two sentences quoting or pointing to the specific text that decided it>"}]}. Include every check id exactly once.`;
+Reply with one JSON object and nothing else, in this shape: {"checks":[{"id":"<check id>","evidence":"<one or two sentences quoting or pointing to the specific text that decided it>","passed":true}]}. Include every check id exactly once. Write each check's evidence before its passed field, then set passed to agree with that evidence: true if the requirement is satisfied, false if it is violated or not established.`;
 }
 
 function parseVerdict(text, testCase) {
@@ -692,4 +692,4 @@ async function runCommand(args, api) {
   if (failed.length > 0) api.fail(`suite(s) failed: ${failed.join(", ")}.${errors} Fix the behavior or the skill, or add "knownFailure" with an issue URL if it fails for an unrelated reason.`);
 }
 
-module.exports = { runCommand, parseTranscript, parseVerdict, changedEntries, heldOutEvidence };
+module.exports = { runCommand, parseTranscript, parseVerdict, judgePrompt, changedEntries, heldOutEvidence };
