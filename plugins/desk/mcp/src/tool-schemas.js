@@ -246,10 +246,10 @@ const HAND_WRITTEN_INPUT_SCHEMAS = Object.freeze({
     about: {
       type: "string",
       enum: ["setup", "system"],
-      description: "\"setup\" (default): this desk's own setup, kept on the desk. \"system\": Desk itself (its skills, tools or the factory); an improvement card opens by itself, built from your `title` and never from your text.",
+      description: "\"setup\" (default): this desk's own setup, kept on the desk. \"system\": a tool, Desk's own or one owned in ourostack; the answer carries the issue link on that tool's repo.",
     },
     title: text("Required when about is \"system\": the card's title, on one line."),
-    plugin: text("For \"system\": the plugin the friction is in; defaults to \"desk\". A tool owned in ourostack (m365crawl, shepherd, housesitter, hackamore, ouroboros) files `title` and `body` as an issue on its repo for its drain: put the evidence in `body`."),
+    plugin: text("For \"system\": the plugin the friction is in; defaults to \"desk\". desk, superpowers, m365crawl, shepherd, housesitter, hackamore and ouroboros file `title` and `body` as an issue on the tool's repo for its drain: put the evidence in `body`. A failed filing is an error."),
     friction_class: {
       type: "string",
       // Mirrors FRICTION_CLASSES in src/factory/kaizen-file.js.

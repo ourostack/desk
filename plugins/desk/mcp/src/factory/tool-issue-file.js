@@ -27,6 +27,7 @@ export const OWNED_TOOLS = Object.freeze({
   hackamore: "ourostack/hackamore",
   ouroboros: "ourostack/ouroboros",
   desk: "ourostack/desk",
+  superpowers: "ourostack/desk",
 })
 const LABEL = "tool-friction"
 const MARKER_PREFIX = "<!-- desk-tool-issue: "
@@ -35,6 +36,13 @@ const MAX_BODY = 8000
 
 /** `isOwnedTool(name) -> boolean`: whether `name` is a tool owned in ourostack. */
 export const isOwnedTool = (name) => typeof name === "string" && Object.hasOwn(OWNED_TOOLS, name)
+
+/** `ownedToolFor(name) -> string | null`: the owned tool a `plugin` value names; Desk's own parts (`desk-web`, `desk_status`) are Desk. */
+export const ownedToolFor = (name) => {
+  if (typeof name !== "string") return null
+  if (isOwnedTool(name)) return name
+  return /^desk[-_]/u.test(name) ? "desk" : null
+}
 
 /** `toolIssueFingerprint(tool, title) -> string`: the 32 hex the issue's marker carries. */
 export const toolIssueFingerprint = (tool, title) => createHash("sha256").update(`${tool}\n${normalizeTitle(title)}`).digest("hex").slice(0, 32)
