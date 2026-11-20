@@ -7,6 +7,7 @@ import { tmpdir } from "node:os"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
 import { resolveSuperpowersContext } from "../../../../../plugins/desk/mcp/src/activation/superpowers-context.js"
+import { removeTree } from "../_remove_tree.js"
 
 const cli = fileURLToPath(new URL("../../../../../plugins/desk/mcp/src/activation/superpowers-context.js", import.meta.url))
 const input = { deskRoot: "/desk", taskPath: "/desk/task", iterationPath: "/desk/task/iteration", planPath: "/desk/task/iteration/planning.md", evidenceRoot: "/evidence", step: 1, attempt: 1 }
@@ -48,7 +49,7 @@ for (const key of ["step", "attempt"]) {
 }
 test("context preserves an unexpected canonical-file stat error", async (t) => {
   const root = await fs.mkdtemp(path.join(tmpdir(), "superpowers-stat-"))
-  t.after(() => fs.rm(root, { recursive: true, force: true }))
+  t.after(() => removeTree(root))
   const taskPath = path.join(root, "task")
   const iterationPath = path.join(taskPath, "iteration")
   await fs.mkdir(iterationPath, { recursive: true })
@@ -84,7 +85,7 @@ test("the hint for each missing path names its flag, with an example built from 
 })
 test("an evidence root whose every ancestor is unreadable, up to the filesystem root, is used as given", async (t) => {
   const root = await fs.mkdtemp(path.join(tmpdir(), "superpowers-rootwalk-"))
-  t.after(() => fs.rm(root, { recursive: true, force: true }))
+  t.after(() => removeTree(root))
   const taskPath = path.join(root, "task")
   const iterationPath = path.join(taskPath, "iteration")
   await fs.mkdir(iterationPath, { recursive: true })

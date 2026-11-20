@@ -22,6 +22,7 @@ import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { git, makeDesk } from "./lib/world.mjs"
+import { removeTreeSync } from "../desk/mcp/__tests__/_remove_tree.js"
 
 const args = process.argv.slice(2)
 const option = (name, fallback) => (args.includes(name) ? args[args.indexOf(name) + 1] : fallback)
@@ -147,7 +148,7 @@ async function session(host) {
     next_session_start_printed_lesson: seen?.secret === secret,
   }
   for (let attempt = 0; attempt < 5; attempt++) {
-    try { fs.rmSync(root, { recursive: true, force: true }); break } catch { await new Promise((resolve) => setTimeout(resolve, 1000)) }
+    try { removeTreeSync(root); break } catch { await new Promise((resolve) => setTimeout(resolve, 1000)) }
   }
   return { host, tag, ms: Math.round(result.ms + next.ms), sessionId: result.sessionId, nextSessionId: next.sessionId, nextAnswerTail: next.answer.slice(-400), checks, reported, answerTail: result.answer.slice(-600), stderrTail: result.stderr.slice(-400), commits: log.split("\n") }
 }
@@ -201,7 +202,7 @@ async function progressNoteSession(host) {
     answer_not_failure: !/can(?:'|no)t|cannot|not in effect/iu.test(answer),
   }
   for (let attempt = 0; attempt < 5; attempt++) {
-    try { fs.rmSync(root, { recursive: true, force: true }); break } catch { await new Promise((resolve) => setTimeout(resolve, 1000)) }
+    try { removeTreeSync(root); break } catch { await new Promise((resolve) => setTimeout(resolve, 1000)) }
   }
   return { host, tag, ms: Math.round(result.ms), sessionId: result.sessionId, checks, answer, stderrTail: result.stderr.slice(-400) }
 }

@@ -20,6 +20,7 @@ import { PATTERNS } from "../../../../../plugins/desk/mcp/src/factory/schema.js"
 import { resolveStore } from "../../../../../plugins/desk/mcp/src/factory/store-route.js"
 import { factoryFindingLines } from "../../../../../plugins/desk/mcp/src/tools/factory-context.js"
 import { ID, STORE, json, recent, scratch, session } from "./_session_helpers.js"
+import { removeTree } from "../_remove_tree.js"
 
 const PRIVATE = "corp/private-factory"
 const TRUNCATED = '{"name":"corp","version":"1.0.0","desk":{"factory":{"store":"corp/private-fac'
@@ -80,7 +81,7 @@ test("variants: an overlay that later declares nothing stays held, and one that 
   const [saved] = await listMarkers(ctx.env)
   await fs.writeFile(manifest, JSON.stringify({ name: "corp", version: "1.0.0" }))
   assert.equal(markerRoute(saved).store, null, "what the plugins after it declared was never recorded")
-  await fs.rm(corp, { recursive: true })
+  await removeTree(corp)
   assert.equal(markerRoute(saved).store, null)
   assert.deepEqual(sessionRoute(saved, { siblings: () => [saved] }), { kind: "unknown" })
 }))
@@ -208,7 +209,7 @@ test("finding 3: a Copilot overlay installed as a link to its folder is read thr
   const run = () => runHook({ host: "copilot", payload: { sessionId: ID, cwd: ctx.desk, reason: "complete" }, env: ctx.env, pluginRoot, launch: async () => {} })
   assert.equal(await run(), "written")
   assert.deepEqual((await listMarkers(ctx.env))[0].routing, { store: PRIVATE, source: "overlay", warnings: [] })
-  await fs.rm(real, { recursive: true })
+  await removeTree(real)
   assert.equal(await run(), "written")
   assert.deepEqual((await listMarkers(ctx.env))[0].routing, { store: null, source: "invalid_declaration", warnings: [{ code: "manifest_unreadable", manifest: path.join(plugins, "corp") }] })
 }))
@@ -408,7 +409,7 @@ test("N2 repro S2: a hold on a broken manifest, then the manifest fixed and the 
   assert.equal(held.routing.store, null)
   // The broken plugin is fixed to declare nothing, and the corp overlay is uninstalled.
   await json(path.join(broken, "plugin.json"), { name: "broken", version: "1.0.0" })
-  await fs.rm(corp, { recursive: true })
+  await removeTree(corp)
   await registry(ctx, { "desk@ourostack": [{ version: "1.0.0", installPath: desk }], "broken@x": [{ version: "1.0.0", installPath: broken }] })
   await runClaude(ctx, { ...endPayload(ctx, marker), session_id: OTHER_ID })
   const after = (await listMarkers(ctx.env)).find((m) => m.session_id === ID)

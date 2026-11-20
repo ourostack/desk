@@ -5,7 +5,7 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { createHash } from "node:crypto"
-import { mkdtempSync, promises as fs, rmSync } from "node:fs"
+import { mkdtempSync, promises as fs } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 import { osEnv } from "../_os_env.js"
@@ -32,6 +32,7 @@ import {
 import { evaluateDue } from "../../../../../plugins/desk/mcp/src/factory/evaluate-kick.js"
 import { recordStep } from "../../../../../plugins/desk/mcp/src/factory/loop-status.js"
 import { factoryStateRoot, readStatus, updateStatus } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
+import { removeTreeSync } from "../_remove_tree.js"
 
 const HOUR = 60 * 60 * 1000
 const DAY = 24 * HOUR
@@ -50,7 +51,7 @@ async function scratch(run) {
     await updateStatus(env, (current) => ({ ...current }))
     return await run(env, await factoryStateRoot(env), base)
   } finally {
-    rmSync(base, { recursive: true, force: true })
+    removeTreeSync(base)
   }
 }
 
@@ -241,7 +242,7 @@ test("protected_windows_and_spent_migration", async (t) => {
       assert.equal((await reserveAgentLaunch(env, { kind: "evaluate", now: at(0, 9) })).state, "reserved")
       assert.equal((await ledgerOf(root)).spent, 1)
     } finally {
-      rmSync(base, { recursive: true, force: true })
+      removeTreeSync(base)
     }
   })
 })

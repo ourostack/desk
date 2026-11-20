@@ -17,6 +17,7 @@ import { tmpdir } from "node:os"
 import { gunzipSync, gzipSync } from "node:zlib"
 import * as path from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
+import { removeTreeSync } from "../_remove_tree.js"
 
 const repoRoot = path.resolve(
   fileURLToPath(new URL("../../../../..", import.meta.url)),
@@ -1421,8 +1422,8 @@ test("runtime dependency archive shape scans package runtime files defensively",
       /runtime dependency archive must require a non-marker runtime file for empty-runtime/u,
     )
   } finally {
-    rmSync(synthetic.root, { recursive: true, force: true })
-    rmSync(emptyRuntime.root, { recursive: true, force: true })
+    removeTreeSync(synthetic.root)
+    removeTreeSync(emptyRuntime.root)
   }
 })
 
@@ -1448,7 +1449,7 @@ for (const buildWithAuxiliaries of [false, true]) {
       dependencyName: "better-sqlite3",
       dependencyFiles: [...runtimeFiles, ...(buildWithAuxiliaries ? auxiliaryFiles : [])],
     })
-    t.after(() => rmSync(synthetic.root, { recursive: true, force: true }))
+    t.after(() => removeTreeSync(synthetic.root))
     const built = buildRuntimeDependencyPack({
       mcpRoot: synthetic.root,
       outputRoot: path.join(synthetic.root, "packs"),
@@ -2108,26 +2109,26 @@ test("runtime dependency pack verification checks checksums and unsupported plat
       },
     )
   } finally {
-    rmSync(packDir, { recursive: true, force: true })
-    rmSync(corruptPackDir, { recursive: true, force: true })
-    rmSync(missingManifestPackDir, { recursive: true, force: true })
-    rmSync(missingArchivePackDir, { recursive: true, force: true })
-    rmSync(missingChecksumPackDir, { recursive: true, force: true })
-    rmSync(invalidArchivePackDir, { recursive: true, force: true })
-    rmSync(staleManifestArchiveShaPackDir, { recursive: true, force: true })
-    rmSync(embeddedManifestMismatchPackDir, { recursive: true, force: true })
-    rmSync(missingArchivePackageJsonPackDir, { recursive: true, force: true })
-    rmSync(missingArchivePackageLockPackDir, { recursive: true, force: true })
-    rmSync(tamperedPackageLockPackDir, { recursive: true, force: true })
-    rmSync(mismatchedPackageJsonPackDir, { recursive: true, force: true })
-    rmSync(invalidPackageJsonPackDir, { recursive: true, force: true })
-    rmSync(malformedPackageLockPackDir, { recursive: true, force: true })
-    rmSync(missingEmbeddedManifestPackDir, { recursive: true, force: true })
-    rmSync(specialHeaderPackDir, { recursive: true, force: true })
-    rmSync(paxWithoutPathPackDir, { recursive: true, force: true })
-    rmSync(noProductionDependenciesPackDir, { recursive: true, force: true })
-    rmSync(missingRuntimeFilePackDir, { recursive: true, force: true })
-    rmSync(missingInferredRuntimeFilePackDir, { recursive: true, force: true })
+    removeTreeSync(packDir)
+    removeTreeSync(corruptPackDir)
+    removeTreeSync(missingManifestPackDir)
+    removeTreeSync(missingArchivePackDir)
+    removeTreeSync(missingChecksumPackDir)
+    removeTreeSync(invalidArchivePackDir)
+    removeTreeSync(staleManifestArchiveShaPackDir)
+    removeTreeSync(embeddedManifestMismatchPackDir)
+    removeTreeSync(missingArchivePackageJsonPackDir)
+    removeTreeSync(missingArchivePackageLockPackDir)
+    removeTreeSync(tamperedPackageLockPackDir)
+    removeTreeSync(mismatchedPackageJsonPackDir)
+    removeTreeSync(invalidPackageJsonPackDir)
+    removeTreeSync(malformedPackageLockPackDir)
+    removeTreeSync(missingEmbeddedManifestPackDir)
+    removeTreeSync(specialHeaderPackDir)
+    removeTreeSync(paxWithoutPathPackDir)
+    removeTreeSync(noProductionDependenciesPackDir)
+    removeTreeSync(missingRuntimeFilePackDir)
+    removeTreeSync(missingInferredRuntimeFilePackDir)
   }
 })
 
@@ -2186,8 +2187,8 @@ test("runtime dependency pack verify CLI reports missing and corrupt artifacts c
     assert.match(corruptRun.stderr, /runtime dependency archive runtime-deps\.tgz must be a readable gzip tar archive/u)
     assert.doesNotMatch(corruptRun.stderr, /(?:Error:|ENOENT|at file:|at async|incorrect header check)/u)
   } finally {
-    rmSync(missingArtifactsPackDir, { recursive: true, force: true })
-    rmSync(corruptArchivePackDir, { recursive: true, force: true })
+    removeTreeSync(missingArtifactsPackDir)
+    removeTreeSync(corruptArchivePackDir)
   }
 })
 
@@ -2340,11 +2341,11 @@ test("package declares CI/release scripts for runtime dependency packs", async (
       ])
       assert.equal(builtVerifyRun.status, 0, builtVerifyRun.stderr || builtVerifyRun.stdout)
     } finally {
-      rmSync(buildOutputRoot, { recursive: true, force: true })
+      removeTreeSync(buildOutputRoot)
     }
   } finally {
-    rmSync(validPackDir, { recursive: true, force: true })
-    rmSync(invalidPackDir, { recursive: true, force: true })
+    removeTreeSync(validPackDir)
+    removeTreeSync(invalidPackDir)
   }
 })
 
@@ -2541,13 +2542,13 @@ test("runtime dependency pack builder handles long paths and CLI argument edge c
     )
     assert.match(stderr.join(""), /runtime dependency pack checksum mismatch/u)
   } finally {
-    rmSync(splittableLongPathRoot.root, { recursive: true, force: true })
-    rmSync(splittableOutputRoot, { recursive: true, force: true })
-    rmSync(unsplittableLongPathRoot.root, { recursive: true, force: true })
-    rmSync(unsplittableOutputRoot, { recursive: true, force: true })
-    rmSync(defaultOutputRoot.root, { recursive: true, force: true })
-    rmSync(cliOutputRoot, { recursive: true, force: true })
-    rmSync(cliInvalidPackDir, { recursive: true, force: true })
+    removeTreeSync(splittableLongPathRoot.root)
+    removeTreeSync(splittableOutputRoot)
+    removeTreeSync(unsplittableLongPathRoot.root)
+    removeTreeSync(unsplittableOutputRoot)
+    removeTreeSync(defaultOutputRoot.root)
+    removeTreeSync(cliOutputRoot)
+    removeTreeSync(cliInvalidPackDir)
   }
 })
 
@@ -2621,8 +2622,8 @@ test("runtime dependency pack rebuilds are byte-stable when inputs are unchanged
       (error) => error?.code === "EISDIR",
     )
   } finally {
-    rmSync(syntheticMcpRoot.root, { recursive: true, force: true })
-    rmSync(outputRoot, { recursive: true, force: true })
+    removeTreeSync(syntheticMcpRoot.root)
+    removeTreeSync(outputRoot)
   }
 })
 
@@ -2672,7 +2673,7 @@ test("runtime pack defaults retain host routing and surface filesystem failure w
       syncBuiltinESMExports()
     }
   } finally {
-    rmSync(root, { recursive: true, force: true })
+    removeTreeSync(root)
   }
 })
 

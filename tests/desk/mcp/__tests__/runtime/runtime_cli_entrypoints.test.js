@@ -4,7 +4,6 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
-  rmSync,
   writeFileSync,
 } from "node:fs"
 import { tmpdir } from "node:os"
@@ -17,6 +16,7 @@ import {
   runRuntimeSupportMatrixVerifier,
   verifyRuntimeSupportMatrixCli,
 } from "../../../../../tools/desk-build/scripts/verify-runtime-support-matrix.js"
+import { removeTreeSync } from "../_remove_tree.js"
 
 function makeRuntimeFixture() {
   const mcpRoot = mkdtempSync(path.join(tmpdir(), "desk-runtime-cli-"))
@@ -61,7 +61,7 @@ test("runtime support matrix CLI functions are importable and preserve command o
     writeFileSync(matrixPath, "{}\n", "utf8")
     assert.equal(verifyRuntimeSupportMatrixCli({ mcpRoot }), 1)
   } finally {
-    rmSync(mcpRoot, { recursive: true, force: true })
+    removeTreeSync(mcpRoot)
   }
 })
 

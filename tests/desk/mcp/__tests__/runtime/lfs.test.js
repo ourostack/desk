@@ -8,6 +8,7 @@ import * as path from "node:path"
 import { spawnSync } from "node:child_process"
 import { fileURLToPath } from "node:url"
 import { mkTempRoot } from "../_temp_roots.js"
+import { removeTreeSync } from "../_remove_tree.js"
 
 const moduleUrl = new URL("../../../../../plugins/desk/mcp/src/runtime/lfs.js", import.meta.url)
 let inspectLfs
@@ -476,7 +477,7 @@ test("GivenExternalAttributesFile_WhenInspected_KeepsItsPolicyInEffect", async (
     assert.equal(file.proposal, "review_existing_policy")
     assert.equal(fileAt(inspect(root), "report.pdf").proposal, "track_exact_path")
   } finally {
-    fs.rmSync(external, { recursive: true, force: true })
+    removeTreeSync(external)
   }
 })
 

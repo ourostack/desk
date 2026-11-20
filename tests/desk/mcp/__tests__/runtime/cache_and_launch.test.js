@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { after, afterEach, describe, it } from "node:test";
+import { removeTreeSync } from "../_remove_tree.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const mcpRoot = path.resolve(__dirname, "../../../../../plugins/desk/mcp");
@@ -34,7 +35,7 @@ const tempRoots = [];
 
 afterEach(() => {
   for (const tempRoot of tempRoots.splice(0)) {
-    rmSync(tempRoot, { recursive: true, force: true });
+    removeTreeSync(tempRoot);
   }
 });
 
@@ -101,7 +102,7 @@ let sharedInstalledRoot = null;
 let sharedInstalled = null;
 let sharedInstalledState = null;
 after(() => {
-  if (sharedInstalledRoot !== null) rmSync(sharedInstalledRoot, { recursive: true, force: true });
+  if (sharedInstalledRoot !== null) removeTreeSync(sharedInstalledRoot);
 });
 function sharedInstalledPluginFixture(t) {
   if (sharedInstalled === null) {
@@ -767,7 +768,7 @@ describe("runtime cache and host launch contract", () => {
         `desk_status.factory under Copilot's launch: ${JSON.stringify(status.factory ?? status)}`,
       );
     } finally {
-      rmSync(installRoot, { recursive: true, force: true });
+      removeTreeSync(installRoot);
     }
   });
 });

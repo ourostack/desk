@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { mkdtempSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 
@@ -14,6 +14,7 @@ import {
   importRuntimeServer,
   inspectRuntimeDependencyPack,
 } from "../../../../../plugins/desk/mcp/src/runtime/bootstrap.js"
+import { removeTreeSync } from "../_remove_tree.js"
 
 function makeRoot(prefix) {
   return mkdtempSync(path.join(tmpdir(), prefix))
@@ -110,7 +111,7 @@ test("startup assembles inspected runtime status and falls back to diagnostics w
     assert.equal(noInspector.snapshot.diagnostic.reason, "runtime_restore_failed")
     assert.equal(noInspector.snapshot.diagnostic.restore_error, "not an Error")
   } finally {
-    rmSync(root, { recursive: true, force: true })
+    removeTreeSync(root)
   }
 })
 
@@ -356,6 +357,6 @@ test("startup handles unavailable runtime through diagnostics and guarded compat
       assert.deepEqual(selectionFailure.runtime.paths_checked, ["/pack"])
     }
   } finally {
-    rmSync(root, { recursive: true, force: true })
+    removeTreeSync(root)
   }
 })

@@ -1,11 +1,11 @@
 // Shared hygiene for tests that leave git or node children running under a temporary fixture.
 // A test that deletes its fixture while a child still has it as its working directory (or is blocked reading a FIFO inside it) leaves that child behind for good: nothing will ever wake it. These helpers find such children by working directory, kill them, and wait for them to exit, so a fixture folder is only removed once nothing is running in it.
 import { execFileSync, spawn } from "node:child_process"
-import { closeSync, constants, mkdirSync, mkdtempSync, openSync, readdirSync, readlinkSync, realpathSync, rmSync, writeFileSync } from "node:fs"
+import { closeSync, constants, mkdirSync, mkdtempSync, openSync, readdirSync, readlinkSync, realpathSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 import { killAndWait } from "./_kill_and_wait.js"
-import { removeTree } from "./_remove_tree.js"
+import { removeTree, removeTreeSync } from "./_remove_tree.js"
 
 const inside = (root, dir) => dir === root || dir.startsWith(root + path.sep)
 
@@ -72,7 +72,7 @@ export function removeFixtureAfter(t, root) {
       // Windows refuses to remove a folder that a process still has as its working folder or open, even once every file in it is gone: the runner's scanner and a Git child that has not yet released a repository do this. Remove what can be removed one entry at a time; a fixture that is left holding only empty folders (or is gone) is cleaned up for every purpose it has, and only a leftover file is a failure.
       let left
       try { left = readdirSync(root) } catch (listError) { if (listError.code === "ENOENT") return; throw error }
-      for (const name of left) { try { rmSync(path.join(root, name), { recursive: true, force: true }) } catch { /* judged below */ } }
+      for (const name of left) { try { removeTreeSync(path.join(root, name)) } catch { /* judged below */ } }
       let remaining
       try { remaining = readdirSync(root, { recursive: true, withFileTypes: true }) } catch (listError) { if (listError.code === "ENOENT") return; throw error }
       const files = remaining.filter((entry) => !entry.isDirectory()).map((entry) => path.join(entry.parentPath ?? entry.path, entry.name))

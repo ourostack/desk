@@ -4,7 +4,7 @@
 
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { mkdtempSync, promises as fs, rmSync } from "node:fs"
+import { mkdtempSync, promises as fs } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 import { osEnv } from "../_os_env.js"
@@ -13,6 +13,7 @@ import { claimNext, openImprovement, readCards, updateCard, cardKey, SOURCES, LO
 import { FRICTION_CLASSES } from "../../../../../plugins/desk/mcp/src/factory/kaizen-file.js"
 import { readStatus } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 import { frictionClassOf, runMirrorStep } from "../../../../../plugins/desk/mcp/src/factory/mirror-step.js"
+import { removeTreeSync } from "../_remove_tree.js"
 
 const NOW = new Date("2026-10-05T12:00:00Z")
 const JOB = "0123456789abcdef0123456789abcdef"
@@ -29,7 +30,7 @@ async function scratch(run) {
   try {
     return await run({ env, deskRoot, personPrefix: "" })
   } finally {
-    rmSync(base, { recursive: true, force: true })
+    removeTreeSync(base)
   }
 }
 

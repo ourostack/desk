@@ -17,6 +17,7 @@ import {
   pluginUpdateFinding,
   pluginUpdateLine,
 } from "../../../../../plugins/desk/mcp/src/runtime/plugin-update.js"
+import { removeTree } from "../_remove_tree.js"
 
 const SHA = "a".repeat(40)
 
@@ -154,7 +155,7 @@ test("it says nothing outside an Agency session folder, without an engine, or wh
   assert.equal(find(a, { env: {} }), null, "no engine to pick cache entries by")
   const unreadable = { get DESK_PLUGIN_ROOT() { throw new Error("env") } }
   assert.equal(find(a, { env: unreadable }), null, "a failing read is no finding")
-  await fs.rm(a.cache, { recursive: true })
+  await removeTree(a.cache)
   assert.equal(find(a), null)
 })
 
@@ -179,7 +180,7 @@ test("a manifest that is missing, unreadable, nameless or without a semver versi
   plugin(path.join(root, "nameless"), 7, "1.0.0")
   plugin(path.join(root, "loose"), "loose", "banana")
   assert.deepEqual(loadedPlugins(a.session).map((p) => p.name), ["cit"])
-  await fs.rm(path.join(a.cache, "entries", "e1"), { recursive: true })
+  await removeTree(path.join(a.cache, "entries", "e1"))
   assert.deepEqual([...newestFetched(a.cache, "copilot")], [["cit", "0.1.82"]])
 })
 

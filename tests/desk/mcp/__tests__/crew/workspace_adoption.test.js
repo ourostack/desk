@@ -5,7 +5,7 @@
 
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
-import { lstatSync, mkdirSync, mkdtempSync, promises as fs, rmSync, symlinkSync, writeFileSync } from "node:fs"
+import { lstatSync, mkdirSync, mkdtempSync, promises as fs, symlinkSync, writeFileSync } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 import { spawnSync } from "node:child_process"
@@ -13,6 +13,7 @@ import { pathToFileURL } from "node:url"
 import { bareGit, fakeGh, git, noWait, onMain, pushFromElsewhere, secondClone, startedTeamRepo, teamRepo } from "./_fixtures.js"
 import { joinWorkspace } from "../../../../../plugins/desk/mcp/src/crew/workspace.js"
 import { readCrewRoster } from "../../../../../plugins/desk/mcp/src/desk/crew-roster.js"
+import { removeTree, removeTreeSync } from "../_remove_tree.js"
 
 const NOW = () => 1767225600000
 const ME = "newbie_example"
@@ -83,7 +84,7 @@ const NO_SYMLINKS = (() => {
     run(["clone", "-q", "-c", "core.symlinks=true", origin, path.join(dir, "clone")])
     return lstatSync(path.join(dir, "clone", "link")).isSymbolicLink() ? false : "Git checks committed links out as plain files here even with core.symlinks=true"
   } finally {
-    rmSync(dir, { recursive: true, force: true })
+    removeTreeSync(dir)
   }
 })()
 const linkTest = { skip: NO_SYMLINKS }
@@ -290,7 +291,7 @@ test("collisions with template paths and ignored files are refused", async () =>
   assert.match((await joinWorkspace(join(dir, { adoptExisting: git(dir.clone, ["rev-parse", "HEAD"]) }))).message, /desks\/newbie\/AGENTS\.md collides with a template file/u)
 
   const desks = await startWorkspaceFixture()
-  await fs.rm(path.join(desks.clone, "desks", "newbie"), { recursive: true, force: true })
+  await removeTree(path.join(desks.clone, "desks", "newbie"))
   teammateSync(desks, (dir2) => writeIn(dir2, `${DESK}/AGENTS.md`, "x"))
   git(desks.clone, ["pull", "-q", "--ff-only", desks.bare, "main"])
   const ignored = path.join(desks.clone, ".git", "info", "exclude")

@@ -6,7 +6,7 @@
 
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { mkdtempSync, promises as fs, readFileSync, rmSync } from "node:fs"
+import { mkdtempSync, promises as fs, readFileSync } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
@@ -16,6 +16,7 @@ import { runEvaluatorStep } from "../../../../../plugins/desk/mcp/src/factory/ev
 import { listStatusAside, statusResetDay } from "../../../../../plugins/desk/mcp/src/factory/loop-worker-state.js"
 import { factoryStateRoot, readStatus, requestEvaluation, setConsent, updateStatus, writeLocalFacts } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 import { indexJob } from "./_index_helper.js"
+import { removeTreeSync } from "../_remove_tree.js"
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const LOCAL = JSON.parse(readFileSync(path.join(here, "fixtures", "local-golden.json"), "utf8"))
@@ -30,7 +31,7 @@ async function scratch(run) {
   try {
     return await run(env, base)
   } finally {
-    rmSync(base, { recursive: true, force: true })
+    removeTreeSync(base)
   }
 }
 

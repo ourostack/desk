@@ -4,18 +4,19 @@ import "../_isolated_env.mjs"
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import { spawn, spawnSync } from "node:child_process"
-import { chmodSync, cpSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
+import { chmodSync, cpSync, mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 
 import { bootFixtureEnv } from "../_boot_fixture.js"
+import { removeTreeSync } from "../_remove_tree.js"
 
 const plugin = fileURLToPath(new URL("../../../../../plugins/desk/", import.meta.url)).replace(/[\\/]$/u, "")
 const hook = path.join(plugin, "hooks", "claude-session-start.cjs")
 const foundationPath = path.join(plugin, "skills", "using-desk", "SKILL.md")
 const ROOT = realpathSync(mkdtempSync(path.join(tmpdir(), "claude-start-")))
-test.after(() => rmSync(ROOT, { recursive: true, force: true }))
+test.after(() => removeTreeSync(ROOT))
 
 const fixture = path.join(ROOT, "boot-fixture.cjs")
 writeFileSync(fixture, 'module.exports = { checks: [], startFactory: async () => true, migrationLine: async () => "" };\n')

@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url"
 import Database from "better-sqlite3"
 import { mkTempRoot } from "../_temp_roots.js"
 import { retentionOptions, runRetention, runSessionRetentionCli } from "../../../../../plugins/desk/mcp/src/runtime/session-retention.js"
+import { removeTree } from "../_remove_tree.js"
 
 const SCRIPT = fileURLToPath(new URL("../../../../../plugins/desk/mcp/scripts/session-retention.js", import.meta.url))
 const DAY = 86_400_000
@@ -451,7 +452,7 @@ test("deletion is paced, rate-limited and survives read-only folders, other volu
   let readings = 0
   let loads = 0
   const code = (c) => Object.assign(new Error(c), { code: c })
-  const real = (p) => fs.rm(p, { recursive: true, force: true })
+  const real = (p) => removeTree(p)
   const deps = {
     // The clock and the free-space readings move unevenly, so the rate limit sees both a full minute and a too-fast one.
     now: () => (clock += ++ticks % 3 ? 20_000 : 100_000),
@@ -557,7 +558,7 @@ test("the CLI parses flags, prints a summary or JSON, and reports failures", asy
     diskUsage: async () => null,
     rm: async (p) => {
       if (p.endsWith("clip.mp4")) throw Object.assign(new Error("EIO: busy disk"), { code: "EIO" })
-      return fs.rm(p, { recursive: true, force: true })
+      return removeTree(p)
     },
   })
   assert.equal(failing.code, 0)

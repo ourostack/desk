@@ -2,10 +2,11 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { spawnSync } from "node:child_process"
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs"
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
+import { removeTreeSync } from "../_remove_tree.js"
 
 const runner = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "..", "..", ".github", "scripts", "run-suite-files.mjs")
 
@@ -26,7 +27,7 @@ function run(files, extra = []) {
     const result = spawnSync(process.execPath, [runner, "--shard", "1/1", "--out", out, "--tests-root", tests, ...extra], { encoding: "utf8", timeout: 120000, env })
     return { status: result.status, results: JSON.parse(readFileSync(out, "utf8")).results, summary: readFileSync(path.join(dir, "results-summary.md"), "utf8") }
   } finally {
-    rmSync(dir, { recursive: true, force: true })
+    removeTreeSync(dir)
   }
 }
 
@@ -68,7 +69,7 @@ function verdictOf(shards, expected, suite = ["a.test.js", "b.test.js"], extra =
     const result = spawnSync(process.execPath, [verdictScript, results, String(expected), tests, ...extra], { encoding: "utf8" })
     return { status: result.status, out: result.stdout }
   } finally {
-    rmSync(dir, { recursive: true, force: true })
+    removeTreeSync(dir)
   }
 }
 

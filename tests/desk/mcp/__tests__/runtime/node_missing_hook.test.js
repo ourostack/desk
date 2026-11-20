@@ -4,13 +4,14 @@ import "../_isolated_env.mjs"
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import { spawnSync } from "node:child_process"
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs"
 import { createRequire } from "node:module"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 
 import { resolveBash } from "../../../../../plugins/desk/mcp/src/util/bash.js"
+import { removeTreeSync } from "../_remove_tree.js"
 
 const require = createRequire(import.meta.url)
 const plugin = fileURLToPath(new URL("../../../../../plugins/desk/", import.meta.url)).replace(/[\\/]$/u, "")
@@ -18,7 +19,7 @@ const { nodeRequiredLine } = require(path.join(plugin, "hooks", "lib", "node-req
 const readJson = (...parts) => JSON.parse(readFileSync(path.join(plugin, ...parts), "utf8"))
 const WINDOWS = process.platform === "win32"
 const ROOT = realpathSync(mkdtempSync(path.join(tmpdir(), "node-missing-")))
-test.after(() => rmSync(ROOT, { recursive: true, force: true }))
+test.after(() => removeTreeSync(ROOT))
 
 const engines = readJson("mcp", "package.json").engines.node
 const floor = /^>=(\d+(?:\.\d+)?)\.0$/u.exec(engines)[1]

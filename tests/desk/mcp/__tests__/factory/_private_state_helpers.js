@@ -14,6 +14,7 @@ import * as path from "node:path"
 import { execFileSync } from "node:child_process"
 
 import { assertWindowsAclAvailable } from "../../../../../plugins/desk/mcp/src/factory/windows-acl.js"
+import { removeTree } from "../_remove_tree.js"
 
 export async function mkFeedbackFixture() {
   const base = await fs.mkdtemp(path.join(os.tmpdir(), "desk-feedback-"))
@@ -65,7 +66,7 @@ export function useHome(home) {
 }
 
 export async function cleanup(base) {
-  await fs.rm(base, { recursive: true, force: true })
+  await removeTree(base)
 }
 
 /**

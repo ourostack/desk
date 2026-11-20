@@ -2,8 +2,9 @@ import { test, beforeEach, afterEach } from "node:test"
 import { strict as assert } from "node:assert"
 import * as path from "node:path"
 import { tmpdir } from "node:os"
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, symlinkSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, symlinkSync } from "node:fs"
 import { resolveWriteTarget } from "../../../../../plugins/desk/mcp/src/util/paths.js"
+import { removeTreeSync } from "../_remove_tree.js"
 
 let fixtureRoot
 let deskRoot
@@ -12,7 +13,7 @@ beforeEach(() => {
   deskRoot = path.join(fixtureRoot, "desk")
   mkdirSync(deskRoot)
 })
-afterEach(() => rmSync(fixtureRoot, { recursive: true, force: true }))
+afterEach(() => removeTreeSync(fixtureRoot))
 
 const target = (overrides = {}) => ({
   deskRoot,

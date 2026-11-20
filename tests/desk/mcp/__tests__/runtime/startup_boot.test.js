@@ -26,13 +26,14 @@ import {
 } from "../../../../../plugins/desk/mcp/src/runtime/startup-boot.js"
 import { runBootCli } from "../../../../../plugins/desk/mcp/src/runtime/boot.js"
 import { bootFixtureEnv } from "../_boot_fixture.js"
+import { removeTreeSync } from "../_remove_tree.js"
 
 const plugin = fileURLToPath(new URL("../../../../../plugins/desk/", import.meta.url)).replace(/[\\/]$/u, "")
 const ROOT = mkdtempSync(path.join(tmpdir(), "startup-boot-"))
 // A boot that is still winding down can hold a folder open on Windows; a leftover temp folder is harmless.
 test.after(() => {
   try {
-    rmSync(ROOT, { recursive: true, force: true })
+    removeTreeSync(ROOT)
   } catch {
     // Left for the OS to clear.
   }

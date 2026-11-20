@@ -19,6 +19,7 @@ import {
 } from "../../../../../plugins/desk/mcp/src/desk/card-commit-guard.js"
 import { commitPaths } from "../../../../../plugins/desk/mcp/src/util/git-stage.js"
 import { removeWithRetry } from "../../../../../plugins/desk/mcp/src/util/remove-retry.js"
+import { removeTreeSync } from "../_remove_tree.js"
 
 const CARD = "---\ntitle: x\nstatus: processing\n---\n\nbody\n"
 
@@ -189,13 +190,13 @@ test("a new card, a card under desks/<alias>, and a rename that edits the card a
     writeFileSync(path.join(root, "greenhouse", "new-job", "task.md"), CARD)
     assert.notEqual(commitAll(root).status, 0, "a card born in a hand commit")
     assert.equal(sh(root, ["reset", "-q"]).status, 0)
-    rmSync(path.join(root, "greenhouse", "new-job"), { recursive: true })
+    removeTreeSync(path.join(root, "greenhouse", "new-job"))
 
     mkdirSync(path.join(root, "desks", "ari", "garden", "planting"), { recursive: true })
     writeFileSync(path.join(root, "desks", "ari", "garden", "planting", "task.md"), CARD)
     assert.notEqual(commitAll(root).status, 0, "a card under desks/<alias>")
     assert.equal(sh(root, ["reset", "-q"]).status, 0)
-    rmSync(path.join(root, "desks"), { recursive: true })
+    removeTreeSync(path.join(root, "desks"))
 
     // A pure rename of the card's folder.
     assert.equal(sh(root, ["mv", "greenhouse/watering-api", "greenhouse/watering-api-2"]).status, 0)
@@ -222,7 +223,7 @@ test("deleting a card passes", () => {
   const root = makeDesk()
   try {
     installCardGuard(root)
-    rmSync(path.join(root, "greenhouse", "watering-api"), { recursive: true })
+    removeTreeSync(path.join(root, "greenhouse", "watering-api"))
     assert.equal(commitAll(root).status, 0)
   } finally {
     removeWithRetry(root, { recursive: true, force: true })
@@ -458,7 +459,7 @@ test("uninstallCardGuard removes Desk's hook and puts a chained hook back; absen
     try {
       assert.equal(uninstallCardGuard(plain).state, "absent")
     } finally {
-      rmSync(plain, { recursive: true, force: true })
+      removeTreeSync(plain)
     }
     assert.equal(uninstallCardGuard(root, { spawnGit: () => { throw new Error("boom") } }).state, "failed")
   } finally {
@@ -546,10 +547,10 @@ test("install skips a folder that is not a git repository, or not the top of one
       mkdirSync(path.join(repo, "inner"))
       assert.equal(installCardGuard(path.join(repo, "inner")).state, "skipped")
     } finally {
-      rmSync(repo, { recursive: true, force: true })
+      removeTreeSync(repo)
     }
   } finally {
-    rmSync(plain, { recursive: true, force: true })
+    removeTreeSync(plain)
   }
 })
 

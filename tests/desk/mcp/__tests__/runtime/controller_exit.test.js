@@ -6,6 +6,7 @@ import { rm } from "node:fs/promises"
 import * as os from "node:os"
 import * as path from "node:path"
 import { assertProcessesGone, controllerPids, processAlive, waitForProcessesGone } from "./_controller_exit.js"
+import { removeTree } from "../_remove_tree.js"
 
 const record = (root, name, body) => {
   mkdirSync(path.join(root, name), { recursive: true })
@@ -15,7 +16,7 @@ const record = (root, name, body) => {
 test("controllerPids names only the controller children whose owner record is readable", async (t) => {
   // Not an owned temp root: the teardown waits for every controller PID under an owned root, and these records name made-up PIDs.
   const root = mkdtempSync(path.join(realpathSync(os.tmpdir()), "desk-controller-exit-"))
-  t.after(() => rm(root, { recursive: true, force: true }))
+  t.after(() => removeTree(root))
   record(root, "a", { owner: { kind: "controller_child", pid: 111 } })
   record(root, "b", { owner: { kind: "controller_child", pid: 111 } })
   record(root, "c", { owner: { kind: "mcp_session", pid: 222 } })

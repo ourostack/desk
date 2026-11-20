@@ -11,6 +11,7 @@ import { jobId } from "../../../../../plugins/desk/mcp/src/factory/binding.js"
 import { deliver, formatReturn, sign } from "../../../../../plugins/desk/mcp/src/factory/outcome.js"
 import { deriveCopilotSession } from "../../../../../plugins/desk/mcp/src/factory/derive-copilot.js"
 import { END, ID, SENTINEL, START, STORE, json, scratch, session } from "./_session_helpers.js"
+import { removeTree } from "../_remove_tree.js"
 
 const moduleUrl = new URL("../../../../../plugins/desk/mcp/src/factory/derive-run.js", import.meta.url)
 async function runner() {
@@ -604,7 +605,7 @@ test("a Copilot sibling releases, and a missing desk path compares by resolved s
   const gone = path.join(ctx.base, "gone-desk")
   await fs.mkdir(path.join(gone, "_meta"), { recursive: true })
   const marker = { ...await codexMarker(ctx), desk_root: gone, cwd: gone }
-  await fs.rm(gone, { recursive: true })
+  await removeTree(gone)
   await sibling(ctx, { host: "copilot-cli", desk_root: gone, ended_at: null, updated_at: CODEX_AT })
   assert.equal((await deriveMarker(ctx.env, { ...marker, ended_at: null, updated_at: CODEX_AT }, stub)).reason, undefined)
 }))
@@ -646,7 +647,7 @@ test("quiet wait recreates nothing when the state root is removed while it waits
   await fs.utimes(marker.log_path, new Date(), new Date())
   const waiting = deriveFile(ctx.env, file, { quietMs: 1500, maxWaitMs: 5000 })
   await new Promise((resolve) => setTimeout(resolve, 200))
-  await fs.rm(ctx.base, { recursive: true, force: true })
+  await removeTree(ctx.base)
   assert.equal((await waiting).result, "invalid")
   assert.equal(existsSync(ctx.base), false, "no directory of the removed home may be recreated")
 }))
@@ -704,7 +705,7 @@ syncBuiltinESMExports();
       }
       assert.equal(existsSync(ready), true, `remove the home only after the real deriver enters its quiet wait: ${stderr.slice(0, 2048)}`)
       clearInterval(heartbeat)
-      await fs.rm(ctx.base, { recursive: true, force: true })
+      await removeTree(ctx.base)
       const { code, signal } = await exited
       clearTimeout(timer)
       assert.equal(signal, null, "the worker must exit on its own once its home is gone")
@@ -806,7 +807,7 @@ async function unkeep(ctx, name) {
   const kept = path.join(root, "retracted-copies", "ourostack__factory", name)
   assert.equal(existsSync(kept), true, "the sweep kept the copy that has no route")
   await fs.rename(kept, path.join(root, "outbox", "ourostack__factory", name))
-  await fs.rm(path.join(root, "retracted-copies"), { recursive: true })
+  await removeTree(path.join(root, "retracted-copies"))
 }
 
 const rebuilt = async (ctx) => {
@@ -897,7 +898,7 @@ test("a retracted orphan stays frozen, whether the record is a retracting entry 
   assert.deepEqual(await rebuilt(ctx), [0, 1])
   assert.deepEqual(await reasons(ctx), { retracted: 1 })
   const root = await factoryStateRoot(ctx.env)
-  await fs.rm(path.join(root, "retracting"), { recursive: true })
+  await removeTree(path.join(root, "retracting"))
   await fs.mkdir(path.join(root, "retracted-copies", "ourostack__factory"), { recursive: true })
   await fs.writeFile(path.join(root, "retracted-copies", "ourostack__factory", name), "{}")
   assert.deepEqual(await rebuilt(ctx), [0, 1])
@@ -925,10 +926,10 @@ test("an orphan in a crew desk stays frozen as crew_desk, told by its roster, it
   await fs.rm(path.join(ctx.desk, "_meta/desks.md"))
   await fs.mkdir(path.join(ctx.desk, "_meta/desks.md"))
   assert.deepEqual(await rebuilt(ctx), [0, 1], "a roster that cannot be read is a crew desk")
-  await fs.rm(path.join(ctx.desk, "_meta/desks.md"), { recursive: true })
+  await removeTree(path.join(ctx.desk, "_meta/desks.md"))
   await fs.mkdir(path.join(ctx.desk, "desks"))
   assert.deepEqual(await rebuilt(ctx), [0, 1])
-  await fs.rm(path.join(ctx.desk, "desks"), { recursive: true })
+  await removeTree(path.join(ctx.desk, "desks"))
   await fs.symlink("desks", path.join(ctx.desk, "desks"))
   assert.deepEqual(await rebuilt(ctx), [0, 1], "a desks entry that cannot be checked at all fails closed")
 }))
@@ -945,7 +946,7 @@ test("an orphan with no transcript stays frozen as no_transcript, with or withou
   await orphan(ctx, { transcript: false })
   assert.deepEqual(await rebuilt(ctx), [0, 1])
   assert.deepEqual(await reasons(ctx), { no_transcript: 1 })
-  await fs.rm(path.join(ctx.base, ".claude"), { recursive: true })
+  await removeTree(path.join(ctx.base, ".claude"))
   assert.deepEqual(await rebuilt(ctx), [0, 1])
 }))
 
@@ -993,7 +994,7 @@ test("the sweep prunes tombstones past their window and reports how many, or a f
   assert.match(retention.ran_at, /^\d{4}-/u)
   assert.deepEqual(Object.keys(JSON.parse(await fs.readFile(file, "utf8"))), [`claude-code-${ID.slice(0, -1)}1.json`])
   // The retracting folder is not a folder: the pruning fails, the sweep goes on and says so.
-  await fs.rm(path.dirname(file), { recursive: true })
+  await removeTree(path.dirname(file))
   await fs.writeFile(path.dirname(file), "not a folder")
   await sweep(ctx.env)
   assert.equal((await readStatus(ctx.env)).retention.failed, "prune_failed")
@@ -1061,7 +1062,7 @@ test("an orphan pass that throws records a fixed failure class and reads as fail
   assert.deepEqual(Object.keys(summary.orphans).sort(), ["cursor", "failed", "last_wrap_at", "ran_at", "started_at", "sweeps_in_walk"])
   assert.equal(JSON.stringify(failed).includes(root), false, "no message text or path")
   await fs.rm(path.join(root, "retracting"))
-  await fs.rm(path.join(root, "outbox"), { recursive: true })
+  await removeTree(path.join(root, "outbox"))
   await fs.writeFile(path.join(root, "outbox"), "not a folder")
   assert.equal((await sweep(ctx.env)).orphans.failed, ORPHAN_PASS_FAILED)
 }))
@@ -1820,7 +1821,7 @@ test("a sweep whose capture coverage fails still derives and reports coverage fa
   await setConsent(ctx.env, { store: STORE, contribute: true })
   await writeMarker(ctx.env, { ...await session(ctx), end_reason: "complete", ended_at: END })
   const root = await factoryStateRoot(ctx.env)
-  await fs.rm(path.join(root, "quarantine"), { recursive: true, force: true })
+  await removeTree(path.join(root, "quarantine"))
   await fs.writeFile(path.join(root, "quarantine"), "not a folder")
   const summary = await sweep(ctx.env, { quietMs: 0 })
   assert.deepEqual([summary.written, summary.coverage], [1, "failed"])
@@ -1876,7 +1877,7 @@ test("a write that fails is recorded with its step and code only, still retries,
   assert.equal(record.step, "write_facts")
   assert.match(record.code, /^[A-Za-z0-9_]+$/u)
   assert.equal(Number.isNaN(Date.parse(record.at)), false)
-  await fs.rm(blocker, { recursive: true })
+  await removeTree(blocker)
   assert.deepEqual(await deriveMarker(ctx.env, marker), { result: "written", store: STORE }, "the marker is kept, so the next derive retries")
   assert.equal(await failuresOf(ctx.env), undefined)
 }))

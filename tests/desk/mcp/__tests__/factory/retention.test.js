@@ -22,6 +22,7 @@ import {
   writeLocalFacts,
 } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 import { STORE, scratch } from "./_session_helpers.js"
+import { removeTree } from "../_remove_tree.js"
 
 const SHA = "a".repeat(40)
 const NOW = "2026-10-06T00:00:00.000Z"
@@ -138,7 +139,7 @@ test("a delivered copy is pruned only when its delivery is trusted and it is the
   // Quarantined: the store refused it, so the copy is evidence.
   await quarantine(ctx.env, STORE, name, "unknown_key")
   assert.equal(await pruneDeliveredCopy(ctx.env, STORE, name), false)
-  await fs.rm(path.join(root, "quarantine"), { recursive: true })
+  await removeTree(path.join(root, "quarantine"))
   // Names that are not a facts copy, and a copy that is not there.
   assert.equal(await pruneDeliveredCopy(ctx.env, STORE, "labels/job/x.json"), false)
   assert.equal(await pruneDeliveredCopy(ctx.env, STORE, "nonsense"), false)

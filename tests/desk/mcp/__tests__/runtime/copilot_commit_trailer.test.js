@@ -2,14 +2,15 @@
 // Copilot settings. Desk forbids AI attribution, so its Copilot session start turns the setting off once, only when it is unset.
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
-import { chmodSync, statSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
+import { chmodSync, statSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, symlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 import { disableCoAuthorTrailer } from "../../../../../plugins/desk/mcp/src/runtime/copilot-commit-trailer.js"
 import * as hostSettings from "../../../../../plugins/desk/mcp/src/runtime/copilot-commit-trailer.js"
+import { removeTreeSync } from "../_remove_tree.js"
 
 const ROOT = mkdtempSync(path.join(tmpdir(), "copilot-trailer-"))
-test.after(() => rmSync(ROOT, { recursive: true, force: true }))
+test.after(() => removeTreeSync(ROOT))
 let counter = 0
 function home({ settings, copilot = true } = {}) {
   const dir = path.join(ROOT, `home-${(counter += 1)}`)

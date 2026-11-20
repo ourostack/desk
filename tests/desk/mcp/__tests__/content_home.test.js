@@ -8,6 +8,7 @@ import { createHash } from "node:crypto"
 import { task_update } from "../../../../plugins/desk/mcp/src/tools/task.js"
 import { desk_save } from "../../../../plugins/desk/mcp/src/tools/desk-save.js"
 import { admitContent, assertCleanContentTarget, assertPublishedContentBase } from "../../../../plugins/desk/mcp/src/desk/content-home.js"
+import { removeTree } from "./_remove_tree.js"
 
 const POLICY = {
   schema_version: 1,
@@ -26,7 +27,7 @@ const git = (root, args) => {
 }
 async function fixture(t, policy = POLICY) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "desk-content-home-"))
-  t.after(() => fs.rm(root, { recursive: true, force: true }))
+  t.after(() => removeTree(root))
   git(root, ["init", "-q", "-b", "main"])
   git(root, ["config", "user.name", "Test"])
   git(root, ["config", "user.email", "test@example.com"])
@@ -345,7 +346,7 @@ test("opted-in tidy preserves frozen card bytes and unrelated staged source", as
 
 test("policy discovery preserves legacy non-Git desks but refuses an unpublished local policy", async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "desk-content-home-unpublished-"))
-  t.after(() => fs.rm(root, { recursive: true, force: true }))
+  t.after(() => removeTree(root))
   const request = { deskRoot: root, tool: "desk_save", subjects: [] }
   assert.equal(admitContent(request), null)
   assertPublishedContentBase(root, null, "desk_save")
@@ -494,7 +495,7 @@ test("desk_save classifies a supplied file once when it is also named in paths",
 test("desk_save refuses directories and paths through outside junctions before staging", async (t) => {
   const root = await fixture(t)
   const outside = await fs.mkdtemp(path.join(os.tmpdir(), "desk-content-home-outside-"))
-  t.after(() => fs.rm(outside, { recursive: true, force: true }))
+  t.after(() => removeTree(outside))
   await fs.writeFile(path.join(outside, "original.log"), "Unique external evidence.")
   await fs.mkdir(path.join(root, "directory"))
   await fs.symlink(outside, path.join(root, "escape"), "junction")

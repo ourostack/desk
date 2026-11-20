@@ -4,13 +4,14 @@
 
 import { before, test } from "node:test"
 import { strict as assert } from "node:assert"
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import * as path from "node:path"
 import { TOOL_NAMES } from "../../../../../plugins/desk/mcp/src/tool-names.js"
 import { mkTempRoot } from "../_temp_roots.js"
 import {
   HANDSHAKE_BUDGET_MS, git, lastStartUntil, makeGitDesk, settled, startDesk, writeActivation, writeFile,
 } from "./_admission_fixtures.js"
+import { removeTreeSync } from "../_remove_tree.js"
 
 // The cases below test admission conditions, not unpacking Desk's runtime, so they share one runtime cache that is built once
 // before them, the way a person's sessions share ~/.cache. With a new cache per case, every case first unpacked the runtime pack
@@ -332,12 +333,12 @@ test("a runtime publication lock held by another process never delays tools/list
   const lockDir = `${fixture.runtimeCache}.publish-lock`
   mkdirSync(lockDir, { recursive: true })
   writeFileSync(path.join(lockDir, "owner.json"), JSON.stringify({ schema_version: 1, pid: process.pid, token: "held-by-test" }))
-  t.after(() => rmSync(lockDir, { recursive: true, force: true }))
+  t.after(() => removeTreeSync(lockDir))
   const session = await startDesk(fixture, { args: ["--activation-config", configPath] })
   t.after(() => session.close())
   const { timings } = await assertAnswersFast(session, t)
   t.diagnostic(`slowest answer while the lock was held: ${Math.max(...timings.map(([, ms]) => ms))} ms over ${timings.length} requests`)
   assert.equal((await session.call("desk_status", { detail: true })).payload.state, "admitting")
-  rmSync(lockDir, { recursive: true, force: true })
+  removeTreeSync(lockDir)
   assert.equal((await session.statusUntil((payload) => payload.state === "ready", { deadlineMs: 40000 })).state, "ready")
 })

@@ -2,7 +2,7 @@
 
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { existsSync, mkdirSync, promises as fsPromises, readdirSync, rmSync, writeFile, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, promises as fsPromises, readdirSync, writeFile, writeFileSync } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
@@ -10,6 +10,7 @@ import { REAL_HOME_WRITE, isRealHomeWrite, testRun } from "./_isolated_env.mjs"
 import { mkTempRoot } from "./_temp_roots.js"
 import { mkFakeRealRoot } from "./_fake_real_root.js"
 import { resolveDeskStateDir, resolveReadinessStateHome } from "../../../../plugins/desk/mcp/src/runtime/last-start.js"
+import { removeTreeSync } from "./_remove_tree.js"
 
 // A nested `node --test` of a factory or tools file writes private stores, and every protected write starts Windows PowerShell; boot_check.test.js alone ran 100 to 180 s on a CI runner, past the 120 s that macOS and Linux need.
 const NESTED_RUN_MS = process.platform === "win32" ? 360000 : 120000
@@ -102,7 +103,7 @@ test("a factory test file with no isolation import at all is still refused from 
     assert.equal(run.status, 0, `${run.stdout}\n${run.stderr}`.split("\n").filter((line) => /^not ok|expected|actual|Error/u.test(line)).join("\n"))
     assert.equal(existsSync(path.join(fakeReal, ".local")), false, "the guard must refuse before creating anything under the fake real home")
   } finally {
-    rmSync(fakeReal, { recursive: true, force: true })
+    removeTreeSync(fakeReal)
   }
 })
 
@@ -157,7 +158,7 @@ test("sync-push.js, run directly with an inherited NODE_TEST_CONTEXT and a real 
     assert.match(run.stderr, /test_isolation_refused|DESK_TEST_REAL_STATE/u, "the refusal must be visible, not silent")
     assert.equal(existsSync(path.join(fakeReal, ".local")), false, "the guard must refuse before creating anything under the fake real home")
   } finally {
-    rmSync(fakeReal, { recursive: true, force: true })
+    removeTreeSync(fakeReal)
   }
 })
 

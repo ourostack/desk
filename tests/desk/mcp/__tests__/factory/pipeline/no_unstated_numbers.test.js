@@ -8,7 +8,7 @@
 import "../../_isolated_env.mjs"
 import { after, test } from "node:test"
 import assert from "node:assert/strict"
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs"
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
@@ -28,6 +28,7 @@ import { validateLocalFacts } from "../../../../../../plugins/desk/mcp/src/facto
 import { SESSION_IDS, SENTINEL as CLAUDE_SENTINEL } from "../fixtures/claude/make.js"
 import { STARTS, THREAD_IDS, rolloutRelPath, SENTINEL as CODEX_SENTINEL } from "../fixtures/codex/make.js"
 import { SESSIONS, SENTINEL as COPILOT_SENTINEL, buildSessionStore, defaultStoreRows, fakeCommitResolver } from "../fixtures/copilot/make.js"
+import { removeTreeSync } from "../../_remove_tree.js"
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const FIXTURES = path.join(here, "..", "fixtures")
@@ -39,7 +40,7 @@ const SECRET = Buffer.alloc(32, 9)
 
 const roots = []
 after(() => {
-  for (const root of roots) rmSync(root, { recursive: true, force: true })
+  for (const root of roots) removeTreeSync(root)
 })
 const tempRoot = (label) => {
   const root = mkdtempSync(path.join(os.tmpdir(), `desk-factory-${label}-`))

@@ -3,7 +3,7 @@
 // (ourostack/factory `.github/scripts/__tests__/fixtures/v12-clocks.json`), whose readers check the same envelopes.
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
@@ -17,6 +17,7 @@ import { timelineAdditions } from "../../../../../../plugins/desk/mcp/src/factor
 import { buildTimelines } from "../../../../../../plugins/desk/mcp/src/factory/pipeline/timeline.js"
 import { jobWalk } from "../../../../../../plugins/desk/mcp/src/factory/pipeline/walk.js"
 import { validatePublished } from "../../../../../../plugins/desk/mcp/src/factory/published-schema.js"
+import { removeTreeSync } from "../../_remove_tree.js"
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const FIXTURE_PATH = path.join(here, "..", "fixtures", "v12-clocks.json")
@@ -437,7 +438,7 @@ function built(raws, job) {
       stackup: read("rollups/stackup.json").jobs.find((row) => row.job === job),
     }
   } finally {
-    rmSync(root, { recursive: true, force: true })
+    removeTreeSync(root)
   }
 }
 

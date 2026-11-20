@@ -3,10 +3,11 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { spawnSync } from "node:child_process"
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { mkdtempSync, writeFileSync } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
+import { removeTreeSync } from "../_remove_tree.js"
 
 const scripts = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "..", "..", ".github", "scripts")
 const { plan, changedFiles, parseErrors, BUDGET_SECONDS, PER_FILE_SECONDS } = await import(pathToFileURL(path.join(scripts, "quick-checks.mjs")).href)
@@ -61,7 +62,7 @@ test("a file that does not parse is named, and files that parse are not", () => 
     const errors = parseErrors({ js: ["good.mjs", "bad.mjs"], json: ["good.json", "bad.json"], yaml: ["good.yml", "bad.yml"] }, dir)
     assert.deepEqual(errors.map((error) => error.split(":")[0]), ["bad.mjs", "bad.json", "bad.yml"])
   } finally {
-    rmSync(dir, { recursive: true, force: true })
+    removeTreeSync(dir)
   }
 })
 

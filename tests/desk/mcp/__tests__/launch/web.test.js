@@ -16,6 +16,7 @@ import { mkTempRoot } from "../_temp_roots.js"
 import { different } from "../_file_identity.js"
 import { NO_POSIX_MODES, isWindows } from "../_platform.js"
 import { fakeDriver, PASSWORD } from "./_auth_fixtures.js"
+import { removeTreeSync } from "../_remove_tree.js"
 
 const require = createRequire(import.meta.url)
 const repoRoot = path.resolve(fileURLToPath(new URL("../../../../..", import.meta.url)))
@@ -1162,7 +1163,7 @@ test("mine refuses unreadable essential cookies and may omit a nonessential lock
   } finally {
     fs.openSync = original
   }
-  for (const name of fs.readdirSync(tmp)) fs.rmSync(path.join(tmp, name), { recursive: true, force: true })
+  for (const name of fs.readdirSync(tmp)) removeTreeSync(path.join(tmp, name))
 })
 
 test("mine passes an operating-system read block through as COPY_SOURCE_PERMISSION", async () => {
@@ -1802,7 +1803,7 @@ test("a failure while closing still lets the server finish and exit", async () =
     fs.rmSync = original
   }
   assert.equal(s.exitCode(), 0)
-  fs.rmSync(path.join(tmp, `desk-browser-${contextId}`), { recursive: true, force: true })
+  removeTreeSync(path.join(tmp, `desk-browser-${contextId}`))
 })
 
 // ---- real browsers ----

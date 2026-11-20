@@ -29,6 +29,7 @@ import {
 } from "../../../../../plugins/desk/mcp/src/factory/windows-acl.js"
 import * as windowsAcl from "../../../../../plugins/desk/mcp/src/factory/windows-acl.js"
 import { nativeProbe, writePosixNodeProvider } from "./_private_state_helpers.js"
+import { removeTree } from "../_remove_tree.js"
 
 const PROVIDER_SEGMENTS = ["System32", "WindowsPowerShell", "v1.0", "powershell.exe"]
 const isWindows = process.platform === "win32"
@@ -371,7 +372,7 @@ test("readonly verifier runs the fixed unchanged policy on every request without
     await reader.close()
     await assert.rejects(reader.verify(PRIVATE_ENTRIES), /NATIVE_PRIVATE_PATH_INVALID/)
     assert.equal(calls.length, 2)
-  } finally { await fs.rm(base, { recursive: true, force: true }) }
+  } finally { await removeTree(base) }
 })
 
 test("readonly verifier validates typed bounded batches and deadlines before asking any provider", async () => {
@@ -397,7 +398,7 @@ test("readonly verifier validates typed bounded batches and deadlines before ask
     for (const env of [{}, { SystemRoot: "relative" }, { SystemRoot: path.join(base, "missing") }])
       assert.throws(() => windowsAcl.createWindowsPrivatePathVerifier({ env }), error =>
         error.message === "NATIVE_PRIVATE_PATH_INVALID")
-  } finally { await fs.rm(base, { recursive: true, force: true }) }
+  } finally { await removeTree(base) }
 })
 
 test("readonly verifier accepts only its exact bounded response and never includes provider diagnostics", async () => {
@@ -417,7 +418,7 @@ test("readonly verifier accepts only its exact bounded response and never includ
       runner: async () => { throw Error("a private path or SID") } })
     await assert.rejects(reader.verify(PRIVATE_ENTRIES), error => error.message === "NATIVE_PRIVATE_PATH_INVALID")
     await reader.close()
-  } finally { await fs.rm(base, { recursive: true, force: true }) }
+  } finally { await removeTree(base) }
 })
 
 test("readonly close waits for real stdin EOF and clean close without touching the writer session", posixProvider, async () => {
@@ -460,7 +461,7 @@ lines.on("close", () => { if (readonly) setTimeout(() => fs.appendFileSync(${JSO
     assert.equal(pidOf(stillServing[0]), writerPid)
     process.kill(writerPid, "SIGTERM")
     assert.ok(await untilDead(writerPid), "exact owned stand-in writer cleaned up")
-  } finally { await fs.rm(base, { recursive: true, force: true }) }
+  } finally { await removeTree(base) }
 })
 
 test("readonly close cancels pending and queued reads without a late authorization or queued restart", posixProvider, async () => {
@@ -488,7 +489,7 @@ lines.on("line", () => {
       assert.equal(outcome.reason.message, "NATIVE_PRIVATE_PATH_INVALID")
     }
     assert.equal((await fs.readFile(log, "utf8")).trim().split("\n").length, 1)
-  } finally { await fs.rm(base, { recursive: true, force: true }) }
+  } finally { await removeTree(base) }
 })
 
 test("readonly close refuses an unclean or stalled helper close rather than claiming absence", posixProvider, async () => {
@@ -507,7 +508,7 @@ lines.on("close", () => { ${ending} })
       await assert.rejects(reader.close(), error => error.message === "NATIVE_PRIVATE_PATH_CLOSE_UNKNOWN")
       await assert.rejects(reader.close(), /NATIVE_PRIVATE_PATH_CLOSE_UNKNOWN/)
       assert.ok(await untilDead(Number(await fs.readFile(pidFile, "utf8"))))
-    } finally { await fs.rm(base, { recursive: true, force: true }) }
+    } finally { await removeTree(base) }
   }
 })
 
@@ -536,7 +537,7 @@ lines.on("close", () => { fs.appendFileSync(${JSON.stringify(log)}, "eof:" + pro
     const second = Number(events[2].split(":")[1])
     assert.notEqual(second, first)
     assert.equal(isAlive(second), false)
-  } finally { await fs.rm(base, { recursive: true, force: true }) }
+  } finally { await removeTree(base) }
 })
 
 test("readonly idle close failure blocks subsequent reads and remains an unknown explicit close", posixProvider, async () => {
@@ -554,7 +555,7 @@ lines.on("close", () => { process.exitCode = 3 })
     assert.ok(await untilDead(Number(await fs.readFile(log, "utf8"))))
     await assert.rejects(reader.verify(PRIVATE_ENTRIES), /NATIVE_PRIVATE_PATH_INVALID/)
     await assert.rejects(reader.close(), /NATIVE_PRIVATE_PATH_CLOSE_UNKNOWN/)
-  } finally { await fs.rm(base, { recursive: true, force: true }) }
+  } finally { await removeTree(base) }
 })
 
 test("readonly verifier's default provider environment is still resolved rather than fabricated", async () => {
@@ -574,7 +575,7 @@ process.stdin.once("data", () => { process.stderr.write("private diagnostic"); p
     await assert.rejects(reader.verify(PRIVATE_ENTRIES), error => error.message === "NATIVE_PRIVATE_PATH_INVALID")
     await assert.rejects(reader.close(), error => error.message === "NATIVE_PRIVATE_PATH_CLOSE_UNKNOWN")
     assert.ok(await untilDead(Number(await fs.readFile(pidFile, "utf8"))))
-  } finally { await fs.rm(base, { recursive: true, force: true }) }
+  } finally { await removeTree(base) }
 })
 
 function runnerReturning(response, { code = 0, stderr = "" } = {}) {
@@ -605,7 +606,7 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
     assert.notEqual(second, first)
     windowsAcl.closeWindowsAclSessions()
     assert.ok(await untilDead(second))
-  } finally { await fs.rm(base, { recursive: true, force: true }) }
+  } finally { await removeTree(base) }
 })
 
 test("assertWindowsAclAvailable resolves the fixed provider under SystemRoot", async () => {
@@ -614,7 +615,7 @@ test("assertWindowsAclAvailable resolves the fixed provider under SystemRoot", a
     const providerPath = await mkProvider(base, ECHO_PROVIDER)
     assert.equal(assertWindowsAclAvailable({ env: { SystemRoot: base } }), providerPath)
   } finally {
-    await fs.rm(base, { recursive: true, force: true })
+    await removeTree(base)
   }
 })
 
@@ -627,7 +628,7 @@ test("assertWindowsAclAvailable finds SystemRoot under any capitalization, as a 
     }
     assert.throws(() => assertWindowsAclAvailable({ env: { SystemRoot: 5, SYSTEMROOT: undefined } }), /%SystemRoot% to locate/u, "a value that is not text is not a SystemRoot")
   } finally {
-    await fs.rm(base, { recursive: true, force: true })
+    await removeTree(base)
   }
 })
 
@@ -646,7 +647,7 @@ test("a verified path is not protected again until its identity or change time m
     assert.equal(runner.calls.length, 1, "the second call is answered from what was verified")
     assert.deepEqual(second, first)
     // A change to the folder moves its change time, so it is protected again.
-    await fs.rm(dir, { recursive: true })
+    await removeTree(dir)
     await fs.mkdir(dir)
     const recreated = runnerReturning(ok([entry]))
     await protectWindowsPaths([entry], { env, runner: recreated, memoize: true })
@@ -661,13 +662,13 @@ test("a verified path is not protected again until its identity or change time m
     const again = runnerReturning(ok([{ path: fresh, kind: "directory" }]))
     await protectWindowsPaths([{ path: fresh, kind: "directory", created: true }], { env, runner: again, memoize: true })
     assert.equal(again.calls.length, 1, "created: true always runs")
-    await fs.rm(fresh, { recursive: true })
-    await fs.rm(dir, { recursive: true })
+    await removeTree(fresh)
+    await removeTree(dir)
     const gone = runnerReturning(ok([entry]))
     await protectWindowsPaths([entry], { env, runner: gone, memoize: true })
     assert.equal(gone.calls.length, 1, "a path that no longer exists is never answered from memory")
   } finally {
-      await fs.rm(base, { recursive: true, force: true })
+      await removeTree(base)
   }
 })
 
@@ -694,7 +695,7 @@ test("a verified file whose change time moved, with the same file id, is protect
     await protectWindowsPaths([entry], { env, runner, memoize: true })
     assert.equal(runner.calls.length, 2, "a moved change time is protected again")
   } finally {
-    await fs.rm(base, { recursive: true, force: true })
+    await removeTree(base)
   }
 })
 
@@ -712,7 +713,7 @@ test("a verified file is remembered like a verified folder", async () => {
     await protectWindowsPaths([entry], { env, runner, memoize: true })
     assert.equal(runner.calls.length, 1)
   } finally {
-      await fs.rm(base, { recursive: true, force: true })
+      await removeTree(base)
   }
 })
 
@@ -744,7 +745,7 @@ test("identical protection requests made at the same time share one run, and a f
     await protectWindowsPaths([otherEntry], { env, runner: after, memoize: true })
     assert.equal(after.calls.length, 1, "a later request runs again after a failed one")
   } finally {
-      await fs.rm(base, { recursive: true, force: true })
+      await removeTree(base)
   }
 })
 
@@ -768,7 +769,7 @@ test("assertWindowsAclAvailable fails when the provider is missing or not a regu
       /not a regular file/u,
     )
   } finally {
-    await fs.rm(base, { recursive: true, force: true })
+    await removeTree(base)
   }
 })
 
@@ -873,7 +874,7 @@ test("protectWindowsPaths invokes one fixed, non-interpolating provider command"
     }
     assert.deepEqual(JSON.parse(call.payload), { paths: [DIR_ENTRY, FILE_ENTRY] })
   } finally {
-    await fs.rm(base, { recursive: true, force: true })
+    await removeTree(base)
   }
 })
 
@@ -911,7 +912,7 @@ test("protectWindowsPaths refuses every result the provider did not actually ver
       `expected refusal for ${JSON.stringify(response)}`,
     )
   }
-  await fs.rm(base, { recursive: true, force: true })
+  await removeTree(base)
 })
 
 test("protectWindowsPaths surfaces a provider failure instead of succeeding quietly", async () => {
@@ -949,7 +950,7 @@ test("protectWindowsPaths surfaces a provider failure instead of succeeding quie
       }),
     /spawn ENOENT/u,
   )
-  await fs.rm(base, { recursive: true, force: true })
+  await removeTree(base)
 })
 
 test("protectWindowsPaths drives a real child process over stdin by default", posixProvider, async () => {
@@ -964,7 +965,7 @@ test("protectWindowsPaths drives a real child process over stdin by default", po
     assert.equal(result[1].kind, "file")
     assert.match(result[0].owner_sid, /^S-1-5-21-/u)
   } finally {
-    await fs.rm(base, { recursive: true, force: true })
+    await removeTree(base)
   }
 })
 
@@ -992,7 +993,7 @@ if (keys.length !== 1 || keys[0] !== "PSModulePath" || process.env.PSModulePath 
       if (previous[index] === undefined) delete process.env[key]
       else process.env[key] = previous[index]
     })
-    await fs.rm(base, { recursive: true, force: true })
+    await removeTree(base)
   }
 })
 
@@ -1005,7 +1006,7 @@ test("the default runner bounds how long it waits and how much it reads", posixP
       /timed out/u,
     )
   } finally {
-    await fs.rm(base, { recursive: true, force: true })
+    await removeTree(base)
   }
 
   const noisy = await mkBase()
@@ -1023,7 +1024,7 @@ test("the default runner bounds how long it waits and how much it reads", posixP
       /too much output/u,
     )
   } finally {
-    await fs.rm(noisy, { recursive: true, force: true })
+    await removeTree(noisy)
   }
 })
 
@@ -1043,7 +1044,7 @@ test("the default runner keeps provider diagnostics and refuses an unrunnable pr
       "stderr must reach the caller so a provider failure is diagnosable",
     )
   } finally {
-    await fs.rm(noisy, { recursive: true, force: true })
+    await removeTree(noisy)
   }
 
   const unrunnable = await mkBase()
@@ -1056,7 +1057,7 @@ test("the default runner keeps provider diagnostics and refuses an unrunnable pr
       "a provider that cannot be executed must fail, not resolve",
     )
   } finally {
-    await fs.rm(unrunnable, { recursive: true, force: true })
+    await removeTree(unrunnable)
   }
 })
 
@@ -1084,7 +1085,7 @@ require("node:readline").createInterface({ input: process.stdin }).on("line", (l
     const next = await protectWindowsPaths([DIR_ENTRY], { env: { SystemRoot: base } })
     assert.equal(next[0].path, DIR_ENTRY.path)
   } finally {
-    await fs.rm(base, { recursive: true, force: true })
+    await removeTree(base)
   }
 })
 
@@ -1097,7 +1098,7 @@ test("the default runner measures its output budget in UTF-8 bytes", posixProvid
       /too much output/u,
     )
   } finally {
-    await fs.rm(base, { recursive: true, force: true })
+    await removeTree(base)
   }
 })
 
@@ -1135,7 +1136,7 @@ test("one provider process answers many requests, in order, and many requests ma
     for (const result of concurrent) assert.equal(pidOf(result[0]), pidOf(first[0]), "the same process served every request")
     assert.ok(isAlive(pidOf(first[0])), "the provider stays up between requests")
   } finally {
-    await fs.rm(base, { recursive: true, force: true })
+    await removeTree(base)
   }
 })
 
@@ -1163,7 +1164,7 @@ require("node:readline").createInterface({ input: process.stdin }).on("line", (l
     assert.notEqual(pidOf(answered[0]), stalledPid, "a fresh process answered")
     assert.ok(await untilDead(stalledPid), "the stalled provider was killed")
   } finally {
-    await fs.rm(base, { recursive: true, force: true })
+    await removeTree(base)
   }
 })
 
@@ -1186,7 +1187,7 @@ require("node:readline").createInterface({ input: process.stdin }).on("line", (l
     const third = await protectWindowsPaths([entryAt(3)], { env })
     assert.notEqual(pidOf(third[0]), pidOf(first[0]), "the dead process is not reused")
   } finally {
-    await fs.rm(base, { recursive: true, force: true })
+    await removeTree(base)
   }
 })
 
@@ -1215,7 +1216,7 @@ require("node:readline").createInterface({ input: process.stdin }).on("line", (l
     const third = await protectWindowsPaths([entryAt(3)], { env })
     assert.notEqual(pidOf(third[0]), pidOf(second[0]))
   } finally {
-    await fs.rm(base, { recursive: true, force: true })
+    await removeTree(base)
   }
 })
 
@@ -1228,7 +1229,7 @@ test("diagnostics on stderr count toward the output budget of the request that c
       /too much output/u,
     )
   } finally {
-    await fs.rm(base, { recursive: true, force: true })
+    await removeTree(base)
   }
 })
 
@@ -1253,7 +1254,7 @@ require("node:readline").createInterface({ input: process.stdin }).on("line", (l
     const second = await protectWindowsPaths([entryAt(2)], { env })
     assert.equal(pidOf(second[0]), pidOf(first[0]), "a late diagnostic is not an answer and does not replace the process")
   } finally {
-    await fs.rm(base, { recursive: true, force: true })
+    await removeTree(base)
   }
 })
 
@@ -1267,7 +1268,7 @@ test("an idle provider exits by itself and the next request starts another", pos
     const second = await protectWindowsPaths([entryAt(2)], { env, idleMs: 100 })
     assert.notEqual(pidOf(second[0]), pidOf(first[0]))
   } finally {
-    await fs.rm(base, { recursive: true, force: true })
+    await removeTree(base)
   }
 })
 
@@ -1285,7 +1286,7 @@ process.stdout.write(result[0].owner_sid)
     assert.equal(child.status, 0, child.stderr)
     assert.ok(await untilDead(Number(child.stdout.split("-").at(-1))), "the provider did not outlive its parent")
   } finally {
-    await fs.rm(base, { recursive: true, force: true })
+    await removeTree(base)
   }
 })
 
@@ -1331,7 +1332,7 @@ test("a readback that caught another process mid-rewrite is protected and verifi
       assert.equal(runner.calls.length, 1, message)
     }
   } finally {
-    await fs.rm(base, { recursive: true, force: true })
+    await removeTree(base)
   }
 })
 
@@ -1357,7 +1358,7 @@ require("node:readline").createInterface({ input: process.stdin }).on("line", (l
     const results = await Promise.all(Array.from({ length: 16 }, (_, n) => protectWindowsPaths([{ ...DIR_ENTRY, created: n === 0 }], { env })))
     assert.equal(results.length, 16)
   } finally {
-    await fs.rm(base, { recursive: true, force: true })
+    await removeTree(base)
   }
 })
 
@@ -1411,7 +1412,7 @@ try {
     if (error.details) t.diagnostic(JSON.stringify(error.details))
     throw error
   } finally {
-    await fs.rm(base, { recursive: true, force: true })
+    await removeTree(base)
   }
 })
 
@@ -1428,7 +1429,7 @@ test("a provider that never answers costs several waiting callers one limit in t
     }
     assert.ok(elapsed < 1800, `five callers waited ${elapsed} ms; one limit is 500 ms`)
   } finally {
-    await fs.rm(base, { recursive: true, force: true })
+    await removeTree(base)
   }
 })
 
@@ -1477,7 +1478,7 @@ await protectWindowsPaths([{ path: "C:\\\\Users\\\\participant\\\\state", kind: 
     for (const name of overlaps) assert.equal(await fs.readFile(path.join(shared, name), "utf8"), "true", "the two requests were in flight together")
     for (const name of names.filter((n) => n.startsWith("requests-"))) assert.equal((await fs.readFile(path.join(shared, name), "utf8")).length, 2, "each process asked twice: the refused pass and one more")
   } finally {
-    await fs.rm(base, { recursive: true, force: true })
+    await removeTree(base)
   }
 })
 
@@ -1510,7 +1511,7 @@ async function encodedProgram() {
     const { args } = runner.calls[0]
     return Buffer.from(args[args.indexOf("-EncodedCommand") + 1], "base64").toString("utf16le")
   } finally {
-    await fs.rm(base, { recursive: true, force: true })
+    await removeTree(base)
   }
 }
 
@@ -1557,7 +1558,7 @@ test("native: Windows ACL protection refuses junctions without changing their ta
     )
     assert.equal(nativeProbe(readSddl, { path: target }), before)
   } finally {
-    await fs.rm(base, { recursive: true, force: true })
+    await removeTree(base)
   }
 })
 
@@ -1600,7 +1601,7 @@ test("native: Windows ACL protection distinguishes an existing foreign owner fro
     assert.equal(result[0].owner_reassigned, true)
     assert.notEqual(result[0].owner_sid, assigned.owner)
   } finally {
-    await fs.rm(base, { recursive: true, force: true })
+    await removeTree(base)
   }
 })
 
@@ -1645,7 +1646,7 @@ test(
         /desk_feedback/u,
       )
     } finally {
-      await fs.rm(base, { recursive: true, force: true })
+      await removeTree(base)
     }
   },
 )

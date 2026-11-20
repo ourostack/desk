@@ -4,11 +4,12 @@
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import { spawnSync } from "node:child_process"
-import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
+import { chmodSync, mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 
 import { SHORT_SHA, createCommitResolver } from "../../../../../plugins/desk/mcp/src/factory/commit-resolve.js"
+import { removeTreeSync } from "../_remove_tree.js"
 
 function git(repo, ...args) {
   const result = spawnSync("git", ["-C", repo, "-c", "user.name=Test", "-c", "user.email=test@example.com", ...args], { encoding: "utf8" })
@@ -35,7 +36,7 @@ test("one batch resolves short, uppercase and full SHAs in the repository's top 
     const shas = [full.slice(0, 7), full.slice(0, 9).toUpperCase(), full, "0000000", tree.slice(0, 12), "abc", 7, `${full.slice(0, 7)}\n${full}`]
     assert.deepEqual(resolve({ gitRoot: repo, shas }), { origin: "https://github.com/octo-org/widgets", fulls: [full, full, full, null, null, null, null, null] })
   } finally {
-    rmSync(scratch, { recursive: true, force: true })
+    removeTreeSync(scratch)
   }
 })
 
@@ -50,7 +51,7 @@ test("a gitRoot that is not a top level falls back to the repository holding cwd
     assert.deepEqual(resolve({ gitRoot: "relative", cwd: "relative", shas: [full.slice(0, 7)] }), { origin: null, fulls: [null] })
     assert.deepEqual(resolve({ cwd: scratch, shas: [full.slice(0, 7)] }), { origin: null, fulls: [null] }, "a directory outside any repository")
   } finally {
-    rmSync(scratch, { recursive: true, force: true })
+    removeTreeSync(scratch)
   }
 })
 
@@ -59,7 +60,7 @@ test("a repository with no origin resolves commits but reports no origin", () =>
   try {
     assert.deepEqual(createCommitResolver()({ gitRoot: repo, shas: [full.slice(0, 7)] }), { origin: null, fulls: [full] })
   } finally {
-    rmSync(scratch, { recursive: true, force: true })
+    removeTreeSync(scratch)
   }
 })
 
@@ -71,7 +72,7 @@ test("no SHAs, or no list, asks nothing of cat-file", () => {
     assert.deepEqual(resolve({ gitRoot: repo, shas: "abc1234" }), { origin: "https://github.com/octo-org/widgets", fulls: [] })
     assert.deepEqual(resolve(), { origin: null, fulls: [] })
   } finally {
-    rmSync(scratch, { recursive: true, force: true })
+    removeTreeSync(scratch)
   }
 })
 
@@ -87,7 +88,7 @@ test("Git that cannot run, runs out of time or fails at cat-file resolves nothin
     chmodSync(fake, 0o755)
     assert.deepEqual(createCommitResolver({ git: fake })({ gitRoot: repo, shas: [short] }), { origin: null, fulls: [null] })
   } finally {
-    rmSync(scratch, { recursive: true, force: true })
+    removeTreeSync(scratch)
   }
 })
 
@@ -100,7 +101,7 @@ test("a hook's GIT_DIR cannot point Git elsewhere", () => {
   } finally {
     if (saved === undefined) delete process.env.GIT_DIR
     else process.env.GIT_DIR = saved
-    rmSync(scratch, { recursive: true, force: true })
+    removeTreeSync(scratch)
   }
 })
 

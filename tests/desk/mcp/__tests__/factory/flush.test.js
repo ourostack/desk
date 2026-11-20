@@ -22,6 +22,7 @@ import { BOT, TOKEN, fakeGitHub, httpError } from "./_fake_github.js"
 import { indexJob } from "./_index_helper.js"
 import { STORE, scratch } from "./_session_helpers.js"
 import { different } from "../_file_identity.js"
+import { removeTree } from "../_remove_tree.js"
 
 const moduleUrl = new URL("../../../../../plugins/desk/mcp/src/factory/flush.js", import.meta.url)
 async function load() {
@@ -1307,7 +1308,7 @@ test("the real runner passes input and the token to gh, and reports a failed exi
   const slow = await fake(["sleep"], { timeoutMs: 100 })
   assert.equal(slow.timedOut, true)
   assert.equal(slow.code, null)
-  await fs.rm(path.dirname(bin), { recursive: true, force: true })
+  await removeTree(path.dirname(bin))
 })
 
 // ---------------------------------------------------------------------------

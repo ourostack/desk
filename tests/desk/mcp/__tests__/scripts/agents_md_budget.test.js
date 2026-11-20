@@ -2,10 +2,11 @@
 // unless a pull request raises the budget on purpose.
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs"
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
+import { removeTreeSync } from "../_remove_tree.js"
 
 const script = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "..", "..", "plugins", "desk", "skills", "lesson-capture", "agents-md-budget.mjs")
 const { judge, report, main } = await import(pathToFileURL(script).href)
@@ -32,6 +33,6 @@ test("--set writes today's sizes, and the check then passes until a file grows",
     writeFileSync(path.join(root, "AGENTS.md"), "# Rules\n- one more\n")
     assert.equal(main(["--root", root], quiet), 1)
   } finally {
-    rmSync(root, { recursive: true, force: true })
+    removeTreeSync(root)
   }
 })

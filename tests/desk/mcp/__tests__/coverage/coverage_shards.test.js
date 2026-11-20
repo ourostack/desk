@@ -5,7 +5,7 @@
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import { spawnSync } from "node:child_process"
-import { chmodSync, existsSync, globSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs"
+import { chmodSync, existsSync, globSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
@@ -16,6 +16,7 @@ import {
   partitionCoverageTestFiles,
   runCoverageCommand,
 } from "../../../../../tools/desk-build/coverage/runner.js"
+import { removeTreeSync } from "../_remove_tree.js"
 
 const mcpRoot = fileURLToPath(new URL("../../../../../plugins/desk/mcp/", import.meta.url))
 const realRepoRoot = path.resolve(mcpRoot, "..", "..", "..")
@@ -32,7 +33,7 @@ function metrics(pct = 100) {
 
 function makeRoot(t, prefix) {
   const root = mkdtempSync(path.join(tmpdir(), prefix))
-  t.after(() => rmSync(root, { recursive: true, force: true }))
+  t.after(() => removeTreeSync(root))
   return root
 }
 
@@ -96,10 +97,10 @@ function run(fixture, argv, { producer = () => ({ status: 0, stdout: "", stderr:
         reportDirectories.push(directory)
         return directory
       },
-      removeDir: (directory) => rmSync(directory, { recursive: true, force: true }),
+      removeDir: (directory) => removeTreeSync(directory),
       readText: (file) => readFileSync(file, "utf8"),
       writeText: (file, text) => writeFileSync(file, text),
-      removeDirRetrying: (directory) => rmSync(directory, { recursive: true, force: true }),
+      removeDirRetrying: (directory) => removeTreeSync(directory),
       listDir: (directory) => readdirSync(directory),
       ...fsOpsOverrides,
     },
@@ -538,7 +539,7 @@ test("real shards each cover part of a file, and only their merged coverage pass
   assert.match(output.stdout, /passed for 1 changed production file/u)
 
   // Without the second shard's raw coverage the same complete split no longer covers the file.
-  rmSync(path.join(shards, "two", "raw"), { recursive: true, force: true })
+  removeTreeSync(path.join(shards, "two", "raw"))
   output.stderr = ""
   assert.equal(command(["--merge", shards]), 1)
   assert.match(output.stderr, /covered\.js (?:branches|lines|statements) coverage \d+(?:\.\d+)? is below 100/u)

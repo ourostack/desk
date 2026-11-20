@@ -1,11 +1,12 @@
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs"
+import { mkdirSync, mkdtempSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 
 import { main, parseArgs } from "../../../../../plugins/desk/mcp/index.js"
 import { createSetupDiagnostic } from "../../../../../plugins/desk/mcp/src/runtime/diagnostics.js"
+import { removeTreeSync } from "../_remove_tree.js"
 
 function makeHome() {
   const root = mkdtempSync(path.join(tmpdir(), "desk-overlay-onboarding-"))
@@ -55,7 +56,7 @@ test("an overlay that cannot resolve its root starts Desk in setup mode on its o
     assert.match(diagnostic.remediation[0].message, /crew:join-crew/u)
     assert.match(diagnostic.summary, /No desk is bound yet/u)
   } finally {
-    rmSync(root, { recursive: true, force: true })
+    removeTreeSync(root)
   }
 })
 
@@ -77,7 +78,7 @@ test("an explicit root still wins over an onboarding request", async () => {
     assert.equal(started.snapshot.state, "ready")
     assert.equal(started.statusContext.root.root, desk)
   } finally {
-    rmSync(root, { recursive: true, force: true })
+    removeTreeSync(root)
   }
 })
 

@@ -19,6 +19,7 @@ import { spawn, spawnSync } from "node:child_process"
 import { gzipSync } from "node:zlib"
 import * as path from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
+import { removeTreeSync } from "../_remove_tree.js"
 
 const repoRoot = path.resolve(fileURLToPath(new URL("../../../../..", import.meta.url)))
 const mcpRoot = path.join(repoRoot, "plugins", "desk", "mcp")
@@ -439,8 +440,8 @@ test("runtime cache resolution honors configured, environment, XDG, and HOME fal
       path.join(home, ".cache", "ouroboros-skills", "desk", packageJson.version, target, prodDependencyLockHash),
     )
   } finally {
-    rmSync(path.dirname(home), { recursive: true, force: true })
-    rmSync(path.dirname(xdg), { recursive: true, force: true })
+    removeTreeSync(path.dirname(home))
+    removeTreeSync(path.dirname(xdg))
   }
 })
 
@@ -517,7 +518,7 @@ test("prepareRuntime restores dependencies, reuses current cache, and imports up
     assert.equal(secondImport.marker, "updated")
     assert.equal(listSourceMirrors(runtimeCacheDir).length, 2)
   } finally {
-    rmSync(fixture.root, { recursive: true, force: true })
+    removeTreeSync(fixture.root)
   }
 })
 
@@ -553,7 +554,7 @@ test("exact admitted source identity reuses a validated source mirror without re
     assert.equal(warmImport.marker, "initial")
     assert.equal(listSourceMirrors(runtimeCacheDir).length, 1)
   } finally {
-    rmSync(fixture.root, { recursive: true, force: true })
+    removeTreeSync(fixture.root)
   }
 })
 
@@ -598,7 +599,7 @@ test("an existing valid source mirror is admitted for later warm reuse", { timeo
     assert.equal(warmImport.marker, "initial")
     assert.equal(listSourceMirrors(runtimeCacheDir).length, 1)
   } finally {
-    rmSync(fixture.root, { recursive: true, force: true })
+    removeTreeSync(fixture.root)
   }
 })
 
@@ -626,7 +627,7 @@ test("a content-derived source identity rejects changed source on a cold cache",
       /source identity.*does not match/i,
     )
   } finally {
-    rmSync(fixture.root, { recursive: true, force: true })
+    removeTreeSync(fixture.root)
   }
 })
 
@@ -669,7 +670,7 @@ test("a persisted content identity cannot point at a differently hashed mirror",
       /source identity.*does not match/i,
     )
   } finally {
-    rmSync(fixture.root, { recursive: true, force: true })
+    removeTreeSync(fixture.root)
   }
 })
 
@@ -712,7 +713,7 @@ test("restoreRuntimeDependencies repairs corrupt or incomplete cache markers", {
     })
     assert.equal(repaired.restored, true)
   } finally {
-    rmSync(fixture.root, { recursive: true, force: true })
+    removeTreeSync(fixture.root)
   }
 })
 
@@ -740,7 +741,7 @@ test("restoreRuntimeDependencies fails before extraction when the cache path is 
     )
     assert.equal(readFileSync(runtimeCacheDir, "utf8"), "not a directory\n")
   } finally {
-    rmSync(fixture.root, { recursive: true, force: true })
+    removeTreeSync(fixture.root)
   }
 })
 
@@ -782,7 +783,7 @@ test("source hashing ignores nested node_modules and mirrors clean up staging di
       false,
     )
   } finally {
-    rmSync(fixture.root, { recursive: true, force: true })
+    removeTreeSync(fixture.root)
   }
 })
 
@@ -838,7 +839,7 @@ test("source mirror admission rejects marker traversal, omissions, directories, 
       mirrorPath,
     )
   } finally {
-    rmSync(fixture.root, { recursive: true, force: true })
+    removeTreeSync(fixture.root)
   }
 })
 
@@ -884,7 +885,7 @@ test("source mirror admission rejects Windows and backslash paths on POSIX hosts
       assert.equal(resolveAdmittedSourceMirror({ runtimeCacheDir, sourceIdentity }), null)
     }
   } finally {
-    rmSync(fixture.root, { recursive: true, force: true })
+    removeTreeSync(fixture.root)
   }
 })
 
@@ -908,7 +909,7 @@ test("source mirror admission rejects symlinked ancestors and undeclared files",
     const undeclared = path.join(mirrorPath, "node_modules", "shadow", "package.json")
     writeJson(undeclared, { name: "shadow" })
     assert.equal(resolveAdmittedSourceMirror({ runtimeCacheDir, sourceIdentity }), null)
-    rmSync(path.join(mirrorPath, "node_modules"), { recursive: true, force: true })
+    removeTreeSync(path.join(mirrorPath, "node_modules"))
 
     const markerPath = path.join(mirrorPath, ".complete.json")
     const admissionPath = path.join(runtimeCacheDir, ".desk-source-mirror.json")
@@ -941,7 +942,7 @@ test("source mirror admission rejects symlinked ancestors and undeclared files",
       t.diagnostic(`symlink ancestor case unavailable: ${error.code}`)
     }
   } finally {
-    rmSync(fixture.root, { recursive: true, force: true })
+    removeTreeSync(fixture.root)
   }
 })
 
@@ -972,7 +973,7 @@ test("source mirror admission rejects incomplete inventories and special files",
     writeJson(markerPath, marker)
     mkdirSync(path.join(mirrorPath, "undeclared-empty"))
     assert.equal(resolveAdmittedSourceMirror({ runtimeCacheDir, sourceIdentity }), null)
-    rmSync(path.join(mirrorPath, "undeclared-empty"), { recursive: true, force: true })
+    removeTreeSync(path.join(mirrorPath, "undeclared-empty"))
 
     const fifoPath = path.join(mirrorPath, "undeclared-fifo")
     const fifo = spawnSync("mkfifo", [fifoPath])
@@ -985,7 +986,7 @@ test("source mirror admission rejects incomplete inventories and special files",
 
     assert.equal(resolveAdmittedSourceMirror(), null)
   } finally {
-    rmSync(fixture.root, { recursive: true, force: true })
+    removeTreeSync(fixture.root)
   }
 })
 
@@ -994,7 +995,7 @@ test("source mirroring supports fixtures without optional package and config roo
   const fixture = makeMcpFixture()
   try {
     for (const entry of ["package-lock.json", "config", "scripts"]) {
-      rmSync(path.join(fixture.mcpRoot, entry), { recursive: true, force: true })
+      removeTreeSync(path.join(fixture.mcpRoot, entry))
     }
     const mirrorPath = syncSourceMirror({
       mcpRoot: fixture.mcpRoot,
@@ -1003,7 +1004,7 @@ test("source mirroring supports fixtures without optional package and config roo
     assert.equal(existsSync(path.join(mirrorPath, "index.js")), true)
     assert.equal(existsSync(path.join(mirrorPath, "config")), false)
   } finally {
-    rmSync(fixture.root, { recursive: true, force: true })
+    removeTreeSync(fixture.root)
   }
 })
 
@@ -1295,7 +1296,7 @@ test("bootstrap pack verifier rejects missing metadata, drift, corrupt archives,
       assert.match(result.errors.join("\n"), item.pattern, item.name)
     }
   } finally {
-    rmSync(fixture.root, { recursive: true, force: true })
+    removeTreeSync(fixture.root)
   }
 })
 
@@ -1364,7 +1365,7 @@ test("extractRuntimeArchive handles tar name variants and rejects unsafe paths",
       )
     }
   } finally {
-    rmSync(root, { recursive: true, force: true })
+    removeTreeSync(root)
   }
 })
 
@@ -1396,13 +1397,13 @@ test("runtime pack diagnostics list expected paths, available targets, and remed
     assert.match(message, /runtime:deps-pack:build/u)
     assert.match(message, /checksum mismatch/u)
 
-    rmSync(path.join(mcpFixtureRoot, "artifacts"), { recursive: true, force: true })
+    removeTreeSync(path.join(mcpFixtureRoot, "artifacts"))
     assert.match(
       runtimeDependencyPackError({ mcpRoot: mcpFixtureRoot, packageJson, packPaths, target }).message,
       /Available targets: \(none\)/u,
     )
   } finally {
-    rmSync(root, { recursive: true, force: true })
+    removeTreeSync(root)
   }
 })
 
@@ -1558,7 +1559,7 @@ test("runtime pack inspection classifies unsupported, missing, checksum, manifes
     assert.deepEqual(invalidTargets.shipped_targets, [])
     assert.match(invalidTargets.errors[0], /non-empty id/u)
   } finally {
-    rmSync(fixture.root, { recursive: true, force: true })
+    removeTreeSync(fixture.root)
   }
 })
 
@@ -1625,7 +1626,7 @@ test("atomic publication rejects invalid staging and rolls back invalid destinat
       false,
     )
   } finally {
-    rmSync(root, { recursive: true, force: true })
+    removeTreeSync(root)
   }
 })
 
@@ -1686,7 +1687,7 @@ test("atomic publication restores the previous cache after interruption", { time
     assert.equal(readFileSync(path.join(destinationDir, "marker"), "utf8"), "previous\n")
     assert.equal(existsSync(stagingDir), false)
   } finally {
-    rmSync(root, { recursive: true, force: true })
+    removeTreeSync(root)
   }
 })
 
@@ -1724,7 +1725,7 @@ for (const collisionCode of ["EEXIST", "ENOTEMPTY"]) {
       assert.equal(existsSync(stagingDir), false)
       assert.deepEqual(readdirSync(root), ["runtime-cache"])
     } finally {
-      rmSync(root, { recursive: true, force: true })
+      removeTreeSync(root)
     }
   })
 }
@@ -1755,7 +1756,7 @@ test("publication lock makes concurrent publishers reuse a valid winner without 
       sleep: () => {
         waits += 1
         writeText(path.join(destinationDir, "marker"), "candidate\n")
-        rmSync(lockDir, { recursive: true, force: true })
+        removeTreeSync(lockDir)
       },
     })
     assert.deepEqual(result, {
@@ -1783,7 +1784,7 @@ test("publication lock makes concurrent publishers reuse a valid winner without 
     assert.equal(winnerAfterAcquisition.reused, true)
     assert.equal(existsSync(stagingDir), false)
   } finally {
-    rmSync(root, { recursive: true, force: true })
+    removeTreeSync(root)
   }
 })
 
@@ -1979,7 +1980,7 @@ test("publication lock reclaims dead and malformed owners but times out behind a
       }
     }
   } finally {
-    rmSync(root, { recursive: true, force: true })
+    removeTreeSync(root)
   }
 })
 
@@ -2013,7 +2014,7 @@ test("publication lock does not remove a lock whose ownership token changed", { 
     assert.equal(result.published, true)
     assert.equal(existsSync(lockDir), true)
   } finally {
-    rmSync(root, { recursive: true, force: true })
+    removeTreeSync(root)
   }
 })
 
@@ -2066,7 +2067,7 @@ test("runtime restoration stages a complete tree before replacing a stale cache"
       false,
     )
   } finally {
-    rmSync(fixture.root, { recursive: true, force: true })
+    removeTreeSync(fixture.root)
   }
 })
 
@@ -2110,7 +2111,7 @@ test("source mirror stages a complete tree before replacing a stale mirror", { t
       false,
     )
   } finally {
-    rmSync(fixture.root, { recursive: true, force: true })
+    removeTreeSync(fixture.root)
   }
 })
 
@@ -2134,7 +2135,7 @@ test("omitted cache options use the ambient override without creating a cache", 
   } finally {
     if (previous === undefined) delete process.env.DESK_RUNTIME_CACHE_DIR
     else process.env.DESK_RUNTIME_CACHE_DIR = previous
-    rmSync(root, { recursive: true, force: true })
+    removeTreeSync(root)
   }
 })
 
@@ -2196,7 +2197,7 @@ test("default host inspection and restoration preserve exact missing-matrix and 
     assert.equal(existsSync(path.join(fixture.mcpRoot, "artifacts")), false)
     assert.deepEqual(sourceFilesForHash(fixture.mcpRoot), filesBefore)
   } finally {
-    rmSync(fixture.root, { recursive: true, force: true })
+    removeTreeSync(fixture.root)
   }
 })
 
@@ -2220,7 +2221,7 @@ test("source hashing ignores real directory links and their changing external co
     writeText(path.join(external, "not-owned.js"), "changed external content\n")
     assert.equal(hashCurrentSource(fixture.mcpRoot), hash)
   } finally {
-    rmSync(fixture.root, { recursive: true, force: true })
+    removeTreeSync(fixture.root)
   }
 })
 
@@ -2240,7 +2241,7 @@ test("publication recovers when a competing lock vanishes before metadata inspec
         mkdirSync(candidate)
         if (candidate === lockDir && !collided) {
           collided = true
-          rmSync(candidate, { recursive: true })
+          removeTreeSync(candidate)
           throw Object.assign(new Error("a competing lock vanished"), { code: "EEXIST" })
         }
       },
@@ -2250,7 +2251,7 @@ test("publication recovers when a competing lock vanishes before metadata inspec
     assert.equal(readFileSync(path.join(destinationDir, "marker"), "utf8"), "candidate\n")
     assert.deepEqual(readdirSync(root), ["destination"])
   } finally {
-    rmSync(root, { recursive: true, force: true })
+    removeTreeSync(root)
   }
 })
 
@@ -2271,7 +2272,7 @@ test("publication does not fail or remove payload when its lock disappears befor
         assert.equal(to, destinationDir)
         assert.equal(readJson(path.join(lockDir, "owner.json")).pid, process.pid)
         renameSync(from, to)
-        rmSync(lockDir, { recursive: true })
+        removeTreeSync(lockDir)
         removed = true
       },
     })
@@ -2280,7 +2281,7 @@ test("publication does not fail or remove payload when its lock disappears befor
     assert.equal(readFileSync(path.join(destinationDir, "marker"), "utf8"), "candidate\n")
     assert.deepEqual(readdirSync(root), ["destination"])
   } finally {
-    rmSync(root, { recursive: true, force: true })
+    removeTreeSync(root)
   }
 })
 
@@ -2306,7 +2307,7 @@ test("a first publication rename failure propagates its error with no previous d
     )
     assert.deepEqual(readdirSync(root), [])
   } finally {
-    rmSync(root, { recursive: true, force: true })
+    removeTreeSync(root)
   }
 })
 
@@ -2331,7 +2332,7 @@ test("a publisher builds its staging tree only once it owns the lock and the des
     assert.equal(builds, 1, "a valid destination is reused without building")
     assert.deepEqual(readdirSync(root), ["cache"])
   } finally {
-    rmSync(root, { recursive: true, force: true })
+    removeTreeSync(root)
   }
 })
 
@@ -2369,7 +2370,7 @@ test("a build that leaves an incomplete tree, or throws, fails the publication a
     )
     assert.deepEqual(readdirSync(root), [], "no staging tree, backup or lock is left behind")
   } finally {
-    rmSync(root, { recursive: true, force: true })
+    removeTreeSync(root)
   }
 })
 
@@ -2447,7 +2448,7 @@ test("publishers in separate processes build the shared tree exactly once", { ti
     assert.deepEqual(readdirSync(root).sort(), ["builds.log", "cache", "go"])
   } finally {
     for (const child of children) if (child.exitCode === null) child.kill()
-    rmSync(root, { recursive: true, force: true })
+    removeTreeSync(root)
   }
 })
 
@@ -2488,14 +2489,14 @@ test("while the lock owner is alive a waiter creates no reclaim folder at all", 
       },
       sleep: () => {
         sleeps += 1
-        if (sleeps === 3) rmSync(lockDir, { recursive: true, force: true })
+        if (sleeps === 3) removeTreeSync(lockDir)
       },
     })
     assert.deepEqual(result, { destinationDir, published: true, reused: false })
     assert.equal(sleeps, 3, "three polls behind the live owner")
     assert.deepEqual(created.filter((name) => name.endsWith(".reclaim-lock")), [], "no reclaim folder was created or deleted while the owner lived")
   } finally {
-    rmSync(root, { recursive: true, force: true })
+    removeTreeSync(root)
   }
 })
 
@@ -2518,7 +2519,7 @@ test("Windows: an EPERM, EACCES or EBUSY on the reclaim folder waits and retries
       assert.deepEqual(result, { destinationDir, published: true, reused: false }, code)
       assert.equal(sleeps, 2, "one wait after the contended reclaim folder, one after the reclaim itself")
     } finally {
-      rmSync(root, { recursive: true, force: true })
+      removeTreeSync(root)
     }
   }
 })
@@ -2539,7 +2540,7 @@ test("Windows: an EPERM on the lock folder itself waits and retries; elsewhere i
     assert.equal(result.published, true)
     assert.ok(attempts >= 2, "the lock folder was tried again after the EPERM")
   } finally {
-    rmSync(first.root, { recursive: true, force: true })
+    removeTreeSync(first.root)
   }
   for (const target of ["lock", "reclaim"]) {
     const other = lockFixture()
@@ -2558,7 +2559,7 @@ test("Windows: an EPERM on the lock folder itself waits and retries; elsewhere i
         `${target}: not a Windows transient`,
       )
     } finally {
-      rmSync(other.root, { recursive: true, force: true })
+      removeTreeSync(other.root)
     }
   }
 })
@@ -2582,7 +2583,7 @@ test("Windows: a dead owner's lock folder that is contended on removal is retrie
     assert.deepEqual(result, { destinationDir, published: true, reused: false })
     assert.equal(sleeps, 2, "a wait after the contended removal, and one after the reclaim")
   } finally {
-    rmSync(root, { recursive: true, force: true })
+    removeTreeSync(root)
   }
 })
 
@@ -2600,7 +2601,7 @@ test("a lock folder that cannot be removed for another reason fails loudly", { t
       /EIO/u,
     )
   } finally {
-    rmSync(root, { recursive: true, force: true })
+    removeTreeSync(root)
   }
 })
 
@@ -2631,7 +2632,7 @@ test("a lock that cannot be removed at release is marked abandoned and never hid
       })
       assert.equal(again.published, true)
     } finally {
-      rmSync(root, { recursive: true, force: true })
+      removeTreeSync(root)
     }
   }
   // A lock whose abandoned mark cannot be written either: still the publish result, not a crash.
@@ -2653,7 +2654,7 @@ test("a lock that cannot be removed at release is marked abandoned and never hid
     assert.equal(result.published, true)
     assert.equal(owners, 2)
   } finally {
-    rmSync(stuck.root, { recursive: true, force: true })
+    removeTreeSync(stuck.root)
   }
 })
 
@@ -2680,10 +2681,10 @@ test("a reclaim folder older than the lock timeout is removed so it cannot block
       )
       assert.equal(existsSync(`${fresh.lockDir}.reclaim-lock`), true)
     } finally {
-      rmSync(fresh.root, { recursive: true, force: true })
+      removeTreeSync(fresh.root)
     }
   } finally {
-    rmSync(root, { recursive: true, force: true })
+    removeTreeSync(root)
   }
 })
 
@@ -2703,7 +2704,7 @@ test("a reclaim folder that vanishes before its age is read is simply retried", 
     })
     assert.deepEqual(result, { destinationDir, published: true, reused: false })
   } finally {
-    rmSync(root, { recursive: true, force: true })
+    removeTreeSync(root)
   }
 })
 
@@ -2718,14 +2719,14 @@ test("an owner that turns out to be alive on the second look keeps its lock", { 
       processAlive: () => answers.shift() ?? true,
       sleep: () => {
         sleeps += 1
-        rmSync(lockDir, { recursive: true, force: true })
+        removeTreeSync(lockDir)
       },
     })
     assert.deepEqual(result, { destinationDir, published: true, reused: false })
     assert.equal(sleeps, 1, "the lock was not reclaimed from under the live owner")
     assert.equal(existsSync(`${lockDir}.reclaim-lock`), false)
   } finally {
-    rmSync(root, { recursive: true, force: true })
+    removeTreeSync(root)
   }
 })
 
@@ -2756,7 +2757,7 @@ test("Windows: a lock folder that persistently cannot be created waits between a
       )
       assert.ok(attempts >= 2 && attempts <= 10, `${attempts} attempts in 100 ms of waiting`)
     } finally {
-      rmSync(root, { recursive: true, force: true })
+      removeTreeSync(root)
     }
   }
 })
@@ -2770,7 +2771,7 @@ test("a reclaim that finishes after the deadline still gets one attempt at the l
     const result = publish(publishDirectoryAtomically, { processAlive: () => false, now: () => (clock += 10_000) })
     assert.deepEqual(result, { destinationDir, published: true, reused: false })
   } finally {
-    rmSync(root, { recursive: true, force: true })
+    removeTreeSync(root)
   }
 })
 
@@ -2789,7 +2790,7 @@ test("a publisher reports that it waits for the lock and that it builds, and pre
     })
     assert.deepEqual(phases, ["waiting_for_publication_lock:cache", "building:cache"])
   } finally {
-    rmSync(root, { recursive: true, force: true })
+    removeTreeSync(root)
   }
   const fixture = makeMcpFixture()
   try {
@@ -2807,6 +2808,6 @@ test("a publisher reports that it waits for the lock and that it builds, and pre
     assert.ok(steps.includes("mirroring_source"))
     assert.ok(steps.some((step) => step.startsWith("building:")), `a first build was reported: ${steps}`)
   } finally {
-    rmSync(fixture.root, { recursive: true, force: true })
+    removeTreeSync(fixture.root)
   }
 })

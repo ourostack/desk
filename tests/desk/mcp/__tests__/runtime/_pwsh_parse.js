@@ -1,9 +1,10 @@
 // PowerShell's own parser, for the differential check of the guard's hand-written tokenizer: `parseCommands` asks
 // `[System.Management.Automation.Language.Parser]::ParseInput` for every CommandAst (and every member call) of each text.
 import { spawnSync } from "node:child_process"
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { mkdtempSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
+import { removeTreeSync } from "../_remove_tree.js"
 
 const SCRIPT = `param([string]$Path)
 $texts = Get-Content -Raw -Encoding UTF8 -LiteralPath $Path | ConvertFrom-Json
@@ -38,6 +39,6 @@ export function parseCommands(shell, texts) {
     if (run.status !== 0) throw new Error(`${shell} could not parse: ${run.stderr}`)
     return JSON.parse(run.stdout)
   } finally {
-    rmSync(dir, { recursive: true, force: true })
+    removeTreeSync(dir)
   }
 }

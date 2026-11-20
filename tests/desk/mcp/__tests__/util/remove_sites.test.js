@@ -67,3 +67,32 @@ test("the rule catches the aliased and indirect forms, and leaves a file with on
     "await fs.promises.rm(root, { recursive: true, maxRetries: 10 })",
   ]) assert.equal(offends(text), false, text)
 })
+
+// A test removes a fixture folder only through `removeTree` / `removeTreeSync` (tests/desk/mcp/__tests__/_remove_tree.js). A bare recursive
+// `rm`, `rmSync`, `rmdir` or `rmdirSync` fails on Windows when Defender, the indexer or a just-exited process still holds something in the
+// folder (EBUSY, EPERM), and that flakes the suite. Ending the process that holds the folder is still the test's job, before the removal.
+const bareTreeRemoval = (text) => /\b(?:rmSync|rmdirSync|rm|rmdir)\s*\((?:[^()]|\((?:[^()]|\([^()]*\))*\))*?\brecursive\b/u.test(text)
+const TREE_HELPER = path.join("tests", "desk", "mcp", "__tests__", "_remove_tree.js")
+
+test("no test removes a folder tree except through the shared removeTree helper", () => {
+  const files = sourceFiles(path.join(repoRoot, "tests"))
+  const offenders = files
+    .map((file) => path.relative(repoRoot, file))
+    .filter((file) => file !== TREE_HELPER && file !== path.relative(repoRoot, SELF) && bareTreeRemoval(readFileSync(path.join(repoRoot, file), "utf8")))
+  assert.deepEqual(offenders, [])
+})
+
+test("the tree-removal rule catches bare recursive removals and leaves the helper calls and mkdir alone", () => {
+  for (const text of [
+    "fs.rmSync(root, { recursive: true, force: true })",
+    "await fs.rm(path.join(root, 'a'), { recursive: true })",
+    "rmdirSync(\n  dir,\n  { recursive: true },\n)",
+    "t.after(() => fs.promises.rm(root, { force: true, recursive: true }))",
+  ]) assert.equal(bareTreeRemoval(text), true, text)
+  for (const text of [
+    "removeTree(root)",
+    "removeTreeSync(root)",
+    "mkdirSync(dir, { recursive: true })",
+    "await fs.rm(file, { force: true })",
+  ]) assert.equal(bareTreeRemoval(text), false, text)
+})

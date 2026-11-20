@@ -1,7 +1,7 @@
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import { execFileSync } from "node:child_process"
-import { copyFileSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
+import { copyFileSync, mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
@@ -16,6 +16,7 @@ import {
   deskStartupDirection,
   resolveStartupRoot,
 } from "../../../../../plugins/desk/mcp/src/util/startup-direction.js"
+import { removeTreeSync } from "../_remove_tree.js"
 
 const mcpRoot = path.resolve(fileURLToPath(new URL("../../../../../plugins/desk/mcp", import.meta.url)))
 const script = path.join(mcpRoot, "scripts", "resolve-desk-root.js")
@@ -39,7 +40,7 @@ function withSandbox(body) {
     writeFileSync(malformed, "{")
     body({ env: { PATH: process.env.PATH, HOME: home, USERPROFILE: home }, home, fallback, solo, crew, codeRepo, malformed })
   } finally {
-    rmSync(scratch, { recursive: true, force: true })
+    removeTreeSync(scratch)
   }
 }
 
@@ -106,7 +107,7 @@ test("a binding whose folder is missing is named as unusable, never as setup mod
 test("resolveStartupRoot separates a missing desk from an unreadable configuration", () => {
   withSandbox(({ env, fallback, malformed }) => {
     assert.deepEqual(resolveStartupRoot({ env, homeDir: env.HOME }), { root: fallback, source: "home_fallback" })
-    rmSync(fallback, { recursive: true })
+    removeTreeSync(fallback)
     assert.deepEqual(resolveStartupRoot({ env, homeDir: env.HOME }), { root: null })
     const broken = resolveStartupRoot({ env, homeDir: env.HOME, activationConfigPath: malformed })
     assert.equal(broken.root, null)
@@ -138,7 +139,7 @@ test("the Copilot first-prompt boot is allowed only where the root resolves to a
     assert.equal(bootRoot({}, crew), crew)
     assert.equal(bootRoot({}, codeRepo), fallback)
     // No desk anywhere (the fallback is gone and nothing is bound) is setup mode: nothing to boot.
-    rmSync(fallback, { recursive: true })
+    removeTreeSync(fallback)
     assert.equal(bootRoot({}, codeRepo), null)
     assert.equal(bootRoot({}, undefined), null)
     assert.equal(bootRoot({}, crew), crew)
@@ -161,7 +162,7 @@ test("resolve-desk-root --startup-line prints the Claude line, where the server 
     assert.equal(line({}), deskStartupDirection({ root: fallback, source: "home_fallback" }))
     assert.equal(line({ CLAUDE_PROJECT_DIR: crew }), deskStartupDirection({ root: crew, source: "host-project" }))
     assert.match(line({ DESK_ACTIVATION_CONFIG: malformed }), /root configuration could not be read/u)
-    rmSync(fallback, { recursive: true })
+    removeTreeSync(fallback)
     assert.equal(line({}), deskStartupDirection(null))
   })
 })
@@ -179,7 +180,7 @@ test("root CLI preserves its JSON and root-only contracts with missing or malfor
     assert.equal(bad.root, null)
     assert.deepEqual(bad.tried, [])
     assert.match(bad.error, /JSON/)
-    rmSync(fallback, { recursive: true })
+    removeTreeSync(fallback)
     assert.equal(run(["--root-only"]), "")
     const missing = JSON.parse(run([]))
     assert.equal(missing.root, null)
@@ -221,7 +222,7 @@ test("Desk running from an Agency session that loads the ms-desk overlay still n
       plain.deskStartupDirection({ root: path.join(home, "desk"), source: "home_fallback" }),
     )
   } finally {
-    rmSync(scratch, { recursive: true, force: true })
+    removeTreeSync(scratch)
   }
 })
 

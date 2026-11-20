@@ -15,6 +15,7 @@ import { runJobLinkCommand } from "../../../../../plugins/desk/mcp/scripts/facto
 import { SITE, SITE_FILES, main, runIfMain, taskNames, viewDir } from "../../../../../plugins/desk/mcp/scripts/private-view.js"
 import { osEnv } from "../_os_env.js"
 import { NO_BACKSLASH_NAMES, NO_FILE_SYMLINKS, NO_POSIX_MODES, isWindows } from "../_platform.js"
+import { removeTreeSync } from "../_remove_tree.js"
 
 const SCRIPT = fileURLToPath(new URL("../../../../../plugins/desk/mcp/scripts/private-view.js", import.meta.url))
 
@@ -40,7 +41,7 @@ async function scratch(run) {
   try {
     return await run({ env, root, home })
   } finally {
-    rmSync(home, { recursive: true, force: true })
+    removeTreeSync(home)
   }
 }
 

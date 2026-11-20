@@ -5,10 +5,11 @@ import { strict as assert } from "node:assert"
 import { test } from "node:test"
 import { spawnSync } from "node:child_process"
 import { createRequire } from "node:module"
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
+import { removeTreeSync } from "../_remove_tree.js"
 
 const repoRoot = path.resolve(fileURLToPath(new URL("../../../../..", import.meta.url)))
 const require = createRequire(import.meta.url)
@@ -28,7 +29,7 @@ const fragmentDir = "plugins/desk/changelog.d"
 // A copy of every file a release reads or writes.
 function fixture(t, version = currentDesk) {
   const root = mkdtempSync(path.join(tmpdir(), "desk-release-"))
-  t.after(() => rmSync(root, { recursive: true, force: true }))
+  t.after(() => removeTreeSync(root))
   for (const file of [...release.DESK_VERSION_FILES, release.CHANGELOG, "plugins/desk/mcp/package.json"]) {
     mkdirSync(path.dirname(path.join(root, file)), { recursive: true })
     copyFileSync(path.join(repoRoot, file), path.join(root, file))
@@ -186,7 +187,7 @@ test("with no pending fragment nothing is released and nothing changes", (t) => 
   const before = snapshot(root)
   assert.deepEqual(release.releaseDesk({ root, date: "2026-10-01" }), { released: false, fragments: [] })
   assert.deepEqual(snapshot(root), before)
-  rmSync(path.join(root, fragmentDir), { recursive: true })
+  removeTreeSync(path.join(root, fragmentDir))
   assert.deepEqual(release.pendingFragments(root), [])
 })
 
@@ -228,7 +229,7 @@ test("a release merges cleanly with a pull request that edits any description on
   fragment(root, "change.md", "A change.\n")
   release.releaseDesk({ root, date: "2026-10-01" })
   const work = mkdtempSync(path.join(tmpdir(), "desk-release-merge-"))
-  t.after(() => rmSync(work, { recursive: true, force: true }))
+  t.after(() => removeTreeSync(work))
   let edited = 0
   for (const file of release.DESK_VERSION_FILES.filter((name) => name.endsWith(".json"))) {
     const ours = base[file].replace(/^(\s*"description": ")/gmu, (match) => { edited += 1; return `${match}Edited. ` })
@@ -571,7 +572,7 @@ ${mark.failOn ? `case "$*" in *"${mark.failOn}"*) exit 1 ;; esac` : ""}
   const env = { ...process.env, RUNNER_TEMP: dir, PATH: `${bin}:${process.env.PATH}`, GITHUB_REPOSITORY: "o/r", GITHUB_STEP_SUMMARY: path.join(dir, "summary"), LABEL: "released", MARK_SINCE: "2026-09-06" }
   const result = spawnSync("bash", ["-c", run], { cwd: dir, env, encoding: "utf8" })
   const calls = existsSync(ghLog) ? readFileSync(ghLog, "utf8") : ""
-  rmSync(dir, { recursive: true, force: true })
+  removeTreeSync(dir)
   return { result, calls }
 }
 const HISTORY = [["bot", "Release Desk 3.2.0-alpha.1"], ["dev", "first (#10)"], ["dev", "second (#11)"], ["bot", "Release Desk 3.2.0-alpha.2"], ["dev", "third (#12)"], ["bot", "Release Desk 3.2.0-alpha.3"], ["spoof", "Release Desk 3.2.0-alpha.9 by a person using the bot name (#13)"], ["bot", "Not a release (#15)\n\nRelease Desk 3.2.0-alpha.8 only in the body"], ["bot", "Release Desk 3.2.0-alpha.1; rm -rf"], ["dev", "unreleased (#14)"]]
@@ -736,7 +737,7 @@ test("a dry run with no fragment pending still folds and checks a throwaway frag
   assert.equal(repo.head(), before)
   assert.equal(repo.git("status", "--porcelain").stdout, "")
   assert.equal(repo.git("branch", "--show-current").stdout.trim(), "main")
-  rmSync(repo.root, { recursive: true, force: true })
+  removeTreeSync(repo.root)
 })
 
 test("a dry run whose release tests are all skipped fails, because only passing tests count", () => {
@@ -745,5 +746,5 @@ test("a dry run whose release tests are all skipped fails, because only passing 
   assert.equal(result.status, 1, result.stdout + result.stderr)
   assert.match(result.stdout + result.stderr, /passed 0 tests/u)
   assert.equal(repo.git("status", "--porcelain").stdout, "")
-  rmSync(repo.root, { recursive: true, force: true })
+  removeTreeSync(repo.root)
 })

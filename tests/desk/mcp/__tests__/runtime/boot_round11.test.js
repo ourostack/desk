@@ -9,6 +9,7 @@ import { mkTempRoot } from "../_temp_roots.js"
 import { bootOnce } from "../../../../../plugins/desk/mcp/src/runtime/boot.js"
 import { UNMATCHED_TASK_INSTRUCTION, UNMATCHED_TASK_INSTRUCTION_TEXT, formatBootText } from "../../../../../plugins/desk/mcp/src/runtime/boot-text.js"
 import { task_create, task_update } from "../../../../../plugins/desk/mcp/src/tools/task.js"
+import { removeTree } from "../_remove_tree.js"
 
 // ── task_update says how to report an unfinished task ───────────────────
 
@@ -259,7 +260,7 @@ test("ensureStateIgnored keeps an existing exclude file's lines, with or without
   assert.equal(ensureStateIgnored(root), true)
   assert.equal(await fs.readFile(exclude, "utf8"), "*.tmp\n.state/\n")
   const bare = await gitRoot()
-  await fs.rm(path.join(bare, ".git", "info"), { recursive: true, force: true })
+  await removeTree(path.join(bare, ".git", "info"))
   assert.equal(ensureStateIgnored(bare), true)
   assert.equal(await fs.readFile(path.join(bare, ".git", "info", "exclude"), "utf8"), ".state/\n")
 })

@@ -1,10 +1,11 @@
 import { strict as assert } from "node:assert"
 import { test } from "node:test"
 import { createRequire } from "node:module"
-import { chmodSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs"
+import { chmodSync, mkdirSync, mkdtempSync, readdirSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
+import { removeTreeSync } from "../_remove_tree.js"
 
 const repoRoot = path.resolve(fileURLToPath(new URL("../../../../..", import.meta.url)))
 const require = createRequire(import.meta.url)
@@ -36,7 +37,7 @@ function withScratch(fn) {
   try {
     return fn(root)
   } finally {
-    rmSync(root, { recursive: true, force: true })
+    removeTreeSync(root)
   }
 }
 

@@ -3,18 +3,19 @@
 
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { mkdtempSync, promises as fs, rmSync } from "node:fs"
+import { mkdtempSync, promises as fs } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 
 import { LOCK_OUTER_AGE_MS, processAlive, releaseLock, takeLock, touchLock, trackChild } from "../../../../../plugins/desk/mcp/src/factory/process-lock.js"
+import { removeTree, removeTreeSync } from "../_remove_tree.js"
 
 async function scratch(run) {
   const root = await fs.realpath(mkdtempSync(path.join(os.tmpdir(), "desk-process-lock-")))
   try {
     return await run(root)
   } finally {
-    rmSync(root, { recursive: true, force: true })
+    removeTreeSync(root)
   }
 }
 
@@ -122,6 +123,6 @@ test("a takeover that fails always removes its guard file, and the next taker is
   await fs.utimes(path.join(dir, "x.running"), old, old)
   await assert.rejects(takeLock(root, { name: "x.running", alive: () => false }), "a lock path that is a directory cannot be removed")
   await assert.rejects(fs.stat(path.join(dir, "x.running.takeover")), "the guard is gone")
-  await fs.rm(path.join(dir, "x.running"), { recursive: true })
+  await removeTree(path.join(dir, "x.running"))
   assert.ok(await takeLock(root, { name: "x.running" }))
 }))

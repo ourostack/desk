@@ -4,7 +4,7 @@
 
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 
@@ -14,6 +14,7 @@ import { dedupePrRefs } from "../../../../../plugins/desk/mcp/src/factory/derive
 import { validateLocalFacts } from "../../../../../plugins/desk/mcp/src/factory/schema.js"
 import { serializePublished, toPublished } from "../../../../../plugins/desk/mcp/src/factory/publish.js"
 import { validatePublishedBytes } from "../../../../../plugins/desk/mcp/src/factory/published-schema.js"
+import { removeTreeSync } from "../_remove_tree.js"
 
 const SAMPLE_SENTENCES = Object.freeze([
   "Shall I also rename the billing tables while I am here?",
@@ -70,7 +71,7 @@ async function deriveClaude(lines, subagents = []) {
     assertNoText(result.facts)
     return result.facts
   } finally {
-    rmSync(dir, { recursive: true, force: true })
+    removeTreeSync(dir)
   }
 }
 
@@ -267,7 +268,7 @@ async function deriveCopilot(events) {
     assertNoText(result.facts)
     return result.facts
   } finally {
-    rmSync(home, { recursive: true, force: true })
+    removeTreeSync(home)
   }
 }
 

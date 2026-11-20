@@ -14,6 +14,7 @@ import { factoryStateRoot, markSessionProof, pendingFiles, pendingLabels, setCon
 import { main } from "../../../../../plugins/desk/mcp/scripts/factory.js"
 import { fakeGitHub } from "./_fake_github.js"
 import { STORE, recent, scratch } from "./_session_helpers.js"
+import { removeTree } from "../_remove_tree.js"
 
 const GOLDEN = JSON.parse(readFileSync(fileURLToPath(new URL("./fixtures/local-golden.json", import.meta.url)), "utf8"))
 const LABELS = JSON.parse(readFileSync(fileURLToPath(new URL("./fixtures/labels-golden.json", import.meta.url)), "utf8"))
@@ -208,7 +209,7 @@ test("a session whose desk folder is gone is refused as foreign", () => scratch(
   await setConsent(ctx.env, { store: STORE, contribute: true, account: "contributor" })
   const gone = await deskFor(ctx.base, "desk-gone")
   await marker(ctx.env, ctx.base, 10, gone)
-  await fs.rm(gone, { recursive: true, force: true })
+  await removeTree(gone)
   assert.deepEqual(await mark(ctx, 10), { result: "refused", reason: "foreign" })
 }))
 

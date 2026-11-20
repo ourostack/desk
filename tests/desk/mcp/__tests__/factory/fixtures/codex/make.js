@@ -13,9 +13,10 @@
 // to read as enums or identifiers (record types, `agent_role`, model names,
 // tool names) carry real-looking values instead.
 
-import { mkdirSync, rmSync, writeFileSync } from "node:fs"
+import { mkdirSync, writeFileSync } from "node:fs"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
+import { removeTreeSync } from "../../../_remove_tree.js"
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 
@@ -317,7 +318,7 @@ export function rolloutText({ lines, truncate = false }) {
 }
 
 export function generate({ outDir = here } = {}) {
-  rmSync(path.join(outDir, "sessions"), { recursive: true, force: true })
+  removeTreeSync(path.join(outDir, "sessions"))
   const written = []
   for (const build of Object.values(SCENARIOS)) {
     const scenario = build()

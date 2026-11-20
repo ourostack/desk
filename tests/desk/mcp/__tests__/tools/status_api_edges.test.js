@@ -1,14 +1,15 @@
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
-import { existsSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, utimesSync, writeFileSync } from "node:fs"
+import { existsSync, mkdtempSync, readdirSync, readFileSync, realpathSync, utimesSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { desk_status } from "../../../../../plugins/desk/mcp/src/tools/status.js"
 import { indexDbPath } from "../../../../../plugins/desk/mcp/src/db/init.js"
+import { removeTreeSync } from "../_remove_tree.js"
 
 test("status's direct API defaults its context without provisioning missing state", async (t) => {
   const root = mkdtempSync(path.join(realpathSync(tmpdir()), "status-default-context-"))
-  t.after(() => rmSync(root, { recursive: true, force: true }))
+  t.after(() => removeTreeSync(root))
   const body = await desk_status({ deskRoot: root })
   assert.equal(body.status, "ok")
   assert.equal(body.root.path, root)

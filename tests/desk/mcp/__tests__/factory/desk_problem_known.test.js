@@ -1,13 +1,14 @@
 // The known-hit record: pure reader and bounded recorder. Every state directory is a scratch directory.
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { mkdtempSync, promises as fs, rmSync } from "node:fs"
+import { mkdtempSync, promises as fs } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 import { osEnv } from "../_os_env.js"
 
 import { DROPPED_KEY, KNOWN_KEY, MAX_KNOWN_ISSUES, MAX_PENDING_FILINGS, PENDING_KEY, SINCE_KEY, armKnownHits, beginFiling, compareVersions, endFiling, knownHitsSince, recordKnownHit, recordLostHit } from "../../../../../plugins/desk/mcp/src/factory/desk-problem-known.js"
 import { readStatus, writeStatus } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
+import { removeTreeSync } from "../_remove_tree.js"
 
 async function scratch(run) {
   const base = await fs.realpath(mkdtempSync(path.join(os.tmpdir(), "desk-problem-known-")))
@@ -15,7 +16,7 @@ async function scratch(run) {
   try {
     return await run({ env })
   } finally {
-    rmSync(base, { recursive: true, force: true })
+    removeTreeSync(base)
   }
 }
 

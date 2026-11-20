@@ -6,6 +6,7 @@ import { spawnSync } from "node:child_process"
 import { fileURLToPath } from "node:url"
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs"
 import { resolveWriteTarget } from "../../../../../plugins/desk/mcp/src/util/paths.js"
+import { removeTreeSync } from "../_remove_tree.js"
 
 let fixtureRoot
 beforeEach(() => {
@@ -13,7 +14,7 @@ beforeEach(() => {
   mkdirSync(path.join(fixtureRoot, "desk", "desks", "member"), { recursive: true })
   seedCanonicalFiles(context())
 })
-afterEach(() => rmSync(fixtureRoot, { recursive: true, force: true }))
+afterEach(() => removeTreeSync(fixtureRoot))
 
 async function loadResolver() {
   const { resolveSuperpowersContext } = await import("../../../../../plugins/desk/mcp/src/activation/superpowers-context.js")
@@ -410,7 +411,7 @@ test("context refuses a directory in place of a canonical file", async () => {
 test("context refuses a missing person root without provisioning it", async () => {
   const input = context()
   const personRoot = path.join(input.deskRoot, "desks", "member")
-  rmSync(personRoot, { recursive: true })
+  removeTreeSync(personRoot)
   const resolveContext = await loadResolver()
   await assert.rejects(() => resolveContext(input), { message: "desk-mcp: effective write root does not exist: Create the missing effective write root first: desks/member" })
   assert.equal(existsSync(personRoot), false)

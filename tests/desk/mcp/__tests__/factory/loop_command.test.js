@@ -4,7 +4,7 @@
 
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { mkdtempSync, promises as fs, rmSync } from "node:fs"
+import { mkdtempSync, promises as fs } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 import { osEnv } from "../_os_env.js"
@@ -18,6 +18,7 @@ import { runMeasureStep } from "../../../../../plugins/desk/mcp/src/factory/loop
 import { LOCK_OUTER_AGE_MS, takeLock } from "../../../../../plugins/desk/mcp/src/factory/process-lock.js"
 import { readWorker, WORKER_STATE_FILE } from "../../../../../plugins/desk/mcp/src/factory/loop-worker-state.js"
 import { factoryStateRoot, readStatus, requestEvaluation, setConsent, updateStatus } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
+import { removeTree, removeTreeSync } from "../_remove_tree.js"
 
 const STORE = "ourostack/factory"
 const MINUTE = 60 * 1000
@@ -33,7 +34,7 @@ async function scratch(run, { consent = true } = {}) {
   try {
     return await run({ env, base, desk })
   } finally {
-    rmSync(base, { recursive: true, force: true })
+    removeTreeSync(base)
   }
 }
 
@@ -421,7 +422,7 @@ test("when the status cannot be written the same three fields go to a small file
   await fs.writeFile(file, JSON.stringify(newer))
   assert.equal(readWorker({ loop: { worker: { at: "2026-01-01T00:00:00.000Z", result: "completed", since: "2026-01-01T00:00:00.000Z" } } }, root).result, "busy")
   assert.equal(readWorker({ loop: { worker: { at: "2031-01-01T00:00:00.000Z", result: "completed", since: "2031-01-01T00:00:00.000Z" } } }, root).result, "completed")
-  await fs.rm(path.join(root, "locks"), { recursive: true, force: true })
+  await removeTree(path.join(root, "locks"))
   await fs.writeFile(path.join(root, "locks"), "a file where a folder should be")
   await runLoopWorker({ ...ctx.env, DESK_FACTORY_LOOP: "off" }, { deskRoot: ctx.desk, pluginVersion: "9.9.9", impls: fakes([]), updateStatusImpl: broken })
 }))

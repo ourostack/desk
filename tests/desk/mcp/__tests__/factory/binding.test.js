@@ -6,7 +6,7 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { createHash } from "node:crypto"
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 
@@ -14,6 +14,7 @@ import { bindSession, jobId, normalizeRemote } from "../../../../../plugins/desk
 import { DESK_MARKER } from "../../../../../plugins/desk/mcp/src/factory/shell-git.js"
 import { LIMITS, validateLocalFacts } from "../../../../../plugins/desk/mcp/src/factory/schema.js"
 import { deriveClaudeSession } from "../../../../../plugins/desk/mcp/src/factory/derive-claude.js"
+import { removeTreeSync } from "../_remove_tree.js"
 
 const SENTINEL = "SENTINEL-7f3a"
 const DESK = "/work/desk"
@@ -411,7 +412,7 @@ test("the desk root is matched through a symlink, so a transcript that recorded 
     assert.equal(bind(write, { deskRoot: link }).jobs.length, 1)
     assert.equal(bind(write, { deskRoot: realpathSync(real) }).jobs.length, 1, "a real desk root needs no second form")
   } finally {
-    rmSync(scratch, { recursive: true, force: true })
+    removeTreeSync(scratch)
   }
 })
 
@@ -504,7 +505,7 @@ test("end to end: a derived session that only reads the desk binds nothing", asy
     assert.deepEqual(calls.readTask, [])
     assert.deepEqual(calls.between, [])
   } finally {
-    rmSync(scratch, { recursive: true, force: true })
+    removeTreeSync(scratch)
   }
 })
 
@@ -636,7 +637,7 @@ test("remote normalization reaches the job: scp-style and credentialed https giv
     assert.equal(viaLink, bind(events, { deskRemote: null, deskRoot: real }).jobs[0].job)
     assert.equal(viaLink, expectedId(`local:${realpathSync(real)}`, "", TRACK, SLUG))
   } finally {
-    rmSync(scratch, { recursive: true, force: true })
+    removeTreeSync(scratch)
   }
 })
 
@@ -701,7 +702,7 @@ test("end to end: a failed Write under the desk binds nothing; the successful on
     const { jobs } = bind(events)
     assert.deepEqual(jobs.map(({ job, basis }) => ({ job, basis })), [{ job: expectedId(NORMALIZED, "", TRACK, SLUG), basis: ["file_write"] }])
   } finally {
-    rmSync(scratch, { recursive: true, force: true })
+    removeTreeSync(scratch)
   }
 })
 

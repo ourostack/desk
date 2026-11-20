@@ -10,6 +10,7 @@ import { spawnSync } from "node:child_process"
 import { desk_save } from "../../../../plugins/desk/mcp/src/tools/desk-save.js"
 import { TOOL_INPUT_SCHEMAS } from "../../../../plugins/desk/mcp/src/tool-schemas.js"
 import { mkTempDeskRoot, exists } from "./tools/_helpers.js"
+import { removeTree } from "./_remove_tree.js"
 
 function git(root, args) {
   const result = spawnSync("git", ["-C", root, ...args], { encoding: "utf8" })
@@ -150,7 +151,7 @@ test("desk_save refuses a `files` path through a committed symlink to outside th
     await assertRefused(root, { path: "link/sub/x.md", content: "escape" })
     assert.deepEqual(await fs.readdir(outside), [])
   } finally {
-    await fs.rm(outside, { recursive: true, force: true })
+    await removeTree(outside)
   }
 })
 

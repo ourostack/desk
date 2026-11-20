@@ -6,7 +6,7 @@
 
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
@@ -25,6 +25,7 @@ import {
   TRUNCATED_SKEWED_RESULT_AT,
   padded,
 } from "./fixtures/claude/make.js"
+import { removeTreeSync } from "../_remove_tree.js"
 
 // A POSIX-looking path that Desk resolves with the host's own rules comes back as `D:\\w\\a.md` on Windows; this reads it back as `/w/a.md` so the fixtures can state paths one way. Off Windows it changes nothing.
 const posixSpelling = (value) => (process.platform === "win32" && typeof value === "string" ? value.replace(/^[A-Za-z]:/u, "").replaceAll("\\", "/") : value)
@@ -201,7 +202,7 @@ test("a subagent whose model resolves nowhere still marks models unavailable (so
     assert.equal(facts.agents[1].model, "unknown")
     assert.deepEqual(facts.unavailable.filter((entry) => entry.field === "models"), [{ field: "models", reason: "source_unreadable" }])
   } finally {
-    rmSync(dir, { recursive: true, force: true })
+    removeTreeSync(dir)
   }
 })
 
@@ -618,7 +619,7 @@ async function deriveLines(lines, endReason = "prompt_input_exit", children = {}
     }
     return await deriveClaudeSession({ transcriptPath: transcript, plugins: PLUGINS, endReason })
   } finally {
-    rmSync(dir, { recursive: true, force: true })
+    removeTreeSync(dir)
   }
 }
 
@@ -971,7 +972,7 @@ async function deriveWithSubagents(rootLines, subagents) {
     }
     return await deriveClaudeSession({ transcriptPath: path.join(dir, `${SUB_SESSION_ID}.jsonl`), plugins: PLUGINS, endReason: "prompt_input_exit" })
   } finally {
-    rmSync(dir, { recursive: true, force: true })
+    removeTreeSync(dir)
   }
 }
 
@@ -1107,7 +1108,7 @@ async function deriveInline(lines) {
     writeFileSync(file, lines.map((line, index) => JSON.stringify({ ...envelope, timestamp: `2026-09-25T13:00:${String(index).padStart(2, "0")}.000Z`, ...line })).join("\n") + "\n")
     return await deriveClaudeSession({ transcriptPath: file, plugins: PLUGINS, endReason: "prompt_input_exit" })
   } finally {
-    rmSync(dir, { recursive: true, force: true })
+    removeTreeSync(dir)
   }
 }
 
@@ -1515,7 +1516,7 @@ test("an unreadable subagents folder flags agents source_unreadable, and a missi
     assert.ok(hasFlag(broken.facts, "agents", "source_unreadable"))
     assert.deepEqual(validateLocalFacts(broken.facts), { ok: true, errors: [] })
   } finally {
-    rmSync(dir, { recursive: true, force: true })
+    removeTreeSync(dir)
   }
 })
 
@@ -1708,7 +1709,7 @@ test("a damaged subagent file does not flag the root's human turns", async () =>
     const { facts } = await deriveClaudeSession({ transcriptPath: root, plugins: PLUGINS, endReason: null })
     assert.deepEqual(humanTurnsFlags(facts), [])
   } finally {
-    rmSync(dir, { recursive: true, force: true })
+    removeTreeSync(dir)
   }
 })
 
@@ -1737,7 +1738,7 @@ test("a log that ends mid-record, or has an unreadable line, flags human_turns",
     assert.equal(damaged.facts.human_turns.length, 2)
     assert.deepEqual(humanTurnsFlags(damaged.facts), [{ field: "human_turns", reason: "source_unreadable" }])
   } finally {
-    rmSync(dir, { recursive: true, force: true })
+    removeTreeSync(dir)
   }
 })
 

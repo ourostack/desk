@@ -16,6 +16,7 @@ import { TOOL_INPUT_SCHEMAS } from "../../../../../plugins/desk/mcp/src/tool-sch
 import { SOURCES, CLOSE_REASONS, cardKey, readCards } from "../../../../../plugins/desk/mcp/src/desk/improvement-cards.js"
 import { READ_ONLY_TOOLS } from "../../../../../plugins/desk/mcp/src/factory/headless-flag.js"
 import { assertRoute } from "./_route_around.js"
+import { removeTree } from "../_remove_tree.js"
 
 const JOB = "0123456789abcdef0123456789abcdef"
 const FP = "fedcba9876543210fedcba9876543210"
@@ -332,7 +333,7 @@ test("improvement_update refuses a card that is not yours, not found, not claime
 test("improvement_update refuses when the card folder cannot be read", async () => {
   const w = await where()
   const held = await claimed(w)
-  await fs.rm(path.join(w.folder, "invalid"), { recursive: true, force: true })
+  await removeTree(path.join(w.folder, "invalid"))
   await fs.writeFile(path.join(w.folder, "invalid"), "x")
   assert.deepEqual(await update(w, { key: held.card.key, claim_id: held.claim_id, state: "open" }), { status: "refused", result: "unreadable_folder" })
 })

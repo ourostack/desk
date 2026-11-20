@@ -9,10 +9,11 @@ import { promises as fs } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 import { after } from "node:test"
+import { removeTree } from "../_remove_tree.js"
 
 const tempDeskRoots = new Set()
 
-after(() => Promise.all([...tempDeskRoots].map((root) => fs.rm(root, { recursive: true, force: true }))))
+after(() => Promise.all([...tempDeskRoots].map((root) => removeTree(root))))
 
 export async function mkTempDeskRoot() {
   const root = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), "desk-search-test-"))

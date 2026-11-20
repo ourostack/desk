@@ -31,6 +31,7 @@ import {
   writeOrganizationRecord,
   writeRecordProblem,
 } from "../../../../../plugins/desk/mcp/src/desk/tidy.js"
+import { removeTreeSync } from "../_remove_tree.js"
 
 // A path put into a regular expression: a Windows path holds backslashes.
 const reEscape = (value) => value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")
@@ -43,7 +44,7 @@ const RECENT = "2026-09-20T00:00:00Z"
 
 const scratch = new Set()
 after(() => {
-  for (const dir of scratch) rmSync(dir, { recursive: true, force: true })
+  for (const dir of scratch) removeTreeSync(dir)
 })
 
 function tempDir(prefix = "desk-tidy-test-") {
@@ -641,7 +642,7 @@ test("under a node:test run, a real (non-temp) identity cache folder is refused 
     assert.equal(person, "bob", "the lookup itself still answers")
     assert.equal(existsSync(path.join(fakeReal, ".local")), false, "the guard refuses before creating anything under the fake real home")
   } finally {
-    rmSync(fakeReal, { recursive: true, force: true })
+    removeTreeSync(fakeReal)
   }
 })
 

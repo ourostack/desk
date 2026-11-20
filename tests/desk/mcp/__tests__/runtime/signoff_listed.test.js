@@ -1,14 +1,15 @@
 // The session record of the unsigned deliveries a boot listed, so a resumed or compacted session is not asked twice (Package H).
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, utimesSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 import { SIGNOFF_LISTED_DIR, hostSessionId, listedFile, noteSignoffListed } from "../../../../../plugins/desk/mcp/src/runtime/signoff-listed.js"
 import { signoffInstructions } from "../../../../../plugins/desk/mcp/src/desk/unsigned-deliveries.js"
+import { removeTreeSync } from "../_remove_tree.js"
 
 const ROOT = mkdtempSync(path.join(tmpdir(), "signoff-listed-"))
-test.after(() => rmSync(ROOT, { recursive: true, force: true }))
+test.after(() => removeTreeSync(ROOT))
 let counter = 0
 const fresh = () => path.join(ROOT, `state-${(counter += 1)}`)
 const found = (...slugs) => ({ count: slugs.length, tasks: slugs.map((slug) => ({ track: "ops", slug })) })

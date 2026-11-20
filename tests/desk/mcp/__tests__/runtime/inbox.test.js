@@ -5,6 +5,7 @@ import { promises as fs } from "node:fs"
 import * as path from "node:path"
 import { mkTempRoot } from "../_temp_roots.js"
 import { INBOX, NOTES_SHOWN_CAP, acknowledgeNote, openNotes, parseNote, renderNote } from "../../../../../plugins/desk/mcp/src/runtime/inbox.js"
+import { removeTree } from "../_remove_tree.js"
 
 const note = (extra = {}) => ({ from: "ari", to: "saranya", created: "2026-10-30T13:00:00-07:00", subject: "The tracker is being extended", related: ["https://example.com/plan", "_shared/tracks/customer-engagement/track.md"], body: "Here's my understanding of what Ari was thinking.\n\nSecond paragraph.", ...extra })
 
@@ -96,7 +97,7 @@ test("openNotes lists the open notes in a person's inbox, oldest first, within a
   assert.equal(many.notes[0].subject.length, 120)
   assert.match(many.notes[0].subject, /^N0 long long/u)
   // A note missing its sender or subject still shows, with a placeholder.
-  await fs.rm(inbox, { recursive: true })
+  await removeTree(inbox)
   await fs.mkdir(inbox)
   await fs.writeFile(path.join(inbox, "x.md"), "---\nstatus: open\n---\n")
   assert.deepEqual(openNotes(root, "desks/saranya").notes, [{ from: "unknown", created: "unknown", subject: "(no subject)", path: "desks/saranya/_inbox/x.md" }])

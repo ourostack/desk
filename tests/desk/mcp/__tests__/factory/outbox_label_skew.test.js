@@ -14,6 +14,7 @@ import {
 import { LABEL_CHECK_CODES, validateLabels } from "../../../../../plugins/desk/mcp/src/factory/label-schema.js"
 import { fakeGitHub } from "./_fake_github.js"
 import { STORE, scratch } from "./_session_helpers.js"
+import { removeTree } from "../_remove_tree.js"
 
 const GOLDEN = JSON.parse(readFileSync(fileURLToPath(new URL("./fixtures/local-golden.json", import.meta.url)), "utf8"))
 const LABELS = JSON.parse(readFileSync(fileURLToPath(new URL("./fixtures/labels-golden.json", import.meta.url)), "utf8"))
@@ -104,7 +105,7 @@ test("ownDeskVersion names the Desk when it runs from a source mirror with no pl
     delete env.CLAUDE_PLUGIN_ROOT
     assert.equal(execFileSync(process.execPath, ["--input-type=module", "-e", script], { env, encoding: "utf8" }), "3.2.0-alpha.901")
   } finally {
-    await rm(base, { recursive: true, force: true })
+    await removeTree(base)
   }
 })
 
@@ -128,7 +129,7 @@ test("ownDeskVersion prefers the plugin.json beside the running code over DESK_P
     const env = { ...process.env, DESK_PLUGIN_ROOT: updated }
     assert.equal(execFileSync(process.execPath, ["--input-type=module", "-e", script], { env, encoding: "utf8" }), "3.2.0-alpha.902")
   } finally {
-    await rm(base, { recursive: true, force: true })
+    await removeTree(base)
   }
 })
 

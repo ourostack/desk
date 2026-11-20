@@ -13,6 +13,7 @@ import { activeTasks } from "../../../../../plugins/desk/mcp/src/desk/active-tas
 import { resolveSyncLockPath } from "../../../../../plugins/desk/mcp/src/runtime/sync-worker.js"
 import { readFileSync } from "node:fs"
 import { formatBootText } from "../../../../../plugins/desk/mcp/src/runtime/boot-text.js"
+import { removeTree } from "../_remove_tree.js"
 
 const POLICY = {
   schema_version: 1,
@@ -44,7 +45,7 @@ const pidAlive = (pid) => {
 }
 async function fixture(t, { policy = false } = {}) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "desk-task-log-"))
-  t.after(() => fs.rm(root, { recursive: true, force: true }))
+  t.after(() => removeTree(root))
   git(root, ["init", "-q", "-b", "main"])
   git(root, ["config", "user.name", "Test"])
   git(root, ["config", "user.email", "test@example.com"])
@@ -92,7 +93,7 @@ test("ten rapid log entries are one commit and one push, and every reader sees e
 test("a log entry reaches a commit and the remote when the server is killed inside the quiet window", async (t) => {
   const root = await fixture(t)
   const origin = await fs.mkdtemp(path.join(os.tmpdir(), "desk-task-log-origin-"))
-  t.after(() => fs.rm(origin, { recursive: true, force: true }))
+  t.after(() => removeTree(origin))
   git(origin, ["init", "-q", "--bare", "-b", "main"])
   git(root, ["remote", "set-url", "origin", origin])
   git(root, ["push", "-q", "-u", "origin", "main"])

@@ -1,13 +1,14 @@
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { mkdtempSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 import { assertCoverageCommandParity } from "../../../../../tools/desk-build/coverage/gate.js"
+import { removeTreeSync } from "../_remove_tree.js"
 
 test("another workflow event does not satisfy the required pull-request and push filters", t => {
   const root = mkdtempSync(path.join(tmpdir(), "desk-coverage-events-"))
-  t.after(() => rmSync(root, { recursive: true, force: true }))
+  t.after(() => removeTreeSync(root))
   const packageJsonPath = path.join(root, "package.json")
   const workflowPath = path.join(root, "workflow.yml")
   writeFileSync(packageJsonPath, JSON.stringify({
@@ -34,7 +35,7 @@ test("another workflow event does not satisfy the required pull-request and push
 
 test("a pull request with no path filter satisfies the pull-request requirement, and one with a filter must still cover the root scripts", t => {
   const root = mkdtempSync(path.join(tmpdir(), "desk-coverage-events-"))
-  t.after(() => rmSync(root, { recursive: true, force: true }))
+  t.after(() => removeTreeSync(root))
   const packageJsonPath = path.join(root, "package.json")
   const workflowPath = path.join(root, "workflow.yml")
   writeFileSync(packageJsonPath, JSON.stringify({
@@ -63,7 +64,7 @@ test("a pull request with no path filter satisfies the pull-request requirement,
 
 test("a pull request trigger that can skip a pull request is refused whatever limit it uses", t => {
   const root = mkdtempSync(path.join(tmpdir(), "desk-coverage-events-"))
-  t.after(() => rmSync(root, { recursive: true, force: true }))
+  t.after(() => removeTreeSync(root))
   const packageJsonPath = path.join(root, "package.json")
   const workflowPath = path.join(root, "workflow.yml")
   writeFileSync(packageJsonPath, JSON.stringify({
@@ -83,7 +84,7 @@ test("a pull request trigger that can skip a pull request is refused whatever li
 
 test("a push filtered only by paths-ignore covers the root scripts unless it ignores them", t => {
   const root = mkdtempSync(path.join(tmpdir(), "desk-coverage-events-"))
-  t.after(() => rmSync(root, { recursive: true, force: true }))
+  t.after(() => removeTreeSync(root))
   const packageJsonPath = path.join(root, "package.json")
   const workflowPath = path.join(root, "workflow.yml")
   writeFileSync(packageJsonPath, JSON.stringify({
@@ -117,7 +118,7 @@ test("a push filtered only by paths-ignore covers the root scripts unless it ign
 
 test("a push to main with no path filter at all covers the root scripts", t => {
   const root = mkdtempSync(path.join(tmpdir(), "desk-coverage-events-"))
-  t.after(() => rmSync(root, { recursive: true, force: true }))
+  t.after(() => removeTreeSync(root))
   const packageJsonPath = path.join(root, "package.json")
   const workflowPath = path.join(root, "workflow.yml")
   writeFileSync(packageJsonPath, JSON.stringify({

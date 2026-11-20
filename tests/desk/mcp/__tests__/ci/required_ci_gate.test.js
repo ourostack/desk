@@ -3,12 +3,13 @@
 // for every other job in its workflow. A pull request runs every check main runs, the Windows suite included, so main's own run only confirms a merge.
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
-import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs"
 import { spawnSync } from "node:child_process"
 import * as os from "node:os"
 import { createRequire } from "node:module"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
+import { removeTreeSync } from "../_remove_tree.js"
 
 const require = createRequire(import.meta.url)
 const { load } = require("js-yaml")
@@ -73,7 +74,7 @@ function gateVerdict({ code, evals, quick = "success", results = {}, event = "pu
     writeFileSync(script, workflow("desk-mcp-tests.yml").jobs["ci-gate"].steps[0].run)
     return spawnSync("bash", [script], { encoding: "utf8", env: { ...process.env, RESULTS: JSON.stringify(needs), EVENT: event } }).status
   } finally {
-    rmSync(dir, { recursive: true, force: true })
+    removeTreeSync(dir)
   }
 }
 const skipped = (...ids) => Object.fromEntries(ids.map((id) => [id, "skipped"]))

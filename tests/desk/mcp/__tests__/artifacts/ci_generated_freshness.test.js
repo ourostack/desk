@@ -14,6 +14,7 @@ import {
 } from "node:fs"
 import { createRequire } from "node:module"
 import { devNull, tmpdir } from "node:os"
+import { removeTreeSync } from "../_remove_tree.js"
 // Git for Windows rejects Node's `\\.\nul` spelling of the null device but maps `/dev/null` itself.
 const gitNull = process.platform === "win32" ? "/dev/null" : devNull
 import * as path from "node:path"
@@ -57,7 +58,7 @@ test("the artifact archive reader ignores directory headers and preserves their 
     assert.equal(contents.has("artifact/"), false)
     assert.equal(contents.get("artifact/payload.txt").toString("utf8"), "fixture payload\n")
   } finally {
-    rmSync(root, { recursive: true, force: true })
+    removeTreeSync(root)
   }
 })
 
@@ -175,7 +176,7 @@ async function withHostFreshnessFixture(fn) {
     }
     return await fn(fixtureRoot)
   } finally {
-    rmSync(tempRoot, { recursive: true, force: true })
+    removeTreeSync(tempRoot)
   }
 }
 
@@ -222,7 +223,7 @@ async function withValidateSkillsFixture({ hostStatus = 0, generatedStatus = 0 }
 
     return await fn(fixtureRoot)
   } finally {
-    rmSync(tempRoot, { recursive: true, force: true })
+    removeTreeSync(tempRoot)
   }
 }
 
@@ -506,7 +507,7 @@ test("root generated-artifact verifier rejects present but stale runtime depende
     assert.match(result.errors.join("\n"), /runtime dependency pack checksum mismatch/u)
     assert.match(result.errors.join("\n"), /manifest archive\.sha256 must match runtime-deps\.tgz/u)
   } finally {
-    rmSync(tempRoot, { recursive: true, force: true })
+    removeTreeSync(tempRoot)
   }
 })
 
@@ -529,7 +530,7 @@ test("root generated-artifact verifier CLI fails closed on setup exceptions", as
     assert.equal(stdout.join(""), "")
     assert.match(stderr.join(""), /Cannot find module|ENOENT|no such file or directory/u)
   } finally {
-    rmSync(tempRoot, { recursive: true, force: true })
+    removeTreeSync(tempRoot)
   }
 })
 
@@ -658,7 +659,7 @@ test("root generated-artifact verifier covers defensive helper and CLI branches"
     )
 
   } finally {
-    rmSync(tempRoot, { recursive: true, force: true })
+    removeTreeSync(tempRoot)
   }
 })
 
@@ -813,7 +814,7 @@ test("root host verifier selects an explicit legacy configuration across both na
       loadText("plugins", "desk", "activation", "host-capability-evidence.md").replace("; plugins/superpowers/hooks/copilot-hooks.json", ""),
     ))
     // A hardcoded read of any Superpowers provider is now a real missing-file failure.
-    rmSync(path.join(root, "plugins", "superpowers"), { recursive: true })
+    removeTreeSync(path.join(root, "plugins", "superpowers"))
     const verify = () => verifier.verifyDeskHostManifests({
       repoRoot: root, mcpRoot, io: { stdout: { write() {} }, stderr: { write() {} } },
     })
@@ -1018,7 +1019,7 @@ test("fingerprinted source bytes survive a Windows-style Git checkout", () => {
     }
     assert.deepEqual(readFileSync(path.join(checkoutRoot, "opaque.bin")), binary)
   } finally {
-    rmSync(tempRoot, { recursive: true, force: true })
+    removeTreeSync(tempRoot)
   }
 })
 

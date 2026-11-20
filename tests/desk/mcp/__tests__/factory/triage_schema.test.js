@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { readFileSync, mkdtempSync, rmSync } from "node:fs"
+import { readFileSync, mkdtempSync } from "node:fs"
 import * as os from "node:os"
 import { validatePr } from "../../../../../plugins/desk/mcp/src/factory/pipeline/validate-pr.js"
 import { validatePublishedBytes } from "../../../../../plugins/desk/mcp/src/factory/published-schema.js"
@@ -8,6 +8,7 @@ import { parseCard } from "../../../../../plugins/desk/mcp/src/factory/pipeline/
 import { SOURCES, STATES, openImprovement, readCards } from "../../../../../plugins/desk/mcp/src/desk/improvement-cards.js"
 import * as triage from "../../../../../plugins/desk/mcp/src/factory/triage-schema.js"
 import { isCredentialLike } from "../../../../../plugins/desk/mcp/src/factory/credential.js"
+import { removeTreeSync } from "../_remove_tree.js"
 
 const fixture = JSON.parse(readFileSync(new URL("./fixtures/v12-triage.json", import.meta.url)))
 const bytes = (value) => `${JSON.stringify(value)}\n`
@@ -254,7 +255,7 @@ test("triage_intake_preserves_old_readers", async () => {
     assert.equal(result.cards.length, 1)
     assert.equal(result.cards[0].state, "open")
     assert.equal(Object.hasOwn(result.cards[0], "triage"), false)
-  } finally { rmSync(root, { recursive:true,force:true }) }
+  } finally { removeTreeSync(root) }
 })
 
 test("public_byte_version_and_pointer_boundaries_refuse_without_echo", () => {

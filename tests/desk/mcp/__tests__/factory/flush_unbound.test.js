@@ -12,6 +12,7 @@ import { labelBinding, releaseReboundLabels, withdrawLabels } from "../../../../
 import { factoryStateRoot, quarantine, readConsent, readDelivered, setConsent, writeLocalFacts, writeLocalLabels, writeMarker } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 import { fakeGitHub } from "./_fake_github.js"
 import { STORE, scratch } from "./_session_helpers.js"
+import { removeTree } from "../_remove_tree.js"
 
 const GOLDEN = JSON.parse(readFileSync(fileURLToPath(new URL("./fixtures/local-golden.json", import.meta.url)), "utf8"))
 const LABELS = JSON.parse(readFileSync(fileURLToPath(new URL("./fixtures/labels-golden.json", import.meta.url)), "utf8"))
@@ -137,7 +138,7 @@ test("unknown is not unbound: facts that are missing, unreadable, not a file or 
     () => fs.rm(facts),
     () => fs.writeFile(facts, "{not json"),
     async () => { await fs.rm(facts, { force: true }); await fs.mkdir(facts) },
-    async () => { await fs.rm(facts, { recursive: true, force: true }); await fs.writeFile(facts, JSON.stringify({ ...localFacts(1, { binds: false }), schema: "desk.factory.local/99" })) },
+    async () => { await removeTree(facts); await fs.writeFile(facts, JSON.stringify({ ...localFacts(1, { binds: false }), schema: "desk.factory.local/99" })) },
   ]) {
     await damage()
     assert.equal(await labelBinding(ctx.env, STORE, keyOf(1)), "unknown")
@@ -145,7 +146,7 @@ test("unknown is not unbound: facts that are missing, unreadable, not a file or 
     await run(ctx.env, github)
     assert.equal(labelsOnMain(github).length, 2)
     assert.equal(github.calls.length >= calls, true)
-    await fs.rm(facts, { recursive: true, force: true })
+    await removeTree(facts)
     await fs.writeFile(facts, original)
   }
   assert.equal(await labelBinding(ctx.env, STORE, keyOf(1)), "bound")
@@ -163,7 +164,7 @@ test("labelBinding reads only a valid labels key and a readable state folder", (
   await fs.writeFile(path.join(await root(ctx), "outbox", SLUG, nameOf(1, "copilot-cli")), JSON.stringify(other))
   assert.equal(await labelBinding(ctx.env, STORE, keyOf(1)), "bound")
   // An outbox folder that is not a folder cannot be read: unknown.
-  await fs.rm(path.join(await root(ctx), "outbox", SLUG), { recursive: true })
+  await removeTree(path.join(await root(ctx), "outbox", SLUG))
   await fs.writeFile(path.join(await root(ctx), "outbox", SLUG), "x")
   assert.equal(await labelBinding(ctx.env, STORE, keyOf(1)), "unknown")
 }))

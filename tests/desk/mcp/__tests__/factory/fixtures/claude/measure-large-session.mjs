@@ -8,12 +8,13 @@
 // string) because a committed fixture that size would bloat the repository.
 // Its only stdout is one JSON line: `{ transcriptBytes, peakGrowthBytes, toolCalls }`.
 
-import { createWriteStream, mkdtempSync, rmSync, statSync } from "node:fs"
+import { createWriteStream, mkdtempSync, statSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 
 import { deriveClaudeSession } from "../../../../../../../plugins/desk/mcp/src/factory/derive-claude.js"
 import { buildLargeSessionLines, LARGE_SESSION } from "./make.js"
+import { removeTreeSync } from "../../../_remove_tree.js"
 
 async function writeLarge(filePath) {
   const { generate } = buildLargeSessionLines(LARGE_SESSION)
@@ -48,7 +49,7 @@ async function main() {
 
     process.stdout.write(`${JSON.stringify({ transcriptBytes, peakGrowthBytes: peak - baseline, toolCalls: facts.counts.tool_calls.shell })}\n`)
   } finally {
-    rmSync(dir, { recursive: true, force: true })
+    removeTreeSync(dir)
   }
 }
 

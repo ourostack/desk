@@ -1,8 +1,9 @@
 // The global test setup, so a factory test file run on its own with `node --test <file>` reads and writes only temporary state, never the machine's own factory consent.
 import "../_isolated_env.mjs"
-import { mkdtemp, realpath, mkdir, writeFile, rm } from "node:fs/promises"
+import { mkdtemp, realpath, mkdir, writeFile } from "node:fs/promises"
 import * as os from "node:os"
 import * as path from "node:path"
+import { removeTree } from "../_remove_tree.js"
 
 export const ID = "3b0c1f5e-8a1d-4c2e-9f3a-1b2c3d4e5f60"
 export const STORE = "ourostack/factory"
@@ -20,7 +21,7 @@ export async function scratch(run) {
   try {
     return await run({ base, desk, env })
   } finally {
-    await rm(base, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })
+    await removeTree(base)
   }
 }
 

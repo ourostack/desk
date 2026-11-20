@@ -4,11 +4,12 @@
 
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 
 import { DEFAULT_STORE, recheckRoute, rereadWarnings, resolveStore } from "../../../../../plugins/desk/mcp/src/factory/store-route.js"
+import { removeTreeSync } from "../_remove_tree.js"
 
 // The result without its warnings; the warning tests below check those.
 function route(args) {
@@ -22,7 +23,7 @@ function scratch(run) {
   try {
     return run(root)
   } finally {
-    rmSync(root, { recursive: true, force: true })
+    removeTreeSync(root)
   }
 }
 
@@ -210,7 +211,7 @@ test("recheckRoute: a route recorded while a manifest was unreadable is held unt
     assert.deepEqual(recheckRoute(legacy), held, "declares nothing: the old hook's recorded public default is not proof")
     assert.deepEqual(recheckRoute({ store: "corp/other", source: "overlay", warnings }), { store: "corp/other", source: "overlay", warnings: [] })
     assert.deepEqual(recheckRoute(current), held, "declares nothing, but what came after it was never recorded")
-    rmSync(corp, { recursive: true, force: true })
+    removeTreeSync(corp)
     for (const routing of [legacy, current]) assert.deepEqual(recheckRoute(routing), held, "gone: it can never be read again")
   })
 })

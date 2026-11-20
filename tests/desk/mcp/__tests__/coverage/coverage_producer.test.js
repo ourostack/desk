@@ -1,12 +1,13 @@
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import { spawnSync } from "node:child_process"
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 import processOnSpawn from "process-on-spawn"
 import { fileURLToPath } from "node:url"
 import { runCoverageCommand } from "../../../../../tools/desk-build/coverage/runner.js"
+import { removeTreeSync } from "../_remove_tree.js"
 
 const realRepoRoot = fileURLToPath(new URL("../../../../../", import.meta.url))
 
@@ -19,7 +20,7 @@ const offlineBridgeSource = "scripts/skill-evals.cjs"
 
 function runProducerFixture(t, { complete, includeUnexecuted = false, viaChild = false, childFromRepoRoot = false, offline = false, offlineTests = true, offlinePinnedTypeScript = true, offlineRegistration = true, offlineTypeScriptUnchanged = false, bridgeExecuted = true, exclusions = [] }) {
   const root = mkdtempSync(path.join(tmpdir(), "desk-coverage-producer-"))
-  t.after(() => rmSync(root, { recursive: true, force: true }))
+  t.after(() => removeTreeSync(root))
   const repoRoot = path.join(root, "repo")
   const physicalRoot = path.join(root, "physical")
   mkdirSync(physicalRoot)
@@ -243,7 +244,7 @@ function runProducerFixture(t, { complete, includeUnexecuted = false, viaChild =
         const coverageFile = path.join(directory, "coverage-final.json")
         if (existsSync(summaryFile)) summary = JSON.parse(readFileSync(summaryFile, "utf8"))
         if (existsSync(coverageFile)) coverage = JSON.parse(readFileSync(coverageFile, "utf8"))
-        rmSync(directory, { recursive: true, force: true })
+        removeTreeSync(directory)
       },
     },
     spawn: (command, args, options) => {

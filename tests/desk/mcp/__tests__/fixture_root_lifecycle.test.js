@@ -1,10 +1,11 @@
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import { spawnSync } from "node:child_process"
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
+import { removeTreeSync } from "./_remove_tree.js"
 
 // Fixture roots created under the OS temp dir must not outlive the test file that
 // created them. Each case below runs one real test file in its own empty temp dir
@@ -87,7 +88,7 @@ for (const [relPath, prefix] of FIXTURE_OWNERS) {
         assert.equal(readFileSync(path.join(sentinel, "keep.txt"), "utf8"), "sentinel")
       }
     } finally {
-      rmSync(sandbox, { recursive: true, force: true })
+      removeTreeSync(sandbox)
     }
   })
 }
@@ -160,7 +161,7 @@ for (const outcome of ["failure", "abort"]) {
       }
       assert.equal(readFileSync(path.join(sameKind, "keep.txt"), "utf8"), "sentinel")
     } finally {
-      rmSync(sandbox, { recursive: true, force: true })
+      removeTreeSync(sandbox)
     }
   })
 }

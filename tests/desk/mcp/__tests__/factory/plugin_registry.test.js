@@ -11,6 +11,7 @@ import { toPublished } from "../../../../../plugins/desk/mcp/src/factory/publish
 import { validateLocalFacts } from "../../../../../plugins/desk/mcp/src/factory/schema.js"
 import { ID, STORE, json, scratch, session } from "./_session_helpers.js"
 import { isWindows } from "../_platform.js"
+import { removeTree } from "../_remove_tree.js"
 
 
 // A Claude Code plugin cache under <base>/cc/plugins/cache: each entry is [marketplace, plugin, version]. A marketplace is a GitHub marketplace (repo ourostack/desk, listing "listed" plugins) unless it is named in "nonGithub".
@@ -201,7 +202,7 @@ test("a symlinked plugin or version folder in the Claude Code cache does not cou
   const cache = path.join(ctx.base, "cc", "plugins", "cache", "ourostack")
   await fs.mkdir(path.join(ctx.base, "elsewhere"), { recursive: true })
   await fs.symlink(path.join(ctx.base, "elsewhere"), path.join(cache, "desk", "3.3.0"))
-  await fs.rm(path.join(cache, "old"), { recursive: true })
+  await removeTree(path.join(cache, "old"))
   await fs.symlink(path.join(cache, "desk"), path.join(cache, "old"))
   assert.equal(registrySource("claude-code", "desk", "3.2.0", { env: ctx.env }), "ourostack/desk")
   assert.equal(registrySource("claude-code", "desk", "3.3.0", { env: ctx.env }), null)

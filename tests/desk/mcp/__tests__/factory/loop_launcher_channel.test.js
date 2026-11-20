@@ -9,13 +9,14 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
-import { mkdtempSync, promises as fs, rmSync } from "node:fs"
+import { mkdtempSync, promises as fs } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 import { pathToFileURL } from "node:url"
 
 import "../_isolated_env.mjs"
 import { processAlive } from "../../../../../plugins/desk/mcp/src/factory/process-lock.js"
+import { removeTreeSync } from "../_remove_tree.js"
 
 const LOOP_WORKER = pathToFileURL(path.resolve(import.meta.dirname, "../../../../../plugins/desk/mcp/src/factory/loop-worker.js")).href
 const LIMIT_MS = 20000
@@ -81,7 +82,7 @@ async function launcherStopped(stdio) {
   } finally {
     if (parent.exitCode === null && parent.signalCode === null) process.kill(parent.pid)
     if (workerPid !== null && processAlive(workerPid)) process.kill(workerPid)
-    rmSync(dir, { recursive: true, force: true })
+    removeTreeSync(dir)
   }
 }
 

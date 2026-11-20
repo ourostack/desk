@@ -18,6 +18,7 @@ import {
 } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 import { fakeGitHub, httpError } from "./_fake_github.js"
 import { STORE, scratch } from "./_session_helpers.js"
+import { removeTree } from "../_remove_tree.js"
 
 const GOLDEN = JSON.parse(readFileSync(fileURLToPath(new URL("./fixtures/local-golden.json", import.meta.url)), "utf8"))
 const LABELS = JSON.parse(readFileSync(fileURLToPath(new URL("./fixtures/labels-golden.json", import.meta.url)), "utf8"))
@@ -125,7 +126,7 @@ test("an invalid declaration, or a desk folder that no longer resolves, freezes 
   // 1: desk folder gone (moved or renamed): frozen, where it routes now cannot be read; its delivered file stays. 2: unreadable declaration. 3: a declaration that is not a
   // store. 4: default route whose hook recorded that it could not resolve one. 5: marker pruned, its receipt's desk folder still there
   // with an unreadable declaration. 6: a marker with no desk root, whose receipt's desk now declares the other store.
-  await fs.rm(desks[0], { recursive: true })
+  await removeTree(desks[0])
   await fs.writeFile(path.join(desks[1], "_meta", "factory.json"), "{ not json")
   await reroute(desks[2], "not a store")
   await fs.rm(path.join(desks[3], "_meta", "factory.json"))
@@ -303,7 +304,7 @@ test("labels retracted from one job leave another job's labels in place: the emp
 test("a delivered record from before paths were recorded is retracted at the path republishing gives, only when the blob matches", () => scratch(async (ctx) => {
   const { github, desks } = await delivered(ctx, 2)
   const root = await factoryStateRoot(ctx.env)
-  await fs.rm(path.join(root, "delivered-paths"), { recursive: true })
+  await removeTree(path.join(root, "delivered-paths"))
   await reroute(desks[0], OTHER)
   const record = path.join(root, "delivered", "ourostack__factory.json")
   const blobs = JSON.parse(await fs.readFile(record, "utf8"))
@@ -319,7 +320,7 @@ test("a delivered record from before paths were recorded is retracted at the pat
 test("an older delivered record with labels is retracted at the republished paths; one whose local files are gone or no longer publish is kept, never quarantined", () => scratch(async (ctx) => {
   const { github, desks } = await delivered(ctx, 4, { labelled: [1, 4] })
   const root = await factoryStateRoot(ctx.env)
-  await fs.rm(path.join(root, "delivered-paths"), { recursive: true })
+  await removeTree(path.join(root, "delivered-paths"))
   // Session 3's local facts are gone, so nothing says where it was delivered.
   await fs.rm(path.join(root, "outbox", "ourostack__factory", nameOf(3)))
   // Session 4's local facts and labels no longer publish at all (the transform refuses the one and the labels gate the other).
@@ -330,7 +331,7 @@ test("an older delivered record with labels is retracted at the republished path
   await fs.writeFile(path.join(root, "labels", "ourostack__factory", LABELS.job, `${sessionId(4)}.json`), `${JSON.stringify({ ...structuredClone(LABELS), session: sessionId(5) })}\n`, { mode: 0o600 })
   for (const desk of desks) await reroute(desk, OTHER)
   // Session 2's desk folder is a plain file, which is not a desk.
-  await fs.rm(desks[1], { recursive: true })
+  await removeTree(desks[1])
   await fs.writeFile(desks[1], "not a folder")
   assert.equal((await run(ctx.env, github)).result, "delivered_pr_open")
   assert.equal(github.pulls.at(-1).body, "0\n\nRetracted: 2 files (route_changed)")
@@ -607,8 +608,8 @@ test("a crash between the delivered and retracting writes leaves a safe state", 
 test("delivered records lost while away: the store's copy is found by its blob the next time the flush is online, and deleted", () => scratch(async (ctx) => {
   const { github, desks } = await delivered(ctx, 1)
   const root = await factoryStateRoot(ctx.env)
-  await fs.rm(path.join(root, "delivered"), { recursive: true })
-  await fs.rm(path.join(root, "delivered-paths"), { recursive: true })
+  await removeTree(path.join(root, "delivered"))
+  await removeTree(path.join(root, "delivered-paths"))
   await reroute(desks[0], OTHER)
   // Nothing local says this machine has anything in the store, so an idle flush stays offline.
   await offline(ctx, github)
@@ -673,7 +674,7 @@ test("a refusal whose return to delivered was cut short is finished by the next 
   assert.deepEqual(await names(ctx), [nameOf(1)])
   const root = await factoryStateRoot(ctx.env)
   await fs.writeFile(await retractingFile(ctx), retracting)
-  await fs.rm(path.join(root, "delivered"), { recursive: true })
+  await removeTree(path.join(root, "delivered"))
   await offline(ctx, github)
   assert.deepEqual(await names(ctx), [nameOf(1)])
   assert.equal((await lastFlush(ctx)).retractions_refused, 1)
@@ -1009,7 +1010,7 @@ test("P2: a marker pruned while its delete is open keeps retracting with a resol
   const root = await factoryStateRoot(ctx.env)
   for (const n of [1, 2]) await fs.rm(path.join(root, "markers", nameOf(n)))
   // Desk 2 is gone too: its root cannot be resolved, so its delete leaves the branch and its record stays, counted.
-  await fs.rm(desks[1], { recursive: true })
+  await removeTree(desks[1])
   assert.equal((await run(ctx.env, github)).result, "delivered_pr_open")
   assert.equal(open.state, "open")
   assert.deepEqual([...github.headFiles(STORE, await branchOf(ctx.env)).keys()], [`facts/${nameOf(2)}`])

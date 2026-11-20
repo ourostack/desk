@@ -10,6 +10,7 @@ import * as fs from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
+import { removeTreeSync } from "../__tests__/_remove_tree.js"
 
 const args = process.argv.slice(2)
 const arg = (name, fallback) => (args.includes(name) ? args[args.indexOf(name) + 1] : fallback)
@@ -95,5 +96,5 @@ console.log(JSON.stringify({
   meanMsPerAppend: +(sum / n).toFixed(1), p50Ms: +sorted[Math.floor(n / 2)].toFixed(1), maxMs: +sorted[n - 1].toFixed(1), totalMs: Math.round(sum), drainMs: Math.round(drained),
   commitsMade: commits, pushesScheduled: pushes, gitProcessesPerAppend: +(gitProcesses / n).toFixed(1),
 }))
-fs.rmSync(base, { recursive: true, force: true })
+removeTreeSync(base)
 process.exit(0)

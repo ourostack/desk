@@ -5,10 +5,11 @@ import { syncBuiltinESMExports } from "node:module"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { resolveSuperpowersContext } from "../../../../../plugins/desk/mcp/src/activation/superpowers-context.js"
+import { removeTree } from "../_remove_tree.js"
 
 test("context preserves a canonical task stat error after successful root validation without changing files", async (t) => {
   const base = await fs.mkdtemp(path.join(tmpdir(), "superpowers-canonical-stat-"))
-  t.after(() => fs.rm(base, { recursive: true, force: true }))
+  t.after(() => removeTree(base))
   const deskRoot = path.join(base, "desk")
   const taskPath = path.join(deskRoot, "task")
   const iterationPath = path.join(taskPath, "iteration")
@@ -48,7 +49,7 @@ test("context preserves a canonical task stat error after successful root valida
 
 test("default progress selection surfaces a permission error instead of silently falling back to the task card", async (t) => {
   const base = await fs.mkdtemp(path.join(tmpdir(), "superpowers-default-progress-"))
-  t.after(() => fs.rm(base, { recursive: true, force: true }))
+  t.after(() => removeTree(base))
   const deskRoot = path.join(base, "desk")
   const taskPath = path.join(deskRoot, "task")
   const iterationPath = path.join(taskPath, "iteration")
@@ -81,7 +82,7 @@ test("default progress selection surfaces a permission error instead of silently
 
 test("an absent iteration progress record falls back to the canonical task card without creating either", async (t) => {
   const base = await fs.mkdtemp(path.join(tmpdir(), "superpowers-task-card-only-"))
-  t.after(() => fs.rm(base, { recursive: true, force: true }))
+  t.after(() => removeTree(base))
   const deskRoot = path.join(base, "desk")
   const taskPath = path.join(deskRoot, "task")
   const iterationPath = path.join(taskPath, "iteration")

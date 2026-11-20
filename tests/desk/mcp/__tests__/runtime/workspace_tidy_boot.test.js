@@ -11,6 +11,7 @@ import { compatibleNode } from "../../../../../plugins/desk/hooks/compatible-nod
 import { bootFixtureEnv } from "../_boot_fixture.js"
 import { mkTempRoot } from "../_temp_roots.js"
 import { dispositionRecord, mergeTidyEvidence } from "../../../../../plugins/desk/mcp/src/runtime/workspace-evidence.js"
+import { removeTree } from "../_remove_tree.js"
 
 // The command-line entry; the registry itself is imported from lib/ above.
 const hookPath = new URL("../../../../../plugins/desk/hooks/boot-checks.cjs", import.meta.url)
@@ -359,7 +360,7 @@ test("the repair launcher runs the repair in a compatible Node, and with none re
   assert.equal((await fs.readdir(path.dirname(file))).some((name) => name.endsWith(".tmp")), false, "no temporary file is left behind")
   repaired.length = 0
   assert.deepEqual(await startRepair(f.desk, { env: f.env, resolveNode: () => ({ node: process.execPath, range: ">=22.18.0" }), repair }), { repaired: f.desk }, "a directory there never stops the repair")
-  await fs.rm(`${file}.node.json`, { recursive: true })
+  await removeTree(`${file}.node.json`)
 
   // An unreadable status is named, never fatal.
   await fs.writeFile(`${file}.node.json`, "{")

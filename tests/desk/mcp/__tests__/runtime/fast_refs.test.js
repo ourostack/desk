@@ -4,16 +4,17 @@
 import { after, test } from "node:test"
 import { strict as assert } from "node:assert"
 import { spawnSync } from "node:child_process"
-import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
+import { chmodSync, mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 import { waitingLogs } from "../../../../../plugins/desk/mcp/src/runtime/append-lane.js"
 import { remoteIdentityEnv } from "../../../../../plugins/desk/mcp/src/runtime/remote-identity.js"
 import { fetchAhead, startBackgroundFetch, syncWorkspace } from "../../../../../plugins/desk/mcp/src/runtime/session-sync.js"
 import { fastGitAnswer, readUpstreamRefs, stripspace } from "../../../../../plugins/desk/mcp/src/runtime/fast-refs.js"
+import { removeTreeSync } from "../_remove_tree.js"
 
 const made = []
-after(() => made.forEach((dir) => rmSync(dir, { recursive: true, force: true })))
+after(() => made.forEach((dir) => removeTreeSync(dir)))
 function mkTempRoot(prefix) {
   const dir = realpathSync(mkdtempSync(path.join(os.tmpdir(), prefix)))
   made.push(dir)

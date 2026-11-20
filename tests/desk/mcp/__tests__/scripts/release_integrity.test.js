@@ -2,10 +2,11 @@ import { strict as assert } from "node:assert"
 import { test } from "node:test"
 import { execFileSync } from "node:child_process"
 import { createRequire } from "node:module"
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
+import { removeTreeSync } from "../_remove_tree.js"
 
 const repoRoot = path.resolve(fileURLToPath(new URL("../../../../..", import.meta.url)))
 const require = createRequire(import.meta.url)
@@ -62,7 +63,7 @@ function withRepo(fn, { fragments = false } = {}) {
     git(root, "branch", "base")
     return fn(root)
   } finally {
-    rmSync(root, { recursive: true, force: true })
+    removeTreeSync(root)
   }
 }
 

@@ -15,9 +15,10 @@ import matter from "gray-matter"
 import { loadFrontmatterParser, loadGrayMatter, organizationFindings } from "../../../../../plugins/desk/mcp/src/desk/organization.js"
 import { parseFrontmatterLite } from "../../../../../plugins/desk/mcp/src/desk/frontmatter-lite.js"
 import { resolveTaskHandle } from "../../../../../plugins/desk/mcp/src/desk/handles.js"
+import { removeTree } from "../_remove_tree.js"
 
 const tempRoots = new Set()
-after(() => Promise.all([...tempRoots].map((root) => fs.rm(root, { recursive: true, force: true }))))
+after(() => Promise.all([...tempRoots].map((root) => removeTree(root))))
 
 async function mkTempRoot() {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "desk-organization-test-"))

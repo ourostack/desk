@@ -9,6 +9,7 @@ import { task_update } from "../../../../../plugins/desk/mcp/src/tools/task.js"
 import { commitWaitingLogs } from "../../../../../plugins/desk/mcp/src/runtime/append-lane.js"
 import { assertPublishedContentBase, gitSeam } from "../../../../../plugins/desk/mcp/src/desk/content-home.js"
 import { catchUpBehind } from "../../../../../plugins/desk/mcp/src/runtime/deliver.js"
+import { removeTree } from "../_remove_tree.js"
 
 // The ways one small append to a repository that publishes through checked pull requests used to cost five calls.
 
@@ -31,7 +32,7 @@ async function fixture(t) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "desk-append-recovery-"))
   t.after(async () => {
     gitSeam.spawn = spawnSync
-    await fs.rm(root, { recursive: true, force: true })
+    await removeTree(root)
   })
   git(root, ["init", "-q", "-b", "main"])
   git(root, ["config", "user.name", "Test"])
@@ -245,6 +246,6 @@ test("a base that cannot be read at all is named, and no admission means no chec
   const root = await fixture(t)
   assert.equal(assertPublishedContentBase(root, null, "task_update"), undefined)
   const bare = await fs.mkdtemp(path.join(os.tmpdir(), "desk-no-repo-"))
-  t.after(() => fs.rm(bare, { recursive: true, force: true }))
+  t.after(() => removeTree(bare))
   assert.throws(() => assertPublishedContentBase(bare, { policy_commit: "0".repeat(40) }, "task_update"), /content_home_unpublished_base/u)
 })
