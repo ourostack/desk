@@ -18,7 +18,7 @@ const IDLE = 1000
 const GRACE = 5000
 const HOUR = 3600000
 
-function harness({ idleMs: idle = IDLE, failSpawnAt = [] } = {}) {
+function harness({ idleMs: idle = IDLE, failSpawnAt = [], watchesParent = true } = {}) {
   const clock = { now: 0 }
   const timers = new Map()
   let nextTimer = 1
@@ -57,7 +57,7 @@ function harness({ idleMs: idle = IDLE, failSpawnAt = [] } = {}) {
     launchChild,
     stdin,
     stdout,
-    watchParent: (gone) => { parentGone = gone },
+    watchParent: watchesParent ? (gone) => { parentGone = gone } : undefined,
     stderr: { write: (text) => stderr.push(text) },
     idleMs: idle,
     now: () => clock.now,
@@ -112,7 +112,7 @@ test("DESK_MCP_IDLE_MS is a whole number of milliseconds, 0 for never, and 3 min
 })
 
 test("the stream passes through both ways; blank lines are dropped and a line that is not a message is passed on as it is", async () => {
-  const h = harness()
+  const h = harness({ watchesParent: false })
   await handshaken(h)
   await h.host("")
   await h.host("not json")

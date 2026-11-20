@@ -92,6 +92,47 @@ test("the parent watch fires once when the parent's pid changes or the parent is
   assert.equal(armed, false, "a process started by init has no parent to wait for")
 })
 
+test("watchParent's default liveness check treats a missing parent as gone and a protected one as alive", () => {
+  const realKill = process.kill
+  const outcomes = []
+  try {
+    for (const code of ["ESRCH", "EPERM", null]) {
+      process.kill = () => { if (code) throw Object.assign(new Error(code), { code }) ; return true }
+      let tick
+      let fired = 0
+      watchParent({ onGone: () => { fired += 1 }, initialPpid: 4242, getPpid: () => 4242, setTimer: (callback) => { tick = callback; return { unref() {} } }, clearTimer() {} })
+      tick()
+      outcomes.push(fired)
+    }
+  } finally {
+    process.kill = realKill
+  }
+  assert.deepEqual(outcomes, [1, 0, 0])
+})
+
+test("main closes the session when the host's output fails", async () => {
+  const { main } = await import("../../../../../plugins/desk/mcp/index.js")
+  const { PassThrough } = await import("node:stream")
+  const { mkTempRoot } = await import("../_temp_roots.js")
+  const { idleSearchEngine } = await import("./_in_process_desk.js")
+  const root = await mkTempRoot("desk-main-output-gone-")
+  const input = new PassThrough()
+  const output = new PassThrough()
+  const writes = []
+  const closedWith = []
+  const handle = await main({
+    argv: ["--root", root], env: {}, cwd: root, homeDir: root, stateHome: path.join(root, "state"),
+    input, output, stderr: { write(text) { writes.push(text); return true } }, admissionKickoffMs: 0,
+    runtimeInspector: null, runtimeImporter: async () => ({ createSearchEngine: () => idleSearchEngine() }),
+    crashHandlers: true, onClosed: (code) => closedWith.push(code),
+  })
+  output.emit("error", Object.assign(new Error("write EPIPE"), { code: "EPIPE" }))
+  assert.deepEqual(closedWith, [0])
+  input.end()
+  await within(handle.closed, 5000, "the close")
+  assert.match(writes.join(""), /the host's output is gone/u)
+})
+
 test("a server whose host closes stdin exits within seconds", { skip: !posix, timeout: 60000 }, async () => {
   const home = await makeIsolatedHome("desk-orphan-stdin-")
   const server = started(isolatedEnv(home, { DESK_MCP_IDLE_MS: "0" }))
