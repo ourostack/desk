@@ -1,5 +1,15 @@
 # desk plugin — changelog
 
+## 3.2.355 — 2026-11-20
+
+### Child agents: reply-based reports, unique scratch, relayed go, read-only startup
+
+Child briefs now ask for the report as text in the child's reply, and the coordinator saves it at the mapped report path, so a host that refuses a subagent's file write (Claude Code) no longer strands the report. The brief mapper (`superpowers-context.js`) also puts a unique scratch folder and pull-request body file name in every brief, so concurrent children never share a `pr-body.md`. It takes an optional `--go-quote` and `--go-scope` and adds an authority entry: a go the brief quotes with its scope, relayed by the root, satisfies a project confirm-first rule for that scope only. It is never presented as the operator's own message and never overrides a managed safeguard, permission prompt or denial. `using-desk` and `work-orchestration` say the same.
+
+A child launched with `DESK_READ_ONLY_CHILD=1` now starts read-only: the boot, the tidy repair launch and the session-end sync skip the desk sync, the background fetch, the card guard and any move or commit, so a read-only investigator cannot change the shared desk before it reads its brief. The `using-desk` budget rises by 200 bytes for the child rules, backed by the new `child-execution-contracts` eval.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.354 — 2026-11-20
 
 Browser `mine` now opens on Claude Code and Codex. Their `desk-web` launch form (`node -e <bootstrap>`) tripped the runtime check that protects authenticated output, so every `mine` open was refused with `AUTH_LOGGING_REFUSED`. The check now allows exactly the bootstrap Desk ships in `.mcp.claude-codex.json`; any other inline script, `--require`, inspector or other Node flag is still refused, and the refusal names the flag that disqualified the runtime.
