@@ -13,7 +13,7 @@ name: Desk release
 #   merge whose pull request was tested against the main it landed on is released at once. If main moved while the pull request's checks
 #   ran, two green pull requests could combine into a broken main: the release is held, and main's own run passing on that commit starts it
 #   (the workflow_run trigger), so nothing waits and nothing releases a combination no run has checked. A "main is red" issue
-#   (report-main-health.sh opens and closes it) holds every release. It holds a read-only token and runs one script.
+#   (report-main-health.sh opens and closes it) holds every release until the code it judges carries the fix and main's CI is green on it. It holds a read-only token and runs one script.
 # - build holds only a read token. It installs dependencies, builds the release commit and checks that exact commit,
 #   because a push made with the workflow token starts no CI on main. It skips the release test step the pull request's release
 #   dry run already ran on the same script (desk-mcp-tests.yml), and runs every other check.

@@ -228,6 +228,19 @@ test("the committed shard weights are expected seconds per repository-relative t
   }
 })
 
+test("the committed weights keep every shard well under the 7-minute watchdog, and no one file fills a shard", () => {
+  const weights = JSON.parse(readFileSync(path.join(realRepoRoot, "tools", "desk-build", "config", "coverage-shards.json"), "utf8"))
+  const workflow = readFileSync(path.join(realRepoRoot, ".github", "workflows", "desk-mcp-tests.yml"), "utf8")
+  const total = workflow.match(/^ +shard: \[([\d, ]+)\]$/mu)[1].split(",").length
+  const files = collectCoverageTestFiles({ repoRoot: realRepoRoot, offline: { selected: true } })
+  const seconds = (file) => weights.file_seconds[file] ?? weights.default_seconds
+  // A shard's step takes about the sum of its weights (run 44651529125), so this is the slowest shard's time before the 420-second watchdog.
+  const slowest = Math.max(...partitionCoverageTestFiles({ files, total, weights }).map((shard) => shard.reduce((sum, file) => sum + seconds(file), 0)))
+  assert.ok(slowest <= 240, `the slowest shard is expected to take ${Math.round(slowest)} seconds of its 420; add shards or split the slowest file`)
+  const heaviest = files.reduce((worst, file) => (seconds(file) > seconds(worst) ? file : worst))
+  assert.ok(seconds(heaviest) <= 200, `${heaviest} is weighted ${seconds(heaviest)} seconds; split it so shards can balance`)
+})
+
 test("a shard runs only its own files, serially, and records raw coverage, timings and a manifest for the merge", (t) => {
   const fixture = fixtureRepo(t, { weights: { default_seconds: 1, file_seconds: { [testFiles[2]]: 5 } } })
   const output = path.join(fixture.root, "shard-2")
