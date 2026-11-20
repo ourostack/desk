@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.368 — 2026-11-20
+
+Any outside service can now wake a session through a webhook. `drains hooks create <name>` makes a hook on the new hooks receiver and prints its address and signing secret; `hooks.json` routes each hook to a session with a prompt; and `drains hooks poll`, run by the same runner as drains and schedules, turns a hook's waiting events into one wake, with each body saved as a private file. The receiver checks Standard Webhooks, Stripe, GitHub, Sentry and Linear signatures, keeps every event until a delivered wake acknowledges it, and runs as its own always-on Container App built from the hosted Desk image. See [docs/webhooks.md](docs/webhooks.md).
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.367 — 2026-11-20
 
 Desk's MCP server now vendors Ouro UI core v1.6.0, moved by Ouro Current.
