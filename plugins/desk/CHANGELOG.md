@@ -1,5 +1,13 @@
 # desk plugin — changelog
 
+## 3.2.356 — 2026-11-20
+
+The `mine` browser copy now keeps you signed in when the Edge on this Mac is newer than your running Edge. A newer Edge could not read the cookies the older one encrypted and dropped every one of them at start, so GitHub and other sites landed on a sign-in page. On macOS the copied cookie file's values are now decrypted with the browser's own Safe Storage key and stored as plain values in the private copy, which is deleted when the context closes. Your real profile is not changed.
+
+Desk's MCP server now vendors Ouro UI v1.3.378, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.355 — 2026-11-20
 
 ### Child agents: reply-based reports, unique scratch, relayed go, read-only startup
