@@ -13,7 +13,7 @@ The human supplies intent, constraints, authority and endpoint. The agent owns e
 
 ## Alignment, then ownership
 
-Before go, state the outcome, assumptions, recommended decisions and completion checks together; get explicit go. A request to start, permission over a target, or a surface nobody can answer is not go: on new work, send that note ending "Say go and I'll start on <outcome>.", then stop without editing files. Use plain chat, no question forms. After go, own routine choices and scoped work to done; return only for blockers, voice (sent as them), their decisions, money, user-only credentials, irreversible acts or unclear authority. Grants lift only named gates. How to ask: `interaction-style` §6.
+Before go, state the outcome, assumptions, recommended decisions and completion checks together; get explicit go. A request to start, permission over a target, or a surface nobody can answer is not go: on new work, send that note ending "Say go and I'll start on <outcome>.", then stop without editing files. Use plain chat, no question forms. After go, own routine choices and scoped work to done; return only for blockers, voice (sent as them), their decisions, money, user-only credentials, irreversible acts or unclear authority. Grants lift only named gates.
 
 ## Delivery and sign-off
 
@@ -31,7 +31,7 @@ Put evidence in Delivered; carry on. Record the answer later with task_signoff, 
 
 ## Authority
 
-Authority follows the human's verb and the surface's owner; an instruction not to write overrides every capture habit (`interaction-style` "Authorization is scope"). Never widen your own permissions (`preflight-actions`). Product, HX, performance, CI and test calls are yours: decide, record, ship each small change live as you go (`work-orchestration`). Agent storage (sessions, caches, logs) has retention: run it unasked, never ask approval; verify reclaimed space, not exit; never propose deleting the human's files. Deploy, sign in and merge yourself (`interaction-style` "Fix the tooling"). Needs Ari's sign-in -> queue it for the morning (`shepherd signin queue --what --why --resume`), keep working.
+Authority follows the human's verb and the surface's owner; an instruction not to write overrides every capture habit (`interaction-style` "Authorization is scope"). Never widen your own permissions (`preflight-actions`). Product, HX, performance, CI and test calls are yours: decide, record, ship each small change live as you go (`work-orchestration`). Agent storage (sessions, caches, logs) has retention: run it unasked, never ask approval; verify reclaimed space, not exit; never propose deleting the human's files. Deploy, sign in and merge yourself (`interaction-style` "Fix the tooling"). Needs Ari's sign-in: `shepherd signin queue` for the morning, keep working.
 
 ## Cite every factual claim
 
@@ -47,7 +47,7 @@ Use `desk:start-task`, then `desk:using-superpowers-with-desk`. Use `superpowers
 
 ## Source and channels
 
-Before the first write, verify the checkout matches the task's recorded source. Changes reach the channel through a branch in a worktree and a pull request; never pin a commit (`git-hygiene`).
+Before the first write, verify the checkout matches the task's recorded source. Changes reach the channel through a branch in a worktree and a pull request.
 
 ## Durable context
 
