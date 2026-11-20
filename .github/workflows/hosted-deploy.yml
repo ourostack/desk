@@ -220,7 +220,7 @@ jobs:
             fi
           done
           if [ "$shown" != "$IMAGE" ] || [ "${#wanted[@]}" -gt 0 ]; then
-            echo "$HOOKS_APP runs $shown; deploying $IMAGE."
+            if [ "$shown" != "$IMAGE" ]; then echo "$HOOKS_APP runs $shown; deploying $IMAGE."; fi
             az containerapp update -n "$HOOKS_APP" -g "$RESOURCE_GROUP" --subscription "$SUBSCRIPTION" --image "$IMAGE" ${wanted[@]+--set-env-vars "${wanted[@]}"} --output none
           fi
           show() { az containerapp show -n "$HOOKS_APP" -g "$RESOURCE_GROUP" --subscription "$SUBSCRIPTION" --query "$1" -o tsv; }
