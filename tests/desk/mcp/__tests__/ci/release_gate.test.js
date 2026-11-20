@@ -91,6 +91,22 @@ test("a main is red issue the judged commit already outran does not hold the rel
   assert.equal(half.release, false, "one failure the commit does not carry keeps the issue open")
 })
 
+test("while the head's CI is still running, a red-main issue it carries neither fails nor releases; failed CI or a foreign failure still fails; green releases", () => {
+  const failed = "e".repeat(40)
+  const issue = { label: "#9 main is red: CI gate", shas: [failed] }
+  const running = { ...green, "desk-windows-suite.yml": [run(null, { status: "in_progress" })] }
+  const waiting = decide({ api: fakeApi({ prs: mergedPr, mainRuns: running, compare: { [failed]: "ahead" } }), redMain: () => [issue] })
+  assert.equal(waiting.release, false)
+  assert.deepEqual(waiting.red, [])
+  assert.match(waiting.reason, /waiting for CI on a{12}/u)
+  const foreign = decide({ api: fakeApi({ prs: mergedPr, mainRuns: running, compare: { [failed]: "behind" } }), redMain: () => [issue] })
+  assert.deepEqual(foreign.red, [issue.label])
+  const broken = decide({ api: fakeApi({ prs: mergedPr, mainRuns: { ...running, "desk-mcp-tests.yml": [run("failure")] }, compare: { [failed]: "ahead" } }), redMain: () => [issue] })
+  assert.deepEqual(broken.red, [issue.label])
+  const done = decide({ api: fakeApi({ prs: mergedPr, mainRuns: green, compare: { [failed]: "ahead" } }), redMain: () => [issue] })
+  assert.equal(done.release, true)
+})
+
 test("main's newest run counts, a partial dispatch never does, and a missing run is not green", () => {
   const older = run("failure", { created_at: "2026-11-14T01:00:00Z" })
   const newer = run("success", { created_at: "2026-11-14T02:00:00Z" })
