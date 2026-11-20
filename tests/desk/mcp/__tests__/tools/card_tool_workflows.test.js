@@ -7,7 +7,7 @@ import * as path from "node:path"
 import { promises as fs, realpathSync } from "node:fs"
 import { spawnSync } from "node:child_process"
 import { callTool } from "../../../../../plugins/desk/mcp/src/server.js"
-import { task_create, task_update } from "../../../../../plugins/desk/mcp/src/tools/task.js"
+import { task_archive, task_create, task_update } from "../../../../../plugins/desk/mcp/src/tools/task.js"
 import { taskSignoff } from "../../../../../plugins/desk/mcp/src/tools/task-signoff.js"
 import { desk_save } from "../../../../../plugins/desk/mcp/src/tools/desk-save.js"
 import { mkTempDeskRoot } from "./_helpers.js"
@@ -141,4 +141,43 @@ test("a registry row the session wrote in its own desk does not make another fol
   const refused = await call(bound, "task_update", { desk: "sneaky", track: "t", slug: "work", note: "no" }, { ...process.env, HOME: home })
   assert.equal(refused.isError, true)
   assert.doesNotMatch(await fs.readFile(path.join(stranger, "t", "work", "task.md"), "utf8"), /\bno\b\s*$/mu)
+})
+
+test("resources must be a non-empty list, even as a JSON string, and an archived card takes several rows at once", async () => {
+  const root = await gitDesk()
+  await card(root, {})
+  await assert.rejects(task_update({ deskRoot: root, input: { track: "t", slug: "work", resources: [] }, ...noPush }), /at least one row/u)
+  await assert.rejects(task_update({ deskRoot: root, input: { track: "t", slug: "work", resources: "not json" }, ...noPush }), /array/u)
+  const rows = ["a", "b"].map((n) => ({ identity: `branch:sample/widgets#feat/${n}`, intended: "remove after merge" }))
+  await task_update({ deskRoot: root, input: { track: "t", slug: "work", resources: JSON.stringify(rows) }, ...noPush })
+  await task_update({ deskRoot: root, input: { track: "t", slug: "work", status: "cancelled", note: "not needed" }, ...noPush })
+  await task_archive({ deskRoot: root, input: { track: "t", slug: "work" }, ...noPush })
+  const closed = await task_update({ deskRoot: root, input: { track: "t", slug: "work", resources: rows.map((row) => ({ identity: row.identity, disposition: "removed-and-absent", details: "gone" })) }, ...noPush })
+  assert.equal(closed.resources.length, 2)
+})
+
+test("an absolute path that is not on this machine is refused as unregistered", async () => {
+  const bound = await gitDesk()
+  const { env } = await registry(["bound", bound])
+  const refused = await call(bound, "task_update", { desk: path.join(bound, "does", "not", "exist"), track: "t", slug: "work", note: "no" }, env)
+  assert.equal(refused.isError, true)
+})
+
+test("a desk registered at a folder this machine does not have is refused by name and by path", async () => {
+  const bound = await gitDesk()
+  const gone = path.join(bound, "missing-desk")
+  const { env } = await registry(["bound", bound], ["gone", gone])
+  for (const desk of [gone, "gone"]) {
+    const refused = await call(bound, "task_update", { desk, track: "t", slug: "work", note: "no" }, env)
+    assert.equal(refused.isError, true)
+    assert.match(answer(refused).message, /not on this machine|registered/u)
+  }
+})
+
+test("an empty or non-text desk is refused", async () => {
+  const bound = await gitDesk()
+  const { env } = await registry(["bound", bound])
+  for (const desk of ["  ", 7]) {
+    assert.equal((await call(bound, "task_update", { desk, track: "t", slug: "work", note: "no" }, env)).isError, true)
+  }
 })
