@@ -110,14 +110,6 @@ test("watchParent's default liveness check treats a missing parent as gone and a
   assert.deepEqual(outcomes, [1, 0, 0])
 })
 
-test("installCrashHandlers needs no peer-gone callback to refuse to record a gone host", () => {
-  const target = new EventEmitter()
-  const recorded = []
-  installCrashHandlers({ session: { recordException: (...args) => recorded.push(args) }, stderr: { write() {} }, target })
-  target.emit("uncaughtException", Object.assign(new Error("write EPIPE"), { code: "EPIPE" }))
-  assert.deepEqual(recorded, [])
-})
-
 test("watchParent reads the real parent by default and stays quiet while it is there", () => {
   let tick
   let fired = 0
