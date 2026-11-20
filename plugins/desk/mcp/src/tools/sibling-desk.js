@@ -17,7 +17,7 @@ const real = (p) => {
 }
 
 function refusal(tool, problem) {
-  return Object.assign(new Error(`${tool}: Pass a registered desk, or leave \`desk\` out: ${problem} Nothing was changed.`), { code: `${tool}_desk_not_registered` })
+  return Object.assign(new Error(`${tool}: Pass a registered desk, or leave \`desk\` out: ${problem} Nothing was changed.`), { code: "card_tool_desk_not_registered" })
 }
 
 /**

@@ -507,7 +507,7 @@ function resourceList(given, one) {
     }
   }
   if (many !== undefined && !Array.isArray(many)) {
-    throw Object.assign(new Error("task_update: Pass `resources` as a list of resource rows: `resources` must be an array of objects, each shaped like `resource`; nothing was changed. Example: {\"resources\": [{\"identity\": \"worktree:/Users/me/code/widgets-worktrees/api\", \"disposition\": \"removed-and-absent\", \"details\": \"git worktree list no longer shows it\"}]}."), { code: "task_update_resources_must_be_a_list" })
+    throw Object.assign(new Error("task_update: Pass `resources` as a list of resource rows: `resources` must be an array of objects, each shaped like `resource`; nothing was changed. Example: {\"resources\": [{\"identity\": \"worktree:/Users/me/code/widgets-worktrees/api\", \"disposition\": \"removed-and-absent\", \"details\": \"the worktree is gone\"}]}."), { code: "task_update_resources_must_be_a_list" })
   }
   if (many !== undefined && many.length === 0) {
     throw Object.assign(new Error("task_update: Pass at least one row in `resources`: `resources` is empty; nothing was changed. Leave it out to change no resource."), { code: "task_update_resources_is_empty" })
