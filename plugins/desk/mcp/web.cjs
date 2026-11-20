@@ -419,9 +419,27 @@ function checkAuthLogging(s) {
     runtime.inspectorActive || require("node:inspector").url()) {
     throw plain("AUTH_LOGGING_REFUSED: Active or unqualified Node inspection is incompatible with authenticated output protection.");
   }
-  if (runtime.execArgv.some(function (arg) {
+  var args = shippedLauncherArgs(s, runtime.execArgv) ? [] : runtime.execArgv;
+  var bad = args.filter(function (arg) {
     return typeof arg !== "string" || !(arg === "--test" || /^--test-(?:name|skip)-pattern=/.test(arg));
-  })) throw plain("AUTH_LOGGING_REFUSED: Node runtime flags or preloads are unqualified for authenticated output protection.");
+  });
+  if (bad.length) {
+    throw plain("AUTH_LOGGING_REFUSED: Node runtime flag " + (typeof bad[0] === "string" ? bad[0].split("=")[0] : "(not text)") +
+      " is unqualified for authenticated output protection. Start desk-web without Node flags or preloads; Desk's own launcher is the only inline script allowed.");
+  }
+}
+
+// Claude Code and Codex start desk-web as `node -e <bootstrap>`, so execArgv is exactly ["-e", <that bootstrap>].
+// Only the bootstrap Desk ships in .mcp.claude-codex.json is allowed; any other script or extra flag is still refused.
+function shippedLauncherArgs(s, execArgv) {
+  if (execArgv.length !== 2 || execArgv[0] !== "-e" || typeof execArgv[1] !== "string") return false;
+  try {
+    var config = JSON.parse(fs.readFileSync(path.join(s.pluginRoot, ".mcp.claude-codex.json"), "utf8"));
+    var args = config.mcpServers["desk-web"].args;
+    return args.length === 2 && args[0] === "-e" && args[1] === execArgv[1];
+  } catch (error) {
+    return false;
+  }
 }
 
 function loadAuthDriver(s) {
