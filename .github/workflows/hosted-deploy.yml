@@ -194,12 +194,13 @@ jobs:
           HOOKS_APP: ouro-desk-hooks
         run: |
           set -euo pipefail
-          if ! shown="$(az containerapp show -n "$HOOKS_APP" -g "$RESOURCE_GROUP" --subscription "$SUBSCRIPTION" --query "properties.template.containers[0].image" -o tsv 2>&1)"; then
-            if grep -qiE "ResourceNotFound|was not found" <<<"$shown"; then
+          # stderr apart from the image: the containerapp extension warns on stderr, and that must not become part of it.
+          if ! shown="$(az containerapp show -n "$HOOKS_APP" -g "$RESOURCE_GROUP" --subscription "$SUBSCRIPTION" --query "properties.template.containers[0].image" -o tsv 2>"$RUNNER_TEMP/hooks-show.err")"; then
+            if grep -qiE "ResourceNotFound|was not found" "$RUNNER_TEMP/hooks-show.err"; then
               echo "::notice title=No hooks receiver::$HOOKS_APP does not exist yet; hosted/infra/provision-hooks.sh creates it."
               exit 0
             fi
-            echo "$shown" >&2
+            cat "$RUNNER_TEMP/hooks-show.err" >&2
             exit 1
           fi
           settings=(DESK_GITHUB_ACCOUNTS DESK_GITHUB_LOGINS DESK_ACCOUNTS_ENDPOINT AZURE_CLIENT_ID)
