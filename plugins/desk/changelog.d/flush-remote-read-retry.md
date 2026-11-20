@@ -1,0 +1,1 @@
+A factory flush no longer ends as `deadline` because one Git call stalled. Reading a desk's remote is asked once more when the first call passes its own time limit and the flush's deadline still has room; a second stall still ends the flush as `deadline`, as before. This closed the Windows suite's red main on the idle flush in `flush_retract.test.js` (ourostack/desk#1428).

@@ -640,6 +640,15 @@ test("a delivered file of an away session that the store no longer holds ends it
 // Refusals and holds.
 // ---------------------------------------------------------------------------
 
+test("a desk-remote read that stalls once is asked again; one that stalls twice ends the flush as deadline", () => scratch(async (ctx) => {
+  const { github } = await delivered(ctx, 1)
+  const stall = () => { throw Object.assign(new Error("git_deadline"), { code: "git_deadline" }) }
+  const flaky = (failures) => { let calls = 0; return () => { calls += 1; if (calls <= failures) stall(); return null } }
+  const withRemote = (readRemote) => flush(ctx.env, { store: STORE, runner: github.runner, anonymousLookup: github.anonymousLookup, readRemote })
+  assert.deepEqual(await withRemote(flaky(1)), { result: "nothing_pending" })
+  assert.deepEqual(await withRemote(flaky(2)), { result: "deadline" })
+}))
+
 test("a delete the store refuses returns the session to delivered, is counted, and never sends a flush online again", () => scratch(async (ctx) => {
   const { github, desks } = await delivered(ctx, 1)
   await reroute(desks[0], OTHER)

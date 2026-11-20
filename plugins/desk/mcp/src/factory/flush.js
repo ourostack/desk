@@ -526,17 +526,20 @@ const sameRepo = (left, right) => typeof left === "string" && left.toLowerCase()
 
 // `readDeskRemote` answers a non-empty URL or `null`; only a GitHub remote has a visibility to ask about.
 
-async function deskRepositories(markers, { deadline, now, receipts }) {
+async function deskRepositories(markers, { deadline, now, receipts, readRemote = readDeskRemote }) {
   const byName = new Map()
   const remotes = new Map()
   // The GitHub repository a desk root's remote names, read once per root.
   const repositoryOf = (root) => {
     if (!remotes.has(root)) {
       let remote
-      try {
-        remote = readDeskRemote({ deskRoot: root, timeoutMs: 5000, deadline, clock: now })
-      } catch {
-        stop("deadline")
+      // A Git call that stalls past its own limit (seen on a loaded Windows runner) is asked once more while the flush's deadline still has room, so a hiccup does not end the whole flush as `deadline`.
+      for (let attempt = 1; remote === undefined; attempt += 1) {
+        try {
+          remote = readRemote({ deskRoot: root, timeoutMs: 5000, deadline, clock: now })
+        } catch {
+          if (attempt >= 2) stop("deadline")
+        }
       }
       remotes.set(root, githubRepoOfRemote(remote))
     }
@@ -916,7 +919,7 @@ async function openPr(client, { store, head, base, count, retracted }) {
 const deliveredBefore = (delivered) => Object.keys(delivered.blobs).length > 0 || Object.keys(delivered.retracting).length > 0 || Object.keys(delivered.retracted).length > 0 || delivered.quarantined.size > 0
 
 async function deliver(env, context) {
-  const { store, client, now, deadline, transform, maxFiles, maxBytes, progress, planContexts } = context
+  const { store, client, now, deadline, transform, maxFiles, maxBytes, progress, planContexts, readRemote } = context
   const nowIso = () => new Date(now()).toISOString()
   const consent = (await readConsent(env)).stores
   const record = consent[store]
@@ -1075,7 +1078,7 @@ async function deliver(env, context) {
   const parse = ({ localBytes }) => JSON.parse(localBytes.toString("utf8"))
   const parsed = candidates.filter(({ name }) => here(name)).map((item) => ({ name: item.name, held: item.quarantine, local: parse(item) }))
   const parsedLabels = labelCandidates.filter(({ name }) => here(name)).map((item) => ({ key: item.name, local: parse(item) }))
-  const desks = await deskRepositories([...markers, ...(await listProofMarkers(env))], { deadline, now, receipts })
+  const desks = await deskRepositories([...markers, ...(await listProofMarkers(env))], { deadline, now, receipts, readRemote })
   // What a file needs resolved: the repositories it references, its desk remote, and the store when it names a plugin.
   const reposOf = ({ name, local }) => [
     ...referencedRepos(local),
@@ -1458,7 +1461,7 @@ async function deliver(env, context) {
 }
 
 /** The flush with what finalize needs: the names still waiting for delivery after it. */
-async function flushDetailed(env, { store, runner = ghRunner(), deadlineMs = DEFAULT_DEADLINE_MS, now = Date.now, transform = toPublished, maxFiles = MAX_FILES, maxBytes = MAX_BYTES, anonymousLookup = anonymousGithub(), planContexts = planContextPublication }) {
+async function flushDetailed(env, { store, runner = ghRunner(), deadlineMs = DEFAULT_DEADLINE_MS, now = Date.now, transform = toPublished, maxFiles = MAX_FILES, maxBytes = MAX_BYTES, anonymousLookup = anonymousGithub(), planContexts = planContextPublication, readRemote = readDeskRemote }) {
   const deadline = now() + deadlineMs
   if (!isRepo(store)) return { result: "unexpected", pending: null }
   let lock
@@ -1476,7 +1479,7 @@ async function flushDetailed(env, { store, runner = ghRunner(), deadlineMs = DEF
   let outcome
   try {
     const client = createClient({ runner, deadline, now, anonymousLookup })
-    outcome = await deliver(env, { store, client, now, deadline, transform, maxFiles, maxBytes, progress, planContexts })
+    outcome = await deliver(env, { store, client, now, deadline, transform, maxFiles, maxBytes, progress, planContexts, readRemote })
   } catch (error) {
     outcome = { result: error instanceof Stop ? error.code : "unexpected" }
   }
