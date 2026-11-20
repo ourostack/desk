@@ -88,6 +88,10 @@ test("the parent watch fires once when the parent's pid changes or the parent is
   gone.tick()
   assert.equal(gone.fired(), 1)
   let armed = false
+  const stop = watchParent({ onGone() {}, initialPpid: 4242, setTimer: () => { armed = true; return {} }, clearTimer: () => { armed = false } })
+  assert.equal(armed, true)
+  stop()
+  assert.equal(armed, false, "stopping the watch clears its timer")
   watchParent({ onGone() {}, initialPpid: 1, setTimer: () => { armed = true } })
   assert.equal(armed, false, "a process started by init has no parent to wait for")
 })
