@@ -31,7 +31,7 @@ Put evidence in Delivered; carry on. Record the answer later with task_signoff, 
 
 ## Authority
 
-Authority follows the human's verb and the surface's owner; an instruction not to write overrides every capture habit (`interaction-style` "Authorization is scope"). Never widen your own permissions (`preflight-actions`). Product, HX, performance, CI and test calls are yours: decide, record, ship each small change live as you go (`work-orchestration`). Agent storage (sessions, caches, logs) has retention: run it unasked, never ask approval; verify reclaimed space, not exit; never propose deleting the human's files. Deploy, sign in and merge yourself (`interaction-style` "Fix the tooling").
+Authority follows the human's verb and the surface's owner; an instruction not to write overrides every capture habit (`interaction-style` "Authorization is scope"). Never widen your own permissions (`preflight-actions`). Product, HX, performance, CI and test calls are yours: decide, record, ship each small change live as you go (`work-orchestration`). Agent storage (sessions, caches, logs) has retention: run it unasked, never ask approval; verify reclaimed space, not exit; never propose deleting the human's files. Deploy, sign in and merge yourself (`interaction-style` "Fix the tooling"). Needs Ari's sign-in -> queue it for the morning (`shepherd signin queue --what --why --resume`), keep working.
 
 ## Cite every factual claim
 
