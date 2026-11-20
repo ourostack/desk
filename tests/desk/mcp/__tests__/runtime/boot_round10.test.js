@@ -17,11 +17,11 @@ import { resolveWriteTarget } from "../../../../../plugins/desk/mcp/src/util/pat
 const task = (extra) => ({ slug: "a-task", title: "a-task", status: "processing", updated: "2026-09-28T00:00:00Z", handle: "task-1", ...extra })
 const textFor = (...tasks) => formatBootText({ status: "ready", active_tasks: { task_count: tasks.length, tracks: [{ track: "ops", tasks }] } })
 
-test("a long next step is printed whole, never cut", () => {
+test("a next step that fits the ceiling is printed whole; a longer one is cut at a word and points at the card", () => {
+  const fits = `${"wire the check into RainDelayPolicy.shouldDelay() and then ".repeat(4)}run test_rain_delay_boundary`
+  assert.ok(textFor(task({ next_step: fits })).includes(`\n  next: ${fits}\n`))
   const long = `${"wire the check into RainDelayPolicy.shouldDelay() and then ".repeat(8)}run test_rain_delay_boundary`
-  const text = textFor(task({ next_step: long }))
-  assert.ok(text.includes(`\n  next: ${long}\n`))
-  assert.doesNotMatch(text, /\.\.\.\n/u)
+  assert.match(textFor(task({ next_step: long })), /\n  next: wire the check [^\n]* \.\.\. \(see card\)\n/u)
 })
 
 test("a task whose card records no next step says so, instead of leaving the agent to fill it in", () => {
@@ -42,11 +42,11 @@ test("a blocked task with no blocker falls back to its next step, and with neith
 })
 
 test("the task list is capped by count, and says how many it left out", async () => {
-  const many = Array.from({ length: TASKS_SHOWN_CAP + 3 }, (_, index) => task({ slug: `t${index}`, title: `t${index}`, next_step: `step ${index} ${"x".repeat(300)}` }))
+  const many = Array.from({ length: TASKS_SHOWN_CAP + 3 }, (_, index) => task({ slug: `t${index}`, title: `t${index}`, next_step: `step ${index} ${"word ".repeat(80)}` }))
   const text = textFor(...many)
   assert.equal((text.match(/^- ops\/t\d+ /gmu) ?? []).length, TASKS_SHOWN_CAP)
-  assert.ok(text.includes(`step 0 ${"x".repeat(300)}\n`), "the tasks that are shown are whole")
-  assert.match(text, /\n\.\.\.and 3 more active tasks \(all of them are in `active_tasks` with `--json`\)\n/u)
+  assert.ok(text.includes("step 0 word word"), "the tasks that are shown keep their next step")
+  assert.match(text, /\n\.\.\.and 3 more active tasks \(`desk_status` lists them\)\n/u)
   assert.doesNotMatch(textFor(...many.slice(0, TASKS_SHOWN_CAP)), /more active tasks/u)
 })
 

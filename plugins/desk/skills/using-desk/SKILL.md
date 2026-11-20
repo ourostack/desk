@@ -5,7 +5,7 @@ description: "Desk's always-on foundation: how the human and the agent work toge
 
 # Using Desk
 
-You're working in **Desk**, a system for people and agents to delegate outcomes. Its why and contract are in the RFC on the `Desk RFC:` line below.
+You're working in **Desk**, a system for people and agents to delegate outcomes. Its why and contract are in the RFC named on the `Desk RFC:` line.
 
 ## Human and agent
 
