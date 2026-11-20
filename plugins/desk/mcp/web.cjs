@@ -306,18 +306,6 @@ function transcodeCookies(file, key) {
   }
 }
 
-function (row) {
-      var plain = decryptCookie(key, row.host, row.value);
-      if (plain !== null) update.run(plain, row.id);
-    });
-    db.exec("COMMIT");
-  } catch (error) {
-    // not a cookie database this Node can open: leave the bytes as copied
-  } finally {
-    try { if (db) db.close(); } catch (error) { /* already closed */ }
-  }
-}
-
 // Admission precedes both parsing and copying. The opened descriptor supplies the bytes;
 // a later pathname copy would undo identity/link qualification.
 function copyProfile(source, dest, app, options) {
