@@ -16,7 +16,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 /** The generator's version, written into every generated file; it is core's version. */
-export const ACTIONS_VERSION = "1.4.0";
+export const ACTIONS_VERSION = "1.4.1";
 const GENERATOR = `ouro-actions ${ACTIONS_VERSION}`;
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -1089,10 +1089,12 @@ export function checkGenerated(set: ActionSet, found: ReadonlyMap<string, string
       continue;
     }
     if (have === text || unstamped(have) === unstamped(text)) continue;
+    // The first line that differs once the stamps are set aside, so a file an older ouro-actions stamped is reported where
+    // it really drifted, not at its generator line (#123). Line numbers are the same either way: the stamp is within one line.
     const a = text.split("\n");
     const b = have.split("\n");
     let i = 0;
-    while (i < a.length && a[i] === b[i]) i++;
+    while (i < a.length && b[i] !== undefined && unstamped(a[i]!) === unstamped(b[i]!)) i++;
     problems.push(`${path}:${i + 1}: drifted from its declaration: expected ${JSON.stringify(a[i] ?? "<end of file>")}, found ${JSON.stringify(b[i] ?? "<end of file>")}. Fix: change the declaration and run generate; never edit a generated file.`);
   }
   for (const path of found.keys()) if (!expected.has(path)) problems.push(`${path}: not generated from any declaration. Fix: delete it, or declare what it holds.`);
