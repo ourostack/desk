@@ -1,5 +1,27 @@
 # desk plugin — changelog
 
+## 3.2.358 — 2026-11-20
+
+Skill evaluation judges read prohibitions as written and write evidence before the pass/fail field. This removes contradictory polarity guidance without changing the checks or automatically rewriting failed verdicts.
+
+Factory now accepts a repository owner with a single underscore in it, such as a managed GitHub login, in the account chooser, the store route and team lessons. The 39-character owner limit stays, and a leading, trailing or doubled underscore is still refused.
+
+A Factory loop worker started by an older Desk release than the newest one installed now claims no work and records `stale_release` as its skip reason.
+
+Ended Copilot sessions that Factory holds without deriving are no longer held silently. The sweep records why each is held, `desk_doctor` and `desk_status` name the route and count, and a `held_sessions` alarm is raised once a hold is over a day old. The route appears only in local status, never on an improvement card.
+
+The `mine` browser now says, when it opens, how to switch GitHub accounts: the copy holds every account signed in to the profile, so go to https://github.com/switch_account and click the account to use, with no sign-in.
+
+Desk's MCP server now vendors Ouro UI v1.3.379, moved by Ouro Current.
+
+Desk's MCP server now vendors Ouro UI v1.3.381, moved by Ouro Current.
+
+Normalized the unused-code tool's package sources to npmjs and extended the CI source guard to every tracked npm lockfile.
+
+Allow tracks to declare `operating_files` in their frontmatter so Desk Doctor keeps their own policy files and state folders in place without hiding undeclared strays or task-card findings.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.357 — 2026-11-20
 
 ### Card tools

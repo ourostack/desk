@@ -1,1 +1,0 @@
-The `mine` browser now says, when it opens, how to switch GitHub accounts: the copy holds every account signed in to the profile, so go to https://github.com/switch_account and click the account to use, with no sign-in.
