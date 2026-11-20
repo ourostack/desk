@@ -96,9 +96,10 @@ function runProcess(command, args, { cwd, timeoutSeconds, env }) {
   });
 }
 
-// The final answer and the tool requests from the CLI's JSONL event log.
+// Keep earlier replies too: some checks judge the first reply, not the final answer.
 function parseTranscript(stdout) {
   let response = "";
+  const messages = [];
   const tools = [];
   for (const line of stdout.split("\n")) {
     if (!line.startsWith("{")) continue;
@@ -109,10 +110,13 @@ function parseTranscript(stdout) {
       continue;
     }
     if (event.type !== "assistant.message" || !event.data) continue;
-    if (typeof event.data.content === "string" && event.data.content.trim() !== "") response = event.data.content;
+    if (typeof event.data.content === "string" && event.data.content.trim() !== "") {
+      response = event.data.content;
+      messages.push(response);
+    }
     for (const request of event.data.toolRequests ?? []) tools.push(`${request.name} ${JSON.stringify(request.arguments ?? {})}`.slice(0, 400));
   }
-  return { response, tools };
+  return { response, messages, tools };
 }
 
 // The subject loads the plugin(s) that own the suite's sources, straight from this checkout, so it runs the text under review.
@@ -428,6 +432,9 @@ function judgePrompt(testCase, subject, evidence) {
 ## The prompt the agent received
 ${testCase.prompt}
 
+## The agent's replies, in order (including its first reply)
+${subject.messages.map((message, index) => `### Reply ${index + 1}\n${message}`).join("\n\n").slice(0, maxResponseCharacters)}
+
 ## The agent's final response
 ${subject.response.slice(0, maxResponseCharacters)}
 
@@ -527,7 +534,7 @@ async function runCaseIn(testCase, context, workspace) {
       context.log(`  ${context.suiteId}/${testCase.id}: ${checks.filter((check) => check.passed).length}/${checks.length} checks passed`);
       if (options.keep !== null) {
         fs.mkdirSync(options.keep, { recursive: true });
-        fs.writeFileSync(path.join(options.keep, `${testCase.id}-${Date.now()}.json`), `${JSON.stringify({ case: testCase.id, response: subject.response, tools: subject.tools, evidence, checks }, null, 2)}\n`);
+        fs.writeFileSync(path.join(options.keep, `${testCase.id}-${Date.now()}.json`), `${JSON.stringify({ case: testCase.id, response: subject.response, messages: subject.messages, tools: subject.tools, evidence, checks }, null, 2)}\n`);
       }
       return { id: testCase.id, checks };
     } catch (error) {
