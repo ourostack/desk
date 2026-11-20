@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.359 — 2026-11-20
+
+Desk's MCP server now vendors Ouro UI core v1.2.0, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.358 — 2026-11-20
 
 Skill evaluation judges read prohibitions as written and write evidence before the pass/fail field. This removes contradictory polarity guidance without changing the checks or automatically rewriting failed verdicts.
