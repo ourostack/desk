@@ -44,8 +44,8 @@ test("derivation honors consent and holds invalid routing without reading the lo
   await setConsent(ctx.env, { store: STORE, contribute: false })
   assert.equal((await deriveMarker(ctx.env, marker)).result, "not_opted_in")
   await json(path.join(ctx.desk, "_meta/factory.json"), { schema_version: 1, store: "invalid" })
-  assert.deepEqual(await deriveMarker(ctx.env, marker), { result: "held", store: null })
-  assert.deepEqual(await deriveMarker(ctx.env, { ...marker, desk_root: null }), { result: "held", store: null })
+  assert.deepEqual(await deriveMarker(ctx.env, marker), { result: "held", store: null, reason: "route_unreadable" })
+  assert.deepEqual(await deriveMarker(ctx.env, { ...marker, desk_root: null }), { result: "held", store: null, reason: "no_desk_root" })
   assert.deepEqual(await deriveMarker(ctx.env, { ...marker, session_id: "../escape" }), { result: "invalid", store: null })
 }))
 
@@ -53,7 +53,7 @@ test("a deriver older than the session's declared Desk holds instead of binding 
   const { deriveMarker } = await runner()
   const marker = { ...await session(ctx), plugins: [{ name: "desk", version: "3.2.0-alpha.999", source: "ourostack/desk" }] }
   await setConsent(ctx.env, { store: STORE, contribute: true })
-  assert.deepEqual(await deriveMarker(ctx.env, marker, { ownVersion: () => "3.2.0-alpha.1" }), { result: "held", store: null })
+  assert.deepEqual(await deriveMarker(ctx.env, marker, { ownVersion: () => "3.2.0-alpha.1" }), { result: "held", store: null, reason: "newer_desk_recorded" })
   const file = path.join(await factoryStateRoot(ctx.env), "outbox", "ourostack__factory", `${marker.host}-${ID}.json`)
   assert.equal(existsSync(file), false)
 }))
@@ -75,7 +75,7 @@ test("a stale-deriver hold survives exactly seven days but expires the instant a
   const updatedAt = "2026-09-01T00:00:00.000Z"
   const holdMs = 7 * 24 * 60 * 60 * 1000
   const marker = { ...await session(ctx), plugins: [{ name: "desk", version: "3.2.0-alpha.999", source: "ourostack/desk" }], updated_at: updatedAt }
-  assert.deepEqual(await deriveMarker(ctx.env, marker, { ownVersion: () => "3.2.0-alpha.1", now: () => Date.parse(updatedAt) + holdMs }), { result: "held", store: null })
+  assert.deepEqual(await deriveMarker(ctx.env, marker, { ownVersion: () => "3.2.0-alpha.1", now: () => Date.parse(updatedAt) + holdMs }), { result: "held", store: null, reason: "newer_desk_recorded" })
   assert.equal((await deriveMarker(ctx.env, marker, { ownVersion: () => "3.2.0-alpha.1", now: () => Date.parse(updatedAt) + holdMs + 1 })).result, "written")
 }))
 
@@ -112,7 +112,7 @@ test("with no ownVersion override, the real running version is read from the co-
   const { deriveMarker } = await runner()
   await setConsent(ctx.env, { store: STORE, contribute: true })
   const marker = { ...await session(ctx), plugins: [{ name: "desk", version: "999.0.0", source: "ourostack/desk" }] }
-  assert.deepEqual(await deriveMarker(ctx.env, marker), { result: "held", store: null })
+  assert.deepEqual(await deriveMarker(ctx.env, marker), { result: "held", store: null, reason: "newer_desk_recorded" })
 }))
 
 test("the running version a deriver holds against follows DESK_PLUGIN_ROOT", () => scratch(async (ctx) => {
@@ -362,7 +362,7 @@ test("routing snapshot survives plugin cleanup, desk declaration wins, and warni
   assert.deepEqual(await deriveMarker(ctx.env, clean), { result: "not_opted_in", store: "example/other" })
   // A route recorded while a manifest could not be read is held while that manifest is gone: it might have declared another store.
   const marker = { ...clean, routing: { ...clean.routing, warnings: [{ code: "manifest_unreadable", manifest: path.join(ctx.base, "missing/plugin.json") }] } }
-  assert.deepEqual(await deriveMarker(ctx.env, marker), { result: "held", store: null })
+  assert.deepEqual(await deriveMarker(ctx.env, marker), { result: "held", store: null, reason: "route_unreadable" })
   await json(path.join(ctx.desk, "_meta/factory.json"), { schema_version: 1, store: STORE })
   assert.deepEqual(await deriveMarker(ctx.env, marker), { result: "written", store: STORE })
   const root = await factoryStateRoot(ctx.env)
@@ -1982,4 +1982,25 @@ test("a result with no record to clear takes no status lock and writes nothing",
   const before = await identity()
   assert.equal((await deriveMarker(ctx.env, marker)).result, "skipped")
   assert.deepEqual(await identity(), before)
+}))
+
+test("a sweep names the route and count of the Copilot sessions it holds, and the loop raises held_sessions once a hold is a day old", () => scratch(async (ctx) => {
+  const { sweep } = await runner()
+  const { loopAlarms, assembleLoop } = await import("../../../../../plugins/desk/mcp/src/factory/loop-health.js")
+  const STORE_ROUTE = "shared-internal-tools/synthetic-factory"
+  await json(path.join(ctx.desk, "_meta/factory.json"), { schema_version: 1, store: STORE_ROUTE })
+  await setConsent(ctx.env, { store: STORE_ROUTE, contribute: true })
+  // The real cause modeled here is one the code holds for: the session ran a newer Desk than the one sweeping (`isStaleDeriver`).
+  const marker = { ...await session(ctx, "copilot-cli"), end_reason: "complete", ended_at: END, plugins: [{ name: "desk", version: "999.0.0", source: "ourostack/desk" }] }
+  await writeMarker(ctx.env, marker)
+  const summary = await sweep(ctx.env, { quietMs: 0 })
+  assert.equal(summary.held, 1)
+  const status = await readStatus(ctx.env)
+  assert.equal(status.held_sessions.groups.length, 1)
+  assert.deepEqual({ ...status.held_sessions.groups[0], oldest_at: null }, { route: STORE_ROUTE, reason: "newer_desk_recorded", sessions: 1, oldest_at: null })
+  const young = assembleLoop({ status, read: { set_aside_total: 0, unreadable_files: 0, cards: [] }, nowMs: Date.parse(marker.updated_at) + 1000, version: "1.0.0" })
+  assert.equal(loopAlarms(young.loop, young.signals).some((alarm) => alarm.name === "held_sessions"), false)
+  const old = assembleLoop({ status, read: { set_aside_total: 0, unreadable_files: 0, cards: [] }, nowMs: Date.parse(marker.updated_at) + 25 * 3600 * 1000, version: "1.0.0" })
+  const alarm = loopAlarms(old.loop, old.signals).find((entry) => entry.name === "held_sessions")
+  assert.deepEqual([alarm.evidence.sessions, alarm.evidence.groups[0].route, alarm.evidence.groups[0].sessions], [1, STORE_ROUTE, 1])
 }))

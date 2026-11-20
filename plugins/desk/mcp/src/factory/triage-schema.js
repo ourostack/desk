@@ -7,6 +7,7 @@ import {
   rangeIntField, validateCanonicalBytes, validateObject,
 } from "./schema.js"
 import { publicPatternField } from "./published-schema.js"
+import { SLUG_SOURCE } from "./repo-name.js"
 import { isCredentialLike } from "./credential.js"
 
 const TRIAGE_SCHEMA = "desk.factory.triage/1"
@@ -43,7 +44,7 @@ const version = () => customField((v, p, e) => {
 // Current public issue/PR URL spelling and build.js's jobReportUrl spelling;
 // these are syntax gates only. Positive visibility/consent belongs to the
 // trusted parent/store, never to a URL-looking untrusted payload.
-const REPO = "[A-Za-z0-9-]{1,39}/[A-Za-z0-9._-]{1,100}"
+const REPO = SLUG_SOURCE
 const POINTERS = {
   issue: new RegExp(`^https://github\\.com/${REPO}/issues/[1-9][0-9]{0,9}$`, "u"),
   pr: new RegExp(`^https://github\\.com/${REPO}/pull/[1-9][0-9]{0,9}$`, "u"),

@@ -11,6 +11,8 @@ import { promises as fs } from "node:fs"
 import { spawnSync } from "node:child_process"
 import { addTeamLesson } from "../../../../../plugins/desk/mcp/src/tools/lesson-team.js"
 import { AGENTS_MD_CAP_BYTES } from "../../../../../plugins/desk/mcp/src/runtime/agents-md.js"
+import { chooseAccount as realChooseAccount } from "../../../../../plugins/desk/mcp/src/factory/flush.js"
+import { resolveStore } from "../../../../../plugins/desk/mcp/src/factory/store-route.js"
 import { mkTempDeskRoot } from "./_helpers.js"
 
 const DAY = /\d{4}-\d{2}-\d{2}/u.source
@@ -49,7 +51,7 @@ async function team(files = { "AGENTS.md": "# Team\n" }, { userName = "Ari Mende
 }
 
 // Git as the tool runs it, but with https://github.com/acme/cit.git leading to `bare`, the way only a test may.
-const toBare = (bare, inner = spawnSync) => (cmd, args, options) => inner(cmd, args, { ...options, env: { ...options.env, GIT_CONFIG_COUNT: "2", GIT_CONFIG_KEY_0: `url.${bare}.insteadOf`, GIT_CONFIG_VALUE_0: `${URL}.git`, GIT_CONFIG_KEY_1: `url.${bare}.pushInsteadOf`, GIT_CONFIG_VALUE_1: `${URL}.git` } })
+const toBare = (bare, inner = spawnSync, url = URL) => (cmd, args, options) => inner(cmd, args, { ...options, env: { ...options.env, GIT_CONFIG_COUNT: "2", GIT_CONFIG_KEY_0: `url.${bare}.insteadOf`, GIT_CONFIG_VALUE_0: `${url}.git`, GIT_CONFIG_KEY_1: `url.${bare}.pushInsteadOf`, GIT_CONFIG_VALUE_1: `${url}.git` } })
 
 const onMain = (bare, file = "AGENTS.md") => spawnSync("git", ["--git-dir", bare, "show", `main:${file}`], { encoding: "utf8" }).stdout
 const lessonBranches = (bare) => spawnSync("git", ["--git-dir", bare, "branch", "--list", "lesson/*"], { encoding: "utf8" }).stdout.trim()
@@ -534,4 +536,40 @@ test("team lesson in a Crew shared workspace defaults to the desk itself and nee
   assert.equal(result.claude_code_loads, true)
   assert.match(result.message, /every teammate's Desk session start prints it, from each session/u)
   assert.match(onMain(repo.bare), /\(ari, \d{4}-\d{2}-\d{2}; _shared\/decisions\/2026-10-20-lists\.md\)/u)
+})
+
+// A managed GitHub login (an Enterprise Managed User) carries an underscore, and so does the organization it owns. The real account
+// chooser and the store route are used, so the owner must pass every check on the way to the pull request.
+test("team lesson in a repository whose owner has an underscore reaches the pull request through the real account chooser", async () => {
+  const url = "https://github.com/some_org/cit"
+  const repo = await team(undefined, { origin: url })
+  const spawnGit = toBare(repo.bare, spawnSync, url)
+  const fake = fakeGh(repo.bare)
+  const asked = []
+  const runner = async (args, options = {}) => {
+    asked.push(args.join(" "))
+    if (args[0] === "--version") return { code: 0, stdout: "gh version 2.54.0 (2024-07-31)\n", stderr: "" }
+    if (args[0] === "auth" && args[1] === "status") return { code: 0, stdout: "github.com\n  ✓ Logged in to github.com account arimendelow_acme (keyring)\n  - Active account: true\n", stderr: "" }
+    if (args[0] === "api") return { code: 0, stdout: JSON.stringify({ default_branch: "main", allow_forking: true, permissions: { push: true, pull: true } }), stderr: "" }
+    return fake.gh(args, options)
+  }
+  const chooseAccount = ({ store }) => realChooseAccount({ store, runner })
+  const result = await addTeamLesson(lesson({ deskRoot: repo.base, repo: { clone: repo.clone, spawnGit }, gh: fake.gh, chooseAccount }))
+  assert.deepEqual([result.status, result.repo, result.account], ["merged", "some_org/cit", "arimendelow_acme"])
+  assert.ok(asked.some((line) => line.includes("repos/some_org/cit")))
+  assert.match(onMain(repo.bare), /Build what was asked/u)
+})
+
+test("the store route and the account chooser take an underscore owner and still refuse a malformed one", async () => {
+  const desk = await mkTempDeskRoot()
+  await fs.mkdir(path.join(desk, "_meta"), { recursive: true })
+  const route = async (store) => {
+    await fs.writeFile(path.join(desk, "_meta", "factory.json"), `${JSON.stringify({ schema_version: 1, store })}\n`)
+    return resolveStore({ deskRoot: desk })
+  }
+  assert.deepEqual([(await route("some_org/cit")).store, (await route("some_org/cit")).source], ["some_org/cit", "desk"])
+  for (const bad of ["_org/cit", "org_/cit", "a__b/cit", `${"a".repeat(40)}/cit`]) assert.equal((await route(bad)).store, null, bad)
+  const runner = async () => ({ code: 1, stdout: "", stderr: "" })
+  for (const bad of ["_org/cit", "a__b/cit", `${"a".repeat(40)}/cit`]) await assert.rejects(realChooseAccount({ store: bad, runner }), { code: "flush_chooseaccount_pass_store_as_owner" })
+  assert.equal((await realChooseAccount({ store: `${"a".repeat(39)}/cit`, runner })).result, "no_account_can_deliver")
 })

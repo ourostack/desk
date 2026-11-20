@@ -1178,7 +1178,7 @@ test("triage_alarm_strict_new_write_and_legacy_read", async () => {
   assert.equal(legacy.revision, LEGACY_REVISION)
   assert.notEqual(legacy.module.readCards, readCards, "the baseline reader is another module, never this checkout's")
   assert.ok(!legacy.module.LOOP_ALARMS.includes("step_stale:triage"), "the baseline predates the code")
-  assert.deepEqual(LOOP_ALARMS.filter((name) => !legacy.module.LOOP_ALARMS.includes(name)), ["triage_engine_unpinned", "step_stale:triage"], "the two additions")
+  assert.deepEqual(LOOP_ALARMS.filter((name) => !legacy.module.LOOP_ALARMS.includes(name)), ["held_sessions", "triage_engine_unpinned", "step_stale:triage"], "the three additions")
   assert.deepEqual(legacy.module.LOOP_ALARMS.filter((name) => !LOOP_ALARMS.includes(name)), [])
   for (const name of ["SOURCES", "STATES", "MOVES", "CLAIM_TTL_HOURS", "MAX_LIVE_CLAIMS", "MAX_CARD_FILES", "CLOSE_REASONS", "CHECK_RESULTS"]) {
     assert.deepEqual({ SOURCES, STATES, MOVES, CLAIM_TTL_HOURS, MAX_LIVE_CLAIMS, MAX_CARD_FILES, CLOSE_REASONS, CHECK_RESULTS }[name], legacy.module[name], `${name} is unchanged`)

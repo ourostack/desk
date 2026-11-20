@@ -30,6 +30,7 @@ import { promises as fs, constants as fsConstants } from "node:fs"
 import * as path from "node:path"
 import { createHash, randomBytes, randomUUID } from "node:crypto"
 import { PUBLIC_PLUGINS, isGeneric } from "../factory/kaizen-file.js"
+import { SLUG_SOURCE } from "../factory/repo-name.js"
 import { PATTERNS } from "../factory/schema.js"
 import { readMachineSecret } from "../factory/outbox.js"
 import { RECONCILE_REASONS } from "../factory/reconcile-reasons.js"
@@ -49,7 +50,7 @@ export const CLAIM_TTL_HOURS = 4
 export const MAX_LIVE_CLAIMS = 1
 // The loop steps whose `step_stale:<step>` alarm this version may write; `triage` came with the loop's triage step (no field, lifecycle or claim change), so an earlier Desk reads its card and never writes it.
 const STEP_NAMES = ["evaluate", "route", "mirror", "reconcile", "verify", "measure", "deliver", "triage"]
-export const LOOP_ALARMS = Object.freeze(["improvement_age", "improvement_stuck", "unsigned_age", "headless_blocked", "labels_quarantined", "label_lag", "facts_quarantine_not_settling", "cards_invalid", "capture_loop_slot", "triage_engine_unpinned", ...STEP_NAMES.map((step) => `step_stale:${step}`)])
+export const LOOP_ALARMS = Object.freeze(["improvement_age", "improvement_stuck", "unsigned_age", "headless_blocked", "labels_quarantined", "label_lag", "facts_quarantine_not_settling", "held_sessions", "cards_invalid", "capture_loop_slot", "triage_engine_unpinned", ...STEP_NAMES.map((step) => `step_stale:${step}`)])
 export const EVALUATOR_NAMES = Object.freeze(["expired_requests", "gave_up"])
 export const FLUSH_HEALTH_CODES = Object.freeze(["no_account", "auth_failed", "gh_missing", "account_cannot_deliver", "route_unknown", "held_markers", "frozen"])
 // The reconcile reasons come from the one list the reconcile code keeps; the measure IDs from the one list the kaizen filer accepts.
@@ -87,7 +88,7 @@ const FIELDS = [
 ]
 const IMMUTABLE = ["key", "source", "opened_at"]
 const REPO_ISSUE = /^(.+)#(\d{1,9})$/u
-const URL_SHAPE = /^https:\/\/github\.com\/([A-Za-z0-9-]{1,39}\/[A-Za-z0-9._-]{1,100})\/(pull|issues)\/\d{1,9}$/u
+const URL_SHAPE = new RegExp(`^https://github\\.com/(${SLUG_SOURCE})/(pull|issues)/\\d{1,9}$`, "u")
 const FILE_NAME = /^([a-z_]+)--([0-9a-f]{12})\.md$/u
 const CONTROL = /[\u0000-\u001f\u007f]/u
 const ABSOLUTE_PATH = /(^|[\s("'`=])(\/[A-Za-z0-9._-]+|[A-Za-z]:[\\/])/u
@@ -144,6 +145,7 @@ const LOOP_TITLES = {
   labels_quarantined: "Evaluation labels were quarantined",
   label_lag: "A finished job has waited over an hour for labels",
   facts_quarantine_not_settling: "Session facts have sat in a quarantine that does not settle",
+  held_sessions: "Ended sessions have been held for over a day without being derived",
   cards_invalid: "Improvement card files were set aside as invalid",
   capture_loop_slot: "The loop health record could not be sent to the store",
 }

@@ -330,6 +330,11 @@ function heldFields(routing, scanReason, status) {
     const reasons = holds.reasons.filter((entry) => isPlainObject(entry) && (entry.path === null || typeof entry.path === "string") && Number.isSafeInteger(entry.sessions))
     fields.route_holds = { count: holds.count, reasons: reasons.map((entry) => ({ ...described(holdReason(entry.path, { code: entry.code }), entry.path), sessions: entry.sessions })) }
   }
+  const sessions = status.held_sessions
+  if (isPlainObject(sessions) && Array.isArray(sessions.groups)) {
+    const groups = sessions.groups.filter((group) => isPlainObject(group) && typeof group.route === "string" && typeof group.reason === "string" && Number.isSafeInteger(group.sessions) && group.sessions > 0 && typeof group.oldest_at === "string")
+    if (groups.length > 0) fields.held_groups = groups.map(({ route, reason, sessions: count, oldest_at: oldest }) => ({ route, reason, sessions: count, oldest_at: oldest }))
+  }
   const pruned = status.held_pruned
   // Said for 30 days after the last such prune: long enough to be read, never a standing line.
   const recent = isPlainObject(pruned) && Date.now() - Date.parse(pruned.last_at) <= HELD_PRUNED_SHOWN_MS
