@@ -1354,6 +1354,45 @@ test("cost: an idle merge relay and an idle dispatch relay read once per poll an
   assert.equal(w.state(MERGE.name).lastPoll.free, 1)
 })
 
+test("cost: an idle dispatch relay with a 15 s interval backs off to at least two minutes, and a new run brings it back", async () => {
+  const w = await setup([{ ...IMMEDIATE, everySeconds: 15 }])
+  let runs = [run(1)]
+  w.world.on("GET", runsRoute, () => ({ workflow_runs: runs }))
+  for (let n = 0; n < 21; n++) await w.poll(NOW + n * 15 * SECOND)
+  const before = reads(w)
+  await w.poll(NOW + 21 * 15 * SECOND)
+  assert.equal(reads(w), before, "15 s after going quiet is too soon")
+  await w.poll(NOW + 20 * 15 * SECOND + 2 * MIN)
+  assert.equal(reads(w) - before, 1)
+  runs = [run(2, { head_sha: HEAD_B }), run(1)]
+  await w.poll(NOW + 20 * 15 * SECOND + 4 * MIN)
+  assert.equal(w.state(IMMEDIATE.name).idlePolls, 0)
+})
+
+test("a relay reads through its readAccount and writes through its account, and its status shows the last full hour's calls", async () => {
+  const w = await setup([{ ...IMMEDIATE, account: "work", readAccount: "personal" }])
+  let runs = [run(1)]
+  w.world.on("GET", runsRoute, () => ({ workflow_runs: runs }))
+  w.world.on("GET", /\/repos\/o\/pages$/u, () => ({ default_branch: "main" }))
+  w.world.on("POST", /\/dispatches$/u, () => ({ ok: true, status: 204, body: {} }))
+  const used = []
+  const connect = async (account, options) => {
+    const api = await w.world.connect(account, options)
+    return { ...api, get: (...args) => (used.push(["get", account]), api.get(...args)), send: (...args) => (used.push(["send", account]), api.send(...args)) }
+  }
+  const poll = (at) => pollRelays({ paths: w.paths, drainFiles: w.drainFiles, connect, now: at })
+  await poll(NOW)
+  runs = [run(2, { head_sha: HEAD_B }), run(1)]
+  await poll(NOW + 2 * MIN)
+  assert.ok(used.some(([kind]) => kind === "send"), `the relay fired: ${w.state(IMMEDIATE.name).lastError}`)
+  assert.deepEqual([...new Set(used.filter(([kind]) => kind === "get").map(([, account]) => account))], ["personal"])
+  assert.deepEqual([...new Set(used.filter(([kind]) => kind === "send").map(([, account]) => account))], ["work"])
+  await poll(NOW + 120 * MIN)
+  await poll(NOW + 120 * MIN + 2 * MIN)
+  const lines = relayStatusLines(readRelayConfig(w.paths.config), readRelayStates(w.paths.state), NOW + 120 * MIN + 2 * MIN)
+  assert.match(lines[0], /last full hour \d+ counted calls \(\d+ free\)/u)
+})
+
 test("cost: a labelled pull request whose checks keep changing is read every 30 to 60 s, not on every poll", async () => {
   const w = await setup([MERGE])
   let queued = 1
@@ -1393,10 +1432,13 @@ test("cost: a merge relay with nothing labelled stretches its interval, and goes
   await w.poll(NOW + 20 * 30 * SECOND)
   assert.equal(reads(w), before, "30 s after the last poll is too soon once the relay has gone quiet")
   await w.poll(NOW + 21 * 30 * SECOND)
-  assert.equal(reads(w) - before, 1, "a minute is not")
+  await w.poll(NOW + 22 * 30 * SECOND)
+  assert.equal(reads(w), before, "a minute is too soon: an idle relay waits at least two minutes")
+  await w.poll(NOW + 23 * 30 * SECOND)
+  assert.equal(reads(w) - before, 1, "two minutes is not")
   labelled = [{ number: 7, pull_request: {} }]
-  await w.poll(NOW + 24 * 30 * SECOND)
-  await w.poll(NOW + 25 * 30 * SECOND)
+  await w.poll(NOW + 28 * 30 * SECOND)
+  await w.poll(NOW + 29 * 30 * SECOND)
   assert.equal(w.state(MERGE.name).idlePolls, 0)
 })
 
