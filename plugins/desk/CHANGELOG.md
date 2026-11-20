@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.354 — 2026-11-20
+
+Browser `mine` now opens on Claude Code and Codex. Their `desk-web` launch form (`node -e <bootstrap>`) tripped the runtime check that protects authenticated output, so every `mine` open was refused with `AUTH_LOGGING_REFUSED`. The check now allows exactly the bootstrap Desk ships in `.mcp.claude-codex.json`; any other inline script, `--require`, inspector or other Node flag is still refused, and the refusal names the flag that disqualified the runtime.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.353 — 2026-11-20
 
 Desk's MCP server now vendors Ouro UI v1.3.377, moved by Ouro Current.
