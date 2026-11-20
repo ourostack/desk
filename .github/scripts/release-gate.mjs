@@ -63,10 +63,10 @@ export function gate({ repo, head, event, trigger = {}, api, redMain }) {
   if (event === "workflow_run") {
     if (trigger.sha !== head) return { red, stale, release: false, reason: `the run that finished tested ${String(trigger.sha).slice(0, 12)}, not the tip of main; a newer run will start the release` }
     if (trigger.conclusion !== "success") return { red, stale, release: false, reason: `the run that finished is ${trigger.conclusion}` }
-    return verified.ok ? { red, release: true, reason: "main's own runs passed on this commit" } : { red, release: false, reason: `${verified.reason}; the other run starts the release when it passes` }
+    return verified.ok ? { red, stale, release: true, reason: "main's own runs passed on this commit" } : { red, stale, release: false, reason: `${verified.reason}; the other run starts the release when it passes` }
   }
 
-  return verified.ok ? { red, release: true, reason: "main's own runs passed on this commit" } : { red, release: false, reason: `${verified.reason}; main's run starts the release when it passes` }
+  return verified.ok ? { red, stale, release: true, reason: "main's own runs passed on this commit" } : { red, stale, release: false, reason: `${verified.reason}; main's run starts the release when it passes` }
 }
 
 function gh(args) {
