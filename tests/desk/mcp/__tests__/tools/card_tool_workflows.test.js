@@ -7,7 +7,7 @@ import * as path from "node:path"
 import { promises as fs, realpathSync } from "node:fs"
 import { spawnSync } from "node:child_process"
 import { callTool } from "../../../../../plugins/desk/mcp/src/server.js"
-import { task_archive, task_create, task_update } from "../../../../../plugins/desk/mcp/src/tools/task.js"
+import { task_create, task_update } from "../../../../../plugins/desk/mcp/src/tools/task.js"
 import { taskSignoff } from "../../../../../plugins/desk/mcp/src/tools/task-signoff.js"
 import { desk_save } from "../../../../../plugins/desk/mcp/src/tools/desk-save.js"
 import { mkTempDeskRoot } from "./_helpers.js"
@@ -155,7 +155,10 @@ test("resources must be a non-empty list, even as a JSON string, and an archived
   assert.equal(both.resource.identity, "branch:sample/widgets#feat/c")
   assert.equal(both.resources.length, 1)
   await task_update({ deskRoot: root, input: { track: "t", slug: "work", status: "cancelled", note: "not needed" }, ...noPush })
-  await task_archive({ deskRoot: root, input: { track: "t", slug: "work" }, ...noPush })
+  // The archived card is arranged directly: this test is about the rows, and the native archive protocol has its own tests.
+  await fs.mkdir(path.join(root, "t", "_archive"), { recursive: true })
+  git(root, "mv", "t/work", "t/_archive/work")
+  git(root, "commit", "-q", "-m", "archive work")
   const closed = await task_update({ deskRoot: root, input: { track: "t", slug: "work", resources: rows.map((row) => ({ identity: row.identity, disposition: "removed-and-absent", details: "gone" })) }, ...noPush })
   assert.equal(closed.resources.length, 2)
 })
