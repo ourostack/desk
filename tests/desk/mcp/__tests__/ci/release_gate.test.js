@@ -78,7 +78,6 @@ test("a main is red issue the judged commit already outran does not hold the rel
   assert.deepEqual(released.stale, [issue.label])
   assert.equal(decide({ api: fakeApi({ prs: mergedPr, mainRuns: green, compare: { [failed]: "identical" } }), redMain: () => [issue] }).release, true)
   for (const [why, options] of [
-    ["main's CI has not passed on the commit yet", { mainRuns: {}, compare: { [failed]: "ahead" } }],
     ["main's CI failed on the commit", { mainRuns: { ...green, "desk-windows-suite.yml": [run("failure")] }, compare: { [failed]: "ahead" } }],
     ["the commit does not carry the failure", { mainRuns: green, compare: { [failed]: "behind" } }],
     ["the failure's ancestry cannot be read", { mainRuns: green, compare: {} }],
@@ -99,6 +98,10 @@ test("while the head's CI is still running, a red-main issue it carries neither 
   assert.equal(waiting.release, false)
   assert.deepEqual(waiting.red, [])
   assert.match(waiting.reason, /waiting for CI on a{12}/u)
+  const noRunYet = decide({ api: fakeApi({ prs: mergedPr, mainRuns: {}, compare: { [failed]: "ahead" } }), redMain: () => [issue] })
+  assert.equal(noRunYet.release, false)
+  assert.deepEqual(noRunYet.red, [])
+  assert.match(noRunYet.reason, /waiting for CI on a{12}/u)
   const foreign = decide({ api: fakeApi({ prs: mergedPr, mainRuns: running, compare: { [failed]: "behind" } }), redMain: () => [issue] })
   assert.deepEqual(foreign.red, [issue.label])
   const broken = decide({ api: fakeApi({ prs: mergedPr, mainRuns: { ...running, "desk-mcp-tests.yml": [run("failure")] }, compare: { [failed]: "ahead" } }), redMain: () => [issue] })

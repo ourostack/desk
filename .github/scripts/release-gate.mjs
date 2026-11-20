@@ -27,7 +27,7 @@ export function mainVerified(sha, runsFor) {
   let failed = 0
   for (const workflow of CI_WORKFLOWS) {
     const run = newest(runsFor(workflow, sha).filter((candidate) => candidate.event === "push" || (candidate.event === "workflow_dispatch" && !String(candidate.display_title ?? "").startsWith("Partial:"))))
-    if (!run) missing.push(`${workflow} has no run on this commit`)
+    if (!run) { pending += 1; missing.push(`${workflow} has no run on this commit`) }
     else if (run.status !== "completed") { pending += 1; missing.push(`${workflow} is still running`) }
     else if (run.conclusion !== "success") { failed += 1; missing.push(`${workflow} finished ${run.conclusion}`) }
   }
