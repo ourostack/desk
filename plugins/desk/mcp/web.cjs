@@ -287,14 +287,26 @@ function decryptCookie(key, host, value) {
 }
 
 function transcodeCookies(file, key) {
-  var db;
   try {
-    var sqlite = require("node:sqlite");
-    db = new sqlite.DatabaseSync(file);
-    var rows = db.prepare("SELECT rowid AS id, host_key AS host, encrypted_value AS value FROM cookies WHERE length(encrypted_value) > 0").all();
-    var update = db.prepare("UPDATE cookies SET value = ?, encrypted_value = x'' WHERE rowid = ?");
-    db.exec("BEGIN");
-    rows.forEach(function (row) {
+    var db = new (require("node:sqlite").DatabaseSync)(file);
+    try {
+      var rows = db.prepare("SELECT rowid AS id, host_key AS host, encrypted_value AS value FROM cookies WHERE length(encrypted_value) > 0").all();
+      var update = db.prepare("UPDATE cookies SET value = ?, encrypted_value = x'' WHERE rowid = ?");
+      db.exec("BEGIN");
+      rows.forEach(function (row) {
+        var plain = decryptCookie(key, row.host, row.value);
+        if (plain !== null) update.run(plain, row.id);
+      });
+      db.exec("COMMIT");
+    } finally {
+      db.close();
+    }
+  } catch (error) {
+    // not a cookie database this Node can open: leave the bytes as copied
+  }
+}
+
+function (row) {
       var plain = decryptCookie(key, row.host, row.value);
       if (plain !== null) update.run(plain, row.id);
     });
