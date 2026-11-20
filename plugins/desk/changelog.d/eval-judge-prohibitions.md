@@ -1,1 +1,0 @@
-Skill evaluation judges read prohibitions as written and write evidence before the pass/fail field. This removes contradictory polarity guidance without changing the checks or automatically rewriting failed verdicts.
