@@ -16,11 +16,12 @@ import { readRecord, toFrontmatter, sign, refuse, STATUSES, REFUSAL_REASONS, RET
 import { deskFailure } from "../runtime/desk-failure.js"
 import { deskPushNote, schedulePush as schedulePushDefault } from "../runtime/sync-worker.js"
 import { findCard } from "./task-focus.js"
+import { readSteps } from "../desk/steps.js"
 import { refreshSignoffStatus } from "../desk/unsigned-deliveries.js"
 import { moveTask } from "./move.js"
-import { DESK_COMMIT_NOTE, DESK_COMMIT_HASH_NOTE, relPath, stagingAllowed, stageAndCommitCard, headSha, updateTrackRow, taskJobOrNull, requestTaskFinalize } from "./task.js"
+import { DESK_COMMIT_NOTE, commitHashAnswer, relPath, stagingAllowed, stageAndCommitCard, headSha, updateTrackRow, taskJobOrNull, requestTaskFinalize } from "./task.js"
 
-export const TASK_SIGNOFF_FIELDS = ["track", "slug", "outcome", "reason", "return_reason"]
+export const TASK_SIGNOFF_FIELDS = ["track", "slug", "outcome", "reason", "return_reason", "desk"]
 
 const given = (value) => value !== undefined && value !== null
 
@@ -78,8 +79,10 @@ export async function taskSignoff({
   const card = await readMarkdown(found.file)
   if (card.data.status !== "done") {
     const shown = STATUSES.includes(card.data.status) ? card.data.status : "no recognised status"
+    // A card at validating whose work the operator now accepts needs one more call, which this refusal names so the agent does not have to find it.
+    const exactCall = card.data.status === "validating" ? ` If the work is finished and the operator accepted it, make this exact call first, then call task_signoff again: task_update ${JSON.stringify({ track, slug, status: "done", evidence: readSteps(card.content).found ? { kind: "steps" } : { kind: "pr", ref: "<pull request URL>" } })}${readSteps(card.content).found ? " (every step must be delivered or dropped; the call's refusal names any that are not)" : " (use kind commit, ci_run or non_code when there is no pull request)"}.` : ""
     // A task that is not at done was never delivered, so nobody should have been asked to accept it: say what to do instead.
-    throw Object.assign(new Error(`task_signoff: Finish the task and move it to done with task_update first: only a delivered task can be signed; this one is at ${shown}. Nothing was recorded. It is not delivered yet, so do not ask the person to accept it: tell them what is left, finish it, move the task to done with task_update, and ask "Accept or send back?" in that delivery.`), { code: "task_signoff_only_a_delivered_task_can" })
+    throw Object.assign(new Error(`task_signoff: Finish the task and move it to done with task_update first: only a delivered task can be signed; this one is at ${shown}. Nothing was recorded. It is not delivered yet, so do not ask the person to accept it: tell them what is left, finish it, move the task to done with task_update, and ask "Accept or send back?" in that delivery.${exactCall}`), { code: "task_signoff_only_a_delivered_task_can" })
   }
 
   const atMs = now()
@@ -148,5 +151,5 @@ export async function taskSignoff({
   if (deskCommit === null) return result
   // Said outright, and first, so no agent runs git for a card Desk has committed and is pushing.
   const pushNote = deskPushNote({ root: deskRoot, env, spawnGit, note: DESK_COMMIT_NOTE })
-  return { status: result.status, desk_note: pushNote.desk_note, ...result, ...pushNote, desk_commit: deskCommit, desk_pushed: false, desk_commit_note: DESK_COMMIT_HASH_NOTE }
+  return { status: result.status, desk_note: pushNote.desk_note, ...result, ...pushNote, ...commitHashAnswer({ env, hash: deskCommit }), desk_pushed: false }
 }
