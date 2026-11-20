@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.333 — 2026-11-20
+
+Desk's MCP server now vendors Ouro UI v1.3.352, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.332 — 2026-11-19
 
 Under a repository's `.github/merge-checks.json`, the merge-when-green relay now also holds a head while any other check on it has failed or timed out, even when the file does not name that check. A red optional check is still red; one that is merely running or cancelled and not named does not hold the head.
