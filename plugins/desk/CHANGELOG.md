@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.363 — 2026-11-20
+
+A fresh session now starts with less text it has to read before the first message. On a busy desk the boot lists at most five active tasks and five unsigned deliveries, each with a shorter blocker or next step, and ends with a one-line count that points to `desk_status` for the rest. The session-start hook no longer repeats the standing-authority grants or the `Desk RFC:` line when the boot text already carries them. In a CIT workspace the session-start text fell from 29,476 to about 23,000 characters.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.362 — 2026-11-20
 
 Desk's MCP server now vendors Ouro UI v1.3.384, moved by Ouro Current.
