@@ -28,6 +28,8 @@ const parseFrontmatter = loadFrontmatterParser()
 const DAY_MS = 86_400_000
 const HEAD_BYTES = 16 * 1024
 const TEXT_LIMIT = 80
+// How many the boot text names; the scan keeps more for desk_status.
+const BOOT_LISTED = 5
 const NO_PROOF = "no proof recorded"
 
 // The scan exists twice over one set of rules: `unsignedDeliveries` reads the disk synchronously, for the callers that must answer without awaiting (`desk_doctor`, boot), and `unsignedDeliveriesAsync` reads it without blocking the thread, for `desk_status`, which answers the host on a time budget (a single directory listing took 192 ms on a Windows runner). Only the reads differ; which folders are walked, how a card is read and how the figures are counted are shared.
@@ -350,7 +352,8 @@ export function unsignedLines(found) {
   if (!found) return []
   const unread = found.unreadable > 0 ? [`${plural(found.unreadable, "task card", "task cards")} could not be read, so this list may be short.`] : []
   if (found.count === 0) return unread.length === 0 ? [] : ["", ...unread]
-  const lines = found.tasks.map((task) => `- ${task.track}/${task.slug}, ${task.age_days === null ? "age unknown" : plural(task.age_days, "day", "days")}, ${task.proof}${task.overdue ? ", overdue" : ""}`)
-  if (found.count > found.tasks.length) lines.push(`- ...and ${found.count - found.tasks.length} more`)
+  const listed = found.tasks.slice(0, BOOT_LISTED)
+  const lines = listed.map((task) => `- ${task.track}/${task.slug}, ${task.age_days === null ? "age unknown" : plural(task.age_days, "day", "days")}, ${task.proof}${task.overdue ? ", overdue" : ""}`)
+  if (found.count > listed.length) lines.push(`- ...and ${found.count - listed.length} more (desk_status lists them)`)
   return ["", "Delivered, awaiting sign-off:", ...lines, ...unread]
 }

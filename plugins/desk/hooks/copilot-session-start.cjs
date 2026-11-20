@@ -215,7 +215,11 @@ async function startupDirection() {
     const [lines, standingLine] = await Promise.all([Promise.race([optional, late]), Promise.race([personLine, late])]);
     clearTimeout(timer);
     const bootText = await bootResult;
-    return [direction, bootText, standingLine || standing.deskOnly, ...(lines ?? [])].filter(Boolean).join("\n\n");
+    // A delivered boot prints the desk's AGENTS.md, which already holds the grants: say them once.
+    const standingText = standingLine || standing.deskOnly;
+    const probe = String(standingText).split("\n")[3]?.replace(/^[-*\s]+/u, "").slice(0, 60);
+    const granted = Boolean(probe) && bootText.includes(probe);
+    return [direction, bootText, granted ? "" : standingText, ...(lines ?? [])].filter(Boolean).join("\n\n");
   } catch {
     return `Desk startup: Desk could not resolve its root in this hook, so the hook did not start the boot. Desk starts it with your first Desk tool reply; desk_status reports the root Desk actually bound. ${BOOT_STAND_DOWN}`;
   }
@@ -250,7 +254,9 @@ function emit(additionalContext) {
     const foundation = fs.readFileSync(foundationPath, "utf8").replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n\s*/u, "").trimEnd();
     const direction = await startupDirection();
     // The startup line leads, as in the Claude hook: a host that keeps only a preview of a long context still shows the boot imperative.
-    const output = `${direction}${memory ? `\n\n${memory}` : ""}\n\n${plainLanguagePointer()}${workerPointer}\n\n${foundation}\n\nDesk RFC: ${rfcPath}`;
+    // The boot names the RFC itself; the foundation's pointer to it needs a line only when the boot has not arrived.
+    const rfcLine = direction.includes("Desk RFC:") ? "" : `\n\nDesk RFC: ${rfcPath}`;
+    const output = `${direction}${memory ? `\n\n${memory}` : ""}\n\n${plainLanguagePointer()}${workerPointer}\n\n${foundation}${rfcLine}`;
     emit(output);
   } catch {
     emit(`desk worker boot — the Desk foundation could not be read from ${foundationPath}. Desk runs its own boot; its result comes with your first Desk tool reply, and desk:session-start explains it. ${BOOT_STAND_DOWN}`);
