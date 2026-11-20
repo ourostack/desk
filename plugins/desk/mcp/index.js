@@ -167,6 +167,8 @@ export async function main({
   newestRelease,
   runtimeRefresher: injectedRefresher,
   crashHandlers = false,
+  crashTarget = process,
+  parentWatcher = watchParent,
   spawnDetached = spawn,
   onClosed = () => {},
 }) {
@@ -321,8 +323,18 @@ export async function main({
   const kickoff = setTimeout(kick, admissionKickoffMs)
   kickoff.unref?.()
   // Once the server is up, nothing that throws later may end the process: the session records it, degrades and keeps serving.
-  const removeCrashHandlers = crashHandlers ? installCrashHandlers({ session, stderr }) : () => {}
-  const closed = frontDoor.closed.then(async () => {
+  const removeCrashHandlers = crashHandlers ? installCrashHandlers({ session, stderr, target: crashTarget, onPeerGone: () => onClosed(0) }) : () => {}
+  // A host that is gone leaves nothing to serve: a failed write to it, or a parent that has ended, closes the session instead of keeping it alive with no client.
+  const peerGone = (why) => {
+    stderr.write(`[desk-mcp] ${why}; closing the session\n`)
+    onClosed(0)
+  }
+  if (crashHandlers) {
+    output.on?.("error", (error) => peerGone(`the host's output is gone (${describeError(error)})`))
+    parentWatcher({ onGone: () => peerGone("the parent process has ended") })
+  }
+  // The host's input failing ends the session the same way its ending does: nothing can arrive on it again.
+  const closed = frontDoor.closed.catch((error) => stderr.write(`[desk-mcp] the host's input failed (${describeError(error)}); closing the session\n`)).then(async () => {
     clearTimeout(kickoff)
     stopRecordWatch()
     let deadline
@@ -540,9 +552,18 @@ export function launcherMode(args) {
 }
 
 // Last-resort handlers for the process: an exception or rejection nothing caught is recorded by the session (degraded:runtime_exception, then re-admission) instead of ending the process and the host's connection with it. Returns a function that removes them.
-export function installCrashHandlers({ session, stderr, target = process }) {
-  const onException = (error) => session.recordException("uncaught_exception", error)
-  const onRejection = (reason) => session.recordException("unhandled_rejection", reason)
+export function installCrashHandlers({ session, stderr, target, onPeerGone }) {
+  // A write or read on a host connection that is gone can never succeed: ending is the only useful answer, and recording it would degrade and re-admit on every later write.
+  const handle = (kind, error) => {
+    if (isPeerGoneError(error)) {
+      stderr.write(`[desk-mcp] the host connection is gone (${describeError(error)}); closing the session\n`)
+      onPeerGone()
+      return
+    }
+    return session.recordException(kind, error)
+  }
+  const onException = (error) => handle("uncaught_exception", error)
+  const onRejection = (reason) => handle("unhandled_rejection", reason)
   target.on("uncaughtException", onException)
   target.on("unhandledRejection", onRejection)
   stderr.write("[desk-mcp] crash handlers installed: an error after the handshake degrades Desk instead of ending it\n")
@@ -550,6 +571,42 @@ export function installCrashHandlers({ session, stderr, target = process }) {
     target.off("uncaughtException", onException)
     target.off("unhandledRejection", onRejection)
   }
+}
+
+const PEER_GONE_CODES = new Set(["EPIPE", "ECONNRESET", "ERR_STREAM_DESTROYED", "ERR_STREAM_WRITE_AFTER_END"])
+
+export function isPeerGoneError(error) {
+  return error !== null && typeof error === "object" && PEER_GONE_CODES.has(error.code)
+}
+
+export const PARENT_CHECK_MS = 5000
+
+// Calls `onGone` once when the process that started this server has ended: its pid changed (a parent that ends leaves the process to init or a subreaper) or it no longer exists. The timer never keeps the process alive. Returns a function that stops it.
+export function watchParent({
+  onGone,
+  initialPpid = process.ppid,
+  getPpid = () => process.ppid,
+  isAlive = (pid) => {
+    try {
+      process.kill(pid, 0)
+      return true
+    } catch (error) {
+      return error?.code === "EPERM"
+    }
+  },
+  intervalMs = PARENT_CHECK_MS,
+  setTimer = setInterval,
+  clearTimer = clearInterval,
+}) {
+  if (!(initialPpid > 1)) return () => {}
+  const timer = setTimer(() => {
+    if (getPpid() !== initialPpid || !isAlive(initialPpid)) {
+      clearTimer(timer)
+      onGone()
+    }
+  }, intervalMs)
+  timer.unref?.()
+  return () => clearTimer(timer)
 }
 
 function optional(read) {

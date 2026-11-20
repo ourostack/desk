@@ -23,6 +23,7 @@ var STALE_CALL_MS = 3600000;
 // A server that ends this soon after it started counts as crashing on start; this many in a row end the proxy instead of respawning forever.
 var QUICK_CRASH_MS = 10000;
 var MAX_QUICK_CRASHES = 3;
+var PARENT_CHECK_MS = 5000;
 var RESUME_ID = "desk-idle-proxy-resume";
 var FORWARDED_SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"];
 
@@ -302,6 +303,9 @@ function createIdleProxy(options) {
       onClientEnd();
     });
     options.stdin.on("error", onClientEnd);
+    // A host that is gone cannot be answered: end like a closed stdin rather than keep a server alive with no client.
+    if (options.stdout.on) options.stdout.on("error", onClientEnd);
+    if (options.watchParent) options.watchParent(onClientEnd);
     FORWARDED_SIGNALS.forEach(function (signal) {
       options.signals.on(signal, function () {
         signalled = true;
@@ -336,6 +340,24 @@ function hostDefaults() {
     exit: process.exit,
     signals: process,
     kill: process.kill,
+    // Calls `gone` once when the process that started this proxy has ended: its pid changed or it no longer exists. The timer never keeps the process alive.
+    watchParent: function (gone) {
+      var initial = process.ppid;
+      if (!(initial > 1)) return;
+      var timer = setInterval(function () {
+        var alive = true;
+        try {
+          process.kill(initial, 0);
+        } catch (error) {
+          alive = error && error.code === "EPERM";
+        }
+        if (process.ppid !== initial || !alive) {
+          clearInterval(timer);
+          gone();
+        }
+      }, PARENT_CHECK_MS);
+      if (timer.unref) timer.unref();
+    },
     // The process's heap can sit at tens of MB of garbage from its own startup and traffic; a collection after a server ends brings it back to the baseline.
     compact: function () {
       try {
@@ -387,7 +409,8 @@ function runIdleProxy(o) {
     exit: pick("exit"),
     signals: pick("signals"),
     kill: pick("kill"),
-    compact: pick("compact")
+    compact: pick("compact"),
+    watchParent: pick("watchParent")
   });
   return { proxy: proxy, error: proxy.begin() };
 }
