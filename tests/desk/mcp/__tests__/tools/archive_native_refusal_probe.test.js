@@ -7,6 +7,7 @@ import fs from "node:fs/promises"
 import path from "node:path"
 import { openArchiveHandleSession } from "../../../../../plugins/desk/mcp/src/tools/archive-native-session.js"
 
+const artifact = new URL("../../../../../windows-archive-race-observations.json", import.meta.url)
 const anchors = [
   ["      $phase = 'delete_open'\n", "delete_open"],
   ["      $phase = 'held_validate'\n", "held_validate"],
@@ -91,7 +92,14 @@ test("diagnostic: actual native refusal retains its unchanged deadline and occup
     } finally {
       try { if (session) await session.close() }
       finally {
-        console.log(JSON.stringify({ diagnostic: "native-refusal", observations, receipt: session?.receipt }))
+        const receipt = session?.receipt
+        const evidence = { diagnostic: "native-refusal", observations, receipt }
+        let previous = []
+        try { previous = JSON.parse(await fs.readFile(artifact, "utf8")).attempts }
+        catch (error) { if (error.code !== "ENOENT") throw error }
+        assert.ok(Array.isArray(previous))
+        await fs.writeFile(artifact, JSON.stringify({ scope: "native refusal diagnostic only", attempts: [...previous, evidence] }))
+        console.log(JSON.stringify({ diagnostic: "native-refusal", observations, movement: receipt?.archiveMove }))
         await fs.rm(root, { recursive: true, force: true })
       }
     }
