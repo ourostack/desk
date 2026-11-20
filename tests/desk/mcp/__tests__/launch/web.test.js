@@ -550,6 +550,29 @@ test("authenticated runtime admission rejects environment preloads and active in
   }
 })
 
+test("authenticated runtime admission allows only the launcher bootstrap Desk ships for Claude and Codex", async () => {
+  const shipped = JSON.parse(fs.readFileSync(path.join(repoRoot, "plugins", "desk", ".mcp.claude-codex.json"), "utf8")).mcpServers["desk-web"].args
+  const unreadableRoot = await mkTempRoot("desk-web-noconfig-")
+  const cases = [
+    { execArgv: shipped, refused: null },
+    { execArgv: ["-e", shipped[1] + ";"], refused: /flag -e is unqualified/u },
+    { execArgv: ["--require", "x.js", ...shipped], refused: /flag --require is unqualified/u },
+    { execArgv: ["--no-warnings", ...shipped], refused: /flag --no-warnings is unqualified/u },
+    { execArgv: shipped, pluginRoot: unreadableRoot, refused: /flag -e is unqualified/u },
+    { execArgv: [7], refused: /\(not text\) is unqualified/u },
+  ]
+  for (const { execArgv, pluginRoot, refused } of cases) {
+    const { options, profiles } = await setup()
+    makeProfile(path.join(profiles, "edge"))
+    const controller = web.createController({ ...options, ...(pluginRoot ? { pluginRoot } : {}), runtimeStateReader: () => ({ execArgv, inspectorActive: false }) })
+    try {
+      const result = await controller.call("browser_context", { action: "open", browser: "mine" })
+      if (refused) assert.match(text(result), refused)
+      else assert.doesNotMatch(text(result), /AUTH_LOGGING_REFUSED/u)
+    } finally { await controller.closeAll() }
+  }
+})
+
 test("actual process options refuse authenticated open even when the supplied environment is clean", async () => {
   const { options, profiles, tmp } = await setup()
   makeProfile(path.join(profiles, "edge"))
