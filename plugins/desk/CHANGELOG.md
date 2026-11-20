@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.343 — 2026-11-20
+
+Desk's MCP server now vendors Ouro UI v1.3.364, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.342 — 2026-11-20
 
 Skill evaluations give each subject its own scratch Shepherd home (`SHEPHERD_HOME`), so an agent that runs `shepherd signin queue` or any other Shepherd command in a case can no longer touch the operator's real sign-in queue, config or app.
