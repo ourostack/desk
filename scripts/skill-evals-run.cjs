@@ -188,6 +188,7 @@ function subjectEnvironment(caseDirectory, desk, person, standIns) {
   const config = path.join(caseDirectory, "config");
   fs.mkdirSync(path.join(config, "gh"), { recursive: true });
   fs.mkdirSync(path.join(config, "state"), { recursive: true });
+  fs.mkdirSync(path.join(config, "shepherd-home"), { recursive: true });
   fs.writeFileSync(path.join(config, "npmrc"), "");
   fs.writeFileSync(path.join(config, "gitconfig"), `[user]\n\tname = Skill eval\n\temail = skill-eval@example.invalid\n[commit]\n\tgpgsign = false\n[credential]\n\thelper =\n[url "file:///skill-eval-no-network/"]\n\tinsteadOf = https://\n\tinsteadOf = http://\n\tinsteadOf = ssh://\n\tinsteadOf = git@\n`);
   const env = {
@@ -195,6 +196,8 @@ function subjectEnvironment(caseDirectory, desk, person, standIns) {
     DESK: desk,
     ...(person === null ? {} : { DESK_PERSON: person }),
     XDG_STATE_HOME: path.join(config, "state"),
+    // Shepherd treats this as its home folder, so a subject that queues a sign-in never reaches the operator's real queue or app.
+    SHEPHERD_HOME: path.join(config, "shepherd-home"),
     GH_CONFIG_DIR: path.join(config, "gh"),
     NPM_CONFIG_USERCONFIG: path.join(config, "npmrc"),
     GIT_CONFIG_GLOBAL: path.join(config, "gitconfig"),
