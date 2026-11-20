@@ -320,6 +320,8 @@ test("ghToken asks the GitHub CLI for the named account's token without the envi
   assert.match(calls[0].env.PATH, /^\/opt\/homebrew\/bin:\/usr\/local\/bin:\/bin$/u)
   assert.throws(() => ghToken(undefined, { spawn: () => ({ status: 1, stdout: "" }), env: {} }), /Sign the GitHub CLI in as an account Desk maps .* gh auth token gave no token/u)
   assert.throws(() => ghToken("x", { spawn: () => ({ status: 0 }), env: {} }), /gh auth token --user x gave no token/u)
+  // The real GitHub CLI, asked for an account no machine has signed in: no token, never a guess. Nothing is printed.
+  assert.throws(() => ghToken("desk-hooks-no-such-account-7f3a", { env: { PATH: process.env.PATH, HOME: "/nonexistent-desk-hooks-home" } }), /desk-hooks-no-such-account-7f3a gave no token/u)
 })
 
 test("the drains CLI runs every hooks command against the files it is given", async () => {

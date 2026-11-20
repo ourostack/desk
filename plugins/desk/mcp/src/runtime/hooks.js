@@ -63,7 +63,7 @@ export function parseHookConfig(raw, file, env = process.env) {
   return { server, hooks }
 }
 
-export function readHookConfig(file, env = process.env) {
+export function readHookConfig(file, env) {
   let raw
   try {
     raw = readFileSync(file, "utf8")
@@ -92,7 +92,7 @@ function writeHookStates(file, states) {
 }
 
 /** The account's GitHub token from the `gh` CLI, never from the environment, so the poll reads as the account hooks.json names. */
-export function ghToken(account, { spawn = spawnSync, env = process.env } = {}) {
+export function ghToken(account, { spawn = spawnSync, env }) {
   const cleaned = { ...env, PATH: ["/opt/homebrew/bin", "/usr/local/bin", env.PATH].filter(Boolean).join(":") }
   for (const name of ["GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GH_HOST"]) delete cleaned[name]
   const result = spawn("gh", ["auth", "token", "--hostname", "github.com", ...(account ? ["--user", account] : [])], { encoding: "utf8", timeout: 20_000, env: cleaned, windowsHide: true })
@@ -223,7 +223,7 @@ function statusLines(config, states, byAccount, now) {
  * Reads every configured hook's pending events, saves their bodies and prints one wake per hook with events. A configured
  * hook the receiver lacks, or a refused account, is an error entry; the other hooks still poll.
  */
-export async function pollHooks({ paths, now, ackCommand, ackFlags = [], fetchImpl = fetch, token = ghToken, env = process.env }) {
+export async function pollHooks({ paths, now, ackCommand, ackFlags = [], fetchImpl, token, env }) {
   const config = readHookConfig(paths.config, env)
   const states = readHookStates(paths.state)
   prunePayloads(paths.payloads, now)
@@ -273,7 +273,7 @@ export async function pollHooks({ paths, now, ackCommand, ackFlags = [], fetchIm
  * Records how a wake went. Delivered: deletes exactly the listed events on the receiver. Not delivered (`error`): keeps them
  * all, so the next poll lists them again.
  */
-export async function ackHooks({ paths, name, events, error, now, fetchImpl = fetch, token = ghToken, env = process.env }) {
+export async function ackHooks({ paths, name, events, error, now, fetchImpl, token, env }) {
   const config = readHookConfig(paths.config, env)
   const hook = config.hooks.find((entry) => entry.name === name)
   if (!hook) throw problem("desk_hooks_unknown_hook", `hooks.json has no hook named ${name}, probably because it was removed after the wake was printed`, "leave the events; they expire on the receiver after 7 days")
@@ -345,7 +345,7 @@ export async function deleteHook({ name, ...context }) {
 }
 
 /** The status lines, read from the receiver, without saving or acknowledging anything. */
-export async function hookStatus({ paths, now, fetchImpl = fetch, token = ghToken, env = process.env }) {
+export async function hookStatus({ paths, now, fetchImpl, token, env }) {
   const config = readHookConfig(paths.config, env)
   const byAccount = await serverHooks(receiver({ server: config.server, fetchImpl, token, env }), config)
   const errors = [...byAccount].filter(([, listing]) => listing.error).map(([account, listing]) => `${account}: ${listing.error}`)
