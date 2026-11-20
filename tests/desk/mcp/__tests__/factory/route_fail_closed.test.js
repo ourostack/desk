@@ -53,7 +53,7 @@ test("reproduction r1 through the end hook: an overlay truncated mid-write recor
   assert.deepEqual(saved.routing, { store: null, source: "invalid_declaration", warnings: [{ code: "manifest_unparseable", manifest }] })
   assert.deepEqual(markerRoute(saved), saved.routing)
   assert.deepEqual(sessionRoute(saved, { siblings: () => [saved] }), { kind: "unknown" })
-  assert.deepEqual(await deriveMarker(ctx.env, saved, { quietMs: 0, requireStored: true }), { result: "held", store: null })
+  assert.deepEqual(await deriveMarker(ctx.env, saved, { quietMs: 0, requireStored: true }), { result: "held", store: null, reason: "route_unreadable" })
   assert.equal(await outboxHas(ctx.env, STORE), false, "nothing reaches the public store's outbox")
 }))
 
@@ -123,14 +123,14 @@ test("an existing marker that recorded the default after skipping a broken overl
   assert.equal(places(), "unknown", "frozen: never published, never deleted, while the overlay cannot be read")
   assert.equal(sessionPlace(STORE, sessionRoute(legacy, { siblings: () => [legacy] }), STORE), "unknown")
   await setConsent(ctx.env, { store: STORE, contribute: true })
-  assert.deepEqual(await deriveMarker(ctx.env, legacy, { quietMs: 0, requireStored: true }), { result: "held", store: null })
+  assert.deepEqual(await deriveMarker(ctx.env, legacy, { quietMs: 0, requireStored: true }), { result: "held", store: null, reason: "route_unreadable" })
   await fs.writeFile(manifest, HEALTHY)
   assert.equal(places(), "away", "the overlay reads again: the session belongs to the private store, so the public copy is retracted")
   // Review round 2, M2: the warned path now declares nothing (an overlay update moved its declaration, or another plugin took the folder).
   // The older Desk's recorded default is not proof, so the session stays held.
   await fs.writeFile(manifest, JSON.stringify({ name: "corp", version: "1.0.0" }))
   assert.equal(places(), "unknown", "the overlay declares nothing: still held, never the recorded public default")
-  assert.deepEqual(await deriveMarker(ctx.env, legacy, { quietMs: 0, requireStored: true }), { result: "held", store: null })
+  assert.deepEqual(await deriveMarker(ctx.env, legacy, { quietMs: 0, requireStored: true }), { result: "held", store: null, reason: "route_unreadable" })
   await fs.writeFile(manifest, JSON.stringify({ name: "other", desk: { factory: { store: STORE } } }))
   assert.equal(places(), "unknown", "a plugin at the warned path that declares the public store does not release it either")
 }))
@@ -147,7 +147,7 @@ test("review round 2, M1: a different plugin swapped into a held Copilot plugin 
   for (const swapped of [{ name: "other", desk: { factory: { store: STORE } } }, { name: "other", desk: { factory: { store: "OuroStack/Factory" } } }, { name: "other" }]) {
     await fs.writeFile(manifest, JSON.stringify(swapped))
     assert.deepEqual(markerRoute(held), { store: null, source: "invalid_declaration", warnings: routing.warnings })
-    assert.deepEqual(await deriveMarker(ctx.env, held, { quietMs: 0, requireStored: true }), { result: "held", store: null })
+    assert.deepEqual(await deriveMarker(ctx.env, held, { quietMs: 0, requireStored: true }), { result: "held", store: null, reason: "route_unreadable" })
   }
   await fs.writeFile(manifest, JSON.stringify({ name: "corp", desk: { factory: { store: PRIVATE } } }))
   assert.deepEqual(markerRoute(held), { store: PRIVATE, source: "overlay", warnings: [] }, "a private declaration at its own path still releases it")
@@ -388,7 +388,7 @@ test("N2 repro S1: a session that loaded a private overlay through claude --plug
   const after = (await listMarkers(ctx.env)).find((m) => m.session_id === ID)
   assert.deepEqual(after.routing, held.routing, "another session's scan never routes this one")
   assert.deepEqual(sessionRoute(after, { siblings: () => [after] }), { kind: "unknown" })
-  assert.deepEqual(await deriveMarker(ctx.env, after, { quietMs: 0, requireStored: true }), { result: "held", store: null })
+  assert.deepEqual(await deriveMarker(ctx.env, after, { quietMs: 0, requireStored: true }), { result: "held", store: null, reason: "route_unreadable" })
   await sweep(ctx.env, { quietMs: 0 })
   assert.equal((await publicOutboxNames(ctx.env)).includes(`claude-code-${ID}.json`), false)
 }))
