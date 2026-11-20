@@ -1,3 +1,4 @@
+import { authorityRule, reportRule, scratchRule } from "../../../../../plugins/desk/mcp/src/activation/superpowers-context.js"
 import { test, beforeEach, afterEach } from "node:test"
 import { strict as assert } from "node:assert"
 import * as path from "node:path"
@@ -82,10 +83,16 @@ test("Superpowers context prints exact paths without introducing a second progre
     implementationReportPath: path.join(artifactDirectory, "implementation-report.md"),
     reviewPackagePath: path.join(artifactDirectory, "review.patch"),
     reviewReportPath: path.join(artifactDirectory, "review-report.md"),
+    reportWrittenBy: "coordinator",
+    scratchFolderName: "step-1-attempt-1",
+    prBodyFileName: "pr-body-step-1-attempt-1.md",
     briefRules: [
       "Desk-Task: track/outcome",
       "Never call task_focus; your work is credited through the Desk-Task line.",
       "Never call task_signoff.",
+      authorityRule(null, null),
+      reportRule(path.join(artifactDirectory, "implementation-report.md"), path.join(artifactDirectory, "review-report.md")),
+      scratchRule("step-1-attempt-1"),
       "verify or validate in your own worktree; never in a checkout your task does not own",
       "Write down the exact path of everything you create when you create it. Delete only those paths, each by that exact path written out in full in the delete command, never through a shell variable or a command substitution; leave anything else in place and list it in your return.",
       "on return list every created worktree and branch, its exact repository/path/ref, current state, owner and verified disposition in the mapped Resources record; close out only exact-owned safe resources through desk:git-hygiene",
@@ -549,7 +556,7 @@ test("a task path that is not exactly track and slug omits the Desk-Task rule an
     const { briefRules } = await resolve(moved)
     assert.equal(briefRules.some((rule) => rule.startsWith("Desk-Task:")), false, segments.join("/"))
     assert.equal(briefRules.some((rule) => rule.includes("task_focus")), false, segments.join("/"))
-    assert.equal(briefRules.length, 5)
+    assert.equal(briefRules.length, 8)
   }
 })
 
@@ -574,4 +581,37 @@ test("the visual-proof rule in every mapped brief is work-orchestration's senten
   assert.equal(output.briefRules.at(-1), VISUAL_PROOF_RULE)
   const skill = readFileSync(fileURLToPath(new URL("../../../../../plugins/desk/skills/work-orchestration/SKILL.md", import.meta.url)), "utf8")
   assert.ok(skill.includes(`"${VISUAL_PROOF_RULE}"`), "work-orchestration quotes the mapper's visual-proof sentence")
+})
+
+test("the brief tells the child to return its report as text and names the coordinator's save path", async () => {
+  const output = await resolve(context())
+  const rule = output.briefRules.find((line) => line.startsWith("Return your report as text"))
+  assert.ok(rule, "the brief asks for the report in the reply")
+  assert.match(rule, /do not write it to a file/u)
+  assert.ok(rule.includes(output.implementationReportPath) && rule.includes(output.reviewReportPath))
+  assert.equal(output.reportWrittenBy, "coordinator")
+  assert.equal(output.briefRules.some((line) => /write (?:your|the) report (?:to|beside)/iu.test(line)), false)
+})
+
+test("two concurrent children never share a scratch folder or a pull-request body file name", async () => {
+  const first = await resolve(context({ step: 1, attempt: 1 }))
+  const second = await resolve(context({ step: 1, attempt: 2 }))
+  const other = await resolve(context({ step: 2, attempt: 1 }))
+  const names = [first, second, other].map((output) => [output.scratchFolderName, output.prBodyFileName])
+  assert.equal(new Set(names.map(([folder]) => folder)).size, 3)
+  assert.equal(new Set(names.map(([, file]) => file)).size, 3)
+  const rule = first.briefRules.find((line) => line.startsWith("Write scratch and pull-request bodies only under"))
+  assert.ok(rule.includes("--body-file") && rule.includes(`${first.scratchFolderName}/${first.prBodyFileName}`))
+  assert.ok(!second.briefRules.includes(rule))
+})
+
+test("a write brief quotes the operator's go with its scope, as relayed, and keeps managed safeguards", async () => {
+  const output = await resolve(context({ goQuote: "go, fix the four issues", goScope: "edits in ourostack/desk plugins/desk" }))
+  const rule = output.briefRules.find((line) => line.includes("The operator said, in the root session, verbatim"))
+  assert.ok(rule.includes('"go, fix the four issues"') && rule.includes("edits in ourostack/desk plugins/desk"))
+  assert.match(rule, /satisfies a project rule to confirm before file changes/u)
+  assert.match(rule, /not a message the operator sent you/u)
+  assert.match(rule, /never overrides a managed tool safeguard/u)
+  await assert.rejects(resolve(context({ goQuote: "go" })), /together/u)
+  await assert.rejects(resolve(context({ goQuote: " ", goScope: "x" })), /short non-empty string/u)
 })

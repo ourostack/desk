@@ -54,7 +54,7 @@ const { spawn, spawnSync } = require("node:child_process");
 // Loaded only by the detached launchers, never on the boot path.
 const compatibleNode = (options) => require("../compatible-node.cjs").compatibleNode(options);
 // A headless evaluator session hears nothing from the boot checks and starts nothing (mcp/src/factory/headless-flag.js).
-const isHeadless = (env) => { try { return require("../../mcp/src/factory/headless-flag.cjs").isHeadlessFactorySession(env); } catch { const v = String(env?.DESK_FACTORY_HEADLESS ?? ""); return v !== "" && v !== "0"; } };
+const isHeadless = (env) => { try { return require("../../mcp/src/factory/headless-flag.cjs").startupChangesNothing(env); } catch { return [env?.DESK_FACTORY_HEADLESS, env?.DESK_READ_ONLY_CHILD].some((v) => String(v ?? "") !== "" && String(v ?? "") !== "0"); } };
 // Set on the repair a launcher re-executes in a compatible Node, so it runs the repair itself.
 const REPAIR_NODE_ENV = "DESK_TIDY_REPAIR_NODE";
 // The launcher may spend the bootstrap's full probe budget: nothing waits on it.

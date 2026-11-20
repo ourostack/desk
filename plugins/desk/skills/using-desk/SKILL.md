@@ -55,4 +55,4 @@ What a successor would lose if this session vanished lives on `main` in the desk
 
 ## Child agents
 
-A child agent with a bounded brief follows the brief, not this text, and skips session-start, host probes, sync and any boot; so does any session told not to boot. The brief carries what it needs (`work-orchestration`); a child never calls task_focus.
+A child agent with a bounded brief follows the brief, not this text, and skips session-start, host probes, sync and any boot; so does any session told not to boot, and a read-only child's startup only reads. A go the brief quotes with its scope, relayed by the root, satisfies a project confirm-first rule for that scope, never a managed safeguard or denial. The brief carries what it needs (`work-orchestration`); a child never calls task_focus.

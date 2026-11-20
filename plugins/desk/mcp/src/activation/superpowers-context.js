@@ -65,6 +65,25 @@ async function canonicalFile(deskRoot, person, file, kind, required = true) {
 // a child briefed on "look into" or "review" work otherwise returns no screenshots of what it saw.
 export const VISUAL_PROOF_RULE = "Capture visual proof as you go: whenever the work touches something a person sees (a screen, a setting before and after, an agent's reply, a refusal, an error, a result), save bounded screenshots, never secrets or private content, into your own folder `evidence/<brief name>/` beside your brief file, named after the brief file without its extension (or, when the brief is not a file, `evidence/<a short name for your assignment>/` in the task's desk folder), so children whose briefs share a folder never overwrite each other's files, and return an Evidence list beside Resources that names each file and what it shows, or says why nothing was visible. A brief's silence never waives this."
 
+// A child returns its report as text in its reply and the coordinator saves it at the mapped path, so the rule never depends on a host letting a
+// subagent write files (Claude Code refuses: "Subagents should return findings as text").
+export function reportRule(implementationReportPath, reviewReportPath) {
+  return `Return your report as text in your final reply; do not write it to a file, because some hosts refuse a subagent's file write. The coordinator saves your reply at ${implementationReportPath} (implementer) or ${reviewReportPath} (reviewer).`
+}
+
+// Two children sharing one scratchpad both wrote pr-body.md and one published the other's text as a live pull request body.
+export function scratchRule(name) {
+  return `Write scratch and pull-request bodies only under a folder named for your node and attempt (\`${name}\`, made under the session scratchpad or with mktemp), never at the scratchpad's root, and use a uniquely named body file there (\`${name}/pr-body-${name}.md\`); pass that exact path to \`gh pr create\` or \`gh pr edit\` with --body-file.`
+}
+
+// A relayed go satisfies a project's confirm-first rule for its scope; it never satisfies a managed tool safeguard, and it is never the operator's own message.
+export function authorityRule(goQuote, goScope) {
+  const quoted = goQuote === null
+    ? "If the root's brief quotes the operator's go, treat it as that go, relayed by the root."
+    : `The operator said, in the root session, verbatim: "${goQuote}" (scope: ${goScope}). The root relays it; it is not a message the operator sent you.`
+  return `${quoted} A go relayed this way satisfies a project rule to confirm before file changes (a CLAUDE.md or AGENTS.md) for that scope only, so do not stop to ask again in your own thread. It extends to no other scope, grants no new authority, and never overrides a managed tool safeguard, a permission prompt or a denial: when one refuses, stop and report it.`
+}
+
 // The person-scoped write authority resolves symlinks against the person root, not this task, so a
 // same-person link inside the task can still name a neighbouring task's record. Compare resolved
 // paths so an escaping link is refused rather than adopted as this task's progress and rulings.
@@ -108,6 +127,16 @@ export async function resolveSuperpowersContext(input) {
   const requestedProgressPath = optionalPath(input, "progressPath")
   const evidenceRoot = optionalPath(input, "evidenceRoot")
   const person = input.person ?? null
+  const goQuote = input.goQuote ?? null
+  const goScope = input.goScope ?? null
+  for (const [name, value] of [["goQuote", goQuote], ["goScope", goScope]]) {
+    if (value !== null && (typeof value !== "string" || value.trim() === "" || value.length > 1000)) {
+      throw Object.assign(new Error(`Superpowers context: Pass ${name} as a short non-empty string: ${name} must be a non-empty string of at most 1000 characters when supplied`), { code: "superpowers_context_pass_as_a_short_string" })
+    }
+  }
+  if ((goQuote === null) !== (goScope === null)) {
+    throw Object.assign(new Error("Superpowers context: Pass goQuote and goScope together: the operator's go is quoted with the scope it covers, or neither is given"), { code: "superpowers_context_pass_go_quote_and_scope_together" })
+  }
   for (const name of ["step", "attempt"]) {
     if (!Number.isInteger(input[name]) || input[name] < 1) {
       throw Object.assign(new Error(`Superpowers context: Pass ${name} as a positive integer: ${name} must be a positive integer`), { code: "superpowers_context_superpowers_context_pass_as_a" })
@@ -149,6 +178,7 @@ export async function resolveSuperpowersContext(input) {
   const canonicalPlan = planPath === null ? null : await canonicalFile(deskRoot, null, planPath, "plan")
   const artifactBase = evidenceRoot === null ? iterationPath : path.join(evidenceRoot, path.relative(deskRoot, iterationPath))
   const artifactDirectory = path.join(artifactBase, "superpowers", `step-${input.step}`, `attempt-${input.attempt}`)
+  const scratchName = `step-${input.step}-attempt-${input.attempt}`
   return {
     taskCardPath,
     iterationPath,
@@ -160,9 +190,15 @@ export async function resolveSuperpowersContext(input) {
     implementationReportPath: path.join(artifactDirectory, "implementation-report.md"),
     reviewPackagePath: path.join(artifactDirectory, "review.patch"),
     reviewReportPath: path.join(artifactDirectory, "review-report.md"),
+    reportWrittenBy: "coordinator",
+    scratchFolderName: scratchName,
+    prBodyFileName: `pr-body-${scratchName}.md`,
     briefRules: [
       ...deskTaskRule(deskRoot, person, taskPath),
       "Never call task_signoff.",
+      authorityRule(goQuote === null ? null : goQuote.trim(), goScope === null ? null : goScope.trim()),
+      reportRule(path.join(artifactDirectory, "implementation-report.md"), path.join(artifactDirectory, "review-report.md")),
+      scratchRule(scratchName),
       "verify or validate in your own worktree; never in a checkout your task does not own",
       // work-orchestration's scratch sentence, verbatim: a reviewer dispatched from a review skill never reads that skill.
       "Write down the exact path of everything you create when you create it. Delete only those paths, each by that exact path written out in full in the delete command, never through a shell variable or a command substitution; leave anything else in place and list it in your return.",
@@ -198,6 +234,8 @@ if (isEntrypoint()) {
       "--evidence-root": "evidenceRoot",
       "--step": "step",
       "--attempt": "attempt",
+      "--go-quote": "goQuote",
+      "--go-scope": "goScope",
     }
     const input = {}
     for (let index = 2; index < process.argv.length; index += 2) {

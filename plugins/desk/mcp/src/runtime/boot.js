@@ -71,7 +71,7 @@ import { redactCredentialLikeText, redactName } from "../util/redact.js"
 import { shellQuote, shellQuotePath } from "../util/shell-quote.js"
 import { readSmallText } from "../factory/marker.js"
 import { readRemotes } from "../util/git-config-file.js"
-import { isHeadlessFactorySession } from "../factory/headless-flag.js"
+import { startupChangesNothing } from "../factory/headless-flag.js"
 import { isNoninteractive } from "../factory/session-kind.js"
 import { improvementPerson } from "../desk/improvement-person.js"
 import { memberMessage, resolveMember } from "../desk/crew-member.js"
@@ -1324,8 +1324,8 @@ export async function bootOnce({
     return taskOnlyBoot({ taskQuery, root, host, degraded, pending, walkFn, repoFn, gh: withAmbientToken(gh, env), now, deadline, spawnGit, homeDir })
   }
 
-  // A headless evaluator session changes nothing in the desk: no card guard, no sync, no stale refresh.
-  const headless = isHeadlessFactorySession(env)
+  // A headless evaluator session or a read-only child (DESK_READ_ONLY_CHILD) changes nothing in the desk: no card guard, no sync, no stale refresh.
+  const headless = startupChangesNothing(env)
   // The stale-Desk lookup runs alongside everything below; it has its own hard budget and never rejects.
   const staleDesk = Promise.resolve()
     .then(() => (headless ? null : staleDeskFn({ env, pluginRoot, agentHost: host.agent, now })))
