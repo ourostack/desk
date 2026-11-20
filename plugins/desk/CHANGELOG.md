@@ -1,5 +1,13 @@
 # desk plugin — changelog
 
+## 3.2.337 — 2026-11-20
+
+`friction_add` about Desk itself (`plugin` `desk`, a `desk-*` part, or `superpowers`) now opens an issue on ourostack/desk for its drain, as the skill always said, and keeps the improvement card; before, only other owned tools got an issue. The reply carries `issue_url`. A plugin name Desk does not know now says so and names `plugin` as the one argument that files it. A failed filing is now an error that names the reason and the saved note, never a quiet `added`. Lessons never file issues.
+
+Desk's MCP server now vendors Ouro UI v1.3.360, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.336 — 2026-11-20
 
 Desk's MCP server now vendors Ouro UI v1.3.357, moved by Ouro Current.
