@@ -52,6 +52,7 @@ import { redactCredentialLikeText } from "../util/redact.js"
 import { focusNote, shelvedLessons } from "./task-focus.js"
 import { applyStep, readSteps, readyOf, setDerived } from "../desk/steps.js"
 import { deriveSteps, unsettledSteps } from "../desk/step-delivery.js"
+import { isHosted } from "../runtime/hosted.js"
 import { applyResource, cleanupAnswer, dueResources, openResources } from "../desk/resources.js"
 import { recordCleanupCard } from "../desk/cleanup-index.js"
 import { recordArchivedDisposition } from "./task-archived-resource.js"
@@ -70,6 +71,13 @@ const DESK_COMMIT_HASH_NOTE = "desk_commit is the local commit; if the push reba
 
 // The card of a worktree on a feature branch is published before the call returns, so these say it is already on the remote.
 const DESK_PUBLISHED_NOTE = "Desk card only: Desk published this card to the remote's default branch from this worktree, so it is already on the remote. Run no git for it. Desk did not push your project's code; say code was pushed only if your own git push succeeded."
+// A hosted desk's push is the only durable copy and may rebase the commit, so the answer carries no hash at all: a hash quoted from it can name a commit origin never had.
+const DESK_COMMIT_PENDING_NOTE = "desk_commit is left out: this desk is hosted, its push can rebase the commit, and the hash origin will hold is not known yet. Say the change is saved and its push is pending, quote no commit hash, and call desk_status to see when it has been pushed."
+// `hash` as the answer's `desk_commit` fields: the local sha on a machine, a pending note on a hosted desk, and always the remote tip once the card was published.
+function commitHashAnswer({ env, hash, published = false }) {
+  if (!published && isHosted(env)) return { desk_commit_pending: DESK_COMMIT_PENDING_NOTE }
+  return { desk_commit: hash, desk_commit_note: published ? DESK_PUBLISHED_HASH_NOTE : DESK_COMMIT_HASH_NOTE }
+}
 const DESK_PUBLISHED_HASH_NOTE = "desk_commit is the remote default branch's tip after Desk published this card; the card is in it or in a commit before it."
 
 const TERMINAL_STATUSES = new Set(TERMINAL_STATES)
@@ -338,9 +346,9 @@ const OPTIONAL_RUNTIME_FIELDS = [
 // OPTIONAL_RUNTIME_FIELDS is a field added here in the same diff.
 // __tests__/tool_schema_parity.test.js checks these against the tool's
 // declared schema in tool-schemas.js.
-export const TASK_CREATE_FIELDS = ["track", "slug", "title", "status", "body", "focus", "steps", "intake_proposal", "display_label", ...OPTIONAL_RUNTIME_FIELDS]
-export const TASK_UPDATE_FIELDS = ["track", "slug", "status", "frontmatter", "body_append", "note", "next_step", "evidence", "repos_removed_reason", "return_reason", "step", "resource", "display_label", "replace_section", "content_home", "log"]
-export const TASK_ARCHIVE_FIELDS = ["track", "slug", "evidence", "outcome"]
+export const TASK_CREATE_FIELDS = ["track", "slug", "title", "status", "body", "focus", "steps", "intake_proposal", "display_label", "desk", ...OPTIONAL_RUNTIME_FIELDS]
+export const TASK_UPDATE_FIELDS = ["track", "slug", "status", "frontmatter", "body_append", "note", "next_step", "evidence", "repos_removed_reason", "return_reason", "step", "resource", "display_label", "replace_section", "content_home", "log", "resources", "desk"]
+export const TASK_ARCHIVE_FIELDS = ["track", "slug", "evidence", "outcome", "desk"]
 
 // The three outcome records are written only by the task tools; a caller never supplies them.
 const RECORD_KEYS = ["signoff", "flow", "returns", "returns_damaged"]
@@ -487,6 +495,26 @@ const stepVerdict = (repos, context) => (name, prRepo) => prRepoVerdict(recorded
 const STEP_INPUT = { tool: "task_update", field: "step", effect: "no step was changed", example: '{"id": "api-change", "depends_on": [], "repo": "widgets"}' }
 
 const REPLACE_SECTION_INPUT = { tool: "task_update", field: "replace_section", effect: "no section was changed", example: '{"heading": "Progress log", "markdown": "- 2026-10-22: shortened; history moved to the iteration folder"}' }
+
+// `resource` and `resources` together are one ordered list of rows, written and committed once.
+function resourceList(given, one) {
+  let many = given
+  if (typeof many === "string") {
+    try {
+      many = JSON.parse(many)
+    } catch {
+      // Refused below as not a list.
+    }
+  }
+  if (many !== undefined && !Array.isArray(many)) {
+    throw Object.assign(new Error("task_update: Pass `resources` as a list of resource rows: `resources` must be an array of objects, each shaped like `resource`; nothing was changed. Example: {\"resources\": [{\"identity\": \"worktree:/Users/me/code/widgets-worktrees/api\", \"disposition\": \"removed-and-absent\", \"details\": \"git worktree list no longer shows it\"}]}."), { code: "task_update_resources_must_be_a_list" })
+  }
+  if (many !== undefined && many.length === 0) {
+    throw Object.assign(new Error("task_update: Pass at least one row in `resources`: `resources` is empty; nothing was changed. Leave it out to change no resource."), { code: "task_update_resources_is_empty" })
+  }
+  if (one === undefined && many === undefined) return undefined
+  return [...(one === undefined ? [] : [one]), ...(many ?? []).map((row, index) => objectInput(row, { ...RESOURCE_INPUT, field: `resources[${index}]` }) ?? objectInput("null", { ...RESOURCE_INPUT, field: `resources[${index}]` }))]
+}
 
 const RESOURCE_INPUT = { tool: "task_update", field: "resource", effect: "no resource was changed", example: '{"identity": "worktree:/Users/me/code/widgets-worktrees/api", "step": "api-change"}' }
 
@@ -1074,6 +1102,7 @@ export async function task_update({ deskRoot, input, person = null, search, stat
   refuseRecordKeys("task_update", frontmatter)
   const step = objectInput(values.step, STEP_INPUT)
   const resource = objectInput(values.resource, RESOURCE_INPUT)
+  const resourceRows = resourceList(values.resources, resource)
   const section = objectInput(values.replace_section, REPLACE_SECTION_INPUT)
   const nextStep = nextStepValue === undefined ? undefined : requiredText(nextStepValue, nextStepKey)
   const note = values.note === undefined ? undefined : requiredText(values.note, "note")
@@ -1094,12 +1123,12 @@ export async function task_update({ deskRoot, input, person = null, search, stat
     segments: [track, slug, "task.md"],
   })
   // An archived card takes one thing: a disposition on one of its existing resource rows, so a cleanup reminder left on a finished card can be closed (task-archived-resource.js).
-  if (!(await pathExists(filePath)) && resource !== undefined) {
+  if (!(await pathExists(filePath)) && resourceRows !== undefined) {
     const archived = await resolveWriteTarget({ deskRoot, person, segments: [track, "_archive", slug, "task.md"] })
     if (await pathExists(archived)) {
       assertCleanContentTarget(deskRoot, relPath(deskRoot, archived), contentAdmission, "task_update")
       const archivedValues = Object.fromEntries(Object.entries(values).filter(([key]) => key !== "content_home"))
-      const result = await recordArchivedDisposition({ deskRoot, file: archived, track, slug, values: archivedValues, resource, search, env, spawnGit, helpers: { relPath, stagingAllowed, stageAndCommitCard, schedulePush } })
+      const result = await recordArchivedDisposition({ deskRoot, file: archived, track, slug, values: archivedValues, resources: resourceRows, search, env, spawnGit, helpers: { relPath, stagingAllowed, stageAndCommitCard, schedulePush } })
       if (contentAdmission !== null) result.content_admission = contentAdmission
       return result
     }
@@ -1159,7 +1188,7 @@ export async function task_update({ deskRoot, input, person = null, search, stat
   let deliveryCheck = null
   // The card as it is now (read after the refresh's network wait): this call's step, the refreshed cells and the done check all apply to it, so nothing another session wrote meanwhile is lost.
   let stepResult = null
-  let resourceResult = null
+  let resourceResults = null
   let newBody = existing.content
   // Due rows are counted on the card as it is now, before this call's step and refreshed cells, so a step Desk finds delivered makes its rows due once.
   const dueBefore = dueResources(newBody, { status: existing.data.status }).map((item) => item.identity)
@@ -1211,9 +1240,13 @@ export async function task_update({ deskRoot, input, person = null, search, stat
   }
 
   // Resources are recorded on the card itself (task.md); Desk reminds about them and never removes anything (desk/resources.js).
-  if (resource !== undefined) {
-    resourceResult = applyResource(newBody, resource, "task_update", `${track}/${slug}`)
-    newBody = resourceResult.body
+  if (resourceRows !== undefined) {
+    resourceResults = []
+    for (const row of resourceRows) {
+      const applied = applyResource(newBody, row, "task_update", `${track}/${slug}`)
+      newBody = applied.body
+      resourceResults.push(applied.row)
+    }
   }
   if (section !== undefined) newBody = replaceSection(newBody, section.heading, section.markdown)
   if (nextStep !== undefined) newBody = replaceNextStep(newBody, nextStep)
@@ -1235,9 +1268,9 @@ export async function task_update({ deskRoot, input, person = null, search, stat
     assertCleanContentTarget(deskRoot, relPath(deskRoot, path.join(path.dirname(path.dirname(filePath)), "track.md")), contentAdmission, "task_update")
   }
   // A card written for a step goes through a temporary file and a rename, so a reader never sees it half written.
-  await writeMarkdown(filePath, merged, newBody, { atomic: step !== undefined || stepsNow !== null || resource !== undefined })
+  await writeMarkdown(filePath, merged, newBody, { atomic: step !== undefined || stepsNow !== null || resourceRows !== undefined })
   // The per-machine index of cards with open resource rows follows each resource write; a state folder that cannot be written never fails the card write.
-  if (resource !== undefined) {
+  if (resourceRows !== undefined) {
     try {
       recordCleanupCard(deskRoot, relPath(deskRoot, path.dirname(filePath)), openResources(newBody).length > 0, env)
     } catch {
@@ -1269,7 +1302,10 @@ export async function task_update({ deskRoot, input, person = null, search, stat
   Object.assign(result, reportResult(report, delivered === null))
   if (stepResult !== null) Object.assign(result, stepAnswer(stepResult))
   Object.assign(result, refreshedAnswer(refreshed, result.step_note))
-  if (resourceResult !== null) result.resource = resourceResult.row
+  if (resourceResults !== null) {
+    if (resource !== undefined) result.resource = resourceResults[0]
+    if (values.resources !== undefined) result.resources = resourceResults.slice(resource === undefined ? 0 : 1)
+  }
   // A call that makes something due lists the card's due rows and the safe action for each; Desk never performs it. A call that finishes the card lists all of them.
   const due = dueResources(newBody, { status: merged.status })
   const finishes = TERMINAL_STATUSES.has(merged.status) && !TERMINAL_STATUSES.has(existing.data.status)
@@ -1284,11 +1320,10 @@ export async function task_update({ deskRoot, input, person = null, search, stat
   if (deliveryCheck?.status === "delivered") result.delivery_check = `delivered: ${deliveryCheck.basis}`
   if (deliveryCheck?.status === "not_verified") result.delivery_check = `not verified: ${deliveryCheck.reason}. The pull request's delivery was not checked; confirm it is delivered (see the repo's .desk/delivery.json) before telling the operator it shipped.`
   if (deskCommit !== null) {
-    result.desk_commit = deskCommit
+    Object.assign(result, commitHashAnswer({ env, hash: deskCommit, published }))
     result.desk_pushed = published
     if (published) result.desk_note = DESK_PUBLISHED_NOTE
     else Object.assign(result, deskPushNote({ root: deskRoot, env, spawnGit, note: DESK_COMMIT_NOTE }))
-    result.desk_commit_note = published ? DESK_PUBLISHED_HASH_NOTE : DESK_COMMIT_HASH_NOTE
     if (heldChanges) result.included_uncommitted_changes = INCLUDED_CHANGES_NOTE
   }
   // A note or a status change that leaves the next step alone is the common way a card ends up describing work that
@@ -1725,4 +1760,4 @@ export async function task_archive({ deskRoot, input, person = null, search, sta
 }
 
 // The write, stage, commit and finalize helpers `task_signoff` uses, so a sign-off goes through the same path as `task_update`.
-export { DESK_COMMIT_NOTE, DESK_COMMIT_HASH_NOTE, relPath, stagingAllowed, stageAndCommitCard, headSha, updateTrackRow, taskJobOrNull, requestTaskFinalize }
+export { DESK_COMMIT_NOTE, DESK_COMMIT_HASH_NOTE, commitHashAnswer, relPath, stagingAllowed, stageAndCommitCard, headSha, updateTrackRow, taskJobOrNull, requestTaskFinalize }

@@ -16,29 +16,38 @@ const FRONT = /^---\r?\n[\s\S]*?\r?\n---[ \t]*(?:\r?\n|$)/u
  * Fills the terminal cell of the archived card's existing row, and returns `{ status: "updated", path, resource }`; refuses, changing nothing, for any other call.
  * `helpers` are task.js's own `{ relPath, stagingAllowed, stageAndCommitCard, schedulePush }`.
  */
-export async function recordArchivedDisposition({ deskRoot, file, track, slug, values, resource, search, env, spawnGit, helpers }) {
+export async function recordArchivedDisposition({ deskRoot, file, track, slug, values, resources, search, env, spawnGit, helpers }) {
   const refuse = (why, { code }) => { throw Object.assign(new Error(`task_update: Pass only \`resource: {identity, disposition, details}\` for an archived card: ${track}/${slug} is archived, so a call can only record a disposition on one of its existing resource rows (\`resource: {identity, disposition, details}\` and nothing else); ${why}; nothing was changed.`), { code }) }
-  const extra = Object.keys(values).filter((key) => !["track", "slug", "resource"].includes(key))
+  const extra = Object.keys(values).filter((key) => !["track", "slug", "resource", "resources"].includes(key))
   if (extra.length > 0) refuse(`Pass only \`resource: {identity, disposition, details}\`: this call also has ${extra.map((key) => `\`${key}\``).join(", ")}`, { code: "task_update_archived_extra_fields" })
-  const other = Object.keys(resource).filter((key) => !ALLOWED.includes(key))
-  if (other.length > 0) refuse(`Pass only \`resource: {identity, disposition, details}\`: the resource has ${other.map((key) => `\`${key}\``).join(", ")}`, { code: "task_update_archived_resource_fields" })
-  if (resource.disposition === undefined) refuse("Pass `disposition` with `details`: the resource has no `disposition`", { code: "task_update_archived_no_disposition" })
   const raw = await fs.readFile(file, "utf8")
   const front = FRONT.exec(raw)?.[0] ?? ""
-  const identity = canonicalIdentity(resource.identity)
-  if (!(readResources(raw.slice(front.length)).rows ?? []).some((row) => canonicalIdentity(row.identity) === identity)) refuse(`Pass an identity that is a row of the Resources table: ${JSON.stringify(resource.identity)} is not a row of its Resources table`, { code: "task_update_archived_unknown_identity" })
-  const written = applyResource(raw.slice(front.length), resource, "task_update", `${track}/${slug}`)
+  const known = readResources(raw.slice(front.length)).rows ?? []
+  for (const resource of resources) {
+    const other = Object.keys(resource).filter((key) => !ALLOWED.includes(key))
+    if (other.length > 0) refuse(`Pass only \`resource: {identity, disposition, details}\`: the resource has ${other.map((key) => `\`${key}\``).join(", ")}`, { code: "task_update_archived_resource_fields" })
+    if (resource.disposition === undefined) refuse("Pass `disposition` with `details`: the resource has no `disposition`", { code: "task_update_archived_no_disposition" })
+    const identity = canonicalIdentity(resource.identity)
+    if (!known.some((row) => canonicalIdentity(row.identity) === identity)) refuse(`Pass an identity that is a row of the Resources table: ${JSON.stringify(resource.identity)} is not a row of its Resources table`, { code: "task_update_archived_unknown_identity" })
+  }
+  let body = raw.slice(front.length)
+  const rows = []
+  for (const resource of resources) {
+    const written = applyResource(body, resource, "task_update", `${track}/${slug}`)
+    body = written.body
+    rows.push(written.row)
+  }
   // Judged before the write, so a card another session left changed is never adopted.
   const stage = helpers.stagingAllowed(file, spawnGit)
   // Written through a temporary file and a rename, so a reader never sees the card half written; nothing else about the card changes.
-  await writeFileAtomic(file, front + written.body)
+  await writeFileAtomic(file, front + body)
   const commit = stage ? helpers.stageAndCommitCard(file, `task_update: ${track}/${slug}`, spawnGit, [], null, deskRoot) : undefined
   if (stage && !commit) helpers.schedulePush({ root: deskRoot })
   search?.noteChange(helpers.relPath(deskRoot, file))
   try {
-    recordCleanupCard(deskRoot, helpers.relPath(deskRoot, path.dirname(file)), openResources(written.body).length > 0, env)
+    recordCleanupCard(deskRoot, helpers.relPath(deskRoot, path.dirname(file)), openResources(body).length > 0, env)
   } catch {
     // A state folder that cannot be written never fails the card write.
   }
-  return { status: "updated", path: helpers.relPath(deskRoot, file), resource: written.row, ...(commit ? { commit } : {}) }
+  return { status: "updated", path: helpers.relPath(deskRoot, file), resource: rows[0], ...(rows.length > 1 ? { resources: rows } : {}), ...(commit ? { commit } : {}) }
 }

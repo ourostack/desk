@@ -54,6 +54,7 @@ import { deskSkill } from "./runtime/skills.js"
 import { desk_status } from "./tools/status.js"
 export { waitForStatusInspection } from "./tools/status.js"
 import { doctorRuntime } from "./tools/doctor.js"
+import { SIBLING_DESK_TOOLS, resolveSiblingDesk } from "./tools/sibling-desk.js"
 export { createSearchEngine } from "./search/engine.js"
 import { searchRouter } from "./search/files-router.js"
 import { headlessRefusal } from "./factory/headless-flag.js"
@@ -298,15 +299,21 @@ export async function callTool({ deskRoot, name, input, person = null, statusCon
   }
   try {
     // The session's search engine (src/search/engine.js), once admission has started it: writes tell it what they changed, and searches use it.
-    const search = statusContext.search ?? null
+    let target = { deskRoot, input: input ?? {}, statusContext, search: statusContext.search ?? null }
+    // `desk` points a card tool at another desk registered on this machine. That desk has its own search index and focus, so the call takes neither of this session's.
+    if (SIBLING_DESK_TOOLS.includes(name) && target.input.desk !== undefined) {
+      const { desk, ...rest } = target.input
+      target = { deskRoot: resolveSiblingDesk({ tool: name, desk, boundRoot: deskRoot, person, env }).deskRoot, input: rest, statusContext: {}, search: null }
+    }
     const invoke = () => impl({
-      deskRoot, input: input ?? {}, person, statusContext, search,
-      queryRouter: searchRouter(search), signal,
+      deskRoot: target.deskRoot, input: target.input, person, statusContext: target.statusContext, search: target.search,
+      queryRouter: searchRouter(target.search), signal,
     })
     let stageStore = null
-    const result = name === "task_archive" && nativeStageTraceEnabled(env)
+    let result = name === "task_archive" && nativeStageTraceEnabled(env)
       ? await runWithNativeStageScope(store => { stageStore = store; return invoke() })
       : await invoke()
+    if (target.deskRoot !== deskRoot && result !== null && typeof result === "object") result = { ...result, desk_root: target.deskRoot }
     if (stageStore?.summaries.length === 1) emitNativeStageSummary(stageStore.summaries[0], traceRequestId, traceWrite)
     // desk_skill answers with the skill's own text: its result is already an MCP answer.
     if (name === "desk_skill" && Array.isArray(result?.content)) return result
