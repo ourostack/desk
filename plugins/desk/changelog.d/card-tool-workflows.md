@@ -1,3 +1,0 @@
-### Card tools
-
-`task_create`, `task_update`, `task_archive` and `task_signoff` take `desk` to write a card in another desk registered on this machine; an unregistered desk, a Crew desk and a person-scoped session are refused, and only the operator's registry counts. `task_update` takes `resources`, a list of Resources rows recorded in one write and one commit, so a cleanup no longer makes one commit per row. A `task_signoff` refusal at `validating` names the exact `task_update` call that closes the card. A hosted `desk_save`, `task_update` or `task_signoff` whose commit is not yet pushed reports `desk_commit_pending` instead of a hash the push can change.

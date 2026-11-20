@@ -1,5 +1,13 @@
 # desk plugin — changelog
 
+## 3.2.357 — 2026-11-20
+
+### Card tools
+
+`task_create`, `task_update`, `task_archive` and `task_signoff` take `desk` to write a card in another desk registered on this machine; an unregistered desk, a Crew desk and a person-scoped session are refused, and only the operator's registry counts. `task_update` takes `resources`, a list of Resources rows recorded in one write and one commit, so a cleanup no longer makes one commit per row. A `task_signoff` refusal at `validating` names the exact `task_update` call that closes the card. A hosted `desk_save`, `task_update` or `task_signoff` whose commit is not yet pushed reports `desk_commit_pending` instead of a hash the push can change.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.356 — 2026-11-20
 
 The `mine` browser copy now keeps you signed in when the Edge on this Mac is newer than your running Edge. A newer Edge could not read the cookies the older one encrypted and dropped every one of them at start, so GitHub and other sites landed on a sign-in page. On macOS the copied cookie file's values are now decrypted with the browser's own Safe Storage key and stored as plain values in the private copy, which is deleted when the context closes. Your real profile is not changed.
