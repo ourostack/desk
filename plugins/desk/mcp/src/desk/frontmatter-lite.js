@@ -12,8 +12,9 @@
 // dropped), an unquoted YAML timestamp is a Date (so an unquoted `updated:`
 // is never treated as a string, exactly as under gray-matter), integers are
 // numbers, `true`/`false`/`null`/`~` are what YAML says they are, and a `|`
-// or `>` block scalar is read as YAML folds or keeps it. Nested values are
-// not parsed; `matter` keeps the raw frontmatter text, which is where the
+// or `>` block scalar is read as YAML folds or keeps it. `operating_files`
+// also reads scalar lists. Other nested values are not parsed; `matter`
+// keeps the raw frontmatter text, which is where the
 // checks look for pull request URLs.
 //
 // Like gray-matter, it throws on a block it cannot trust — a duplicate key,
@@ -111,6 +112,59 @@ function blockScalar(style, chomp, lines) {
   return chomp === "-" ? text : `${text}\n`
 }
 
+function scalar(value) {
+  const text = value.trim()
+  if (text.startsWith('"')) {
+    try { return JSON.parse(withoutFlowComments(text)) }
+    catch { return null }
+  }
+  if (text.startsWith("'")) return quoted(text, "'")
+  const plain = plainScalar(text)
+  if (typeof plain !== "string") return plain
+  const numeric = plain.replaceAll("_", "")
+  if (/^(?:null|true|false|[-+]?\.inf|\.nan)$/iu.test(plain) ||
+      numeric !== "" && !Number.isNaN(Number(numeric)) ||
+      /^[-+]?\d+(?::[0-5]?\d)+(?:\.\d+)?$/u.test(numeric)) return null
+  return plain
+}
+
+function withoutFlowComments(value) {
+  let text = "", quote = null, comment = false
+  for (let index = 0; index < value.length; index++) {
+    const char = value[index]
+    if (comment) {
+      if (char === "\n") { comment = false; text += char }
+    } else if (quote) {
+      text += char
+      if (quote === '"' && char === "\\") text += value[++index] ?? ""
+      else if (char === quote) {
+        if (quote === "'" && value[index + 1] === "'") text += value[++index]
+        else quote = null
+      }
+    } else if (char === "#" && (index === 0 || /\s/u.test(value[index - 1]))) comment = true
+    else {
+      text += char
+      if (char === '"' || char === "'") quote = char
+    }
+  }
+  return text
+}
+
+function operatingFlowList(value) {
+  const list = /^\[([\s\S]*)\][ \t]*$/u.exec(withoutFlowComments(value))
+  if (!list) return value
+  let rest = list[1].trim()
+  const items = []
+  while (rest) {
+    const item = /^(?:"(?:\\.|[^"\\])*"|'(?:''|[^'])*'|[^,[\]{}"']+?)(?=\s*(?:,|$))/u.exec(rest)
+    if (!item) return value
+    items.push(scalar(item[0]))
+    rest = rest.slice(item[0].length).trimStart()
+    if (rest.startsWith(",")) rest = rest.slice(1).trimStart()
+  }
+  return items
+}
+
 export function parseFrontmatterLite(text) {
   const normalized = String(text).replace(/\r\n/g, "\n")
   const lines = normalized.split("\n")
@@ -131,7 +185,17 @@ export function parseFrontmatterLite(text) {
     const value = raw.trim()
 
     const block = BLOCK_SCALAR_RE.exec(value)
-    if (block) {
+    if (key === "operating_files" && (value === "" || value.startsWith("#"))) {
+      const body = []
+      while (index + 1 < matterLines.length &&
+          (isContinuation(matterLines[index + 1]) || /^-(?:[ \t]|$)/u.test(matterLines[index + 1]))) {
+        body.push(matterLines[++index])
+      }
+      const rows = body.filter(line => line.trim() && !line.trimStart().startsWith("#"))
+      const items = rows.map(line => /^([ \t]*)-[ \t]+(.+)$/u.exec(line))
+      data[key] = rows.length && items.every(item => item && item[1] === items[0][1])
+        ? items.map(item => scalar(item[2])) : null
+    } else if (block) {
       const body = []
       while (index + 1 < matterLines.length && isContinuation(matterLines[index + 1])) {
         body.push(matterLines[index + 1])
@@ -142,12 +206,14 @@ export function parseFrontmatterLite(text) {
       data[key] = quoted(value, value[0])
     } else if (value.startsWith("[") || value.startsWith("{")) {
       let depth = flowDepth(value)
+      let collection = value
       while (depth > 0 && index + 1 < matterLines.length && isContinuation(matterLines[index + 1])) {
         index += 1
         depth = flowDepth(matterLines[index], depth)
+        collection += `\n${matterLines[index]}`
       }
       if (depth !== 0) throw malformed("an unbalanced flow collection")
-      data[key] = value
+      data[key] = key === "operating_files" ? operatingFlowList(collection) : value
     } else {
       data[key] = plainScalar(value)
     }

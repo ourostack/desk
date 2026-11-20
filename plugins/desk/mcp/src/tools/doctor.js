@@ -14,6 +14,7 @@ import { searchRouter } from "../search/files-router.js"
 // rather than "not checked".
 export const ORGANIZATION_CODES = [
   "track_missing_scope",
+  "track_operating_files_invalid",
   "track_person_name",
   "track_catch_all",
   "track_empty",

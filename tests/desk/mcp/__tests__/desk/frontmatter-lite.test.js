@@ -129,3 +129,33 @@ test("the reader agrees with gray-matter on what a Desk tool writes", () => {
   assert.deepEqual(actual.data, expected.data)
   assert.equal(actual.content, expected.content)
 })
+
+test("track operating file lists agree with gray-matter on block and flow forms", () => {
+  for (const declaration of [
+    "operating_files:\n  - README.md\n  - 'policy, final.md'\n  - state/",
+    "operating_files:\n- README.md\n- state/",
+    "operating_files: [README.md, 'policy, final.md', state/]",
+    'operating_files: ["README.md",\n  "policy.md", "state/"]',
+    "operating_files: [README.md # note, stray.md\n  , state/]",
+    'operating_files: ["stray\\n.md"]',
+    "operating_files: []",
+    matter.stringify("", { operating_files: ["README.md", "policy.md", "state/"] }).split("---")[1].trim(),
+  ]) {
+    sameAsGrayMatter(`---\n${declaration}\nscope: billing; not payroll\n---\n`, ["operating_files", "scope"])
+  }
+})
+
+test("an explicit null operating_files value cannot introduce exemptions from indented text", () => {
+  const parsed = parseFrontmatterLite("---\noperating_files: null\n  - stray.md\n---\n")
+  assert.equal(Array.isArray(parsed.data.operating_files), false)
+})
+
+test("non-string YAML operating file entries cannot become filename exemptions", () => {
+  for (const value of ["FALSE", "True", "NULL", "Null", "0xFF", "0b11", "012", "1.5", "1e3", ".Inf", ".NaN", "1:20"]) {
+    for (const declaration of [`operating_files: [${value}]`, `operating_files:\n  - ${value}`]) {
+      const text = `---\n${declaration}\n---\n`
+      assert.notEqual(typeof grayMatterData(text).operating_files[0], "string", value)
+      assert.notEqual(typeof parseFrontmatterLite(text).data.operating_files[0], "string", value)
+    }
+  }
+})

@@ -16,6 +16,12 @@ title: "<track title>"
 scope: "<what belongs>; not <what doesn't>"
 status: active | closed
 
+# Optional files and folders used to operate this track
+operating_files:
+  - README.md
+  - policy.md
+  - state/
+
 # Link to predecessor track (if this track succeeds a closed one)
 predecessor:
   slug: <predecessor-track-slug>
@@ -43,6 +49,10 @@ consumer agents extending this with their own work-tracker schema (e.g. enterpri
 `track_create` requires it and rejects a missing, multi-line or over-long scope. `track_update` sets or changes it with the same check (`frontmatter.scope`). Tracks created before the scope line existed stay readable; `desk_doctor` reports each one as `track_missing_scope`, and the agent adds the line when it tidies (`interaction-style` section 2).
 
 A track name follows the same rules as a task name (see `start-task`), and in addition a track is never named after a person and never a catch-all such as `misc`, `general` or `inbox`: `track_create` and `track_update` reject both. A track is created together with its first task; a track with no live tasks is archived (`archive-workflow`).
+
+## Operating files
+
+Use `track_update` with `frontmatter: { operating_files: ["README.md", "policy.md", "state/"] }` for files or folders that operate the track itself. `desk_doctor` does not report those entries as loose. Names match immediate children exactly, not nested paths or globs; a trailing `/` limits the entry to a folder. Undeclared entries are still checked, and a declared folder containing `task.md` still gets the ordinary task checks. An invalid list produces `track_operating_files_invalid` and applies no exemptions. An empty list removes all exemptions.
 
 ## Schema versioning
 
