@@ -1393,7 +1393,7 @@ function create(context, outputDir, timeoutMs, runtimePolicy, options) {
     var packet = await send(reader, "DOMSnapshot.captureSnapshot", { computedStyles: STYLES.slice() });
     var outside = await readOutside(reader, true);
     try {
-      return prepare(packet, before.scope, before.frameId, function () { return 0; }, outside.map(function (frame) {
+      return prepare(packet, before.scope, before.frameId, Number, outside.map(function (frame) {
         return { packet: frame.packet, scope: frame.read.scope, frameId: frame.read.frameId, key: frame };
       })).page;
     } finally {

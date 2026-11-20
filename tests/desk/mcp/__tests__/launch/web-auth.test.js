@@ -2672,6 +2672,35 @@ function outOfProcess() {
   return { packet: main, outside: { packet: away, owner: 107 } }
 }
 
+test("a screenshot of a tab with an out-of-process frame is taken and reports the scrubbed page", async () => {
+  const root = await mkTempRoot("auth-oopif-shot-")
+  const { packet, outside } = outOfProcess()
+  const native = fakeDriver({ packet, outside })
+  const adapter = adapterFor(native, root)
+  try {
+    const shot = await adapter.call(["screenshot"])
+    assert.ok(fs.existsSync(shot.screenshot))
+    assert.equal(JSON.stringify(shot).includes(OOP_TYPED), false)
+  } finally { await adapter.close() }
+})
+
+test("a screenshot is refused when an out-of-process frame cannot be read, and a known failure is reported as it is", async () => {
+  for (const [thrown, expected] of [[new Error(PASSWORD), /AUTH_FRAME_COVERAGE_REFUSED/u], [auth.fail("AUTH_TARGET_REFUSED"), /AUTH_TARGET_REFUSED/u]]) {
+    const root = await mkTempRoot("auth-oopif-refuse-")
+    const { packet, outside } = outOfProcess()
+    const native = fakeDriver({ packet, outside })
+    const send = native.oop.send
+    native.oop.send = async (method, params) => {
+      if (method === "DOMSnapshot.captureSnapshot") throw thrown
+      return send(method, params)
+    }
+    const adapter = adapterFor(native, root)
+    try {
+      await assert.rejects(adapter.call(["screenshot"]), (error) => expected.test(error.message) && !error.message.includes(PASSWORD))
+    } finally { await adapter.close() }
+  }
+})
+
 test("an out-of-process child frame is read inside its owner, scrubbed by every value typed anywhere in the tab, and its refs act in it", async () => {
   const root = await mkTempRoot("auth-oopif-")
   const { packet, outside } = outOfProcess()
@@ -2931,6 +2960,28 @@ test("screenshot hides nothing but real secrets, and blurs those in every frame 
   try {
     assert.ok(fs.existsSync((await other.call(["screenshot"])).screenshot), "a frame that cannot be marked does not stop the picture")
   } finally { await other.close() }
+})
+
+test("token-looking values are marked for the picture and unmarked after, and plain values are left alone", async () => {
+  const root = await mkTempRoot("auth-screenshot-mark-")
+  const native = framedDriver()
+  const fields = [{ value: "abcdef0123456789abcdef0123456789ab" }, { value: "hello there" }, { value: "x".repeat(40) }].map((field) => ({ ...field, attrs: new Set(), setAttribute(name) { this.attrs.add(name) }, removeAttribute(name) { this.attrs.delete(name) } }))
+  const seen = []
+  for (const frame of native.page.frames()) {
+    const record = frame.evaluate
+    frame.evaluate = async (fn, arg) => {
+      await record(fn, arg)
+      globalThis.document = { querySelectorAll: (selector) => ({ forEach: (each) => fields.forEach(each), selector }) }
+      try { return fn(arg) } finally { delete globalThis.document }
+    }
+  }
+  native.page.screenshot = async (options) => { seen.push(fields.map((field) => field.attrs.size)); return fs.promises.writeFile(options.path, "png") }
+  const adapter = adapterFor(native, root)
+  try {
+    await adapter.call(["screenshot"])
+    assert.deepEqual(seen, [[1, 0, 0]], "only the token-looking value is marked while the picture is taken")
+    assert.deepEqual(fields.map((field) => field.attrs.size), [0, 0, 0], "and nothing stays marked")
+  } finally { await adapter.close() }
 })
 
 test("the page's own marks are removed after a picture that failed", async () => {
