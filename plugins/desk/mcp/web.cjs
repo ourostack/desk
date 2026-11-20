@@ -265,7 +265,7 @@ function keychainCookieKey(app) {
   var item = SAFE_STORAGE[app];
   if (process.platform !== "darwin" || !item) return null;
   try {
-    var secret = childProcess.execFileSync("security", ["find-generic-password", "-w", "-s", item[0], "-a", item[1]], { timeout: 10000, stdio: ["ignore", "pipe", "ignore"] });
+    var secret = childProcess.execFileSync("security", ["find-generic-password", "-w", "-s", item[0], "-a", item[1]], { timeout: 10000, windowsHide: true, stdio: ["ignore", "pipe", "ignore"] });
     return crypto.pbkdf2Sync(secret.toString("utf8").trim(), "saltysalt", 1003, 16, "sha1");
   } catch (error) {
     return null;
