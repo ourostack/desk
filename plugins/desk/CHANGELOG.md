@@ -1,5 +1,15 @@
 # desk plugin — changelog
 
+## 3.2.340 — 2026-11-20
+
+Skill evaluations give the judge earlier replies as well as the final answer, so first-reply checks can inspect the evidence they require. `--keep` retains those replies for diagnosis.
+
+A Desk server whose host is gone now ends instead of running on with no client. It exits when its input fails, when a write to the host fails with EPIPE or ECONNRESET (before, that error was recorded as a degraded state and the server kept retrying), and when the process that started it ends, which it checks every 5 seconds. The idle proxy does the same. Three orphaned servers had each used a full CPU core for a day.
+
+Agents now know that a flow needing Ari's sign-in is queued for the morning with `shepherd signin queue` and keeps working, instead of prompting him live. The rule is one line in the `using-desk` Authority section.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.339 — 2026-11-20
 
 Desk's MCP server now vendors Ouro UI v1.3.363, moved by Ouro Current.
