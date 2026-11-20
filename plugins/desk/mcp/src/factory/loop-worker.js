@@ -31,13 +31,15 @@
 //
 // The result holds codes and integers only: `{ result, ran, skipped, failed, steps: { <step>: <code> } }`, where
 // `result` is `completed`, `budget_spent`, `status_unavailable`, `status_reset` (the status file was damaged and moved aside during this run: nothing more runs, and that UTC day is a spent day for the evaluator), `busy`, `headless_session`, `disabled`,
-// `no_factory_state`, `no_consenting_store` or `no_desk`, and a step's code is its own result code, `skipped`
+// `no_factory_state`, `no_consenting_store`, `no_desk` or `stale_release` (the Desk that started this worker is older than the newest release on this machine, as in a session that outlived its Desk: it claims nothing, the code is recorded as the skip reason, and the newest release's own hooks run the loop), and a step's code is its own result code, `skipped`
 // (not due), `not_started` (the budget was spent, or the status unreadable or reset), `step_error` (it threw) or
 // `invalid_result`. The `route` step is the two route collectors as one: `routed`, `issues_failed`, `local_failed`
 // or `both_failed`. `route` and `measure` answer `not_own_desk` (not run and not recorded) in a desk that is not the person's own (`route-desk.js`).
 // Every other step records itself; the worker records `route`, and records `step_error` for a step that threw. The measure step runs last and is told which steps ran.
 
 import { createRequire } from "node:module"
+import { existsSync, readdirSync } from "node:fs"
+import * as os from "node:os"
 import * as path from "node:path"
 
 import { checkPersonPrefix } from "./binding.js"
@@ -58,6 +60,7 @@ import { contextEvaluationDue } from "./context-run.js"
 import { LOOP_LOCK_NAME, evaluateDue, kickLoop, newestRequestAt } from "./evaluate-kick.js"
 import { consumeEvaluationContinuation } from "./headless-ledger.js"
 import { runVerifyStep } from "./improvement-verify.js"
+import { compareVersions, isVersion } from "./pipeline/versions.js"
 
 const { isLoopEnabled } = createRequire(import.meta.url)("./loop-switch.cjs")
 
@@ -73,6 +76,17 @@ const LOCK_NAME = LOOP_LOCK_NAME
 const CODE = /^[a-z0-9][a-z0-9_:-]{0,63}$/u
 
 const isObject = (value) => typeof value === "object" && value !== null && !Array.isArray(value)
+/** The newest complete Desk release copy on this machine (`runtime/newest-release.js` keeps them), or null. */
+export function newestInstalledRelease(env, homeDir = os.homedir()) {
+  const cacheHome = typeof env.XDG_CACHE_HOME === "string" && env.XDG_CACHE_HOME.trim() !== "" ? env.XDG_CACHE_HOME : path.join(env.HOME || homeDir, ".cache")
+  const copies = path.join(cacheHome, "ouroboros-skills", "desk", "release-copies")
+  try {
+    return readdirSync(copies).filter((name) => isVersion(name) && existsSync(path.join(copies, name, ".complete.json"))).sort(compareVersions).at(-1) ?? null
+  } catch {
+    return null
+  }
+}
+
 const answer = (result, extra = {}) => ({ result, ran: 0, skipped: 0, failed: 0, steps: {}, ...extra })
 
 // A step's answer, or null when it is not `{ ok: boolean, result: <code> }`.
@@ -161,7 +175,7 @@ const DEFAULT_IMPLS = { evaluate: runEvaluatorStep, consumeContinuation: consume
 export async function runLoopWorker(env, {
   deskRoot, personPrefix = "", pluginVersion, clock = Date.now, alive = processAlive, budgetMs = LOOP_BUDGET_MS,
   ceilingMs = budgetMs + CEILING_GRACE_MS, exit = process.exit, notify = notifyLauncher, readStatusImpl = readStatus, updateStatusImpl = updateStatus, impls = {},
-  ownDesk = isOwnDesk,
+  ownDesk = isOwnDesk, newestRelease = newestInstalledRelease,
 }) {
   if (deskRoot !== null && !path.isAbsolute(deskRoot)) throw Object.assign(new TypeError("Pass deskRoot as an absolute path"), { code: "loop_worker_pass_deskroot_as_an_absolute" })
   checkPersonPrefix(personPrefix, "runLoopWorker")
@@ -174,6 +188,9 @@ export async function runLoopWorker(env, {
   }
   if (!isLoopEnabled(env)) return ended(answer("disabled"))
   if (deskRoot === null) return ended(answer("no_desk"))
+  // A worker the old turn-end hook of a long-running session started must not claim work that belongs to the current release.
+  const newest = newestRelease(env)
+  if (isVersion(pluginVersion) && isVersion(newest) && compareVersions(newest, pluginVersion) > 0) return ended(answer("stale_release", { running: pluginVersion, newest }))
   if (root === null) return answer("no_factory_state")
   // A desk that has not opted in stays silent: nothing is recorded, so no health line or card follows from it.
   if (!hasContributingStore(env)) return answer("no_consenting_store")

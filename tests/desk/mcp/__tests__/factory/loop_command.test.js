@@ -220,6 +220,24 @@ test("a second worker finds the lock and answers busy without running anything, 
   assert.equal(JSON.parse(await fs.readFile(held.file, "utf8")).token, held.token, "the holder's lock is untouched")
 }))
 
+test("a worker an older Desk started claims nothing while a newer release is on the machine, and records why", () => scratch(async (ctx) => {
+  const copy = path.join(ctx.base, ".cache", "ouroboros-skills", "desk", "release-copies")
+  await fs.mkdir(path.join(copy, "3.2.400"), { recursive: true })
+  await fs.writeFile(path.join(copy, "3.2.400", ".complete.json"), "{}")
+  await fs.mkdir(path.join(copy, "3.2.500"), { recursive: true })
+  const log = []
+  const env = { ...ctx.env, XDG_CACHE_HOME: path.join(ctx.base, ".cache") }
+  const old = await runLoopWorker(env, { deskRoot: ctx.desk, pluginVersion: "3.2.353", impls: fakes(log) })
+  assert.deepEqual(old, { result: "stale_release", ran: 0, skipped: 0, failed: 0, steps: {}, running: "3.2.353", newest: "3.2.400" })
+  assert.deepEqual(log, [])
+  assert.equal((await readStatus(ctx.env)).loop.worker.result, "stale_release")
+  const root = await factoryStateRoot(ctx.env)
+  await assert.rejects(fs.access(path.join(root, "locks", "loop-worker.running")), "no lock was taken")
+  // The newest release itself, and one newer than the copies, run as before.
+  assert.equal((await runLoopWorker(env, { deskRoot: ctx.desk, pluginVersion: "3.2.400", impls: fakes([]) })).result, "completed")
+  assert.equal((await runLoopWorker(env, { deskRoot: ctx.desk, pluginVersion: "3.2.401", impls: fakes([]) })).result, "completed")
+}))
+
 test("a lock whose process is gone, or that is older than the outer age, is taken over; the worker's own lock is released at the end", () => scratch(async (ctx) => {
   const root = await factoryStateRoot(ctx.env)
   const lockFile = path.join(root, "locks", "loop-worker.running")
