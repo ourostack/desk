@@ -407,7 +407,7 @@ const isCancelledTemplate = (run, newest) => {
  * Every other check run and commit status on the head must be green too: a check that is not required (a path-filtered one, say) still blocks while it fails or runs, whatever `skippedPasses` says.
  * Only a required check needs `skippedPasses` for a skip: a skipped or neutral check that nothing requires never holds the head.
  */
-export function waitingOnChecks(requiredChecks, runs, skippedPasses = false, statuses = [], { onlyRequired = false } = {}) {
+export function waitingOnChecks(requiredChecks, runs, skippedPasses = false, statuses = []) {
   const green = (run) => run.status === "completed" && (run.conclusion === "success" || (skippedPasses && SKIPPED_PASSES.has(run.conclusion)))
   const newest = [...latestCheckRuns(runs), ...statuses.map(statusAsRun)]
   const counted = new Set()
@@ -420,11 +420,8 @@ export function waitingOnChecks(requiredChecks, runs, skippedPasses = false, sta
     const notGreen = matching.filter((run) => !green(run))
     return notGreen.length === 0 ? [] : [`${required}: ${notGreen.length === matching.length && matching.length === 1 ? shown(notGreen) : `${notGreen.length} of ${matching.length} not green (${shown(notGreen)})`}`]
   })
-  // A check nobody required that a path filter skipped says nothing against the head, so only a failure, a cancellation or a run still going holds it.
-  const others = newest.filter((run) => !counted.has(run) && !green(run) && !isCancelledTemplate(run, newest) && !(run.status === "completed" && SKIPPED_PASSES.has(run.conclusion)))
-  // Under a repository's own list only a check that ended in failure still holds the head; one still running or cancelled that the list does not name does not.
-  const failed = others.filter((run) => run.status === "completed" && (run.conclusion === "failure" || run.conclusion === "timed_out"))
-  if (onlyRequired) return failed.length === 0 ? required : [...required, `${failed.length} other check${failed.length === 1 ? "" : "s"} on the head failed (${shown(failed)})`]
+  // A check nobody required holds the head while it is still going or once it ended in anything but success, skipped, neutral or cancelled (failure, timed out, action required); skipped, neutral and cancelled ones (a superseded run, a path filter) say nothing against it.
+  const others = newest.filter((run) => !counted.has(run) && (run.status !== "completed" || !["success", "skipped", "neutral", "cancelled"].includes(run.conclusion)))
   return others.length === 0 ? required : [...required, `${others.length} other check${others.length === 1 ? "" : "s"} on the head not green (${shown(others)})`]
 }
 
@@ -687,7 +684,7 @@ async function handlePull(relay, state, ctx, number) {
     if (repoChecks) {
       const { runs } = await readChecks(ctx, state, relay.repo, pr.headSha)
       const { statuses } = await readStatuses(ctx, state, relay.repo, pr.headSha)
-      waiting = waitingOnChecks(repoChecks, runs, relay.skippedPasses, statuses, { onlyRequired: true })
+      waiting = waitingOnChecks(repoChecks, runs, relay.skippedPasses, statuses)
     } else if (strict) {
       ;({ waiting, warnings } = await strictChecks(relay, state, ctx, pr.headSha))
       if (waiting.length > 0 && record.update && !record.update.failed && record.update.from !== pr.headSha) waiting.unshift(`updated branch to ${pr.baseRef} (the head was ${short(record.update.from)}); waiting for ${strict.requiredWorkflows.join(", ")} on the new head`)
