@@ -465,5 +465,6 @@ test("held sessions are grouped by route and cause with the oldest hold, and a r
   await writeStatus(ctx.env, { held_sessions: held })
   const status = factoryLocalStatus({ env: ctx.env, deskRoot: ctx.desk })
   assert.equal(status.held_groups[0].sessions, 2)
+  assert.match(factoryFindingLines(status).join("\n"), /2 ended sessions are held for the route .* \(newer_desk_recorded\), the oldest since 2026-01-01; the session ran a newer Desk/u)
   assert.match(factoryFindingLines({ ...status, held_groups: [{ route: "a/b", reason: "other", sessions: 1, oldest_at: "2026-01-01T00:00:00.000Z" }] }).join("\n"), /1 ended session is held for the route a\/b \(other\), the oldest since 2026-01-01; see desk_doctor/u)
 }))
