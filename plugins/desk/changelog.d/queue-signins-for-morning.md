@@ -1,0 +1,1 @@
+Agents now know that a flow needing Ari's sign-in is queued for the morning with `shepherd signin queue` and keeps working, instead of prompting him live. The rule is one line in the `using-desk` Authority section.
