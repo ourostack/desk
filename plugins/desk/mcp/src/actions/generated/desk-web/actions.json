@@ -1,5 +1,5 @@
 {
-  "generator": "ouro-actions 0.17.4",
+  "generator": "ouro-actions 1.1.0",
   "set": "desk-web",
   "tool": "desk-web",
   "actions": [
@@ -54,7 +54,7 @@
         },
         "args": {
           "label": "Args",
-          "description": "The command and its arguments, for example [\"snapshot\"] or [\"fill\",\"e4\",\"text\"]. In mine the commands are: snapshot [--interactive|--save], find <text>, goto <url>, go-back, go-forward, reload, wait [<seconds>|<text>|--gone <text>], click/dblclick/hover/check/uncheck <ref>, fill/type <ref> <text>, press [<ref>] <key>, select <ref> <value>, mousewheel <dx> <dy>, resize <w> <h>, screenshot [<ref>] [--full], tab-list, tab-new, tab-select <n>, tab-close [<n>], eval <function or expression> [<ref>], run-code <async function of page>, console [<level>], keydown/keyup <key>, mousemove <x> <y>, mousedown/mouseup [<button>], upload <ref> <file>..., dialog-accept [<text>], dialog-dismiss, localstorage-* and sessionstorage-* (list, get, set, delete, clear). Act on a ref soon after its snapshot. To type into a rich-text editor, fill its textbox ref, then press Enter; typed.verified says whether it holds the text. screenshot saves a masked PNG in the evidence folder, which stays after close, and returns its path. A transient error page: [\"reload\"], then wait. Fresh keeps the legacy CLI commands.",
+          "description": "The command and its arguments, for example [\"snapshot\"] or [\"fill\",\"e4\",\"text\"]. In mine the commands are: snapshot [--interactive|--save], find <text>, goto <url>, go-back, go-forward, reload, wait [<seconds>|<text>|--gone <text>], click/dblclick/hover/check/uncheck <ref>, fill/type <ref> <text>, press [<ref>] <key>, select <ref> <value>, mousewheel <dx> <dy>, resize <w> <h>, screenshot [<ref>] [--full], tab-list, tab-new, tab-select <n>, tab-close [<n>], eval <function or expression> [<ref>], run-code <async function of page>, console [<level>], keydown/keyup <key>, mousemove <x> <y>, mousedown/mouseup [<button>], upload <ref> <file>..., dialog-accept [<text>], dialog-dismiss, localstorage-* and sessionstorage-* (list, get, set, delete, clear). Act on a ref soon after its snapshot. To type into a rich-text editor, fill its textbox ref, then press Enter; typed.verified says whether it holds the text. screenshot saves a PNG (real secrets blurred, nothing else hidden; do not crop the operator's own content out) in the evidence folder, which stays after close, and returns its path. A transient error page: [\"reload\"], then wait. Fresh keeps the legacy CLI commands.",
           "protocolOnly": true,
           "minItems": 1,
           "maxItems": 256,

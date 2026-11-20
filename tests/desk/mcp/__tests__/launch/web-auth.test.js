@@ -252,7 +252,7 @@ test("what may have been typed in a child frame is scrubbed where the main docum
   }
   const page = JSON.stringify(sanitize(framedSnapshot({ echo: FRAME_TEXT })))
   assert.ok(page.includes(FRAME_TEXT), "read-only frame text is page text, not a secret")
-  const controls = framedSnapshot({ echo: "Draft CHILD_TEXTAREA_688 for USB" })
+  const controls = framedSnapshot({ echo: "Draft CHILD_TEXTAREA_688_00000000000000 for USB" })
   const child = controls.documents[1].nodes
   const s = (text) => controls.strings.push(text) - 1
   child.parentIndex.push(2, 2)
@@ -261,11 +261,11 @@ test("what may have been typed in a child frame is scrubbed where the main docum
   child.nodeValue.push(-1, -1)
   child.backendNodeId.push(208, 209)
   child.attributes.push([], [s("type"), s("hidden")])
-  child.textValue = { index: [child.nodeType.length - 2], value: [s("CHILD_TEXTAREA_688")] }
+  child.textValue = { index: [child.nodeType.length - 2], value: [s("CHILD_TEXTAREA_688_00000000000000")] }
   child.inputValue.index.push(child.nodeType.length - 1)
   child.inputValue.value.push(s("US"))
   const drafted = JSON.stringify(sanitize(controls))
-  assert.equal(drafted.includes("CHILD_TEXTAREA_688"), false, "a frame's textarea value is scrubbed")
+  assert.equal(drafted.includes("CHILD_TEXTAREA_688_00000000000000"), false, "a frame's textarea value is scrubbed")
   assert.ok(drafted.includes("for USB"), "a frame's hidden code is page content")
   for (const mutate of [
     (p) => { p.documents[1].nodes = undefined },
@@ -1214,7 +1214,6 @@ test("a page with a child frame reads and saves the frame's content without its 
     assert.equal(confirm[1][2].nodeId, 1001, "and the field's path inside the frame's document")
     assert.equal(native.packet.strings[native.packet.documents[1].nodes.inputValue.value[0]], "literal")
     assert.equal(filled.typed.verified, true)
-    assert.equal(JSON.stringify(filled).includes("literal"), false)
     for (const call of native.calls.filter((call) => call[0] === "dispose")) assert.ok([107, 205].includes(call[1]))
   } finally { await adapter.close() }
 })
@@ -1348,7 +1347,7 @@ function labelledPage({ checkbox = "on", spanValue = "Echo on and off", whitespa
   return packet
 }
 
-test("checkbox markup values and whitespace never become redaction secrets; typed values still do", () => {
+test("checkbox markup values and whitespace never become redaction secrets; a typed value that is no secret shows", () => {
   for (const checkbox of ["on", undefined, "yes"]) {
     const text = JSON.stringify(sanitize(labelledPage({ checkbox, spanValue: "Echo on and off, yes" })))
     noPassword(text)
@@ -1356,16 +1355,14 @@ test("checkbox markup values and whitespace never become redaction secrets; type
   }
   const typed = labelledPage({ checkbox: "typed-elsewhere", spanValue: "Echo typed-elsewhere" })
   typed.documents[0].nodes.attributes[6] = [typed.strings.indexOf("type"), typed.strings.indexOf("checkbox")]
-  assert.equal(JSON.stringify(sanitize(typed)).includes("typed-elsewhere"), false, "a value differing from its markup is protected")
+  assert.ok(JSON.stringify(sanitize(typed)).includes("typed-elsewhere"), "a value that is no secret is the operator's own and shows")
   const radio = labelledPage({ checkbox: "on", spanValue: "Echo on" })
   radio.strings.push("text")
   radio.documents[0].nodes.attributes[6][1] = radio.strings.length - 1
-  assert.equal(JSON.stringify(sanitize(radio)).includes("Echo on"), false, "a text field's value is protected however short")
-  radio.documents[0].nodes.attributes[6] = []
-  assert.equal(JSON.stringify(sanitize(radio)).includes("Echo on"), false, "an input without a type is a text field")
+  assert.ok(JSON.stringify(sanitize(radio)).includes("Echo on"), "a text field's short value shows")
 })
 
-test("short hidden and button input values are page codes; longer ones may copy a typed value and stay secrets", () => {
+test("hidden and button input values are page codes; only a token-looking value in any field is a secret", () => {
   const page = (type, value, spanValue) => {
     const packet = labelledPage({ checkbox: value, spanValue })
     packet.documents[0].nodes.attributes[6] = [packet.strings.indexOf("type"), packet.strings.push(type) - 1]
@@ -1373,10 +1370,10 @@ test("short hidden and button input values are page codes; longer ones may copy 
   }
   for (const type of ["hidden", "submit", "button", "reset", "image", "HIDDEN"]) {
     assert.ok(page(type, "US", "USB Bluetooth 5.0").includes("USB Bluetooth 5.0"), type + " codes are page content")
-    assert.equal(page(type, "+15551234567", "Code sent to +15551234567").includes("+1555"), false, type + " copies of typed values stay secret")
+    assert.equal(page(type, PASSWORD, "Token " + PASSWORD).includes(PASSWORD), false, type + " copies of a token stay secret")
   }
   for (const type of ["text", "number", "email", "search"]) {
-    assert.equal(page(type, "US", "USB Bluetooth").includes("USB"), false, type + " fields stay protected however short")
+    assert.ok(page(type, "US", "USB Bluetooth").includes("USB"), type + " fields show a short value")
   }
 })
 // <div style="display:none">US</div><span>USB Bluetooth Dongle</span>: hidden nodes have no layout row, so no computed style.
@@ -1550,7 +1547,7 @@ test("a control only the capture has is read without a ref, and its value stays 
       const table = result.documents[0].nodes
       table.parentIndex.push(2); table.nodeType.push(1); table.nodeName.push(table.nodeName[3]); table.nodeValue.push(-1)
       table.backendNodeId.push(905); table.attributes.push([])
-      result.strings.push("LATE_TYPED_VALUE_679"); table.inputValue.index.push(table.nodeType.length - 1); table.inputValue.value.push(result.strings.length - 1)
+      result.strings.push("LATE_TYPED_VALUE_679_0000000000000"); table.inputValue.index.push(table.nodeType.length - 1); table.inputValue.value.push(result.strings.length - 1)
       result.documents[0].layout.nodeIndex.push(table.nodeType.length - 1)
       result.documents[0].layout.styles.push(result.documents[0].layout.styles[2].slice())
     }
@@ -1560,7 +1557,7 @@ test("a control only the capture has is read without a ref, and its value stays 
   try {
     const result = await adapter.call(["snapshot"])
     noPassword(result)
-    assert.equal(JSON.stringify(result).includes("LATE_TYPED_VALUE_679"), false)
+    assert.equal(JSON.stringify(result).includes("LATE_TYPED_VALUE_679_0000000000000"), false)
     const fields = all(result.snapshot).filter((node) => node.role === "textbox")
     assert.equal(fields.length, 2)
     assert.equal(fields.filter((node) => node.ref).length, 1, "only the control the DOM read names has a ref")
@@ -1837,7 +1834,6 @@ test("a page that has not rendered reads as not rendered, not as a tree of redac
   assert.deepEqual(page.tree, { role: "document", visible: false, children: [{ role: "text", text: "[not rendered]" }] })
   assert.equal(page.unrendered, true)
   assert.deepEqual(page.targets, [])
-  assert.deepEqual(page.masks.map((mask) => mask.id), [102], "the root element still masks the page")
   const text = JSON.stringify(page.tree)
   assert.equal(text.includes(PASSWORD), false, "a typed value under the page stays scrubbed")
   assert.equal(text.includes("Visible paragraph"), false, "text that is not rendered is not read")
@@ -2649,7 +2645,7 @@ test("a navigation whose page is still loading reports that it went through and 
 // Stream's player and transcript, Teams' panes: another site's document in its own process, under an IFRAME the main
 // document names by frame id. The frame's page repeats the tab's password, and the main page echoes the frame's field.
 const OOP_TEXT = "STREAM_TRANSCRIPT_679"
-const OOP_TYPED = "OOP_TYPED_VALUE_679"
+const OOP_TYPED = "OOP_TYPED_VALUE_679_0000000000000"
 function outOfProcess() {
   const main = nativeSnapshot()
   const away = nativeSnapshot({ value: OOP_TYPED, type: "text" })
@@ -2676,6 +2672,35 @@ function outOfProcess() {
   add(away, add(away, 2, 1, "P", undefined, 305), 3, "#text", OOP_TEXT + " " + PASSWORD, 306)
   return { packet: main, outside: { packet: away, owner: 107 } }
 }
+
+test("a screenshot of a tab with an out-of-process frame is taken and reports the scrubbed page", async () => {
+  const root = await mkTempRoot("auth-oopif-shot-")
+  const { packet, outside } = outOfProcess()
+  const native = fakeDriver({ packet, outside })
+  const adapter = adapterFor(native, root)
+  try {
+    const shot = await adapter.call(["screenshot"])
+    assert.ok(fs.existsSync(shot.screenshot))
+    assert.equal(JSON.stringify(shot).includes(OOP_TYPED), false)
+  } finally { await adapter.close() }
+})
+
+test("a screenshot is refused when an out-of-process frame cannot be read, and a known failure is reported as it is", async () => {
+  for (const [thrown, expected] of [[new Error(PASSWORD), /AUTH_FRAME_COVERAGE_REFUSED/u], [auth.fail("AUTH_TARGET_REFUSED"), /AUTH_TARGET_REFUSED/u]]) {
+    const root = await mkTempRoot("auth-oopif-refuse-")
+    const { packet, outside } = outOfProcess()
+    const native = fakeDriver({ packet, outside })
+    const send = native.oop.send
+    native.oop.send = async (method, params) => {
+      if (method === "DOMSnapshot.captureSnapshot") throw thrown
+      return send(method, params)
+    }
+    const adapter = adapterFor(native, root)
+    try {
+      await assert.rejects(adapter.call(["screenshot"]), (error) => expected.test(error.message) && !error.message.includes(PASSWORD))
+    } finally { await adapter.close() }
+  }
+})
 
 test("an out-of-process child frame is read inside its owner, scrubbed by every value typed anywhere in the tab, and its refs act in it", async () => {
   const root = await mkTempRoot("auth-oopif-")
@@ -2766,7 +2791,7 @@ test("tab-select brings the tab to the front, and refs from its snapshot act the
   } finally { await adapter.close() }
 })
 
-test("screenshot saves the tab or one element in the private files folder, with every input, textarea and editable region masked in every frame", async () => {
+test("screenshot saves the tab or one element in the private files folder", async () => {
   const root = await mkTempRoot("auth-screenshot-")
   const native = framedDriver()
   const adapter = adapterFor(native, root)
@@ -2782,14 +2807,6 @@ test("screenshot saves the tab or one element in the private files folder, with 
     const shot = native.calls.find((call) => call[0] === "page.screenshot")[1]
     assert.equal(shot.fullPage, false)
     assert.equal(shot.timeout, 5000)
-    const frames = native.page.frames().length
-    assert.deepEqual(shot.mask.slice(0, frames).map((mask) => [mask.frame, mask.selector]),
-      native.page.frames().map((frame, index) => [index, "input, textarea, [contenteditable]"]), "every field in every frame, also one that appears meanwhile")
-    assert.deepEqual(shot.mask.slice(frames).map((mask) => [mask.through, mask.selector]), [
-      [[], "css=html:nth-of-type(1) > body:nth-of-type(1) > input:nth-of-type(1)"],
-      [["css=html:nth-of-type(1) > body:nth-of-type(1) > iframe:nth-of-type(1)"], "css=html:nth-of-type(1) > body:nth-of-type(1) > input:nth-of-type(1)"],
-      [["css=html:nth-of-type(1) > body:nth-of-type(1) > iframe:nth-of-type(1)"], "css=html:nth-of-type(1) > body:nth-of-type(1) > div:nth-of-type(1)"],
-    ], "each opaque region the read found, in the frame it is in")
     await adapter.call(["screenshot", "--full"])
     assert.equal(native.calls.filter((call) => call[0] === "page.screenshot")[1][1].fullPage, true)
     const ref = inputRef(await adapter.call(["snapshot"]))
@@ -2797,7 +2814,7 @@ test("screenshot saves the tab or one element in the private files folder, with 
     const call = native.calls.find((entry) => entry[0] === "element.screenshot")
     assert.equal(call[1], 104)
     assert.equal(call[2].path, element.screenshot)
-    assert.equal(call[2].mask.length, shot.mask.length)
+    assert.match(call[2].style, /blur/u)
     assert.ok(native.calls.some((entry) => entry[0] === "dispose" && entry[1] === 104), "the element handle is let go")
     for (const args of [["screenshot", "--full", "--full"], ["screenshot", ref, "--full"], ["screenshot", "x"], ["screenshot", ref, ref], ["screenshot", "--path=/tmp/x.png"]]) {
       await assert.rejects(adapter.call(args), /AUTH_ARGUMENTS_REFUSED/u, JSON.stringify(args))
@@ -2923,130 +2940,60 @@ test("a ref in a child frame is refused when its owner, the frame or the browser
   }
 })
 
-test("screenshot masks what markup alone does not mark: a CSS-editable page and open-shadow content by its host; a closed shadow or an unmasked region that stays is never pictured", async () => {
-  const root = await mkTempRoot("auth-screenshot-regions-")
-  const regions = (native) => native.calls.filter((call) => call[0] === "page.screenshot").at(-1)[1].mask
-    .filter((mask) => mask.selector !== "input, textarea, [contenteditable]").map((mask) => mask.selector)
-  const editable = fakeDriver({ packet: editingSnapshot() })
-  let adapter = adapterFor(editable, root)
-  try {
-    await adapter.call(["screenshot"])
-    assert.deepEqual(regions(editable), ["css=html:nth-of-type(1) > body:nth-of-type(1) > div:nth-of-type(1)"], "a region editable by CSS alone is covered from its outermost editable element")
-  } finally { await adapter.close() }
-  const packet = nativeSnapshot({ value: "Prefilled card 4111", type: "text" })
-  packet.strings.push("open")
-  packet.documents[0].nodes.shadowRootType = { index: [3], value: [packet.strings.length - 1] }
-  const shadowed = fakeDriver({ packet })
-  let kind = "open"
-  const send = shadowed.cdp.send
-  shadowed.cdp.send = async (method, params) => {
-    const result = await send(method, params)
-    if (method !== "DOM.getDocument") return result
-    const body = result.root.children[0].children[0]
-    body.shadowRoots = [{ nodeType: 11, nodeName: "#document-fragment", backendNodeId: 106, shadowRootType: kind, children: body.children.splice(0) }]
-    return result
-  }
-  adapter = adapterFor(shadowed, root)
-  try {
-    const files = fs.readdirSync(root).length
-    await adapter.call(["screenshot"])
-    assert.deepEqual(regions(shadowed), ["css=html:nth-of-type(1) > body:nth-of-type(1)"], "a field in an open shadow is covered by its host")
-    kind = "closed"
-    await assert.rejects(adapter.call(["screenshot"]), /AUTH_SHADOW_COVERAGE_REFUSED/u)
-    assert.equal(fs.readdirSync(root).length, files + 1, "nothing is pictured past a closed shadow")
-  } finally { await adapter.close() }
-  // Page script makes a region editable by CSS while the picture is taken: the read after it finds a region the mask
-  // did not cover, so the picture is taken again; one that keeps appearing is refused and leaves no file.
-  for (const [appears, expected] of [[1, null], [Infinity, /AUTH_SNAPSHOT_INVALIDATED/u]]) {
-    const changing = nativeSnapshot({ type: "text" })
-    const native = fakeDriver({ packet: changing })
-    const body = changing.documents[0].layout.styles[1]
-    const readOnly = body[2]
-    const readWrite = changing.strings.push("read-write") - 1
-    let shots = 0
-    let shot = false
-    native.page.screenshot = async (options) => {
-      native.calls.push(["page.screenshot", options])
-      fs.writeFileSync(options.path, "FAKE_PNG")
-      shot = true
-      body[2] = shots++ < appears ? readWrite : readOnly
-    }
-    // A region that keeps appearing is gone again whenever the next picture's read is taken.
-    const send = native.cdp.send
-    native.cdp.send = async (method, params) => {
-      if (method === "DOMSnapshot.captureSnapshot" && !shot && appears === Infinity) body[2] = readOnly
-      const result = await send(method, params)
-      if (method === "DOMSnapshot.captureSnapshot") shot = false
-      return result
-    }
-    const other = adapterFor(native, root)
-    try {
-      const files = fs.readdirSync(root).length
-      if (expected) {
-        await assert.rejects(other.call(["screenshot"]), expected)
-        assert.equal(fs.readdirSync(root).length, files, "a picture that may show an unmasked region is removed")
-      } else {
-        const result = await other.call(["screenshot"])
-        assert.ok(fs.existsSync(result.screenshot))
-        assert.equal(native.calls.filter((call) => call[0] === "page.screenshot").length, 2, "taken again once the region was masked")
-        assert.equal(fs.readdirSync(root).length, files + 1, "only the kept picture stays")
-      }
-    } finally { await other.close() }
-  }
-})
-
-test("screenshot masks an out-of-process frame's fields in that frame", async () => {
-  const root = await mkTempRoot("auth-screenshot-oopif-")
-  const { packet, outside } = outOfProcess()
-  const native = fakeDriver({ packet, outside })
+test("screenshot hides nothing but real secrets, and blurs those in every frame instead of painting over them", async () => {
+  const root = await mkTempRoot("auth-screenshot-blur-")
+  const native = framedDriver()
   const adapter = adapterFor(native, root)
   try {
-    const away = native.page.frames().at(-1)
-    away.locator = (selector) => ({ away: true, selector })
     await adapter.call(["screenshot"])
-    const masks = native.calls.find((call) => call[0] === "page.screenshot")[1].mask
-    const field = "css=html:nth-of-type(1) > body:nth-of-type(1) > input:nth-of-type(1)"
-    assert.ok(masks.some((mask) => mask.away && mask.selector === field), "the frame's own field, located in that frame")
-    assert.ok(masks.some((mask) => !mask.away && mask.selector === field), "and the page's, in the page")
+    const shot = native.calls.find((call) => call[0] === "page.screenshot")[1]
+    assert.equal(shot.mask, undefined, "no region is painted over")
+    for (const secret of ["input[type=password]", "input[autocomplete~=one-time-code]", "[data-desk-blur]"]) assert.ok(shot.style.includes(secret), secret)
+    assert.match(shot.style, /filter: blur\(/u)
+    assert.doesNotMatch(shot.style, /textarea|contenteditable|#ff00ff/iu)
+    const marks = native.calls.filter((call) => call[0] === "frame.evaluate").map((call) => call[2])
+    const frames = native.page.frames().length
+    assert.deepEqual(marks, [...Array(frames).fill(true), ...Array(frames).fill(false)], "token-looking values are marked in each frame for the picture, then unmarked")
+  } finally { await adapter.close() }
+  const failing = framedDriver()
+  for (const frame of failing.page.frames()) frame.evaluate = async () => { throw new Error(PASSWORD) }
+  const other = adapterFor(failing, root)
+  try {
+    assert.ok(fs.existsSync((await other.call(["screenshot"])).screenshot), "a frame that cannot be marked does not stop the picture")
+  } finally { await other.close() }
+})
+
+test("token-looking values are marked for the picture and unmarked after, and plain values are left alone", async () => {
+  const root = await mkTempRoot("auth-screenshot-mark-")
+  const native = framedDriver()
+  const fields = [{ value: "abcdef0123456789abcdef0123456789ab" }, { value: "hello there" }, { value: "x".repeat(40) }].map((field) => ({ ...field, attrs: new Set(), setAttribute(name) { this.attrs.add(name) }, removeAttribute(name) { this.attrs.delete(name) } }))
+  const seen = []
+  for (const frame of native.page.frames()) {
+    const record = frame.evaluate
+    frame.evaluate = async (fn, arg) => {
+      await record(fn, arg)
+      globalThis.document = { querySelectorAll: (selector) => ({ forEach: (each) => fields.forEach(each), selector }) }
+      try { return fn(arg) } finally { delete globalThis.document }
+    }
+  }
+  native.page.screenshot = async (options) => { seen.push(fields.map((field) => field.attrs.size)); return fs.promises.writeFile(options.path, "png") }
+  const adapter = adapterFor(native, root)
+  try {
+    await adapter.call(["screenshot"])
+    assert.deepEqual(seen, [[1, 0, 0]], "only the token-looking value is marked while the picture is taken")
+    assert.deepEqual(fields.map((field) => field.attrs.size), [0, 0, 0], "and nothing stays marked")
   } finally { await adapter.close() }
 })
 
-test("screenshot never pictures an out-of-process frame it could not read: a closed shadow or a failed read refuses, and a frame with no way in is masked whole by its owner", async () => {
-  const root = await mkTempRoot("auth-screenshot-oopif-coverage-")
-  for (const [failure, code] of [["closed", /AUTH_SHADOW_COVERAGE_REFUSED/u], ["read", /AUTH_FRAME_COVERAGE_REFUSED/u]]) {
-    const { packet, outside } = outOfProcess()
-    const native = fakeDriver({ packet, outside })
-    const send = native.oop.send
-    let broken = false
-    native.oop.send = async (method, params) => {
-      if (broken && failure === "read" && method === "DOMSnapshot.captureSnapshot") throw new Error(PASSWORD)
-      const result = await send(method, params)
-      if (broken && failure === "closed" && method === "DOM.getDocument") {
-        const body = result.root.children[0].children[0]
-        body.shadowRoots = [{ nodeType: 11, nodeName: "#document-fragment", backendNodeId: 399, shadowRootType: "closed", children: body.children.splice(0) }]
-      }
-      return result
-    }
-    const adapter = adapterFor(native, root)
-    try {
-      assert.ok((await adapter.call(["snapshot"])).text.includes(OOP_TEXT))
-      broken = true
-      const files = fs.readdirSync(root).length
-      await assert.rejects(adapter.call(["screenshot"]), (error) => code.test(error.message) && !error.message.includes(PASSWORD) && !error.message.includes("[\"screenshot\"] shows"))
-      assert.equal(native.calls.some((call) => call[0] === "page.screenshot"), false, `no picture past a ${failure} frame`)
-      assert.equal(fs.readdirSync(root).length, files, "and no file")
-    } finally { await adapter.close() }
-  }
-  const blind = outOfProcess()
-  blind.outside.hook = ({ method }) => { if (method === "DOM.enable") throw new Error(PASSWORD) }
-  const native = fakeDriver(blind)
+test("the page's own marks are removed after a picture that failed", async () => {
+  const root = await mkTempRoot("auth-screenshot-unmark-")
+  const native = framedDriver()
+  native.page.screenshot = async () => { throw new Error(PASSWORD) }
   const adapter = adapterFor(native, root)
   try {
-    const result = await adapter.call(["screenshot"])
-    assert.ok(fs.existsSync(result.screenshot))
-    const masks = native.calls.find((call) => call[0] === "page.screenshot")[1].mask
-    assert.ok(masks.some((mask) => mask.frame === 0 && mask.through.length === 0 && mask.selector === "css=html:nth-of-type(1) > body:nth-of-type(1) > iframe:nth-of-type(1)"),
-      "the owner of a frame with no session is masked whole")
+    await assert.rejects(adapter.call(["screenshot"]), /AUTH_SCREENSHOT_FAILED/u)
+    const marks = native.calls.filter((call) => call[0] === "frame.evaluate").map((call) => call[2])
+    assert.equal(marks.filter((on) => on === false).length, native.page.frames().length)
   } finally { await adapter.close() }
 })
 
@@ -3257,7 +3204,7 @@ test("a screenshot is saved in the evidence folder, outside the context's files,
     assert.equal(shot.survivesClose, true)
     assert.match(shot.note, /saved in this session's evidence folder, outside the browser context's files, so it is still there after browser_context close\./u)
     assert.deepEqual(fs.readdirSync(root), [], "nothing is left in the context's files folder")
-    assert.equal(native.calls.find((call) => call[0] === "page.screenshot")[1].mask.length > 0, true, "the masking rules are unchanged")
+    assert.match(native.calls.find((call) => call[0] === "page.screenshot")[1].style, /blur/u, "secrets are still blurred")
     if (!NO_POSIX_MODES) assert.equal(fs.statSync(evidence).mode & 0o777, 0o700)
     await adapter.close()
     removeTreeSync(root)

@@ -1,0 +1,1 @@
+Browser screenshots in your own (`mine`) contexts no longer paint magenta bars over every input. They blur only real secrets (password fields, one-time-code fields, token-looking values), and ordinary typed values show in snapshots too. The docs now tell agents not to crop or hide your own content from you.
