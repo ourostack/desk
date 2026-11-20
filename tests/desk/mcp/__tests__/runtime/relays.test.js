@@ -121,6 +121,7 @@ test("a relay config is validated: a bad entry is named, never dropped", () => {
   bad("x", /relays\[0\] is not an object/u)
   bad({ ...DISPATCH, name: "" }, /\.name is not a name/u)
   bad({ ...DISPATCH, account: 5 }, /\.account is not a GitHub login/u)
+  bad({ ...DISPATCH, readAccount: 5 }, /\.readAccount is not a GitHub login/u)
   bad({ ...DISPATCH, watch: { repo: "o/data" } }, /\.watch needs "repo" \(owner\/name\) and "workflow"/u)
   bad({ ...DISPATCH, watch: { ...DISPATCH.watch, branch: 5 } }, /watch\.branch is not a branch name/u)
   bad({ ...DISPATCH, fire: {} }, /\.fire needs "repo"/u)
