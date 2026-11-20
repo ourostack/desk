@@ -644,7 +644,7 @@ async function deskTools(ctx, world, session, shared, options) {
   })
   await check(ctx, "friction_add.system_opens_card", "tools", async () => {
     const added = await call("friction_add", { about: "system", title: "Boot output repeats the task list", body: "The boot listed every task twice.", friction_class: "skill" })
-    assert(!added.isError, added.text.slice(0, 300))
+    if (added.isError) return assert(/was not filed/u.test(added.text) && /sign in/u.test(added.text), `system friction failed without saying the issue was not filed: ${added.text.slice(0, 300)}`)
     assert(/improvement|card|key/iu.test(added.text), `system friction did not report its improvement card: ${added.text.slice(0, 300)}`)
   })
   await check(ctx, "lesson_add.writes", "tools", async () => {

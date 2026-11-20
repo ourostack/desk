@@ -39,7 +39,7 @@ Every factual claim to a human or an agent, drafts included, carries an inline l
 
 ## Own the stack
 
-If tooling or instructions get in your way, work around them with ordinary tools, never past a safeguard or permission denial, then file the tool's bug with evidence: `friction_add` (`about` system, `plugin` the tool, evidence in `body`) opens an issue on its repo for its drain, and the reply carries `issue_url` (a reply without one, or an error, means it did not reach a drain; fix the named argument and call again). Ari's agents own those tools; others' agents file it and ping Ari. Start no unrequested repair work (`desk-problem`). When instructions are confusing or conflict, say so and record the friction; an agent must not be silently confused.
+If tooling or instructions get in your way, work around them with ordinary tools, never past a safeguard or permission denial, then file the tool's bug with evidence: `friction_add` (`about` system, `plugin` the tool, evidence in `body`) opens an issue on its repo for its drain. Ari's agents own those tools; others' agents file it and ping Ari. Start no unrequested repair work (`desk-problem`). When instructions are confusing or conflict, say so and record the friction; an agent must not be silently confused.
 
 ## Engineering work
 

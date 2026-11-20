@@ -34,12 +34,10 @@ const MARKER_PREFIX = "<!-- desk-tool-issue: "
 const MAX_TITLE = 120
 const MAX_BODY = 8000
 
-/** `isOwnedTool(name) -> boolean`: whether `name` is a tool owned in ourostack. */
-export const isOwnedTool = (name) => typeof name === "string" && Object.hasOwn(OWNED_TOOLS, name)
+const isOwnedTool = (name) => typeof name === "string" && Object.hasOwn(OWNED_TOOLS, name)
 
 /** `ownedToolFor(name) -> string | null`: the owned tool a `plugin` value names; Desk's own parts (`desk-web`, `desk_status`) are Desk. */
 export const ownedToolFor = (name) => {
-  if (typeof name !== "string") return null
   if (isOwnedTool(name)) return name
   return /^desk[-_]/u.test(name) ? "desk" : null
 }
