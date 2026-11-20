@@ -1,0 +1,1 @@
+The release gate no longer crashes when main's own run passes. A decision made on a `workflow_run` or a manual dispatch left out its list of stale "main is red" issues, so the gate step failed with `decision.stale is not iterable` and no release was built.

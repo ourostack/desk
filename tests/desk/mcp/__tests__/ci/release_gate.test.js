@@ -55,10 +55,12 @@ test("a workflow_run starts the release only for the tip of main, and only when 
   const api = fakeApi({ prs: [], mainRuns: green })
   const finished = (trigger) => gate({ repo: REPO, head: SHA, event: "workflow_run", trigger, api, redMain: () => [] })
   assert.equal(finished({ sha: SHA, conclusion: "success" }).release, true)
+  assert.deepEqual(finished({ sha: SHA, conclusion: "success" }).stale, [], "the command line prints every stale issue, so a decision always carries the list")
   assert.equal(finished({ sha: "e".repeat(40), conclusion: "success" }).release, false, "a run for a superseded commit releases nothing; a newer run follows it")
   assert.equal(finished({ sha: SHA, conclusion: "failure" }).release, false)
   const half = gate({ repo: REPO, head: SHA, event: "workflow_run", trigger: { sha: SHA, conclusion: "success" }, api: fakeApi({ prs: [], mainRuns: { ...green, "desk-windows-suite.yml": [run(null, { status: "in_progress" })] } }), redMain: () => [] })
   assert.equal(half.release, false)
+  assert.deepEqual(half.stale, [])
   assert.match(half.reason, /still running/u)
 })
 
