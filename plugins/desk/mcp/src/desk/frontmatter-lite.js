@@ -124,6 +124,7 @@ function scalar(value) {
   const numeric = plain.replaceAll("_", "")
   if (/^(?:null|true|false|[-+]?\.inf|\.nan)$/iu.test(plain) ||
       numeric !== "" && !Number.isNaN(Number(numeric)) ||
+      /^[-+]?0(?:x[\da-f]+|b[01]+)$/iu.test(numeric) ||
       /^[-+]?\d+(?::[0-5]?\d)+(?:\.\d+)?$/u.test(numeric)) return null
   return plain
 }

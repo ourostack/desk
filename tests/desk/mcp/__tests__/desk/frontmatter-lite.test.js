@@ -151,11 +151,12 @@ test("an explicit null operating_files value cannot introduce exemptions from in
 })
 
 test("non-string YAML operating file entries cannot become filename exemptions", () => {
-  for (const value of ["FALSE", "True", "NULL", "Null", "0xFF", "0b11", "012", "1.5", "1e3", ".Inf", ".NaN", "1:20"]) {
+  for (const value of ["FALSE", "True", "NULL", "Null", "0xFF", "-0xFF", "+0xFF", "0b11", "-0b11", "+0b11", "012", "1.5", "1e3", ".Inf", ".NaN", "1:20"]) {
     for (const declaration of [`operating_files: [${value}]`, `operating_files:\n  - ${value}`]) {
       const text = `---\n${declaration}\n---\n`
       assert.notEqual(typeof grayMatterData(text).operating_files[0], "string", value)
       assert.notEqual(typeof parseFrontmatterLite(text).data.operating_files[0], "string", value)
     }
+    sameAsGrayMatter(`---\noperating_files: ["${value}"]\n---\n`, ["operating_files"])
   }
 })
