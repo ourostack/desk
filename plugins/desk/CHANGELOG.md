@@ -1,5 +1,17 @@
 # desk plugin — changelog
 
+## 3.2.338 — 2026-11-20
+
+Desk's MCP server now vendors Ouro UI v1.3.362, moved by Ouro Current.
+
+A relay now merges a head only when every check that started on it has finished. Any check run or commit status still queued, pending or running holds the merge, including under a repository's `.github/merge-checks.json`, where the relay used to merge once the required checks were green even while other checks (a repository's test shards, say) were still running. The required checks must be `success`; `failure`, `timed_out` and other bad endings hold the head; cancelled, skipped and neutral checks do not. All check runs are paged through, and polling is unchanged. See [relays](docs/relays.md).
+
+The release gate crashed on a successful run: its `workflow_run` and fallback decisions left out `stale`, which the command line iterates. Every decision now carries it.
+
+Browser screenshots in your own (`mine`) contexts no longer paint magenta bars over every input. They blur only real secrets (password fields, one-time-code fields, token-looking values), and ordinary typed values show in snapshots too. The docs now tell agents not to crop or hide your own content from you.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.337 — 2026-11-20
 
 `friction_add` about Desk itself (`plugin` `desk`, a `desk-*` part, or `superpowers`) now opens an issue on ourostack/desk for its drain, as the skill always said, and keeps the improvement card; before, only other owned tools got an issue. The reply carries `issue_url`. A plugin name Desk does not know now says so and names `plugin` as the one argument that files it. A failed filing is now an error that names the reason and the saved note, never a quiet `added`. Lessons never file issues.
