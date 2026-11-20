@@ -77,7 +77,7 @@
     "evals/offline/__tests__/wording.test.mjs": 0.4,
     "evals/offline/__tests__/writer-stop.test.mjs": 2.8,
     "evals/offline/__tests__/writer-trace.test.mjs": 0.5,
-    "scripts/test-skill-evals.cjs": 6.6,
+    "scripts/test-skill-evals.cjs": 200,
     "tests/desk/mcp/__tests__/activation/activation_api_coverage.test.js": 0.3,
     "tests/desk/mcp/__tests__/activation/activation_contract.test.js": 0.4,
     "tests/desk/mcp/__tests__/activation/admission.test.js": 0.4,
