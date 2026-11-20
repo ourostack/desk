@@ -4,6 +4,7 @@
 const assert = require("node:assert/strict");
 const { spawnSync } = require("node:child_process");
 const fs = require("node:fs");
+const os = require("node:os");
 const path = require("node:path");
 const { contractFingerprint, sourceFingerprint, validateRepo, verifyReceipt, requireEvidence, recordReceipt, revisionStatus } = require("./skill-evals.cjs");
 
@@ -935,7 +936,7 @@ try {
       'const cwd = process.cwd();',
       'const git = (gitArgs) => spawnSync("git", gitArgs, { cwd, encoding: "utf8" }).stdout.trim().split("\\n");',
       'const linkTarget = (file) => { try { return fs.readlinkSync(file); } catch { return null; } };',
-      'if (log) fs.appendFileSync(log, JSON.stringify({ role: judging ? "judge" : "subject", model: value("--model"), pid: process.pid, args, cwd, pathFirst: judging ? null : (process.env.PATH ?? "").split(path.delimiter)[0], deskIsCwd: Boolean(process.env.DESK) && fs.realpathSync(process.env.DESK) === fs.realpathSync(cwd), bound: fs.existsSync(cwd + "/_meta") && fs.existsSync(cwd + "/_archive"), gh: process.env.GH_CONFIG_DIR, heldOut: judging ? null : fs.readdirSync(cwd).filter((name) => name.startsWith("held-out")), deskPerson: judging ? null : (process.env.DESK_PERSON ?? null), linkTo: judging ? null : linkTarget(cwd + "/linked.md"), originMain: judging ? null : git(["--git-dir", path.join(cwd, "..", "origin.git"), "log", "main", "--format=%s"]), originBranches: judging ? null : git(["--git-dir", path.join(cwd, "..", "origin.git"), "branch", "--list"]), prompt, tracked: judging ? null : git(["ls-files"]), commits: judging ? null : git(["log", "--format=%s"]), status: judging ? null : git(["status", "--porcelain"]) }) + "\\n");',
+      'if (log) fs.appendFileSync(log, JSON.stringify({ role: judging ? "judge" : "subject", model: value("--model"), pid: process.pid, args, cwd, pathFirst: judging ? null : (process.env.PATH ?? "").split(path.delimiter)[0], deskIsCwd: Boolean(process.env.DESK) && fs.realpathSync(process.env.DESK) === fs.realpathSync(cwd), bound: fs.existsSync(cwd + "/_meta") && fs.existsSync(cwd + "/_archive"), gh: process.env.GH_CONFIG_DIR, shepherdHome: process.env.SHEPHERD_HOME ?? null, heldOut: judging ? null : fs.readdirSync(cwd).filter((name) => name.startsWith("held-out")), deskPerson: judging ? null : (process.env.DESK_PERSON ?? null), linkTo: judging ? null : linkTarget(cwd + "/linked.md"), originMain: judging ? null : git(["--git-dir", path.join(cwd, "..", "origin.git"), "log", "main", "--format=%s"]), originBranches: judging ? null : git(["--git-dir", path.join(cwd, "..", "origin.git"), "branch", "--list"]), prompt, tracked: judging ? null : git(["ls-files"]), commits: judging ? null : git(["log", "--format=%s"]), status: judging ? null : git(["status", "--porcelain"]) }) + "\\n");',
       'if (!judging && mode === "write") fs.writeFileSync(cwd + "/written.txt", "x\\n");',
       'if (!judging && mode === "commit") { fs.writeFileSync(cwd + "/subject.txt", "x\\n"); spawnSync("git", ["add", "-A"], { cwd }); spawnSync("git", ["commit", "-q", "-m", "Subject change"], { cwd }); }',
       'if (!judging && mode === "worktree") { const wt = cwd + "/../wt"; spawnSync("git", ["worktree", "add", "-q", "-b", "fix", wt], { cwd }); fs.writeFileSync(wt + "/subject.txt", "x\\n"); spawnSync("git", ["add", "-A"], { cwd: wt }); spawnSync("git", ["commit", "-q", "-m", "Subject change"], { cwd: wt }); fs.writeFileSync(wt + "/worktree-note.md", "x\\n"); }',
@@ -1002,6 +1003,8 @@ try {
       assert.equal(subjectCall.deskIsCwd, true, "Desk binds that scratch desk");
       assert.equal(subjectCall.cwd.startsWith(dir), false, "the scratch desk is outside the checkout");
       assert.match(subjectCall.gh, /config[\\/]gh$/u, "GitHub credentials are replaced with an empty folder");
+      assert.match(subjectCall.shepherdHome, /config[\\/]shepherd-home$/u, "Shepherd state is a scratch folder inside the case, never the operator's home");
+      assert.ok(subjectCall.shepherdHome.startsWith(os.tmpdir()), "the scratch Shepherd home is under the temp folder");
       assert.match(subjectCall.prompt, /scenario below is true[\s\S]*\n\nEvaluate the fixture\.$/u);
       assert.equal(fs.existsSync(subjectCall.cwd), false, "the scratch workspace is removed after the case");
       assert.match(judgeCall.prompt, /## Workspace state after the run[\s\S]*### desk\nUncommitted or untracked changes:\n\(none\)[\s\S]*not yet pushed to the desk's remote:\n\(none\)/u);
