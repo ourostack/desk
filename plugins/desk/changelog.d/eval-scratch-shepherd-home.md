@@ -1,1 +1,0 @@
-Skill evaluations give each subject its own scratch Shepherd home (`SHEPHERD_HOME`), so an agent that runs `shepherd signin queue` or any other Shepherd command in a case can no longer touch the operator's real sign-in queue, config or app.

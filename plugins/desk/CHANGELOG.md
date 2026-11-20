@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.342 — 2026-11-20
+
+Skill evaluations give each subject its own scratch Shepherd home (`SHEPHERD_HOME`), so an agent that runs `shepherd signin queue` or any other Shepherd command in a case can no longer touch the operator's real sign-in queue, config or app.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.341 — 2026-11-20
 
 Skill evaluation judges read prohibitions as written and write evidence before the pass/fail field. This removes contradictory polarity guidance without changing the checks or automatically rewriting failed verdicts.
