@@ -96,13 +96,16 @@ jobs:
         env:
           DESK_AZURITE: "1"
         run: |
-          node --disable-warning=ExperimentalWarning --test --test-reporter=tap test/accounts.test.js > "$RUNNER_TEMP/accounts.tap"
           passed() {
             # Passing tests only: not the suite's own line, not a skipped or todo one.
-            grep -E "^\s*ok [0-9]+ - \[$1\] " "$RUNNER_TEMP/accounts.tap" | grep -vE '# (SKIP|TODO)' | grep -cv " - \[$1\] accounts store" || true
+            grep -E "^\s*ok [0-9]+ - \[$2\] " "$RUNNER_TEMP/$1.tap" | grep -vE '# (SKIP|TODO)' | grep -cv " - \[$2\] $3 store" || true
           }
-          memory=$(passed memory)
-          count=$(passed azurite)
-          echo "Azurite tests run: $count of $memory"
-          echo "Azurite tests run: $count of $memory" >> "$GITHUB_STEP_SUMMARY"
-          if [ "$count" -lt 1 ] || [ "$count" -ne "$memory" ]; then echo "Every store test must pass against Azurite as well as in memory" >&2; exit 1; fi
+          for pair in accounts:accounts hooks-store:hooks; do
+            file="${pair%%:*}" suite="${pair##*:}"
+            node --disable-warning=ExperimentalWarning --test --test-reporter=tap "test/$file.test.js" > "$RUNNER_TEMP/$file.tap"
+            memory=$(passed "$file" memory "$suite")
+            count=$(passed "$file" azurite "$suite")
+            echo "Azurite tests run for the $suite store: $count of $memory"
+            echo "Azurite tests run for the $suite store: $count of $memory" >> "$GITHUB_STEP_SUMMARY"
+            if [ "$count" -lt 1 ] || [ "$count" -ne "$memory" ]; then echo "Every $suite store test must pass against Azurite as well as in memory" >&2; exit 1; fi
+          done

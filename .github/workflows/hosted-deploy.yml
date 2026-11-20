@@ -10,7 +10,8 @@ name: Hosted Desk deploy
 # DESK_PUBLIC_URL for the health check (the app's Azure address when unset).
 #
 # Steps: refuse a commit whose Desk is not released (a pending changelog fragment); build the image in the registry with `az acr build`, tagged with the commit SHA; point the app at it; wait for
-# the new revision to be ready; then poll /healthz until it answers 200, and then /healthz/deep for up to 5 minutes, or fail.
+# the new revision to be ready; then poll /healthz until it answers 200; point the hooks receiver, ouro-desk-hooks, at the same image and wait for its /healthz;
+# and then poll the gateway's /healthz/deep for up to 5 minutes, or fail.
 
 on:
   workflow_run:
@@ -153,6 +154,47 @@ jobs:
             sleep 10
           done
           echo "$url answers 200; $APP runs $IMAGE."
+
+      # The hooks receiver (plugins/desk/docs/webhooks.md) runs the same image as Container App ouro-desk-hooks, made
+      # once by hosted/infra/provision-hooks.sh. Until it exists this step only says so. It follows the gateway even
+      # when the gateway already ran this image, so a receiver left behind catches up.
+      - name: Deploy the hooks receiver
+        env:
+          IMAGE: ${{ steps.image.outputs.image }}
+          HOOKS_APP: ouro-desk-hooks
+        run: |
+          set -euo pipefail
+          if ! shown="$(az containerapp show -n "$HOOKS_APP" -g "$RESOURCE_GROUP" --subscription "$SUBSCRIPTION" --query "properties.template.containers[0].image" -o tsv 2>&1)"; then
+            if grep -qiE "ResourceNotFound|was not found" <<<"$shown"; then
+              echo "::notice title=No hooks receiver::$HOOKS_APP does not exist yet; hosted/infra/provision-hooks.sh creates it."
+              exit 0
+            fi
+            echo "$shown" >&2
+            exit 1
+          fi
+          if [ "$shown" != "$IMAGE" ]; then
+            echo "$HOOKS_APP runs $shown; deploying $IMAGE."
+            az containerapp update -n "$HOOKS_APP" -g "$RESOURCE_GROUP" --subscription "$SUBSCRIPTION" --image "$IMAGE" --output none
+          fi
+          show() { az containerapp show -n "$HOOKS_APP" -g "$RESOURCE_GROUP" --subscription "$SUBSCRIPTION" --query "$1" -o tsv; }
+          deadline=$((SECONDS + 600))
+          until [ "$(show properties.latestReadyRevisionName)" = "$(show properties.latestRevisionName)" ] \
+            && [ "$(show 'properties.template.containers[0].image')" = "$IMAGE" ]; do
+            if [ "$SECONDS" -ge "$deadline" ]; then
+              echo "::error title=Hooks receiver revision not ready::$HOOKS_APP's new revision was not ready after 10 minutes; see az containerapp logs show -n $HOOKS_APP."
+              exit 1
+            fi
+            sleep 10
+          done
+          url="https://$(show properties.configuration.ingress.fqdn)/healthz"
+          until [ "$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "$url")" = "200" ]; do
+            if [ "$SECONDS" -ge "$deadline" ]; then
+              echo "::error title=Hooks receiver is not healthy::$url did not answer 200."
+              exit 1
+            fi
+            sleep 10
+          done
+          echo "$url answers 200; $HOOKS_APP runs $IMAGE."
 
       # /healthz passes even when the accounts store, Ouro sign-in (ciamlogin.com) or a mapped legacy account is
       # broken. /healthz/deep checks them, answering 503 with only the failing check names, and caches its result for

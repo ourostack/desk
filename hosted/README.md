@@ -141,6 +141,14 @@ Hosted Desk serves only released Desk. `.github/workflows/hosted-deploy.yml` run
 
 The first deploy of a release with Ouro sign-in needs the app's Ouro settings in place first ([Turn on Ouro sign-in](#turn-on-ouro-sign-in), step 9). `DESK_GITHUB_ACCOUNTS` and `DESK_GITHUB_LOGINS` must name Ari's GitHub user id. With the Ouro tenant set and an empty mapping, the gateway logs `LEGACY ACCOUNT MAPPING EMPTY`, refuses Ari's legacy connector, and fails `/healthz/deep`, which fails the deploy. Set `DESK_LEGACY_CUTOFF` once the release is confirmed live (step 10). Until then legacy tokens never expire, and the identity checks alert a day after `releasedAt`. A 404 from `/healthz/deep` is only a notice, because an image from before the route can't answer it, so after such a deploy run the legacy probe by hand: `node hosted/infra/mcp-probe.mjs status --name prod-legacy`.
 
+## Hooks receiver
+
+Webhooks ([plugins/desk/docs/webhooks.md](../plugins/desk/docs/webhooks.md)) arrive at a separate Container App, `ouro-desk-hooks`, which runs `node hosted/src/hooks/main.js` from the gateway's image. It is separate because the gateway scales to zero and takes about a minute to start, while senders give up after about 10 seconds. The receiver needs no desk clone, starts in seconds and runs on one 0.25 vCPU / 0.5 GiB replica that is always on.
+
+It checks each event's signature on the raw bytes, stores it in the accounts storage account (tables `hooks` and `hookevents`, made at start) and answers 202. Bodies are at most 512 KB, because Table Storage holds at most 64 KB in one binary property and 1 MB in one entity. When Table Storage is busy, the receiver answers 503 with the `Retry-After` Table Storage gave, so the sender retries. Signing secrets are sealed with a key derived from `DESK_CLIENT_KEY`. Every other route needs `Authorization: Bearer <GitHub token>` for a user in `DESK_GITHUB_ACCOUNTS`.
+
+Run `hosted/infra/provision-hooks.sh --dry-run`, read the plan, then run it without `--dry-run` once, after a release carrying `hosted/src/hooks` has reached the gateway. It copies the gateway's registry, identities, store and account mapping, and the value of its `desk-client-key` secret through a private file. The deploy workflow then points the receiver at each new image and waits for its `/healthz`. Until the app exists, that step only leaves a notice.
+
 ## Ouro identity
 
 People sign in to hosted Desk through an Ouro tenant, a Microsoft Entra External ID directory, with Apple or an email one-time code. Production uses the tenant `ourobot` (`de8841c3-7799-4523-bbad-44f8a2426eaa`). The staging app, `ouro-desk-hosted-staging`, uses the test tenant `ourobottest` (`c12edfb6-c5ab-4bf8-b1d5-1f053311d396`), which stays for later rehearsals.
