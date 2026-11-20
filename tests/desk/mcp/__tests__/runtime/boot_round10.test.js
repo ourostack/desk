@@ -397,7 +397,7 @@ test("a next step or blocker over the ceiling is cut at a word boundary, keeps i
   assert.ok(cut.endsWith(" ... (see card)"))
   assert.ok(cut.length <= TEXT_CEILING + 20)
   assert.doesNotMatch(cut, /\bwor\b|\bwo\b/u)
-  const span = `${"x ".repeat(295)}\`some identifier with spaces\` and more words after it`
+  const span = `${"x ".repeat(147)}\`some identifier with spaces\` and more words after it`
   assert.ok(!ceiling(span).includes("`"), "an open code span is dropped whole, never split")
   const bigWord = `${"y".repeat(700)} tail`
   assert.equal(ceiling(bigWord), `${"y".repeat(700)} ... (see card)`)
