@@ -1,5 +1,17 @@
 # desk plugin — changelog
 
+## 3.2.361 — 2026-11-20
+
+A factory flush no longer ends as `deadline` because one Git call stalled. Reading a desk's remote is asked once more when the first call passes its own time limit and the flush's deadline still has room; a second stall still ends the flush as `deadline`, as before. This closed the Windows suite's red main on the idle flush in `flush_retract.test.js` (ourostack/desk#1428).
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.360 — 2026-11-20
+
+Desk's MCP server now vendors Ouro UI core v1.4.0 and Ouro UI v1.3.382, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.359 — 2026-11-20
 
 Desk's MCP server now vendors Ouro UI core v1.2.0, moved by Ouro Current.
