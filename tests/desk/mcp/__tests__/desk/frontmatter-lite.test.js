@@ -137,11 +137,27 @@ test("track operating file lists agree with gray-matter on block and flow forms"
     "operating_files: [README.md, 'policy, final.md', state/]",
     'operating_files: ["README.md",\n  "policy.md", "state/"]',
     "operating_files: [README.md # note, stray.md\n  , state/]",
+    "operating_files: ['it''s.md']",
     'operating_files: ["stray\\n.md"]',
     "operating_files: []",
     matter.stringify("", { operating_files: ["README.md", "policy.md", "state/"] }).split("---")[1].trim(),
   ]) {
     sameAsGrayMatter(`---\n${declaration}\nscope: billing; not payroll\n---\n`, ["operating_files", "scope"])
+  }
+})
+
+test("unsupported operating file sequences stay invalid instead of creating exemptions", () => {
+  for (const declaration of [
+    "operating_files:",
+    "operating_files: # no entries",
+    "operating_files:\n  policy.md",
+    "operating_files: [policy.md] trailing",
+    "operating_files: [{nested: policy.md}]",
+    'operating_files:\n  - "bad\\x20escape.md"',
+    'operating_files:\n  - "unterminated\\',
+  ]) {
+    const entries = parseFrontmatterLite(`---\n${declaration}\n---\n`).data.operating_files
+    assert.ok(!Array.isArray(entries) || entries.some(entry => typeof entry !== "string"), declaration)
   }
 })
 
