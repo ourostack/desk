@@ -13,7 +13,7 @@ const anchors = [
   ["      $phase = 'current_open'\n", "current_open"],
   ["      $phase = 'current_validate'\n", "current_validate"],
   ["      $phase = 'rename'\n", "rename"],
-  ["        $last = [Runtime.InteropServices.Marshal]::GetLastWin32Error()\n        $rename.success", "rename_returned"],
+  ["        $rename.success = [bool]$ok\n", "rename_returned"],
   ["  if ($null -eq $script:failure) { $script:failure", "refuse_entered"],
   ["  throw 'owned_refusal'\n", "refuse_throw"],
   ["} catch {\n  if ($null -eq $script:failure)", "caught", true],
