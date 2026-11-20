@@ -42,6 +42,16 @@ function userIdMap(env, name, valuePattern) {
   return map;
 }
 
+// DESK_GITHUB_ACCOUNTS and DESK_GITHUB_LOGINS together: a Map from GitHub user id to `{ login, accountId }`. The
+// gateway's GitHub fallback and the hooks receiver both admit exactly these users.
+export function readGithubAccounts(env) {
+  const accounts = userIdMap(env, "DESK_GITHUB_ACCOUNTS", ACCOUNT_ID);
+  const logins = userIdMap(env, "DESK_GITHUB_LOGINS", GITHUB_LOGIN);
+  const ids = (map) => [...map.keys()].sort().join(",");
+  if (ids(accounts) !== ids(logins)) throw new Error("DESK_GITHUB_LOGINS must name the GitHub login of exactly the user ids in DESK_GITHUB_ACCOUNTS.");
+  return new Map([...accounts].map(([userId, accountId]) => [userId, { login: logins.get(userId), accountId }]));
+}
+
 export function readIdentity(env, publicUrl) {
   const present = [...IDENTITY_REQUIRED, ...IDENTITY_OPTIONAL].filter((name) => isSet(env[name]));
   if (present.length === 0) return null;
@@ -54,11 +64,7 @@ export function readIdentity(env, publicUrl) {
   const signIn = isSet(env.DESK_GITHUB_SIGNIN) ? env.DESK_GITHUB_SIGNIN.trim() : "off";
   if (signIn !== "on" && signIn !== "off") throw new Error("DESK_GITHUB_SIGNIN must be on or off.");
 
-  const accounts = userIdMap(env, "DESK_GITHUB_ACCOUNTS", ACCOUNT_ID);
-  const logins = userIdMap(env, "DESK_GITHUB_LOGINS", GITHUB_LOGIN);
-  const ids = (map) => [...map.keys()].sort().join(",");
-  if (ids(accounts) !== ids(logins)) throw new Error("DESK_GITHUB_LOGINS must name the GitHub login of exactly the user ids in DESK_GITHUB_ACCOUNTS.");
-  const byUserId = new Map([...accounts].map(([userId, accountId]) => [userId, { login: logins.get(userId), accountId }]));
+  const byUserId = readGithubAccounts(env);
 
   let cutoff = null;
   if (isSet(env.DESK_LEGACY_CUTOFF)) {
