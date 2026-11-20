@@ -16,6 +16,8 @@ const DAY_MS = 24 * 3_600_000
 const PAYLOAD_DAYS = 7
 const EVENTS_PER_WAKE = 50
 const NAME = /^[a-z0-9][a-z0-9-]{0,39}$/u
+/** The receiver's event ids (hosted/src/hooks/core.js); checked before one becomes a file name. */
+const EVENT_ID = /^\d{15}-[0-9a-f]{6}$/u
 /** The presets whose secret the sender's dashboard issues, so `create` reads it from stdin. The receiver makes the others' secrets. */
 const SENDER_SECRET_PRESETS = ["svix", "resend", "clerk", "stripe", "sentry", "linear"]
 /** The headers that say what kind of event it is, in the order a wake line prefers them. */
@@ -160,6 +162,7 @@ function prunePayloads(root, now) {
   let removed = 0
   for (const name of names) {
     const dir = path.join(root, name)
+    if (!statSync(dir).isDirectory()) continue
     for (const file of readdirSync(dir)) {
       if (now - statSync(path.join(dir, file)).mtimeMs > PAYLOAD_DAYS * DAY_MS) {
         rmSync(path.join(dir, file), { force: true })
@@ -206,7 +209,7 @@ function statusLines(config, states, byAccount, now) {
     const listed = byAccount.get(hook.account)?.hooks?.get(hook.name)
     const head = `hook ${hook.name} -> ${hook.session.slice(0, 8)} as ${hook.account}`
     const facts = listed ? [`${listed.pending} pending`, listed.lastEventAt ? `last event ${ago(now - Date.parse(listed.lastEventAt))} ago` : "no event yet", ...(listed.lastRejection ? [`last refused ${ago(now - Date.parse(listed.lastRejection.at))} ago: ${listed.lastRejection.reason}`] : [])] : []
-    const extra = [...(state.expired ? [`${state.expired} expired unread`] : []), ...(state.lastError ? [`last error: ${state.lastError}`] : [])]
+    const extra = [...(state.expired ? [`${state.expired.count} expired unread, the last ${ago(now - Date.parse(state.expired.lastAt))} ago`] : []), ...(state.lastError ? [`last error: ${state.lastError}`] : [])]
     return [head, ...facts, ...extra].join(", ")
   })
   const configured = new Set(config.hooks.map((hook) => hook.name))
@@ -240,8 +243,11 @@ export async function pollHooks({ paths, now, ackCommand, ackFlags = [], fetchIm
           error = refusal(answer, hook.account, `reading ${hook.name}`)
         } else {
           const { events, expired } = answer.body
-          if (expired) state.expired = (state.expired ?? 0) + expired
-          if (events.length) {
+          if (expired) state.expired = { count: (state.expired?.count ?? 0) + expired, lastAt: new Date(now).toISOString() }
+          const strange = events.find((event) => !EVENT_ID.test(String(event.eventId)))
+          if (strange) {
+            error = `Check the receiver at ${config.server}: it sent ${hook.name} an event id that is not one it makes (${JSON.stringify(String(strange.eventId).slice(0, 40))}), so no event was saved`
+          } else if (events.length) {
             const files = events.map((event) => savePayload(path.join(paths.payloads, hook.name), event))
             const ids = events.map((event) => event.eventId)
             wakes.push({ name: hook.name, session: hook.session, message: hookWakeMessage({ hook, verify: listed.verify, events, files, expired }), done: [...ackCommand, "hooks", "ack", "--name", hook.name, "--events", ids.join(","), ...ackFlags] })
@@ -255,6 +261,8 @@ export async function pollHooks({ paths, now, ackCommand, ackFlags = [], fetchIm
     if (error) {
       state.lastError = error
       errors.push({ name: hook.name, error })
+    } else {
+      delete state.lastError
     }
   }
   writeHookStates(paths.state, states)
@@ -279,13 +287,18 @@ export async function ackHooks({ paths, name, events, error, now, fetchImpl = fe
   }
   const call = receiver({ server: config.server, fetchImpl, token, env })
   const failed = []
+  const answers = new Set()
   for (const id of ids) {
     const answer = await call(hook.account, "DELETE", `/hooks/${name}/events/${encodeURIComponent(id)}`).catch((caught) => ({ status: 0, body: { error: caught.cause?.code ?? caught.name } }))
     // 404: already acknowledged, which is what this asked for.
-    if (answer.status !== 204 && answer.status !== 404) failed.push(id)
+    if (answer.status !== 204 && answer.status !== 404) {
+      failed.push(id)
+      answers.add(answer.status ? `HTTP ${answer.status}` : answer.body.error)
+    }
   }
   if (failed.length) {
-    state.lastError = `${failed.length} delivered event${failed.length === 1 ? "" : "s"} could not be acknowledged and will be sent again`
+    const plural = failed.length === 1 ? "" : "s"
+    state.lastError = `Nothing to do: the receiver kept ${failed.length} delivered event${plural} because acknowledging them got ${[...answers].join(", ")}, so the next wake lists them again`
   } else {
     delete state.lastError
     state.lastAckAt = new Date(now).toISOString()

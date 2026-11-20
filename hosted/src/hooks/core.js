@@ -140,11 +140,14 @@ export function hooksStoreOn(backend, names) {
     },
 
     async deleteHook(accountId, name) {
-      const hook = await hookByName(accountId, name);
-      if (!hook) return false;
-      // The id row first, so the receiver stops accepting events before they are cleared.
-      await backend.remove(HOOKS, `id:${hook.id}`, "");
-      for (const row of await backend.query(EVENTS, hook.id, { from: "", below: "\u{10FFFF}", select: ["RowKey"] })) await backend.remove(EVENTS, hook.id, row.rowKey);
+      const index = await backend.get(HOOKS, accountId, name);
+      if (!index) return false;
+      const hook = await hookById(index.id);
+      if (hook && hook.accountId !== accountId) return false;
+      // The id row first, so the receiver stops accepting events before they are cleared. A name row whose id row is
+      // missing (a createHook that stopped halfway) is deleted too, so the name can be used again.
+      if (hook) await backend.remove(HOOKS, `id:${index.id}`, "");
+      for (const row of await backend.query(EVENTS, index.id, { from: "", below: "\u{10FFFF}", select: ["RowKey"] })) await backend.remove(EVENTS, index.id, row.rowKey);
       await backend.remove(HOOKS, accountId, name);
       return true;
     },
@@ -156,7 +159,8 @@ export function hooksStoreOn(backend, names) {
       try {
         await backend.createAll(EVENTS, rows);
       } catch (error) {
-        if (!(error instanceof Conflict)) throw error;
+        // Without a delivery id, a conflict is two events with the same event id: the sender gets an error and resends.
+        if (!(error instanceof Conflict) || !deliveryId) throw error;
         // A mark older than 7 days is stale: the sender's retries are long over, so this is a new delivery.
         const mark = await backend.get(EVENTS, hookId, rows[1].rowKey);
         if (mark && receivedAt - Date.parse(mark.receivedAt) <= EXPIRY_MS) return "duplicate";

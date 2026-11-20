@@ -37,7 +37,7 @@ When the service issues the secret, pipe it in so it never sits in your shell hi
 
 ## Config
 
-`hooks.json` sits beside the drains' `config.json`, on the machine that runs the poll, and is never committed:
+`hooks.json` sits beside the drains' `config.json`, on the machine that runs the poll. It holds no secret (the poll signs in with `gh`), so it may live in Git and be synced there like the runner's other config:
 
 ```json
 { "server": "https://<receiver>",
@@ -66,13 +66,13 @@ Each body is saved as a file only you can read (`.json` when it is JSON, else `.
 - The receiver answers the service only after the event is stored. A service that gets no answer, or an error, sends it again, and a retry that carries the same delivery id is stored once.
 - An event stays on the receiver until a wake that listed it has been delivered. Then the runner runs the wake's `done`, `hooks ack`, which deletes exactly those events. If the runner could not deliver the wake, or held it because the session still had the last one queued, it runs `hooks ack --error` and nothing is deleted.
 - A wake never replaces another, because a delivered prompt can't be taken back. While one is held, new events wait on the receiver, and the next wake lists every event not yet acknowledged.
-- An event nobody acknowledges for 7 days expires. The next wake for that hook says how many expired, and `hooks status` keeps the count.
-- A hook in `hooks.json` that the receiver doesn't have, or a token the receiver refuses, is an error for that hook in the poll's output; the other hooks still poll. A hook on the receiver that no `hooks.json` entry routes is named in `hooks status`.
+- An event nobody acknowledges for 7 days expires. The receiver reports the count once, with the next read of that hook: the wake says how many expired when that read also has events, and `hooks status` always shows the running count and when the last one expired.
+- A poll that works clears the hook's last error. A hook in `hooks.json` that the receiver doesn't have, or a token the receiver refuses, is an error for that hook in the poll's output; the other hooks still poll. A hook on the receiver that no `hooks.json` entry routes is named in `hooks status`.
 
 ## Limits
 
-A body may be up to 512 KB, because each event is stored as one Table Storage entity, which holds at most 1 MB. The receiver keeps no other cap: no rate limit and no ceiling on waiting events. When Table Storage itself is busy, the receiver answers 503 with Table Storage's `Retry-After`, and the service sends the event again later.
+A body may be up to 512 KB, because each event is stored as one Table Storage entity, which holds at most 1 MB. The receiver keeps no other cap: no rate limit and no ceiling on waiting events. When Table Storage itself is busy, the receiver answers 503 with the `Retry-After` Table Storage gave, if it gave one, and the service sends the event again later. A GitHub rate limit on sign-in is a 503 too, so the poll tries again rather than asking you to sign in.
 
 ## The receiver
 
-The receiver is its own always-on Container App, `ouro-desk-hooks`, built from the same image as hosted Desk, so a gateway deploy or restart never misses an event. `hosted/infra/provision-hooks.sh` makes it once (run it with `--dry-run` first to read the plan), and the [hosted deploy](../../../.github/workflows/hosted-deploy.yml) points it at each new Desk release. Signing secrets are stored sealed with a key derived from `DESK_CLIENT_KEY`; the hook's address is a random 22-character id, and a wrong id answers 404 without saying whether a hook exists. See [hosted/README.md](../../../hosted/README.md#hooks-receiver).
+The receiver is its own always-on Container App, `ouro-desk-hooks`, built from the same image as hosted Desk, so a gateway deploy or restart never misses an event. Each deploy also copies the gateway's GitHub account mapping to it, so an account removed from the gateway stops managing hooks with the next release. `hosted/infra/provision-hooks.sh` makes it once (run it with `--dry-run` first to read the plan), and the [hosted deploy](../../../.github/workflows/hosted-deploy.yml) points it at each new Desk release. Signing secrets are stored sealed with a key derived from `DESK_CLIENT_KEY`; the hook's address is a random 22-character id, and a wrong id answers 404 without saying whether a hook exists. See [hosted/README.md](../../../hosted/README.md#hooks-receiver).

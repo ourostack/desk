@@ -3,8 +3,8 @@ import { Conflict, hooksStoreOn, tableNames } from "./core.js";
 
 const copy = (entity) => Object.fromEntries(Object.entries(entity).map(([key, value]) => [key, value instanceof Uint8Array ? new Uint8Array(value) : value]));
 
-export function createHooksMemoryStore({ tablePrefix = "" } = {}) {
-  const names = tableNames(tablePrefix);
+/** The Map backend alone, so a test can wrap one call to make it fail. */
+export function memoryBackend(names) {
   const tables = new Map(Object.values(names).map((name) => [name, new Map()]));
   const rowKey = (pk, rk) => `${pk}\u0000${rk}`;
   const backend = {
@@ -39,5 +39,10 @@ export function createHooksMemoryStore({ tablePrefix = "" } = {}) {
         .map(copy);
     },
   };
-  return hooksStoreOn(backend, names);
+  return backend;
+}
+
+export function createHooksMemoryStore({ tablePrefix = "" } = {}) {
+  const names = tableNames(tablePrefix);
+  return hooksStoreOn(memoryBackend(names), names);
 }

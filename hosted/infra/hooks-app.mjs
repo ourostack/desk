@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // The Container App spec for the hooks receiver, ouro-desk-hooks (provision-hooks.sh). It is built from the gateway
 // app as `az containerapp show` prints it, so the receiver uses exactly the gateway's environment, registry, pull
-// identity, store identity, accounts store and GitHub account mapping, and nothing here can drift from it.
+// identity, store identity, accounts store and GitHub account mapping. The hosted deploy copies the mapping and store
+// settings from the gateway again on every release (.github/workflows/hosted-deploy.yml), so they don't drift.
 //
 //   node hosted/infra/hooks-app.mjs --gateway <shown.json> --image <image> --public-url <url> \
 //     --client-key-file <file> --out <app.json> [--mask]

@@ -20,9 +20,16 @@ export function githubIdentity({ accounts, fetch, now = Date.now, maxCached = 10
     } catch (error) {
       return { status: 503, error: `GitHub could not confirm the token (${error.message}); try again shortly` };
     }
+    // GitHub answers 403 (or 429) when its rate limit is spent; that is a wait, not a bad token.
+    if (response.status === 429 || (response.status === 403 && response.headers?.get?.("x-ratelimit-remaining") === "0")) return { status: 503, error: `GitHub's rate limit stopped it confirming the token (HTTP ${response.status}); try again shortly` };
     if (response.status === 401 || response.status === 403) return { status: 401, error: `GitHub refused the token (HTTP ${response.status}); sign in again with gh auth login` };
     if (!response.ok) return { status: 503, error: `GitHub could not confirm the token (HTTP ${response.status}); try again shortly` };
-    const user = await response.json();
+    let user;
+    try {
+      user = await response.json();
+    } catch {
+      return { status: 503, error: "GitHub's answer about the token was not JSON; try again shortly" };
+    }
     const mapped = accounts.get(Number(user.id));
     if (!mapped) return { status: 401, error: `GitHub user ${user.login} (${user.id}) has no Desk account; poll with gh auth token --user ${mappedLogins}`, cache: true };
     return { accountId: mapped.accountId, cache: true };

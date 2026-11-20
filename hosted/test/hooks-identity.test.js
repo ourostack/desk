@@ -13,7 +13,7 @@ function fakeGithub(answers) {
     calls.push({ url, authorization: init.headers.Authorization });
     const answer = answers.shift();
     if (answer instanceof Error) throw answer;
-    return { ok: answer.status === 200, status: answer.status, json: async () => answer.body };
+    return { ok: answer.status === 200, status: answer.status, headers: new Headers(answer.headers ?? {}), json: async () => (answer.body instanceof Error ? Promise.reject(answer.body) : answer.body) };
   };
   return { fetch, calls };
 }
@@ -72,4 +72,13 @@ test("the cache keeps at most its limit of tokens", async () => {
   const identity = githubIdentity({ accounts: ACCOUNTS, fetch: github.fetch, now: () => NOW, maxCached: 2 });
   for (const token of ["a", "b", "c", "a"]) await identity(`Bearer ${token}`);
   assert.equal(github.calls.length, 4, "the oldest token was dropped and asked again");
+});
+
+test("GitHub's rate limit, or an answer that isn't JSON, is a 503 to try again, not a bad token", async () => {
+  const github = fakeGithub([{ status: 403, headers: { "x-ratelimit-remaining": "0" }, body: {} }, { status: 429, body: {} }, { status: 200, body: new SyntaxError("bad json") }, { status: 403, headers: { "x-ratelimit-remaining": "12" }, body: {} }]);
+  const identity = githubIdentity({ accounts: ACCOUNTS, fetch: github.fetch, now: () => NOW });
+  assert.deepEqual(await identity("Bearer a"), { status: 503, error: "GitHub's rate limit stopped it confirming the token (HTTP 403); try again shortly" });
+  assert.deepEqual(await identity("Bearer b"), { status: 503, error: "GitHub's rate limit stopped it confirming the token (HTTP 429); try again shortly" });
+  assert.deepEqual(await identity("Bearer c"), { status: 503, error: "GitHub's answer about the token was not JSON; try again shortly" });
+  assert.deepEqual(await identity("Bearer d"), { status: 401, error: "GitHub refused the token (HTTP 403); sign in again with gh auth login" });
 });

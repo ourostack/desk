@@ -116,6 +116,7 @@ test("a held wake grows: two polls with new events between list every event once
   const kept = await w.ack("smoke", first.eventId, "held: the last wake has not reached the session")
   assert.deepEqual(kept, { ok: true, acknowledged: 0, kept: 1, reason: "kept the events; the next poll lists them again" })
   assert.equal(w.receiver.calls.filter((call) => call.method === "DELETE").length, 0)
+  assert.equal(readHookStates(w.paths.state).smoke.lastError, "the wake was not delivered: held: the last wake has not reached the session")
   const second = eventOf("{}")
   w.receiver.state.hooks.smoke.events.push(second)
   const two = await w.poll()
@@ -123,7 +124,7 @@ test("a held wake grows: two polls with new events between list every event once
   assert.equal(two.wakes[0].done.at(-1), `${first.eventId},${second.eventId}`)
   assert.match(two.wakes[0].message, /received 2 events/u)
   assert.notEqual(two.wakes[0].message, one.message)
-  assert.match(two.status[0], /last error: the wake was not delivered: held/u)
+  assert.doesNotMatch(two.status[0], /last error/u, "a poll that worked clears the last error")
   const acked = await w.ack("smoke", `${first.eventId},${second.eventId}`)
   assert.deepEqual(acked, { ok: true, acknowledged: 2, failed: [] })
   assert.equal(w.receiver.state.hooks.smoke.events.length, 0)
@@ -142,12 +143,15 @@ test("ack counts an event already gone as acknowledged and keeps a failed one in
     throw Object.assign(new Error("fetch failed"), { cause: { code: "ECONNREFUSED" } })
   }
   assert.equal((await w.ack("smoke", "c")).failed.length, 1)
-  assert.equal(readHookStates(w.paths.state).smoke.lastError, "1 delivered event could not be acknowledged and will be sent again")
+  assert.equal(readHookStates(w.paths.state).smoke.lastError, "Nothing to do: the receiver kept 1 delivered event because acknowledging them got ECONNREFUSED, so the next wake lists them again")
   w.receiver.state.fail = () => {
     throw new Error("no cause")
   }
   assert.equal((await w.ack("smoke", "d,e")).failed.length, 2)
-  assert.equal(readHookStates(w.paths.state).smoke.lastError, "2 delivered events could not be acknowledged and will be sent again")
+  assert.equal(readHookStates(w.paths.state).smoke.lastError, "Nothing to do: the receiver kept 2 delivered events because acknowledging them got Error, so the next wake lists them again")
+  w.receiver.state.fail = () => ({ status: 503, text: async () => "" })
+  await w.ack("smoke", "f")
+  assert.equal(readHookStates(w.paths.state).smoke.lastError, "Nothing to do: the receiver kept 1 delivered event because acknowledging them got HTTP 503, so the next wake lists them again")
   await assert.rejects(w.ack("gone", "x"), /desk_hooks_unknown_hook/u)
 })
 
@@ -206,7 +210,7 @@ test("expired events are named in the wake and kept in status", async () => {
   receiver.state.hooks.smoke.events.push(eventOf("{}"))
   const result = await w.poll()
   assert.match(result.wakes[0].message, /\n2 older events expired unread after 7 days\.\n/u)
-  assert.match(result.status[0], /, 2 expired unread/u)
+  assert.match(result.status[0], /, 2 expired unread, the last under 1m ago/u)
   receiver.state.expired = 1
   assert.deepEqual((await w.poll()).wakes.length, 1)
   assert.match((await w.poll()).status[0], /3 expired unread/u)
@@ -221,6 +225,7 @@ test("payload files older than 7 days are removed, and empty folders with them",
   mkdirSync(path.dirname(fresh), { recursive: true })
   writeFileSync(old, "{}")
   writeFileSync(fresh, "{}")
+  writeFileSync(path.join(w.paths.payloads, "stray-file"), "not a folder")
   const eightDaysAgo = (NOW - 8 * DAY) / 1000
   utimesSync(old, eightDaysAgo, eightDaysAgo)
   utimesSync(fresh, NOW / 1000, NOW / 1000)
@@ -353,4 +358,13 @@ test("the drains CLI runs every hooks command against the files it is given", as
   assert.deepEqual(defaults.json.wakes, [])
   const kept = await run(["hooks", "ack", "--name", "smoke", "--events", "x", "--error", "held", ...files, "--json"])
   assert.equal(kept.json.kept, 1)
+})
+
+test("an event id the receiver would never make is refused before it becomes a file name", async () => {
+  const w = await world()
+  w.receiver.state.hooks.smoke.events.push({ ...eventOf("{}"), eventId: "../../escape" })
+  const result = await w.poll()
+  assert.deepEqual(result.wakes, [])
+  assert.equal(result.errors[0].error, 'Check the receiver at https://hooks.example: it sent smoke an event id that is not one it makes ("../../escape"), so no event was saved')
+  assert.equal(existsSync(w.paths.payloads), false)
 })

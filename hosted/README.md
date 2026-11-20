@@ -147,7 +147,7 @@ Webhooks ([plugins/desk/docs/webhooks.md](../plugins/desk/docs/webhooks.md)) arr
 
 It checks each event's signature on the raw bytes, stores it in the accounts storage account (tables `hooks` and `hookevents`, made at start) and answers 202. Bodies are at most 512 KB, because Table Storage holds at most 64 KB in one binary property and 1 MB in one entity. When Table Storage is busy, the receiver answers 503 with the `Retry-After` Table Storage gave, so the sender retries. Signing secrets are sealed with a key derived from `DESK_CLIENT_KEY`. Every other route needs `Authorization: Bearer <GitHub token>` for a user in `DESK_GITHUB_ACCOUNTS`.
 
-Run `hosted/infra/provision-hooks.sh --dry-run`, read the plan, then run it without `--dry-run` once, after a release carrying `hosted/src/hooks` has reached the gateway. It copies the gateway's registry, identities, store and account mapping, and the value of its `desk-client-key` secret through a private file. The deploy workflow then points the receiver at each new image and waits for its `/healthz`. Until the app exists, that step only leaves a notice.
+Run `hosted/infra/provision-hooks.sh --dry-run`, read the plan, then run it without `--dry-run` once, after a release carrying `hosted/src/hooks` has reached the gateway. It copies the gateway's registry, identities, store and account mapping, and the value of its `desk-client-key` secret through a private file. The deploy workflow then, after the gateway's deep health check, points the receiver at each new image, copies the gateway's account mapping and store settings again so they never drift, and waits for its `/healthz`. Until the app exists, that step only leaves a notice.
 
 ## Ouro identity
 

@@ -5,8 +5,9 @@ import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { randomBytes, randomUUID } from "node:crypto";
 import { AzureNamedKeyCredential } from "@azure/data-tables";
-import { createHooksMemoryStore } from "../src/hooks/memory-store.js";
-import { createHooksTableStore, hooksStoreError } from "../src/hooks/store.js";
+import { createHooksMemoryStore, memoryBackend } from "../src/hooks/memory-store.js";
+import { createHooksTableStore, hooksStoreError, retryAfterOf } from "../src/hooks/store.js";
+import { createHooksApp } from "../src/hooks/app.js";
 import { Conflict, EXPIRY_MS, MAX_BODY_BYTES, hooksStoreOn, newEventId, tableNames } from "../src/hooks/core.js";
 import { azuriteFromEnv } from "./fixtures/azurite.mjs";
 
@@ -175,6 +176,40 @@ test("a failing lastEventAt write never fails a stored event", async () => {
   assert.equal(await hooksStoreOn(backend, tableNames()).addEvent("h", event(NOW)), "stored");
 });
 
+test("a hook whose creation stopped after its name row can be deleted, freeing the name", async () => {
+  const names = tableNames();
+  const backend = memoryBackend(names);
+  let failNext = false;
+  const store = hooksStoreOn({ ...backend, create: async (table, entity) => {
+    if (failNext && entity.partitionKey.startsWith("id:")) throw new Error("store down");
+    return backend.create(table, entity);
+  }, remove: async (table, pk, rk) => {
+    if (failNext) throw new Error("store down");
+    return backend.remove(table, pk, rk);
+  } }, names);
+  failNext = true;
+  const hook = { accountId: "acct", name: "stuck", id: hookId(), verify: VERIFY, sealedSecret: "", createdAt: NOW };
+  await assert.rejects(store.createHook(hook), /store down/);
+  failNext = false;
+  assert.deepEqual(await store.listHooks("acct"), []);
+  await assert.rejects(store.createHook({ ...hook, id: hookId() }), Conflict);
+  assert.equal(await store.deleteHook("acct", "stuck"), true);
+  await store.createHook({ ...hook, id: hookId() });
+  assert.equal((await store.hookByName("acct", "stuck")).name, "stuck");
+  // Another account's name row pointing at this hook's id is not this account's to delete.
+  await backend.create(names.hooks, { partitionKey: "other", rowKey: "stuck", id: (await store.hookByName("acct", "stuck")).id });
+  assert.equal(await store.deleteHook("other", "stuck"), false);
+});
+
+test("two events with the same event id and no delivery id: the second is an error the sender retries, never a silent drop", async () => {
+  const store = createHooksMemoryStore();
+  const hook = await newHook(store);
+  const one = event(NOW);
+  await store.addEvent(hook.id, one);
+  await assert.rejects(store.addEvent(hook.id, { ...one }), Conflict);
+  assert.equal(await store.pending(hook.id), 1);
+});
+
 test("store errors name the status and Table Storage's Retry-After, never a key", () => {
   const throttled = { statusCode: 503, details: { errorCode: "ServerBusy" }, response: { headers: { get: (name) => (name === "retry-after" ? "7" : undefined) } }, message: "https://x/hookevents(PartitionKey='SECRETID')" };
   const error = hooksStoreError("create", "hookevents", throttled);
@@ -184,6 +219,41 @@ test("store errors name the status and Table Storage's Retry-After, never a key"
   assert.equal(hooksStoreError("get", "hooks", { name: "AbortError" }).message, "the hooks store failed: get on table hooks (timed out)");
   assert.equal(hooksStoreError("get", "hooks", { statusCode: 500, response: { headers: { get: () => "soon" } } }).retryAfter, undefined);
   assert.equal(hooksStoreError("get", "hooks", { code: "ECONNREFUSED" }).message, "the hooks store failed: get on table hooks (ECONNREFUSED)");
+});
+
+test("Retry-After is read from retry-after-ms, x-ms-retry-after-ms or Retry-After, as seconds or a date", () => {
+  const withHeaders = (headers) => ({ response: { headers: { get: (name) => headers[name] } } });
+  assert.equal(retryAfterOf(withHeaders({ "retry-after-ms": "1500" })), 2);
+  assert.equal(retryAfterOf(withHeaders({ "x-ms-retry-after-ms": "200", "retry-after": "40" })), 1);
+  assert.equal(retryAfterOf(withHeaders({ "retry-after-ms": "nope", "retry-after": "40" })), 40);
+  assert.equal(retryAfterOf(withHeaders({ "retry-after": new Date(NOW + 20_000).toUTCString() }), NOW), 20);
+  assert.equal(retryAfterOf(withHeaders({ "retry-after": new Date(NOW - 20_000).toUTCString() }), NOW), undefined);
+  assert.equal(retryAfterOf(withHeaders({ "retry-after": "99999" })), 3600);
+  assert.equal(retryAfterOf(withHeaders({})), undefined);
+  assert.equal(retryAfterOf(undefined), undefined);
+});
+
+test("a throttled Table Storage reaches the sender as 503 with its own Retry-After, through the real SDK pipeline", async (t) => {
+  let requests = 0;
+  const busy = createServer((req, res) => {
+    requests += 1;
+    req.resume();
+    res.writeHead(503, { "Content-Type": "application/json;odata=minimalmetadata", "Retry-After": "12", "x-ms-error-code": "ServerBusy" });
+    res.end(JSON.stringify({ "odata.error": { code: "ServerBusy", message: { lang: "en-US", value: "The server is busy." } } }));
+  });
+  await new Promise((resolve) => busy.listen(0, "127.0.0.1", resolve));
+  t.after(() => busy.close());
+  const store = createHooksTableStore({ endpoint: `http://127.0.0.1:${busy.address().port}/devstoreaccount1`, credential: new AzureNamedKeyCredential("devstoreaccount1", "a2V5"), timeoutMs: 2_000 });
+  const app = createHooksApp({ store, identity: async () => ({ accountId: "a" }), key: Buffer.alloc(32), publicUrl: "https://h.example", log: () => {} });
+  const server = app.listen(0, "127.0.0.1");
+  await new Promise((resolve) => server.once("listening", resolve));
+  t.after(() => server.close());
+  const started = Date.now();
+  const response = await fetch(`http://127.0.0.1:${server.address().port}/hooks/${hookId().slice(0, 22)}`, { method: "POST", body: "{}", headers: { "content-type": "application/json" } });
+  assert.equal(response.status, 503);
+  assert.equal(response.headers.get("retry-after"), "12");
+  assert.equal(requests, 1, "the SDK did not sleep and retry on the throttle");
+  assert.ok(Date.now() - started < 1_500);
 });
 
 test("the Table store refuses plain http except on loopback, and table prefixes must be alphanumeric", () => {

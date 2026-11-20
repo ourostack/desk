@@ -3,9 +3,11 @@
 // DefaultAzureCredential (an `az` sign-in locally); tests pass Azurite's development key.
 //
 // The accounts backend (accounts/store.js) has no delete, partition query or transaction, so this is its own small
-// TableClient wrapper with the same deadline and error handling: every call has a deadline (5 s, covering the SDK's one
-// retry), and every failure becomes a HooksStoreError that names the status but never a key. When Table Storage
-// throttles (503 ServerBusy, or 429), the error carries the Retry-After it gave, so the receiver can pass it on.
+// TableClient wrapper with the same deadline and error handling: every call has a deadline (5 s), and every failure
+// becomes a HooksStoreError that names the status but never a key. The SDK retries nothing here. Its throttling retry
+// would sleep for Table Storage's Retry-After inside the 5 s deadline and then time out, losing the value; every caller
+// of this store already retries (the sender resends on a 503, the poll runs again), so a throttle comes straight back
+// and the error carries the Retry-After Table Storage gave, which the receiver passes on to the sender.
 import { TableClient, odata } from "@azure/data-tables";
 import { STORE_TIMEOUT_MS, defaultCredential } from "../accounts/store.js";
 import { Conflict, HooksStoreError, hooksStoreOn, tableNames } from "./core.js";
@@ -26,10 +28,18 @@ function serviceCode(error) {
   return typeof code === "string" && /^[A-Za-z_]{1,64}$/.test(code) ? code : undefined;
 }
 
-function retryAfterOf(error) {
-  const value = error?.response?.headers?.get?.("retry-after");
-  const seconds = Number(value);
-  return Number.isInteger(seconds) && seconds > 0 && seconds <= 3600 ? seconds : undefined;
+/** Table Storage's wait in whole seconds, from retry-after-ms, x-ms-retry-after-ms or Retry-After (seconds or a date). */
+export function retryAfterOf(error, now = Date.now()) {
+  const header = (name) => error?.response?.headers?.get?.(name);
+  let ms;
+  for (const name of ["retry-after-ms", "x-ms-retry-after-ms"]) {
+    const value = Number(header(name));
+    if (ms === undefined && header(name) && Number.isFinite(value) && value > 0) ms = value;
+  }
+  const plain = header("retry-after");
+  if (ms === undefined && plain) ms = /^\d+$/.test(plain.trim()) ? Number(plain) * 1000 : Date.parse(plain) - now;
+  if (!(ms > 0)) return undefined;
+  return Math.min(3600, Math.max(1, Math.ceil(ms / 1000)));
 }
 
 export function hooksStoreError(operation, table, error) {
@@ -42,7 +52,7 @@ export function createHooksTableStore({ endpoint, credential, clientId, timeoutM
   if (url.protocol !== "https:" && !(url.protocol === "http:" && LOOPBACK.has(url.hostname))) {
     throw new Error("the hooks store endpoint must be https (plain http is allowed only on loopback, for Azurite)");
   }
-  const clientOptions = { allowInsecureConnection: url.protocol === "http:", retryOptions: { maxRetries: 1, retryDelayInMs: 200, maxRetryDelayInMs: 1_000 } };
+  const clientOptions = { allowInsecureConnection: url.protocol === "http:", retryOptions: { maxRetries: 0 } };
   const auth = credential ?? defaultCredential({ clientId });
   const names = tableNames(tablePrefix);
   const clients = new Map(Object.values(names).map((name) => [name, new TableClient(endpoint, name, auth, clientOptions)]));
