@@ -904,9 +904,10 @@ try {
       { type: "tool.execution_start", data: {} },
       { type: "assistant.message" },
       { type: "assistant.message", data: { content: 7 } },
+      { type: "assistant.message", data: { content: "Earlier checks no longer cover the changed requirement." } },
       { type: "assistant.message", data: { content: "Final answer." } },
     ];
-    assert.deepEqual(parseTranscript(`not json\n{broken\n${events.map((event) => JSON.stringify(event)).join("\n")}\n`), { response: "Final answer.", tools: ['view {"path":"a"}', "glob {}"] });
+    assert.deepEqual(parseTranscript(`not json\n{broken\n${events.map((event) => JSON.stringify(event)).join("\n")}\n`), { response: "Final answer.", messages: ["Earlier checks no longer cover the changed requirement.", "Final answer."], tools: ['view {"path":"a"}', "glob {}"] });
     const verdictCase = { checks: [{ id: "a" }, { id: "b" }] };
     assert.deepEqual(parseVerdict('Here: {"checks":[{"id":"b","passed":false,"evidence":" x "},{"id":"a","passed":true,"evidence":"y"}]}', verdictCase), [{ id: "a", passed: true, evidence: "y" }, { id: "b", passed: false, evidence: "x" }]);
     assert.throws(() => parseVerdict("no json", verdictCase), /did not return a JSON object/u);
@@ -948,6 +949,7 @@ try {
       '  const subjectCalls = log ? fs.readFileSync(log, "utf8").split("\\n").filter((line) => line.includes(\'"role":"subject"\')).length : 0;',
       '  const content = mode === "empty" || (mode === "empty-once" && subjectCalls === 1) ? "" : "Subject answer.";',
       '  const toolRequests = mode === "tools" ? [{ name: "view", arguments: { path: "SKILL.md" } }] : [];',
+      '  if (content) console.log(JSON.stringify({ type: "assistant.message", data: { content: "Earlier checks no longer cover the changed requirement." } }));',
       '  console.log(JSON.stringify({ type: "assistant.message", data: { content, toolRequests } }));',
       '} else if (mode === "garbage" || (mode === "flaky" && earlier === 0)) {',
       '  console.log("no verdict here");',
@@ -993,6 +995,7 @@ try {
       assert.deepEqual(calls().map((call) => [call.role, call.model]), [["subject", "sub"], ["judge", "jud"]]);
       assert.notEqual(calls()[0].pid, calls()[1].pid, "subject and judge are separate processes");
       const [subjectCall, judgeCall] = calls();
+      assert.match(judgeCall.prompt, /Earlier checks no longer cover the changed requirement\.[\s\S]*Subject answer\./u, "the judge sees the first reply before the final answer");
       assert.ok(subjectCall.args.includes("--allow-all-tools") && !subjectCall.args.includes("--deny-tool"), "the subject can use shell and write tools");
       assert.ok(subjectCall.args.includes("--disable-builtin-mcps"), "the subject cannot reach GitHub through the built-in tools");
       assert.equal(subjectCall.bound, true, "the subject starts in a scratch desk");
@@ -1050,7 +1053,9 @@ try {
       const kept = run(["fixture", ...fake, "--case", "case-1", "--keep", keepDir]);
       assert.equal(kept.status, 0, kept.stderr);
       assert.match(kept.stdout, /Dry run/u, "--case never writes a receipt");
-      assert.equal(JSON.parse(fs.readFileSync(path.join(keepDir, fs.readdirSync(keepDir)[0]), "utf8")).case, "case-1");
+      const keptCase = JSON.parse(fs.readFileSync(path.join(keepDir, fs.readdirSync(keepDir)[0]), "utf8"));
+      assert.equal(keptCase.case, "case-1");
+      assert.deepEqual(keptCase.messages, ["Earlier checks no longer cover the changed requirement.", "Subject answer."], "retained evidence preserves the same replies the judge received");
       const onceLog = path.join(path.dirname(receiptFile), "once.jsonl");
       const once = run(["fixture", ...fake], { FAKE_MODE: "empty-once", FAKE_LOG: onceLog });
       assert.equal(once.status, 0, once.stderr);
