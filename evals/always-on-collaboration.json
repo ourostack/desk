@@ -77,7 +77,10 @@
     "evals/worlds/always-on-collaboration/requirement-change-names-stale-proof/desk/desks/alex/posts-site/track.md",
     "evals/worlds/always-on-collaboration/requirement-change-names-stale-proof/person"
   ],
-  "reviewedSourceFingerprint": "19a9e4d87852d45e5cd06cbbdf92c5fe10c1ddd7d2777fcb5a3078bd7a793c12",
+  "reviewedSourceFingerprint": "54906bf9708fd2ecce2d02f40eb08bdc5ea5356cf7cd0c9387096eeb1f1f736f",
+  "knownFailure": [
+    {"issue": "https://github.com/ourostack/desk/issues/1371", "case": "requirement-change-names-stale-proof", "observed": "2026-11-19"}
+  ],
   "requirements": [
     {"id": "git-backed-memory", "description": "Disable native harness memory while Desk is active. Keep durable instructions and preferences in the Git-backed desk, never in store_memory, vote_memory or another host memory store."},
     {"id": "scratch-reclamation", "description": "Budget scratch storage and verify actual reclaimed space; process exit and pending acceptance do not complete disposable-profile cleanup."},
