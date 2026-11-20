@@ -30,6 +30,8 @@ function harness({ idleMs: idle = IDLE, failSpawnAt = [] } = {}) {
   const compacted = []
   const signals = new EventEmitter()
   const children = []
+  const stdout = Object.assign(new EventEmitter(), { write: (text) => sent.push(text) })
+  let parentGone = null
   let spawns = 0
 
   function launchChild() {
@@ -54,7 +56,8 @@ function harness({ idleMs: idle = IDLE, failSpawnAt = [] } = {}) {
   const proxy = createIdleProxy({
     launchChild,
     stdin,
-    stdout: { write: (text) => sent.push(text) },
+    stdout,
+    watchParent: (gone) => { parentGone = gone },
     stderr: { write: (text) => stderr.push(text) },
     idleMs: idle,
     now: () => clock.now,
@@ -68,7 +71,7 @@ function harness({ idleMs: idle = IDLE, failSpawnAt = [] } = {}) {
 
   const tick = () => new Promise((resolve) => setImmediate(resolve))
   return {
-    proxy, stdin, sent, stderr, exits, kills, compacted, signals, children, timers,
+    proxy, stdin, stdout, parentGone: () => parentGone(), sent, stderr, exits, kills, compacted, signals, children, timers,
     last: () => children.at(-1),
     host: async (message) => { stdin.write(`${typeof message === "string" ? message : JSON.stringify(message)}\n`); await tick() },
     sees: () => sent.filter(Boolean).map((line) => JSON.parse(line.trim())),
@@ -357,6 +360,17 @@ test("when the host closes its stream the server is ended and the proxy leaves w
   failing.last().leave(null, "SIGKILL")
   await failing.flush()
   assert.deepEqual(failing.exits, [0])
+})
+
+test("a host that is gone ends the server and the proxy: its output failing, or its process ending with its stdin still open", async () => {
+  for (const goneHost of [(h) => h.stdout.emit("error", Object.assign(new Error("write EPIPE"), { code: "EPIPE" })), (h) => h.parentGone()]) {
+    const h = harness()
+    await handshaken(h)
+    goneHost(h)
+    assert.equal(h.last().ended, true)
+    h.last().leave(0)
+    assert.deepEqual(h.exits, [0])
+  }
 })
 
 test("the host closing its stream while the server is being ended, ends the proxy once", async () => {
