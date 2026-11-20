@@ -13,8 +13,13 @@ const SHA = "a".repeat(40)
 const run = (conclusion, extra = {}) => ({ event: "push", status: "completed", conclusion, created_at: "2026-11-14T02:00:00Z", ...extra })
 
 // A fake GitHub: `prs` for the commit, the pull request's CI runs, main's commits after the run started, and main's own runs.
-function fakeApi({ prs, prRuns = [{ conclusion: "success", created_at: "2026-11-14T01:00:00Z", run_started_at: "2026-11-14T01:00:05Z" }], commits = [], mainRuns = {} }) {
+function fakeApi({ prs, prRuns = [{ conclusion: "success", created_at: "2026-11-14T01:00:00Z", run_started_at: "2026-11-14T01:00:05Z" }], commits = [], mainRuns = {}, compare = {} }) {
   return (route) => {
+    if (route.includes("/compare/")) {
+      const status = compare[route.split("/compare/")[1].split("...")[0]]
+      if (!status) throw new Error("compare failed")
+      return { status }
+    }
     if (route.includes("/pulls")) return prs
     if (route.includes("event=pull_request")) return { workflow_runs: prRuns }
     if (route.includes("/commits?")) return commits
@@ -58,9 +63,31 @@ test("a workflow_run starts the release only for the tip of main, and only when 
 })
 
 test("an open main is red issue holds every release, whatever the pull request showed", () => {
-  const result = decide({ api: fakeApi({ prs: mergedPr }), redMain: () => ["#9 main is red: CI gate"] })
+  const result = decide({ api: fakeApi({ prs: mergedPr }), redMain: () => [{ label: "#9 main is red: CI gate", shas: [] }] })
   assert.equal(result.release, false)
   assert.deepEqual(result.red, ["#9 main is red: CI gate"])
+})
+
+test("a main is red issue the judged commit already outran does not hold the release, but any other still does", () => {
+  const failed = "e".repeat(40)
+  const issue = { label: "#9 main is red: CI gate", shas: [failed] }
+  const released = decide({ api: fakeApi({ prs: mergedPr, mainRuns: green, compare: { [failed]: "ahead" } }), redMain: () => [issue] })
+  assert.equal(released.release, true)
+  assert.deepEqual(released.red, [])
+  assert.deepEqual(released.stale, [issue.label])
+  assert.equal(decide({ api: fakeApi({ prs: mergedPr, mainRuns: green, compare: { [failed]: "identical" } }), redMain: () => [issue] }).release, true)
+  for (const [why, options] of [
+    ["main's CI has not passed on the commit yet", { mainRuns: {}, compare: { [failed]: "ahead" } }],
+    ["main's CI failed on the commit", { mainRuns: { ...green, "desk-windows-suite.yml": [run("failure")] }, compare: { [failed]: "ahead" } }],
+    ["the commit does not carry the failure", { mainRuns: green, compare: { [failed]: "behind" } }],
+    ["the failure's ancestry cannot be read", { mainRuns: green, compare: {} }],
+  ]) {
+    const held = decide({ api: fakeApi({ prs: mergedPr, ...options }), redMain: () => [issue] })
+    assert.equal(held.release, false, why)
+    assert.deepEqual(held.red, [issue.label], why)
+  }
+  const half = decide({ api: fakeApi({ prs: mergedPr, mainRuns: green, compare: { [failed]: "ahead" } }), redMain: () => [{ label: "#9 x", shas: [failed, "f".repeat(40)] }] })
+  assert.equal(half.release, false, "one failure the commit does not carry keeps the issue open")
 })
 
 test("main's newest run counts, a partial dispatch never does, and a missing run is not green", () => {

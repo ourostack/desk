@@ -2,7 +2,8 @@
 // Pull requests run every check, so a merge whose pull request was tested against the main it landed on needs no second run. When
 // main moved while the pull request's checks ran, two green pull requests could combine into a broken main, so the release holds
 // until main's own run on that commit has passed, and the passing run starts the release again (desk-release.yml, workflow_run).
-// A "main is red" issue (report-main-health.sh) holds every release.
+// A "main is red" issue (report-main-health.sh) holds every release, unless the commit being judged carries every failure the issue records and
+// main's own CI passed on it: the issue is then only waiting for the run that closes it, and the code is what the gate judges.
 // Usage: node release-gate.mjs --repo <owner/name> --head <sha> --event <push|workflow_run|workflow_dispatch|schedule> [--trigger-sha <sha> --trigger-conclusion <conclusion>]
 // Prints `release=true` or `release=false` and a reason on stderr. Exit code 1 only while main is red.
 import { spawnSync } from "node:child_process"
@@ -30,12 +31,17 @@ export function mainVerified(sha, runsFor) {
   return { ok: missing.length === 0, reason: missing.join("; ") }
 }
 
-// `api(path)` returns the parsed JSON of a GitHub API read; `redMain()` lists the open "main is red" issues.
+// `api(path)` returns the parsed JSON of a GitHub API read; `redMain()` lists the open "main is red" issues as `{ label, shas }`, the commits whose failure each records.
 export function gate({ repo, head, event, trigger = {}, api, redMain }) {
-  const red = redMain()
-  if (red.length > 0) return { red, release: false, reason: `main is red: ${red.join(", ")}` }
   const runsFor = (workflow, sha) => api(`repos/${repo}/actions/workflows/${workflow}/runs?head_sha=${sha}&per_page=30`).workflow_runs ?? []
   const verified = mainVerified(head, runsFor)
+  const carries = (failed) => {
+    try { return ["ahead", "identical"].includes(api(`repos/${repo}/compare/${failed}...${head}`).status) } catch { return false }
+  }
+  const open = redMain()
+  const stale = verified.ok ? open.filter((issue) => issue.shas.length > 0 && issue.shas.every(carries)).map((issue) => issue.label) : []
+  const red = open.map((issue) => issue.label).filter((label) => !stale.includes(label))
+  if (red.length > 0) return { red, stale, release: false, reason: `main is red: ${red.join(", ")}` }
 
   if (event === "push") {
     const prs = api(`repos/${repo}/commits/${head}/pulls`)
@@ -45,18 +51,18 @@ export function gate({ repo, head, event, trigger = {}, api, redMain }) {
       const run = newest(prRuns)
       if (run?.conclusion === "success") {
         const commits = api(`repos/${repo}/commits?sha=${head}&since=${run.run_started_at}&per_page=100`)
-        if (!movedSince(head, commits)) return { red, release: true, reason: `#${pr.number} was tested against the main it landed on` }
-        if (verified.ok) return { red, release: true, reason: "main's own run passed on this commit" }
-        return { red, release: false, reason: `main moved while #${pr.number}'s checks ran, so the release waits for main's run on this commit (${verified.reason}); that run starts the release when it passes` }
+        if (!movedSince(head, commits)) return { red, stale, release: true, reason: `#${pr.number} was tested against the main it landed on` }
+        if (verified.ok) return { red, stale, release: true, reason: "main's own run passed on this commit" }
+        return { red, stale, release: false, reason: `main moved while #${pr.number}'s checks ran, so the release waits for main's run on this commit (${verified.reason}); that run starts the release when it passes` }
       }
     }
-    if (verified.ok) return { red, release: true, reason: "main's own run passed on this commit" }
-    return { red, release: false, reason: `no pull request's passing checks cover this commit (${verified.reason}); main's run starts the release when it passes` }
+    if (verified.ok) return { red, stale, release: true, reason: "main's own run passed on this commit" }
+    return { red, stale, release: false, reason: `no pull request's passing checks cover this commit (${verified.reason}); main's run starts the release when it passes` }
   }
 
   if (event === "workflow_run") {
-    if (trigger.sha !== head) return { red, release: false, reason: `the run that finished tested ${String(trigger.sha).slice(0, 12)}, not the tip of main; a newer run will start the release` }
-    if (trigger.conclusion !== "success") return { red, release: false, reason: `the run that finished is ${trigger.conclusion}` }
+    if (trigger.sha !== head) return { red, stale, release: false, reason: `the run that finished tested ${String(trigger.sha).slice(0, 12)}, not the tip of main; a newer run will start the release` }
+    if (trigger.conclusion !== "success") return { red, stale, release: false, reason: `the run that finished is ${trigger.conclusion}` }
     return verified.ok ? { red, release: true, reason: "main's own runs passed on this commit" } : { red, release: false, reason: `${verified.reason}; the other run starts the release when it passes` }
   }
 
@@ -85,8 +91,12 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     event,
     trigger: { sha: option("--trigger-sha"), conclusion: option("--trigger-conclusion") },
     api: (path) => JSON.parse(gh(["api", path])),
-    redMain: () => JSON.parse(gh(["issue", "list", "--repo", repo, "--state", "open", "--label", "red-main", "--json", "number,title"])).map((issue) => `#${issue.number} ${issue.title}`),
+    redMain: () => JSON.parse(gh(["issue", "list", "--repo", repo, "--state", "open", "--label", "red-main", "--json", "number,title,body,comments"])).map((issue) => ({
+      label: `#${issue.number} ${issue.title}`,
+      shas: [...new Set([issue.body, ...issue.comments.map((comment) => comment.body)].flatMap((text) => [...String(text).matchAll(/red-main-sha: ([0-9a-f]{40})/gu)].map((found) => found[1])))],
+    })),
   })
+  for (const label of decision.stale) console.error(`Not holding for ${label}: main's own CI passed on ${head.slice(0, 12)}, which carries every failure it records; the run that turned green closes it.`)
   console.error(decision.reason)
   if (decision.red.length > 0) {
     console.error("::error::main is red, so nothing is released until these issues close:")
