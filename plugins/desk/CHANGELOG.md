@@ -1,5 +1,71 @@
 # desk plugin — changelog
 
+## 3.2.332 — 2026-11-19
+
+Under a repository's `.github/merge-checks.json`, the merge-when-green relay now also holds a head while any other check on it has failed or timed out, even when the file does not name that check. A red optional check is still red; one that is merely running or cancelled and not named does not hold the head.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.331 — 2026-11-19
+
+The merge-when-green relay now reads `.github/merge-checks.json` from the pull request's base branch. When the file is there, its `required` list (check names or globs) is the only thing judged, in place of the relay's `requiredChecks` and its other checks, and a required check that has not reported counts as missing. Without the file, the relay's configured checks apply as before.
+
+The merge-when-green relay no longer waits for GitHub to work out whether a green pull request merges cleanly: it sends the merge, which makes GitHub work it out, and a 405 is tried again on the next poll. A waiting pull request is also read every 30 to 60 seconds instead of every 1 to 4 minutes.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.330 — 2026-11-19
+
+`fast-honest-ci` corrects its merge-queue advice: before adding a queue against a red default branch, read which checks turn it red. Measured on a busy component library, most red commits were flaky checks the next commit passed, and a queue only turns those into dequeues.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.329 — 2026-11-19
+
+Desk's MCP server now vendors Ouro UI v1.3.351, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.328 — 2026-11-19
+
+### Sessions know the other desks on the machine again
+
+Session start now names the other desks on this machine and where they are, in one line, so a session in one desk (a Crew workspace, say) no longer guesses a path to another desk or tries to clone one that is already here. This had been lost when session start moved into one script call: the agent-run step that read the desk registry was left out of the boot.
+
+`desk_status` returns `machine_desks` (name, path, owner, remote) and takes a `desk` input that resolves a desk by name, repo or owner; a desk that isn't registered or isn't on this machine says to register it, never to clone it. Desk reads the registry from `$DESK_REGISTRY`, the path a registering tool records in `~/.config/desk/registry-path`, or the bound desk's own `_meta/desks.md`. `desk_save` also recognises registered Crew desks as other desks.
+
+`start-task` now tells the agent to search the repo's history for a capability before designing it, and to treat finding one as a regression to restore.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.327 — 2026-11-19
+
+Desk's MCP server now vendors Ouro UI v1.3.350, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.326 — 2026-11-19
+
+Desk's MCP server now vendors Ouro UI v1.3.348, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.325 — 2026-11-19
+
+`fast-honest-ci` now states the goal it serves: a shorter loop needs no savings case, so measurements choose the order of work, not whether a faster loop is worth having. It points to ourostack/.github's loop clock (PR opened to live, and the default branch's red share) for step one. It also says that dropping a merge queue needs a replacement that still builds the merged tree, with the measured cost of going without one. And it adds one trunk-based rule: fix on the default branch and cherry-pick to a release branch, then delete the release branch once it has shipped.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.324 — 2026-11-19
+
+`lesson-capture` ships [`agents-md-budget.mjs`](skills/lesson-capture/agents-md-budget.mjs), a script any repository can copy in and run in CI to hold its always-loaded instructions (AGENTS.md, CLAUDE.md, GEMINI.md and `.github/copilot-instructions.md`) to a byte budget. A file over its budget, or without one, fails with the fix: turn a rule into a check, or delete one. Raising a budget is a choice a pull request makes with `--set` and states, and `--set` also locks in a cut. It needs only Node, so it works in repositories whose organization blocks outside Actions.
+
+Desk's MCP server now vendors Ouro UI v1.3.347, moved by Ouro Current.
+
+A merge-when-green relay's `strict` block takes `requireCurrentBase: false` to merge a head that is green on its own checks at once, however far behind its base it is, any number in parallel, without updating it. Main is then protected after the merge by post-merge checks and auto-revert, and the red-main exemption still applies. The new `strict.serial` (default `true`) lets `false` drop the oldest-first update queue. Relays that leave both unset behave as before. See [relays](docs/relays.md).
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.323 — 2026-11-19
 
 Desk's MCP server now vendors Ouro UI v1.3.343, moved by Ouro Current.

@@ -96,6 +96,7 @@ import { recordUnsigned, signoffInstructions } from "../desk/unsigned-deliveries
 import { noteSignoffListed } from "./signoff-listed.js"
 import { stuckSaves } from "./unmerged-saves.js"
 import { otherSessions } from "./other-sessions.js"
+import { readMachineDesks } from "../desk/machine-desks.js"
 import { resolveDeskStateDir } from "./last-start.js"
 import { applyPublicationMode } from "./publication-mode.js"
 import { renameWithRetry } from "../util/rename-retry.js"
@@ -1024,6 +1025,7 @@ function emptyResult({ status, degraded, pending, instructions = [], root, host 
     stale_desk: null,
     plugin_update: null,
     other_sessions: null,
+    machine_desks: [],
     release_alert: null,
     desk_problems: null,
     unmerged_saves: [],
@@ -1582,6 +1584,7 @@ export async function bootOnce({
     stale_desk: staleFinding,
     plugin_update: pluginUpdate,
     other_sessions: otherWork,
+    machine_desks: readMachineDesks({ homeDir, root: root.path, env }),
     release_alert: releaseFinding?.release_alert ?? null,
     desk_problems: releaseFinding?.desk_problems ?? null,
     unmerged_saves: headless ? [] : stuckSaves({ root: root.path, env, now: Date.now }),

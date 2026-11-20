@@ -5,9 +5,10 @@ export const deskStatus = defineAction({
   consent: "write",
   label: "Desk status",
   description: "Check that Desk is ready for this session.",
-  agent: "Session-start health check for the resolved desk root. The compact answer has `state` (ready, degraded, admitting or setup_required), `degraded` (why), `fix` (what to do in this session), `search`, `notes` and where the desk is. Retries admission when Desk is not ready. `detail: true` returns the full payload. A hosted Desk (claude.ai, ChatGPT) also returns its instructions, unless `has_instructions: true`; follow them and read the skills they name with desk_skill.",
+  agent: "Session-start health check for the resolved desk root. The compact answer has `state` (ready, degraded, admitting or setup_required), `degraded` (why), `fix` (what to do in this session), `search`, `notes`, where the desk is and `machine_desks` (every desk registered on this machine, with path, owner and remote). Retries admission when Desk is not ready. `detail: true` returns the full payload. A hosted Desk (claude.ai, ChatGPT) also returns its instructions, unless `has_instructions: true`; follow them and read the skills they name with desk_skill.",
   input: {
     detail: field.boolean({ label: "Full payload", description: "Pass true for the full payload (tens of KB). Omit it for the compact answer.", optional: true }),
+    desk: field.string({ label: "Other desk", description: "Name, repo or owner of another desk on this machine (for example personal): the answer's `machine_desk` has its local path, or says what to do when it is not here. Never clone a registered desk.", optional: true }),
     hasInstructions: field.boolean({ label: "Has instructions", description: "Hosted Desk only: pass true when an earlier desk_status answer in this conversation already gave you Desk's instructions.", optional: true, wire: "has_instructions" }),
   },
   output: {},
