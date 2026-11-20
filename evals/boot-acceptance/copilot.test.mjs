@@ -188,25 +188,28 @@ test("auth: only the parent's COPILOT_GITHUB_TOKEN by default; the gh token only
   const never = () => { throw new Error("gh must not run") }
   assert.deepEqual(resolveCopilotAuth({ parentEnv: { COPILOT_GITHUB_TOKEN: OAUTH }, run: never }).token, OAUTH)
   // Unset and no opt-in: refused without ever asking gh, and the problem names the fix.
-  const refusedDefault = resolveCopilotAuth({ parentEnv: {}, lastLogin: () => "someone", run: never })
+  const refusedDefault = resolveCopilotAuth({ parentEnv: {}, ownerLogin: () => "", lastLogin: () => "someone", run: never })
   assert.equal(refusedDefault.token, null)
   assert.match(refusedDefault.problem, /fine-grained personal access token with only the "Copilot Requests" permission/)
   assert.match(refusedDefault.problem, /--copilot-use-gh-token/)
   const calls = []
   const run = (cmd, args) => { calls.push([cmd, ...args]); return { status: 0, stdout: `${OAUTH}\n` } }
-  const viaGh = resolveCopilotAuth({ parentEnv: {}, allowGhToken: true, lastLogin: () => "someone", run })
+  const viaGh = resolveCopilotAuth({ parentEnv: {}, allowGhToken: true, ownerLogin: () => "", lastLogin: () => "someone", run })
   assert.equal(viaGh.token, OAUTH)
   assert.equal(viaGh.broad, true)
   assert.deepEqual(calls, [["gh", "auth", "token", "--user", "someone"]])
   assert.equal(resolveCopilotAuth({ parentEnv: { COPILOT_GITHUB_TOKEN: OAUTH }, allowGhToken: true, run: never }).broad, undefined)
-  assert.equal(resolveCopilotAuth({ parentEnv: { DESK_HARNESS_COPILOT_LOGIN: "other" }, allowGhToken: true, lastLogin: () => "someone", run }).token, OAUTH)
+  assert.equal(resolveCopilotAuth({ parentEnv: { DESK_HARNESS_COPILOT_LOGIN: "other" }, allowGhToken: true, ownerLogin: () => "", lastLogin: () => "someone", run }).token, OAUTH)
   assert.deepEqual(calls.at(-1), ["gh", "auth", "token", "--user", "other"])
   const classic = ["ghp", "_", "a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8"].join("")
   const refused = resolveCopilotAuth({ parentEnv: { COPILOT_GITHUB_TOKEN: classic }, run: never })
   assert.equal(refused.token, null)
   assert.equal(refused.problem.includes(classic), false)
-  assert.match(resolveCopilotAuth({ parentEnv: {}, allowGhToken: true, lastLogin: () => null, run: never }).problem, /no last-signed-in login/)
-  assert.match(resolveCopilotAuth({ parentEnv: {}, allowGhToken: true, lastLogin: () => "x", run: () => ({ status: 1, stdout: "" }) }).problem, /returned nothing/)
+  assert.match(resolveCopilotAuth({ parentEnv: {}, allowGhToken: true, ownerLogin: () => "", lastLogin: () => null, run: never }).problem, /no last-signed-in login/)
+  assert.match(resolveCopilotAuth({ parentEnv: {}, allowGhToken: true, ownerLogin: () => "", lastLogin: () => "x", run: () => ({ status: 1, stdout: "" }) }).problem, /returned nothing/)
+  const ownerCalls = []
+  resolveCopilotAuth({ parentEnv: {}, allowGhToken: true, ownerLogin: () => "arimendelow", lastLogin: () => "arimendelow_microsoft", run: (cmd, args) => { ownerCalls.push(args.at(-1)); return { status: 0, stdout: OAUTH } } })
+  assert.deepEqual(ownerCalls, ["arimendelow"])
   assert.match(GH_TOKEN_WARNING, /full gh OAuth token/)
 })
 

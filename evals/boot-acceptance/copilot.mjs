@@ -19,6 +19,9 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, symlink
 import * as os from "node:os"
 import * as path from "node:path"
 import { spawnSync } from "node:child_process"
+import { createRequire } from "node:module"
+
+const { copilotLogin, withoutAmbientTokens } = createRequire(import.meta.url)("../../scripts/copilot-account.cjs")
 
 // ---------------------------------------------------------------------------
 // The binary
@@ -78,11 +81,11 @@ export function copilotLastLogin(home = os.homedir()) {
  * (`gh auth token --user <login>`, run in the parent). That is the account's full gh OAuth token (repo and workflow scopes), so the caller prints a loud warning.
  * Classic tokens (`ghp_`) are not accepted by Copilot, and a value is never put in an argument list, a file, a log line or a problem text.
  */
-export function resolveCopilotAuth({ parentEnv = process.env, home = os.homedir(), allowGhToken = false, run = (cmd, args) => spawnSync(cmd, args, { encoding: "utf8" }), lastLogin = copilotLastLogin } = {}) {
+export function resolveCopilotAuth({ parentEnv = process.env, home = os.homedir(), allowGhToken = false, run = (cmd, args) => spawnSync(cmd, args, { encoding: "utf8", env: withoutAmbientTokens(process.env) }), lastLogin = copilotLastLogin, ownerLogin = () => copilotLogin(process.cwd(), { env: parentEnv }) } = {}) {
   const fromEnv = (parentEnv[COPILOT_TOKEN_VAR] ?? "").trim()
   if (fromEnv) return checkToken(fromEnv, `${COPILOT_TOKEN_VAR} in the parent environment`)
   if (!allowGhToken) return { token: null, problem: `no Copilot credential: ${COPILOT_TOKEN_VAR} is unset. Set it to a fine-grained personal access token with only the "Copilot Requests" permission. To use the gh keychain token of Copilot's signed-in account instead (a full OAuth token with repo and workflow scopes that a process listing in the run can read), pass --copilot-use-gh-token` }
-  const login = (parentEnv.DESK_HARNESS_COPILOT_LOGIN ?? "").trim() || lastLogin(home)
+  const login = (parentEnv.DESK_HARNESS_COPILOT_LOGIN ?? "").trim() || ownerLogin() || lastLogin(home)
   if (!login) return { token: null, problem: `no Copilot credential: Copilot has no last-signed-in login in ~/.copilot/config.json (set ${COPILOT_TOKEN_VAR}, or DESK_HARNESS_COPILOT_LOGIN to a gh account that has Copilot)` }
   const r = run("gh", ["auth", "token", "--user", login])
   const token = (r.stdout ?? "").trim()
