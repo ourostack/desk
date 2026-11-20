@@ -1,5 +1,71 @@
 # desk plugin — changelog
 
+## 3.2.353 — 2026-11-20
+
+Desk's MCP server now vendors Ouro UI v1.3.377, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.352 — 2026-11-20
+
+Desk's MCP server now vendors Ouro UI v1.3.376, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.351 — 2026-11-20
+
+Desk's MCP server now vendors Ouro UI v1.3.375, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.350 — 2026-11-20
+
+Desk's MCP server now vendors Ouro UI v1.3.374, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.349 — 2026-11-20
+
+Desk's MCP server now vendors Ouro UI v1.3.373, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.348 — 2026-11-20
+
+Desk's MCP server now vendors Ouro UI v1.3.371, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.347 — 2026-11-20
+
+Desk's MCP server now vendors Ouro UI v1.3.369, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.346 — 2026-11-20
+
+Desk's MCP server now vendors Ouro UI v1.3.368, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.345 — 2026-11-20
+
+Desk's MCP server now vendors Ouro UI v1.3.367, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.344 — 2026-11-20
+
+Desk's MCP server now vendors Ouro UI v1.3.366, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.343 — 2026-11-20
+
+Desk's MCP server now vendors Ouro UI v1.3.364, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.342 — 2026-11-20
 
 Skill evaluations give each subject its own scratch Shepherd home (`SHEPHERD_HOME`), so an agent that runs `shepherd signin queue` or any other Shepherd command in a case can no longer touch the operator's real sign-in queue, config or app.
