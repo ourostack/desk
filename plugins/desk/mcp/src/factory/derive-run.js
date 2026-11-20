@@ -710,7 +710,7 @@ export async function sweep(env, { quietMs = 600000 } = {}) {
     const { result, reason } = await deriveMarker(env, marker, { quietMs, requireStored: true, siblings })
     summary[result] += 1
     if (reason === "route_unverified") summary.route_unverified += 1
-    if (result === "held") held.push({ marker, reason: reason ?? "held" })
+    if (result === "held") held.push({ marker, reason })
   }
   // Held sessions by route and cause, with the oldest hold: the loop raises `held_sessions` for a hold that outlasts a day. Local status only.
   await writeStatus(env, { held_sessions: heldSessions(held, new Date().toISOString()) }).catch(() => {})

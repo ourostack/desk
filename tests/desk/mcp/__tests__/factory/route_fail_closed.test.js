@@ -9,10 +9,10 @@ import * as path from "node:path"
 
 import { runHook } from "../../../../../plugins/desk/hooks/lib/factory-end.cjs"
 import { metadata } from "../../../../../plugins/desk/mcp/src/factory/plugin-sources.cjs"
-import { factoryStateRoot, listMarkers, setConsent, writeMarker } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
+import { factoryStateRoot, listMarkers, setConsent, writeMarker, writeStatus } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 import { markerRoute, proofIndex, provenBy, sessionPlace, sessionRoute } from "../../../../../plugins/desk/mcp/src/factory/session-route.js"
 import { placesFor } from "../../../../../plugins/desk/mcp/src/factory/capture-sweep.js"
-import { deriveMarker, sweep } from "../../../../../plugins/desk/mcp/src/factory/derive-run.js"
+import { deriveMarker, heldSessions, sweep } from "../../../../../plugins/desk/mcp/src/factory/derive-run.js"
 import { HOLD_REMEDIES, holdReason, routeHolds } from "../../../../../plugins/desk/mcp/src/factory/held-route.js"
 import { factoryLocalStatus } from "../../../../../plugins/desk/mcp/src/factory/local-status.js"
 import { readSmallText } from "../../../../../plugins/desk/mcp/src/factory/marker.js"
@@ -449,4 +449,21 @@ test("N3: a Desk updated while the session ran is listed through its sibling ver
   // A Desk outside that cache folder is still not listed.
   const scan = metadata({ host: "claude", pluginRoot: path.join(ctx.base, "dev", "desk"), home: ctx.base, env: ctx.env, readSmallText, PATTERNS })
   assert.equal(scan.reason, "desk_not_in_registry")
+}))
+
+test("held sessions are grouped by route and cause with the oldest hold, and a record with no usable group names nothing", () => scratch(async (ctx) => {
+  const marker = await session(ctx, "claude-code")
+  const older = { ...marker, updated_at: "2026-01-01T00:00:00.000Z" }
+  const newer = { ...marker, updated_at: "2026-01-02T00:00:00.000Z" }
+  const held = heldSessions([{ marker: newer, reason: "newer_desk_recorded" }, { marker: older, reason: "newer_desk_recorded" }, { marker: { ...newer, desk_root: null }, reason: "no_desk_root" }], "2026-01-03T00:00:00.000Z")
+  assert.deepEqual(held.groups.map(({ route, reason, sessions, oldest_at: oldest }) => [route, reason, sessions, oldest]), [
+    [STORE, "newer_desk_recorded", 2, "2026-01-01T00:00:00.000Z"],
+    ["unresolved", "no_desk_root", 1, "2026-01-02T00:00:00.000Z"],
+  ])
+  await writeStatus(ctx.env, { held_sessions: { at: held.at, groups: [{ route: 1 }] } })
+  assert.equal(factoryLocalStatus({ env: ctx.env, deskRoot: ctx.desk }).held_groups, undefined)
+  await writeStatus(ctx.env, { held_sessions: held })
+  const status = factoryLocalStatus({ env: ctx.env, deskRoot: ctx.desk })
+  assert.equal(status.held_groups[0].sessions, 2)
+  assert.match(factoryFindingLines({ ...status, held_groups: [{ route: "a/b", reason: "other", sessions: 1, oldest_at: "2026-01-01T00:00:00.000Z" }] }).join("\n"), /1 ended session is held for the route a\/b \(other\), the oldest since 2026-01-01; see desk_doctor/u)
 }))

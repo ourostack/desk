@@ -238,6 +238,19 @@ test("a worker an older Desk started claims nothing while a newer release is on 
   assert.equal((await runLoopWorker(env, { deskRoot: ctx.desk, pluginVersion: "3.2.401", impls: fakes([]) })).result, "completed")
 }))
 
+test("the newest release is looked up from HOME when no cache folder is set, and a missing folder means no newer release", () => scratch(async (ctx) => {
+  const env = { ...ctx.env, XDG_CACHE_HOME: "", HOME: ctx.base }
+  assert.equal((await runLoopWorker(env, { deskRoot: ctx.desk, pluginVersion: "1.0.0", impls: fakes([]) })).result, "completed", "no copies folder")
+  const copy = path.join(ctx.base, ".cache", "ouroboros-skills", "desk", "release-copies")
+  await fs.mkdir(copy, { recursive: true })
+  assert.equal((await runLoopWorker(env, { deskRoot: ctx.desk, pluginVersion: "1.0.0", impls: fakes([]) })).result, "completed", "an empty copies folder")
+  await fs.mkdir(path.join(copy, "2.0.0"))
+  await fs.writeFile(path.join(copy, "2.0.0", ".complete.json"), "{}")
+  assert.equal((await runLoopWorker(env, { deskRoot: ctx.desk, pluginVersion: "1.0.0", impls: fakes([]) })).result, "stale_release")
+  const bare = { ...ctx.env, XDG_CACHE_HOME: "", HOME: "" }
+  assert.ok(["completed", "stale_release"].includes((await runLoopWorker(bare, { deskRoot: ctx.desk, pluginVersion: "99999.0.0", impls: fakes([]) })).result))
+}))
+
 test("a lock whose process is gone, or that is older than the outer age, is taken over; the worker's own lock is released at the end", () => scratch(async (ctx) => {
   const root = await factoryStateRoot(ctx.env)
   const lockFile = path.join(root, "locks", "loop-worker.running")
