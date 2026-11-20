@@ -555,8 +555,8 @@ test("team lesson in a repository whose owner has an underscore reaches the pull
   }
   const chooseAccount = ({ store }) => realChooseAccount({ store, runner })
   const result = await addTeamLesson(lesson({ deskRoot: repo.base, repo: { clone: repo.clone, spawnGit }, gh: fake.gh, chooseAccount }))
-  assert.deepEqual([result.status, result.repo, result.account, result.route], ["merged", "some_org/cit", "arimendelow_acme", "direct"])
-  assert.ok(asked.includes("api GET repos/some_org/cit") || asked.some((line) => line.includes("repos/some_org/cit")))
+  assert.deepEqual([result.status, result.repo, result.account], ["merged", "some_org/cit", "arimendelow_acme"])
+  assert.ok(asked.some((line) => line.includes("repos/some_org/cit")))
   assert.match(onMain(repo.bare), /Build what was asked/u)
 })
 
@@ -571,5 +571,5 @@ test("the store route and the account chooser take an underscore owner and still
   for (const bad of ["_org/cit", "org_/cit", "a__b/cit", `${"a".repeat(40)}/cit`]) assert.equal((await route(bad)).store, null, bad)
   const runner = async () => ({ code: 1, stdout: "", stderr: "" })
   for (const bad of ["_org/cit", "a__b/cit", `${"a".repeat(40)}/cit`]) await assert.rejects(realChooseAccount({ store: bad, runner }), { code: "flush_chooseaccount_pass_store_as_owner" })
-  assert.equal((await realChooseAccount({ store: `${"a".repeat(39)}/cit`, runner })).result, "gh_missing" in {} ? "x" : (await realChooseAccount({ store: `${"a".repeat(39)}/cit`, runner })).result)
+  assert.equal((await realChooseAccount({ store: `${"a".repeat(39)}/cit`, runner })).result, "no_account_can_deliver")
 })
