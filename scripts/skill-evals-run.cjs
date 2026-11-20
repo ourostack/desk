@@ -6,6 +6,13 @@
 
 const { spawn, spawnSync } = require("node:child_process");
 const { copilotEnvironment } = require("./copilot-account.cjs");
+
+let accountEnvironment;
+// The account lookup spawns git and gh, so it runs once per process, not once per case.
+function copilotAccountEnvironment() {
+  accountEnvironment ??= copilotEnvironment(process.env, process.cwd());
+  return accountEnvironment;
+}
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
@@ -180,7 +187,7 @@ function subjectEnvironment(caseDirectory, desk, person, standIns) {
   fs.writeFileSync(path.join(config, "npmrc"), "");
   fs.writeFileSync(path.join(config, "gitconfig"), `[user]\n\tname = Skill eval\n\temail = skill-eval@example.invalid\n[commit]\n\tgpgsign = false\n[credential]\n\thelper =\n[url "file:///skill-eval-no-network/"]\n\tinsteadOf = https://\n\tinsteadOf = http://\n\tinsteadOf = ssh://\n\tinsteadOf = git@\n`);
   const env = {
-    ...copilotEnvironment(process.env, process.cwd()),
+    ...copilotAccountEnvironment(),
     DESK: desk,
     ...(person === null ? {} : { DESK_PERSON: person }),
     XDG_STATE_HOME: path.join(config, "state"),
@@ -510,7 +517,7 @@ async function runCaseIn(testCase, context, workspace) {
   const judgeArgs = ["-p", judgePrompt(testCase, subject, evidence), "-s", "--model", options.judgeModel, "--no-ask-user", "--no-auto-update", "--no-custom-instructions", "--deny-tool", "shell", "--deny-tool", "write", "--deny-tool", "read", "--deny-tool", "url"];
   let lastError;
   for (let attempt = 1; attempt <= 2; attempt += 1) {
-    const judgeRun = await runProcess(command, judgeArgs, { cwd: root, env: copilotEnvironment(process.env, process.cwd()), timeoutSeconds: budget(context, options.timeoutSeconds ?? judgeTimeoutSeconds) });
+    const judgeRun = await runProcess(command, judgeArgs, { cwd: root, env: copilotAccountEnvironment(), timeoutSeconds: budget(context, options.timeoutSeconds ?? judgeTimeoutSeconds) });
     if (judgeRun.timedOut || judgeRun.code !== 0) {
       lastError = new Error(`the judge process ${describeFailure(judgeRun)}`);
       continue;
