@@ -1,5 +1,13 @@
 # desk plugin — changelog
 
+## 3.2.370 — 2026-11-20
+
+### Relays spend less of a shared GitHub quota
+
+A relay can name a `readAccount`: it reads the repository with that account (for example `arimendelow` for a public ourostack repo) and uses `account` only for the write, so a Microsoft account is no longer billed for reading a personal repository. Every relay with nothing pending now backs off to at least two minutes, and goes back to its own interval as soon as a labelled pull request or a new run appears. `drains status` shows each relay's counted and free (304) calls for the last full hour.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.369 — 2026-11-20
 
 Desk's MCP server now vendors Ouro UI v1.3.388, moved by Ouro Current.
