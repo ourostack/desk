@@ -4,7 +4,7 @@
 
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { mkdtempSync, promises as fs, rmSync, utimesSync } from "node:fs"
+import { mkdtempSync, promises as fs, utimesSync } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 import { osEnv } from "../_os_env.js"
@@ -22,6 +22,7 @@ import {
 import { recordStep } from "../../../../../plugins/desk/mcp/src/factory/loop-status.js"
 import { MAX_HEADLESS_JOBS_PER_DAY } from "../../../../../plugins/desk/mcp/src/factory/headless.js"
 import { factoryStateRoot, requestEvaluation, updateStatus } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
+import { removeTree, removeTreeSync } from "../_remove_tree.js"
 
 const MINUTE = 60 * 1000
 const JOB = "ab".repeat(16)
@@ -34,7 +35,7 @@ async function scratch(run) {
   try {
     return await run(env, base)
   } finally {
-    rmSync(base, { recursive: true, force: true })
+    removeTreeSync(base)
   }
 }
 
@@ -128,7 +129,7 @@ test("anything that cannot be read starts nothing", () => scratch(async (env, ba
   await requestEvaluation(env, { job: JOB, deskRoot: path.join(base, "desk") })
   assert.deepEqual(await evaluationKickDue(env, { readStatusImpl: async () => { throw new Error("SENTINEL") } }), { due: false, reason: "unreadable" })
   const root = await factoryStateRoot(env)
-  await fs.rm(path.join(root, "locks"), { recursive: true, force: true })
+  await removeTree(path.join(root, "locks"))
   await fs.writeFile(path.join(root, "locks"), "not a folder")
   assert.deepEqual(await evaluationKickDue(env), { due: false, reason: "unreadable" })
   const spawn = fakeSpawn()
@@ -140,7 +141,7 @@ test("a missing lock directory or missing worker lock still permits a due kick",
   await requestEvaluation(env, { job: JOB, deskRoot: path.join(base, "desk") })
   const root = await factoryStateRoot(env)
   const locks = path.join(root, "locks")
-  await fs.rm(locks, { recursive: true, force: true })
+  await removeTree(locks)
   assert.deepEqual(await evaluationKickDue(env), { due: true, reason: "due" }, "a genuinely absent directory is not malformed")
   await fs.mkdir(locks)
   assert.deepEqual(await evaluationKickDue(env), { due: true, reason: "due" }, "a real directory without a worker lock permits the kick")

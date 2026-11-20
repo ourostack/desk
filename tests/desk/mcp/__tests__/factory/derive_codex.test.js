@@ -8,7 +8,7 @@
 import "../_isolated_env.mjs"
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
@@ -33,6 +33,7 @@ import {
   generate,
   rolloutRelPath,
 } from "./fixtures/codex/make.js"
+import { removeTreeSync } from "../_remove_tree.js"
 
 // A POSIX-looking path that Desk resolves with the host's own rules comes back as `D:\\w\\a.md` on Windows; this reads it back as `/w/a.md` so the fixtures can state paths one way. Off Windows it changes nothing.
 const posixSpelling = (value) => (process.platform === "win32" && typeof value === "string" ? value.replace(/^[A-Za-z]:/u, "").replaceAll("\\", "/") : value)
@@ -82,7 +83,7 @@ async function withHome(run) {
   try {
     return await run(home)
   } finally {
-    rmSync(home, { recursive: true, force: true })
+    removeTreeSync(home)
   }
 }
 

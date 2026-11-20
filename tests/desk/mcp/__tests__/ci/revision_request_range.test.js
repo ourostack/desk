@@ -1,11 +1,12 @@
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import { spawnSync } from "node:child_process"
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs"
 import { createRequire } from "node:module"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
+import { removeTreeSync } from "../_remove_tree.js"
 
 const repoRoot = path.resolve(fileURLToPath(new URL("../../../../..", import.meta.url)))
 const workflowPath = path.join(repoRoot, ".github", "workflows", "desk-mcp-tests.yml")
@@ -99,6 +100,6 @@ test("the published revision request covers the whole pushed range, including fi
       assert.equal(request.events.length, 1)
     }
   } finally {
-    rmSync(scratch, { recursive: true, force: true })
+    removeTreeSync(scratch)
   }
 })

@@ -1,7 +1,7 @@
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import { execFileSync, spawnSync } from "node:child_process"
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
@@ -18,6 +18,7 @@ import {
 } from "../../../../../plugins/desk/mcp/index.js"
 import { createRuntimeDiagnostic, createSetupDiagnostic } from "../../../../../plugins/desk/mcp/src/runtime/diagnostics.js"
 import { claudeBindingPath, resolveActivationConfigPath } from "../../../../../plugins/desk/mcp/src/util/paths.js"
+import { removeTreeSync } from "../_remove_tree.js"
 
 const mcpRoot = path.resolve(fileURLToPath(new URL("../../../../../plugins/desk/mcp", import.meta.url)))
 const hostEnvKeys = ["DESK", "DESK_ACTIVATION_CONFIG", "CLAUDE_PLUGIN_DATA", "CLAUDE_PROJECT_DIR"]
@@ -59,7 +60,7 @@ test("startup helpers default to the live process environment", () => {
       assert.equal(claudeBindingPath(), null)
     })
   } finally {
-    rmSync(desk, { recursive: true, force: true })
+    removeTreeSync(desk)
   }
 })
 
@@ -101,6 +102,6 @@ test("resolve-desk-root reports configuration errors and prints nothing for --ro
     assert.equal(wrong.status, 2)
     assert.match(wrong.stderr, /^resolve-desk-root: .*Fix: .*\n$/u)
   } finally {
-    rmSync(scratch, { recursive: true, force: true })
+    removeTreeSync(scratch)
   }
 })

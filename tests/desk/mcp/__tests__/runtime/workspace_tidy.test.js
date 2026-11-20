@@ -16,6 +16,7 @@ import { withWorkspaceClaim } from "../../../../../plugins/desk/mcp/src/runtime/
 import { acknowledgeRepair, readReport, reportPath, runBootChecks, runRepair } from "../../../../../plugins/desk/hooks/lib/boot-checks.cjs"
 import { different } from "../_file_identity.js"
 import { fixture, git, moduleUrl, readStartWithRetry, squashFixture, tidy, tidyInspectionGit, worktree } from "./_workspace_tidy_fixture.js"
+import { removeTree } from "../_remove_tree.js"
 
 test("workspace tidy exposes the deferred repair and bounded inventory", () => {
   assert.equal(typeof tidy.inspectWorkspace, "function")
@@ -248,7 +249,7 @@ test("one malformed, inaccessible or oversized card is skipped by name; every ot
     assert.deepEqual(result.cardRecords[sibling].repositories, [await fs.realpath(f.desk), await fs.realpath(f.repo)])
   }
   // A card whose repos Desk cannot read is one card's issue, never the whole desk's, and it authorizes nothing.
-  await fs.rm(path.dirname(sibling), { recursive: true })
+  await removeTree(path.dirname(sibling))
   for (const [body, reason] of [
     ['---\nstatus: processing\nrepos: [{mode: local}]\n---', "repos list not readable"],
     ['---\nstatus: processing\nrepos:\n  - local_path: "/x"\n---', "repos list not readable"],
@@ -356,7 +357,7 @@ test("skipped cards are listed three at a time, with credential-like segments re
   const { issues } = await tidy.inspectWorkspace({ deskRoot: f.desk, budgetMs: 5000 })
   assert.equal(issues.length, 1)
   assert.match(issues[0], /^5 task cards skipped: track\/alpha\/task\.md \(no readable status\), track\/bravo\/task\.md \(no readable status\), track\/charlie\/task\.md \(no readable status\), and 2 more$/)
-  for (const name of names.slice(1)) await fs.rm(path.join(f.desk, "track", name), { recursive: true })
+  for (const name of names.slice(1)) await removeTree(path.join(f.desk, "track", name))
   await fs.rename(path.join(f.desk, "track", "alpha"), path.join(f.desk, "track", "hi-set-pw-hunter2"))
   assert.deepEqual((await tidy.inspectWorkspace({ deskRoot: f.desk, budgetMs: 5000 })).issues, ["1 task card skipped: track/<redacted segment>/task.md (no readable status)"])
 })

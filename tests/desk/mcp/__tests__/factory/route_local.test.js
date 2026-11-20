@@ -5,7 +5,7 @@
 
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { mkdtempSync, promises as fs, rmSync } from "node:fs"
+import { mkdtempSync, promises as fs } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 import { osEnv } from "../_os_env.js"
@@ -15,6 +15,7 @@ import { factoryStateDir } from "../../../../../plugins/desk/mcp/src/factory/boo
 import { readStatus, updateStatus } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 import { FLUSH_CONFIRM_RUNS, MIN_RUN_GAP_HOURS, runRouteLocalStep } from "../../../../../plugins/desk/mcp/src/factory/route-local.js"
 import { reading } from "../../../../../plugins/desk/mcp/src/factory/improvement-verify.js"
+import { removeTreeSync } from "../_remove_tree.js"
 
 const T0 = new Date("2026-10-05T00:00:00Z")
 const at = (hours) => new Date(T0.getTime() + hours * 3600 * 1000)
@@ -28,7 +29,7 @@ async function scratch(run) {
   try {
     return await run({ env, deskRoot, personPrefix: "", base })
   } finally {
-    rmSync(base, { recursive: true, force: true })
+    removeTreeSync(base)
   }
 }
 

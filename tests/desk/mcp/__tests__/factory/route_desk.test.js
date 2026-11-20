@@ -1,10 +1,11 @@
 // Which desk receives this machine's findings: the person's own desk, never the desk a session happens to be opened in.
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 import { isOwnDesk, ownDesk } from "../../../../../plugins/desk/mcp/src/factory/route-desk.js"
+import { removeTreeSync } from "../_remove_tree.js"
 
 const desk = (folder) => {
   mkdirSync(path.join(folder, "_meta"), { recursive: true })
@@ -37,6 +38,6 @@ test("the own desk comes from the saved binding, $DESK or the home folder, never
     assert.equal(ownDesk(claude, at), null)
     assert.equal(isOwnDesk(claude, homeDesk, at), false)
   } finally {
-    rmSync(base, { recursive: true, force: true })
+    removeTreeSync(base)
   }
 })

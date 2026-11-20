@@ -35,6 +35,7 @@ import {
 } from "../../../../../plugins/desk/mcp/src/desk/improvement-cards.js"
 import { RECONCILE_REASONS as SOURCE_REASONS } from "../../../../../plugins/desk/mcp/src/factory/reconcile-reasons.js"
 import { MEASURE_IDS as SOURCE_MEASURES } from "../../../../../plugins/desk/mcp/src/factory/pipeline/rollups.js"
+import { removeTree } from "../_remove_tree.js"
 
 const JOB = "0123456789abcdef0123456789abcdef"
 const FP = "fedcba9876543210fedcba9876543210"
@@ -751,7 +752,7 @@ test("a stale lock older than two minutes is taken over, a fresh one makes the c
   assert.equal((await open(where, { key: "andon:ourostack/factory#9", lockWaitMs: 30 })).result, "lock_busy")
   assert.deepEqual(await fs.readdir(lock), ["fresh-token"])
   // an empty lock directory older than two minutes (its creator died between the two steps) is stale too, a fresh empty one is not
-  await fs.rm(lock, { recursive: true })
+  await removeTree(lock)
   await fs.mkdir(lock)
   assert.deepEqual(await claim(where, { lockWaitMs: 30 }), { result: "lock_busy" })
   await fs.utimes(lock, OLD, OLD)
@@ -770,19 +771,19 @@ test("the takeover interleaving cannot remove a lock that replaced the stale one
   await makeLock(lock, "old-token", true)
   const replaced = await claim(where, {
     lockWaitMs: 60,
-    lockHooks: { afterStale: async () => { await fs.rm(lock, { recursive: true }); await makeLock(lock, "live-token", false) } },
+    lockHooks: { afterStale: async () => { await removeTree(lock); await makeLock(lock, "live-token", false) } },
   })
   assert.deepEqual(replaced, { result: "lock_busy" })
   assert.deepEqual(await fs.readdir(lock), ["live-token"])
   // the stale lock vanished on its own while the waiter looked: the waiter just takes the free lock
-  await fs.rm(lock, { recursive: true })
+  await removeTree(lock)
   await makeLock(lock, "old-token", true)
-  const vanished = await claim(where, { lockHooks: { afterStale: async () => { await fs.rm(lock, { recursive: true }) } } })
+  const vanished = await claim(where, { lockHooks: { afterStale: async () => { await removeTree(lock) } } })
   assert.equal(vanished.result, "claimed")
   // the holder released between the waiter's listing and its look at the holder's token: the waiter reads no age and tries again
   await makeLock(lock, "old-token", true)
   let listed = 0
-  const released = await claim(where, { lockHooks: { afterList: async () => { listed += 1; await fs.rm(lock, { recursive: true }) } } })
+  const released = await claim(where, { lockHooks: { afterList: async () => { listed += 1; await removeTree(lock) } } })
   assert.equal(listed, 1)
   assert.equal(released.result, "claim_held", "the lock was taken; the earlier claim is still live")
   // a creator whose lock directory is removed before it can make its token directory starts again
@@ -799,10 +800,10 @@ test("a holder whose lock was taken over does not remove the new holder's lock",
   const where = await desk()
   await open(where)
   const lock = lockOf(where)
-  const result = await claim(where, { lockHooks: { beforeRelease: async () => { await fs.rm(lock, { recursive: true }); await makeLock(lock, "someone-else", false) } } })
+  const result = await claim(where, { lockHooks: { beforeRelease: async () => { await removeTree(lock); await makeLock(lock, "someone-else", false) } } })
   assert.equal(result.result, "claimed")
   assert.deepEqual(await fs.readdir(lock), ["someone-else"])
-  await fs.rm(lock, { recursive: true })
+  await removeTree(lock)
   assert.equal((await claim(where, { now: at(2, 13) })).result, "claim_held")
   await assert.rejects(() => fs.stat(lock))
 })

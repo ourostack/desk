@@ -5,7 +5,7 @@
 import { test, mock } from "node:test"
 import assert from "node:assert/strict"
 import { EventEmitter } from "node:events"
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
@@ -25,6 +25,7 @@ import {
   resolveLaunch,
   runHeadless,
 } from "../../../../../plugins/desk/mcp/src/factory/headless.js"
+import { removeTreeSync } from "../_remove_tree.js"
 
 test("the shared triage child environment strips credentials without changing evaluator argv", () => {
   const before = HEADLESS_ARGV({ briefPaths: ["/brief"], evaluationDir: "/evaluation", logDirs: [] })
@@ -810,7 +811,7 @@ test("findAgentCli's default check accepts an executable file and refuses a fold
     assert.equal(findAgentCli({ env: env(["dir", "plain"]) }), null)
     assert.equal(findAgentCli({ env: env(["dir", "plain", "exe"]) }), path.join(root, "exe", "claude"))
   } finally {
-    rmSync(root, { recursive: true, force: true })
+    removeTreeSync(root)
   }
 })
 
@@ -823,7 +824,7 @@ test("the default working-folder check accepts a folder and refuses a missing pa
       assert.equal(out.state, expected)
     }
   } finally {
-    rmSync(root, { recursive: true, force: true })
+    removeTreeSync(root)
   }
 })
 
@@ -921,7 +922,7 @@ test("resolveLaunch's default readers use the real file system and this process'
     assert.equal(out.cmd, process.execPath)
     assert.deepEqual(out.prefix, [path.join(root, "node_modules", "@anthropic-ai", "claude-code", "cli.js")])
   } finally {
-    rmSync(root, { recursive: true, force: true })
+    removeTreeSync(root)
   }
 })
 

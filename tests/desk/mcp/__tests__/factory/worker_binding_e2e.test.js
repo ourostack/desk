@@ -6,9 +6,10 @@
 
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
+import { removeTreeSync } from "../_remove_tree.js"
 
 const FACTORY = "../../../../../plugins/desk/mcp/src/factory/"
 const { deriveClaudeSession } = await import("../../../../../plugins/desk/mcp/src/factory/derive-claude.js")
@@ -152,8 +153,8 @@ test("a multi-worker Claude session goes from transcript to built store with eve
     for (const job of [A, B, C]) assert.equal(Object.hasOwn(built(job).active_time_ms, "partial"), false, job)
     assert.ok(built(C).active_time_ms.value < built(B).active_time_ms.value)
   } finally {
-    rmSync(dir, { recursive: true, force: true })
-    rmSync(store, { recursive: true, force: true })
-    rmSync(path.dirname(out), { recursive: true, force: true })
+    removeTreeSync(dir)
+    removeTreeSync(store)
+    removeTreeSync(path.dirname(out))
   }
 })

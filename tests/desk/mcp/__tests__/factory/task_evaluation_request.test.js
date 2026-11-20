@@ -15,6 +15,7 @@ import { task_archive, task_create, task_update } from "../../../../../plugins/d
 import { factoryStateRoot, listEvaluationRequests, listFinalizeRequests } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 import { jobId } from "../../../../../plugins/desk/mcp/src/factory/binding.js"
 import { scratch } from "./_session_helpers.js"
+import { removeTree } from "../_remove_tree.js"
 
 // task_update's evidence gate (the invented-completion finding) only fires on the
 // transition into `done`; fixture calls that move a task to `done` carry
@@ -80,7 +81,7 @@ test("re-archiving with the archived task.md gone requests no evaluation and doe
   await task_create({ deskRoot: desk, input: { track: "track", slug: "finished-work", title: "fixture" } })
   assert.equal((await task_archive({ deskRoot: desk, env, input: { track: "track", slug: "finished-work", evidence: DONE_EVIDENCE } })).status, "archived")
   await fs.rm(path.join(desk, "track", "_archive", "finished-work", "task.md"))
-  await fs.rm(path.join(env.XDG_STATE_HOME, "ouroboros-skills", "desk", "factory", "evaluate-requests"), { recursive: true, force: true })
+  await removeTree(path.join(env.XDG_STATE_HOME, "ouroboros-skills", "desk", "factory", "evaluate-requests"))
   const result = await task_archive({ deskRoot: desk, env, input: { track: "track", slug: "finished-work" } })
   assert.equal(result.status, "already_archived")
   assert.equal((await listEvaluationRequests(env)).length, 0, "an unreadable archived status must not be treated as done")
@@ -93,8 +94,8 @@ test("re-archiving over a corrupted archived task.md requests no evaluation, sti
   const archivedFile = path.join(desk, "track", "_archive", "finished-work", "task.md")
   await fs.writeFile(archivedFile, "---\nstatus: [done\nupdated: 2026-01-01\n---\nbody\n")
   const factoryRoot = path.join(env.XDG_STATE_HOME, "ouroboros-skills", "desk", "factory")
-  await fs.rm(path.join(factoryRoot, "evaluate-requests"), { recursive: true, force: true })
-  await fs.rm(path.join(factoryRoot, "finalize"), { recursive: true, force: true })
+  await removeTree(path.join(factoryRoot, "evaluate-requests"))
+  await removeTree(path.join(factoryRoot, "finalize"))
   const result = await task_archive({ deskRoot: desk, env, input: { track: "track", slug: "finished-work" } })
   assert.equal(result.status, "already_archived", "corrupted archived frontmatter must not break already_archived idempotency")
   assert.equal((await listEvaluationRequests(env)).length, 0, "corrupted archived frontmatter must not be treated as a terminal status")

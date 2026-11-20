@@ -1,11 +1,12 @@
 // desk_save is Desk's commit path, so the desk's pre-commit hook trusts it; it must therefore never commit a task card (round 12).
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 
 import { desk_save } from "../../../../../plugins/desk/mcp/src/tools/desk-save.js"
+import { removeTreeSync } from "../_remove_tree.js"
 
 test("desk_save refuses a live task card path, and still takes a card's other files", async () => {
   const root = realpathSync(mkdtempSync(path.join(tmpdir(), "desk-save-card-")))
@@ -19,6 +20,6 @@ test("desk_save refuses a live task card path, and still takes a card's other fi
     assert.equal(result.status, "nothing_to_commit")
     assert.ok(calls.length > 0, "a non-card path goes on to git")
   } finally {
-    rmSync(root, { recursive: true, force: true })
+    removeTreeSync(root)
   }
 })

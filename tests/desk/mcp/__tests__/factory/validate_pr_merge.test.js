@@ -10,12 +10,13 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { execFileSync } from "node:child_process"
-import { mkdtempSync, readFileSync, rmSync } from "node:fs"
+import { mkdtempSync, readFileSync } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 
 import { validatePrCommand as runValidatePrCommand } from "./_validate_pr_command.js"
+import { removeTreeSync } from "../_remove_tree.js"
 
 const FACTS = fileURLToPath(new URL("fixtures/store/facts", import.meta.url))
 const VICTIM = "claude-code-11111111-1111-4111-8111-111111111111.json"
@@ -45,7 +46,7 @@ async function repository(run) {
   try {
     return await run({ root, git, blob, tree, commit })
   } finally {
-    rmSync(root, { recursive: true, force: true })
+    removeTreeSync(root)
   }
 }
 

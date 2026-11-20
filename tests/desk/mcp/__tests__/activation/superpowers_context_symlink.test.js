@@ -6,12 +6,13 @@ import { tmpdir } from "node:os"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
 import { isEntrypoint } from "../../../../../plugins/desk/mcp/src/activation/superpowers-context.js"
+import { removeTree } from "../_remove_tree.js"
 
 const real = fileURLToPath(new URL("../../../../../plugins/desk/mcp/src/activation/superpowers-context.js", import.meta.url))
 
 async function linked(t) {
   const dir = await fs.mkdtemp(path.join(tmpdir(), "context-link-"))
-  t.after(() => fs.rm(dir, { recursive: true, force: true }))
+  t.after(() => removeTree(dir))
   const link = path.join(dir, "context-link.js")
   await fs.symlink(real, link)
   return link

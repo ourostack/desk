@@ -13,6 +13,7 @@ import * as path from "node:path"
 
 import { listMarkers, readMachineSecret, setConsent, writeMarker } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 import { nativeProbe } from "./_private_state_helpers.js"
+import { removeTree } from "../_remove_tree.js"
 
 const isWindows = process.platform === "win32"
 
@@ -93,6 +94,6 @@ test("native: the factory state root, the machine secret and an outbox file each
     if (error.details) t.diagnostic(JSON.stringify(error.details))
     throw error
   } finally {
-    await fs.rm(base, { recursive: true, force: true })
+    await removeTree(base)
   }
 })

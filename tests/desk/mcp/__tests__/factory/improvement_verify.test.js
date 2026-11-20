@@ -4,7 +4,7 @@
 
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { mkdirSync, mkdtempSync, promises as fs, rmSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, promises as fs, writeFileSync } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 import { osEnv } from "../_os_env.js"
@@ -15,6 +15,7 @@ import {
   CHECK_GAP_HOURS, CONFIRMED_COMMENT, DESK_PROBLEM_QUIET_DAYS, MAX_CHECKS_PER_RUN, MAX_READING_AGE_HOURS, RECURRING_VERIFYING_CHECKS, THIN_CHECKS_BEFORE_ESCALATION, UNVERIFIED_COMMENT,
   githubAccess, reading, runVerifyStep, withFields,
 } from "../../../../../plugins/desk/mcp/src/factory/improvement-verify.js"
+import { removeTreeSync } from "../_remove_tree.js"
 
 const NOW = new Date("2026-10-05T12:00:00.000Z")
 const DAY = 24 * 3600 * 1000
@@ -36,7 +37,7 @@ async function scratch(run) {
   try {
     return await run({ env, deskRoot, personPrefix: "", base })
   } finally {
-    rmSync(base, { recursive: true, force: true })
+    removeTreeSync(base)
   }
 }
 

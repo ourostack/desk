@@ -9,6 +9,7 @@ import { COVERAGE_FAILED, coverageNow, placesFor, recordCoverage } from "../../.
 import { BINDING_RULES_VERSION, BINDING_VERSION, sweep } from "../../../../../plugins/desk/mcp/src/factory/derive-run.js"
 import { factoryStateRoot, readStatus, setConsent, writeMarker, writeStatus } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 import { ID, SENTINEL, STORE, json, recent, scratch, session } from "./_session_helpers.js"
+import { removeTree, removeTreeSync } from "../_remove_tree.js"
 
 const ids = Array.from({ length: 40 }, (_, index) => `${String(index).padStart(8, "0")}-8a1d-4c2e-9f3a-1b2c3d4e5f60`)
 const options = { bindingVersion: BINDING_VERSION }
@@ -100,7 +101,7 @@ test("a coverage failure is recorded as a fixed code and the sweep still derives
   const before = (await statusOf(ctx)).coverage
   // A file where the quarantine folders belong: listing them fails, and the previous coverage stays.
   const quarantine = path.join(await factoryStateRoot(ctx.env), "quarantine")
-  await rm(quarantine, { recursive: true, force: true })
+  await removeTree(quarantine)
   await writeFile(quarantine, "not a folder")
   const copilot = await session(ctx, "copilot-cli")
   await writeMarker(ctx.env, { ...copilot, end_reason: "complete", ended_at: recent(-3600000), updated_at: recent(-3600000) })
@@ -123,7 +124,7 @@ test("each stage of a failed pass has its own fixed code and no message", () => 
   assert.deepEqual(await coverageNow(ctx.env, { ...options, now: throwing }), { ok: false, code: "count_failed" })
   assert.deepEqual(await coverageNow(ctx.env, { ...options, markers: 5 }), { ok: false, code: "classify_failed" })
   await writeFile(await statusFile(ctx), "{}").catch(() => {})
-  await rm(path.join(await factoryStateRoot(ctx.env), "outbox"), { recursive: true, force: true })
+  await removeTree(path.join(await factoryStateRoot(ctx.env), "outbox"))
   await writeFile(path.join(await factoryStateRoot(ctx.env), "outbox"), "x")
   assert.deepEqual(await coverageNow(ctx.env, options), { ok: false, code: "state_unreadable" })
 }))
@@ -142,7 +143,7 @@ test("a status file that cannot be written reports failed and the sweep goes on"
     return Date.now()
   }
   assert.equal(await recordCoverage(ctx.env, { ...options, markers: [], now }), "failed")
-  rmSync(file, { recursive: true })
+  removeTreeSync(file)
 }))
 
 test("coverage never contains a path, a session id or SENTINEL outside by_owner store names", () => scratch(async (ctx) => {
@@ -177,8 +178,8 @@ test("a host folder that disappears between sweeps becomes absent, not zero", ()
   await put(path.join(ctx.env.COPILOT_HOME, "session-state", ids[1], "events.jsonl"))
   await sweep(ctx.env, { quietMs: 0 })
   assert.equal((await statusOf(ctx)).coverage.hosts["claude-code"].on_disk, 1)
-  await rm(path.join(ctx.base, ".claude"), { recursive: true })
-  await rm(ctx.env.COPILOT_HOME, { recursive: true })
+  await removeTree(path.join(ctx.base, ".claude"))
+  await removeTree(ctx.env.COPILOT_HOME)
   await sweep(ctx.env, { quietMs: 0 })
   const { hosts } = (await statusOf(ctx)).coverage
   assert.deepEqual(hosts["claude-code"], { state: "absent", unverified: true })
@@ -367,7 +368,7 @@ test("a marker whose route is unknown is held and never owned by the default sto
   const broken = await desk(ctx, "broken", "invalid")
   const routing = { source: "default", store: STORE, warnings: [] }
   await mark(ctx, gone, ids[0], { routing })
-  await rm(gone, { recursive: true })
+  await removeTree(gone)
   await writeStatus(ctx.env, { derivations: { [`claude-code-${ids[0]}.json`]: { desk_root: broken, binding_version: BINDING_VERSION } } })
   await put(claudeFile(ctx, folderOf(gone), ids[0]))
   const claude = (await coverageNow(ctx.env, options)).coverage.hosts["claude-code"]
@@ -379,7 +380,7 @@ test("a marker with a derived route and no desk folder left is held, not owned b
   await setConsent(ctx.env, { store: STORE, contribute: true })
   const gone = await desk(ctx, "gone", null)
   await mark(ctx, gone, ids[0])
-  await rm(gone, { recursive: true })
+  await removeTree(gone)
   await put(claudeFile(ctx, folderOf(gone), ids[0]))
   const claude = (await coverageNow(ctx.env, options)).coverage.hosts["claude-code"]
   assert.deepEqual([claude.held, claude.pending], [1, 0])

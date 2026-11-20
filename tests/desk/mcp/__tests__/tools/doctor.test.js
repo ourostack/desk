@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
-import { mkdtempSync, readFileSync, rmSync, mkdirSync, utimesSync, writeFileSync } from "node:fs"
+import { mkdtempSync, readFileSync, mkdirSync, utimesSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 import matter from "gray-matter"
@@ -8,6 +8,7 @@ import matter from "gray-matter"
 import { callTool, TOOL_IMPLS } from "../../../../../plugins/desk/mcp/src/server.js"
 import { TOOL_DESCRIPTIONS, TOOL_NAMES } from "../../../../../plugins/desk/mcp/src/tool-names.js"
 import { doctorRuntime, organizationSection, ORGANIZATION_CODES } from "../../../../../plugins/desk/mcp/src/tools/doctor.js"
+import { removeTreeSync } from "../_remove_tree.js"
 const deskPluginVersion = JSON.parse(readFileSync(new URL("../../../../../plugins/desk/plugin.json", import.meta.url), "utf8")).version
 
 function makeRoot() {
@@ -90,7 +91,7 @@ test("healthy desk_doctor uses the same dependency-free diagnostic vocabulary", 
 
     assert.deepEqual(body.remediation, [])
   } finally {
-    rmSync(root, { recursive: true, force: true })
+    removeTreeSync(root)
   }
 })
 
@@ -150,7 +151,7 @@ test("preview doctor emits only a versioned local snapshot without workspace or 
     assert.equal(body.node_abi, process.versions.modules)
     assert.doesNotMatch(JSON.stringify(body), /private|desk-doctor-/u)
   } finally {
-    rmSync(root, { recursive: true, force: true })
+    removeTreeSync(root)
   }
 })
 
@@ -202,7 +203,7 @@ test("desk_doctor reports organization findings for the caller's own desk", asyn
     assert.ok(body.summary.includes(`inbox (handle ${catchAll.handle}) — `), "the doctor text shows the handle a rename needs")
     assert.equal(body.organization.find((f) => f.code === "track_missing_scope").handle, undefined)
   } finally {
-    rmSync(root, { recursive: true, force: true })
+    removeTreeSync(root)
   }
 })
 
@@ -214,7 +215,7 @@ test("desk_doctor's organization section reports clean when there is nothing to 
     assert.match(body.summary, /Organization/u)
     assert.match(body.summary, /clean/u)
   } finally {
-    rmSync(root, { recursive: true, force: true })
+    removeTreeSync(root)
   }
 })
 
@@ -266,7 +267,7 @@ test("desk_doctor scopes organization findings to the caller's own crew subtree"
       assert.doesNotMatch(JSON.stringify(aged), /alice/u)
       t.diagnostic(`calendar=${calendar}: healthy=${body.organization.length}, stale=${aged.organization.length}, peer absent`)
     } finally {
-      rmSync(root, { recursive: true, force: true })
+      removeTreeSync(root)
     }
   }
 })
@@ -282,7 +283,7 @@ test("desk_doctor's organization section truncates a code past the first five pa
     assert.match(body.summary, /loose_file: 6/u)
     assert.match(body.summary, /\.\.\. and 1 more/u)
   } finally {
-    rmSync(root, { recursive: true, force: true })
+    removeTreeSync(root)
   }
 })
 
@@ -299,7 +300,7 @@ test("desk_doctor reports a stale quarantine entry instead of failing on it", as
     assert.deepEqual(body.organization.map((f) => f.code), ["stale_quarantine"])
     assert.match(body.summary, /^ {2}stale_quarantine: 1\n {4}_cache\/stray-2026-07-01 — stale quarantine: review and delete$/mu)
   } finally {
-    rmSync(root, { recursive: true, force: true })
+    removeTreeSync(root)
   }
 })
 
@@ -338,13 +339,13 @@ test("preview desk_doctor never runs organization checks or leaks workspace data
     assert.equal(body.organization, undefined)
     assert.doesNotMatch(JSON.stringify(body), /inbox/u)
   } finally {
-    rmSync(root, { recursive: true, force: true })
+    removeTreeSync(root)
   }
 })
 
 test("doctor with reindex re-reads the desk into the session's search engine", async (t) => {
   const root = makeRoot()
-  t.after(() => rmSync(root, { recursive: true, force: true }))
+  t.after(() => removeTreeSync(root))
   assert.equal((await doctorRuntime({ deskRoot: root, input: { reindex: true } })).code, "search_starting")
 
   const { createSearchEngine } = await import("../../../../../plugins/desk/mcp/src/search/engine.js")

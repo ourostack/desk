@@ -4,7 +4,7 @@
 
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { mkdtempSync, promises as fs, rmSync } from "node:fs"
+import { mkdtempSync, promises as fs } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 import { osEnv } from "../_os_env.js"
@@ -18,6 +18,7 @@ import {
   AGE_ALARM_DAYS, STALE_AFTER_HOURS, STUCK_ALARM_DAYS, BLOCKING_STATES, HEADLESS_STATES,
   STORE_SIDE_REASONS, LABEL_LAG_ALARM_MINUTES, assembleLoop, buildLoopHealth, count, loopAlarms, runMeasureStep, unreadAlarms,
 } from "../../../../../plugins/desk/mcp/src/factory/loop-health.js"
+import { removeTreeSync } from "../_remove_tree.js"
 
 const DAY = 24 * 3600 * 1000
 const NOW = new Date("2026-10-05T12:00:00.000Z")
@@ -36,7 +37,7 @@ async function scratch(run, { version = "3.2.0-alpha.9" } = {}) {
   try {
     return await run({ env, deskRoot, personPrefix: "", base, pluginRoot })
   } finally {
-    rmSync(base, { recursive: true, force: true })
+    removeTreeSync(base)
   }
 }
 

@@ -223,6 +223,7 @@ test("no desk_commit when the commit failed, git cannot name HEAD, or the desk i
 
 import { ensureStateIgnored } from "../../../../../plugins/desk/mcp/src/util/state-ignore.js"
 import { openDb } from "../../../../../plugins/desk/mcp/src/db/init.js"
+import { removeTree } from "../_remove_tree.js"
 
 const gitIn = (root, ...args) => spawnSync("git", ["-C", root, ...args], { encoding: "utf8" })
 async function gitRoot() {
@@ -259,7 +260,7 @@ test("ensureStateIgnored keeps an existing exclude file's lines, with or without
   assert.equal(ensureStateIgnored(root), true)
   assert.equal(await fs.readFile(exclude, "utf8"), "*.tmp\n.state/\n")
   const bare = await gitRoot()
-  await fs.rm(path.join(bare, ".git", "info"), { recursive: true, force: true })
+  await removeTree(path.join(bare, ".git", "info"))
   assert.equal(ensureStateIgnored(bare), true)
   assert.equal(await fs.readFile(path.join(bare, ".git", "info", "exclude"), "utf8"), ".state/\n")
 })

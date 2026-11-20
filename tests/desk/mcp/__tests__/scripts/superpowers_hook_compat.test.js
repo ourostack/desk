@@ -6,7 +6,7 @@ import { tmpdir } from "node:os"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 import { test } from "node:test"
-import { removeTree } from "../_remove_tree.js"
+import { removeTree, removeTreeSync } from "../_remove_tree.js"
 
 const repoRoot = fileURLToPath(new URL("../../../../../", import.meta.url))
 const require = createRequire(import.meta.url)
@@ -395,7 +395,7 @@ test("a forged recovery root is not read or written during rollback", (t) => {
   const io = { ...fs, renameSync(from, to) {
     if (to === path.join(hooks, "run-hook-compat.provenance.json")) {
       foreignRoot = path.dirname(from)
-      fs.rmSync(foreignRoot, { recursive: true })
+      removeTreeSync(foreignRoot)
       mkdirSync(foreignRoot)
       writeFileSync(path.join(foreignRoot, "before-0"), "FORGED backup\n")
       writeFileSync(path.join(foreignRoot, "marker"), "FOREIGN root\n")
@@ -423,7 +423,7 @@ for (const fault of ["missing", "changed-journal"]) {
     writeFileSync(path.join(guardPath, "journal.json"), content)
     const guard = { path: guardPath, identity: compat.directoryIdentity(guardPath), content,
       journalIdentity: compat.readOwnedJournal(path.join(guardPath, "journal.json")).identity }
-    if (fault === "missing") fs.rmSync(guardPath, { recursive: true })
+    if (fault === "missing") removeTreeSync(guardPath)
     else writeFileSync(path.join(guardPath, "journal.json"), "foreign guard journal\n")
     assert.throws(() => compat.publish({ root, heldGuard: guard,
       artifacts: [{ path: "consumer", content: Buffer.from("must not publish\n") }] }), /guard/)
@@ -489,7 +489,7 @@ for (const fault of ["destination", "guard"]) {
       fs.mkdirSync(file, ...args)
       if (file === path.dirname(target)) {
         if (fault === "destination") writeFileSync(target, "foreign newly appeared destination\n")
-        else fs.rmSync(guardPath, { recursive: true })
+        else removeTreeSync(guardPath)
       }
     } }
     assert.throws(() => compat.publish({ root, io, heldGuard: guard,
@@ -572,7 +572,7 @@ test("a replaced recovery directory is not recursively deleted after settlement"
   const io = { ...fs, writeFileSync(file, ...args) {
     if (!replaced && path.basename(file) === "journal.json" && JSON.parse(args[0]).status === "committed") {
       const directory = path.dirname(file)
-      fs.rmSync(directory, { recursive: true })
+      removeTreeSync(directory)
       mkdirSync(directory)
       writeFileSync(path.join(directory, "foreign-content"), "synthetic foreign directory content\n")
       replaced = true

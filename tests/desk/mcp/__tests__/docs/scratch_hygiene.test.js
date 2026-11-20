@@ -9,11 +9,12 @@
 
 import { strict as assert } from "node:assert"
 import { spawnSync } from "node:child_process"
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { test } from "node:test"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
+import { removeTreeSync } from "../_remove_tree.js"
 
 const repoRoot = path.resolve(fileURLToPath(new URL("../../../../..", import.meta.url)))
 const bootstrapSkillPath = path.join(repoRoot, "plugins", "desk", "skills", "first-run-bootstrap", "SKILL.md")
@@ -94,6 +95,6 @@ test("the widened .gitignore template ignores scratch files at the desk root and
       "a real per-repo-iteration screenshot deep in a task folder must not be ignored",
     )
   } finally {
-    rmSync(root, { recursive: true, force: true })
+    removeTreeSync(root)
   }
 })

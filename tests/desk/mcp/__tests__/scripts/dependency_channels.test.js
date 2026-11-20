@@ -2,10 +2,11 @@ import { strict as assert } from "node:assert"
 import { test } from "node:test"
 import { execFileSync } from "node:child_process"
 import { createRequire } from "node:module"
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
+import { removeTreeSync } from "../_remove_tree.js"
 
 const repoRoot = path.resolve(fileURLToPath(new URL("../../../../..", import.meta.url)))
 const require = createRequire(import.meta.url)
@@ -24,7 +25,7 @@ function withPlugins(manifests, fn) {
     writeFileSync(path.join(root, "plugins", "README.md"), "not a plugin directory\n")
     return fn(root)
   } finally {
-    rmSync(root, { recursive: true, force: true })
+    removeTreeSync(root)
   }
 }
 

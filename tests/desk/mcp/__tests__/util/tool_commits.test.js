@@ -6,6 +6,7 @@ import * as path from "node:path"
 import { spawnSync } from "node:child_process"
 import { readToolCommits, recordToolCommit } from "../../../../../plugins/desk/mcp/src/util/tool-commits.js"
 import { lastStartRootKey, resolveDeskStateDir } from "../../../../../plugins/desk/mcp/src/runtime/last-start.js"
+import { removeTree } from "../_remove_tree.js"
 
 const git = (root, args) => {
   const result = spawnSync("git", ["-C", root, ...args], { encoding: "utf8", windowsHide: true })
@@ -15,7 +16,7 @@ const git = (root, args) => {
 
 async function fixture(t) {
   const base = await fs.mkdtemp(path.join(os.tmpdir(), "desk-tool-commits-"))
-  t.after(() => fs.rm(base, { recursive: true, force: true }))
+  t.after(() => removeTree(base))
   const root = path.join(base, "desk")
   mkdirSync(root)
   git(root, ["init", "-q", "-b", "main"])

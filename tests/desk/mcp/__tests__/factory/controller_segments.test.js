@@ -8,10 +8,11 @@
 
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
+import { removeTreeSync } from "../_remove_tree.js"
 
 const FACTORY = "../../../../../plugins/desk/mcp/src/factory/"
 const { bindSession, jobId } = await import("../../../../../plugins/desk/mcp/src/factory/binding.js")
@@ -592,8 +593,8 @@ test("a Claude controller working three jobs: derive, bind, publish and build sp
     // Each PR is in exactly one job: the controller's by time, the child's by its worker.
     assert.deepEqual([A, B, C].map((hex) => built(hex).references.value.public_pull_requests.map((pr) => pr.number)), [[20], [22], [21]])
   } finally {
-    rmSync(dir, { recursive: true, force: true })
-    rmSync(store, { recursive: true, force: true })
-    rmSync(path.dirname(out), { recursive: true, force: true })
+    removeTreeSync(dir)
+    removeTreeSync(store)
+    removeTreeSync(path.dirname(out))
   }
 })

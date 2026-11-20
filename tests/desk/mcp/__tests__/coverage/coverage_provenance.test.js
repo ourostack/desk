@@ -10,6 +10,7 @@ import TestExclude from "test-exclude"
 import { DETECT_CHILD_SOURCE } from "../../../../../tools/desk-build/coverage/detect-child.js"
 import { parseMigration, pendingMigrations } from "../../../../../plugins/desk/mcp/src/runtime/pending-migrations.js"
 import { runCoverageCommand } from "../../../../../tools/desk-build/coverage/runner.js"
+import { removeTreeSync } from "../_remove_tree.js"
 
 const mcpRoot = fileURLToPath(new URL("../../../../../plugins/desk/mcp/", import.meta.url))
 const sourceFile = "plugins/desk/mcp/src/covered.js"
@@ -31,7 +32,7 @@ function metrics(statements = 100) {
 
 function runFixture(t, summary, options = {}) {
   const root = mkdtempSync(path.join(tmpdir(), "desk-coverage-provenance-"))
-  t.after(() => rmSync(root, { recursive: true, force: true }))
+  t.after(() => removeTreeSync(root))
   const repoRoot = path.join(root, "repo")
   const reportDirectory = path.join(root, "report")
   const write = (relative, body) => {
@@ -87,7 +88,7 @@ function runFixture(t, summary, options = {}) {
       removeDir: directory => {
         const report = path.join(directory, "coverage-summary.json")
         if (existsSync(report)) reportBytes = readFileSync(report, "utf8")
-        rmSync(directory, { recursive: true, force: true })
+        removeTreeSync(directory)
       },
       readText: file => readFileSync(file, "utf8"),
       writeText: (file, text) => {
@@ -201,7 +202,7 @@ test("the registration skips only a migration Detect child, and registers the ma
   const { args } = run.invocation
   const registrationUrl = args[args.indexOf("--import") + 1]
   const dir = mkdtempSync(path.join(tmpdir(), "desk-coverage-registration-"))
-  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  t.after(() => removeTreeSync(dir))
   const marker = path.join(dir, "registered")
   const fakeLoader = path.join(dir, "loader.mjs")
   const script = path.join(dir, "script.mjs")
@@ -228,7 +229,7 @@ test("the gate hands its test process no DESK_PLUGIN_ROOT, so only the migration
 test("the offline registration helper leaves a migration Detect child uninstrumented and registers every other process", t => {
   const helper = pathToFileURL(path.join(mcpRoot, "../../../evals/offline/__tests__/helpers/register-coverage.mjs")).href
   const dir = mkdtempSync(path.join(tmpdir(), "desk-offline-registration-"))
-  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  t.after(() => removeTreeSync(dir))
   const detect = spawnSync(process.execPath, ["--input-type=module", "-e", "import(process.argv[1]).then(() => console.log(process.env.NODE_OPTIONS ?? \"\"))", helper, "--detect"], {
     env: { PATH: process.env.PATH, OFFLINE_COVERAGE_PACKAGE_ROOT: mcpRoot, DESK_PLUGIN_ROOT: dir }, encoding: "utf8",
   })
@@ -244,7 +245,7 @@ test("the offline registration helper leaves a migration Detect child uninstrume
 // The test above sees only the NODE_OPTIONS re-add. This one watches the two `register` calls, with fake loaders in a copy of the helper's folder layout, so dropping the guard from either call fails here.
 test("the offline registration helper registers neither hook for a migration Detect child, and both for every other process", t => {
   const dir = mkdtempSync(path.join(tmpdir(), "desk-offline-register-guard-"))
-  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  t.after(() => removeTreeSync(dir))
   const marker = path.join(dir, "registered.txt")
   const put = (relative, body) => {
     const file = path.join(dir, relative)
@@ -291,7 +292,7 @@ test("every migration Detect block that runs node passes --detect under $DESK_PL
   }
   assert.ok(nodeDetects >= 1, "the tidy Detect block is present")
   const root = mkdtempSync(path.join(tmpdir(), "desk-detect-driver-"))
-  t.after(() => rmSync(root, { recursive: true, force: true }))
+  t.after(() => removeTreeSync(root))
   mkdirSync(path.join(root, "migrations"))
   const seen = path.join(root, "seen")
   writeFileSync(path.join(root, "migrations", "01-probe.md"), [

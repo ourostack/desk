@@ -4,7 +4,7 @@
 
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { mkdtempSync, promises as fs, rmSync } from "node:fs"
+import { mkdtempSync, promises as fs } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 import { osEnv } from "../_os_env.js"
@@ -14,6 +14,7 @@ import { conditionOf } from "../../../../../plugins/desk/mcp/src/factory/loop-co
 import { reading } from "../../../../../plugins/desk/mcp/src/factory/improvement-verify.js"
 import { readStatus, setConsent } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 import { MAX_ISSUES_PER_KIND, runRouteIssuesStep } from "../../../../../plugins/desk/mcp/src/factory/route-issues.js"
+import { removeTreeSync } from "../_remove_tree.js"
 
 const NOW = new Date("2026-10-05T12:00:00Z")
 const BOT = "github-actions[bot]"
@@ -31,7 +32,7 @@ async function scratch(run) {
   try {
     return await run({ env, deskRoot, personPrefix: "", base })
   } finally {
-    rmSync(base, { recursive: true, force: true })
+    removeTreeSync(base)
   }
 }
 

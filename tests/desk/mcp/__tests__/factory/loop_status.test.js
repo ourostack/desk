@@ -4,13 +4,14 @@
 
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { mkdtempSync, promises as fs, rmSync } from "node:fs"
+import { mkdtempSync, promises as fs } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 import { osEnv } from "../_os_env.js"
 
 import { readStatus, writeStatus } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 import { MIN_GAP_HOURS, STEPS, dueStep, recordStep, staleSteps } from "../../../../../plugins/desk/mcp/src/factory/loop-status.js"
+import { removeTreeSync } from "../_remove_tree.js"
 
 async function scratch(run) {
   const base = await fs.realpath(mkdtempSync(path.join(os.tmpdir(), "desk-loop-status-")))
@@ -18,7 +19,7 @@ async function scratch(run) {
   try {
     return await run(env)
   } finally {
-    rmSync(base, { recursive: true, force: true })
+    removeTreeSync(base)
   }
 }
 

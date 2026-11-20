@@ -7,12 +7,13 @@
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import { homedir, tmpdir } from "node:os"
-import { mkdtempSync, mkdirSync, readFileSync, rmSync } from "node:fs"
+import { mkdtempSync, mkdirSync, readFileSync } from "node:fs"
 import * as path from "node:path"
 
 // Import from tool-names directly (not server.js) so the test doesn't pull
 // the @modelcontextprotocol/sdk dep. Tool list is the canonical source.
 import { TOOL_NAMES } from "../../../../plugins/desk/mcp/src/tool-names.js"
+import { removeTreeSync } from "./_remove_tree.js"
 
 const EXPECTED_TOOLS = [
   // Runtime CRUD (Unit 3)
@@ -95,7 +96,7 @@ test("path resolver — explicit --root wins over env + fallbacks", async () => 
       else process.env.DESK = prevDesk
     }
   } finally {
-    rmSync(tmp, { recursive: true, force: true })
+    removeTreeSync(tmp)
   }
 })
 
@@ -124,7 +125,7 @@ test("path resolver — $DESK env var used when --root absent", async () => {
       else process.env.USERPROFILE = prevProfile
     }
   } finally {
-    rmSync(tmp, { recursive: true, force: true })
+    removeTreeSync(tmp)
   }
 })
 
@@ -151,7 +152,7 @@ test("path resolver — falls through $HOME canonical locations when env unset",
       else process.env.USERPROFILE = prevProfile
     }
   } finally {
-    rmSync(tmp, { recursive: true, force: true })
+    removeTreeSync(tmp)
   }
 })
 
@@ -180,7 +181,7 @@ test("path resolver — prefers desk over worker-workspace and never binds a wor
       else process.env.USERPROFILE = prevProfile
     }
   } finally {
-    rmSync(tmp, { recursive: true, force: true })
+    removeTreeSync(tmp)
   }
 })
 
@@ -206,7 +207,7 @@ test("path resolver — falls back to worker-workspace as last resort", async ()
       else process.env.USERPROFILE = prevProfile
     }
   } finally {
-    rmSync(tmp, { recursive: true, force: true })
+    removeTreeSync(tmp)
   }
 })
 
@@ -240,6 +241,6 @@ test("path resolver — fatal error lists every path tried", async () => {
       else process.env.USERPROFILE = prevProfile
     }
   } finally {
-    rmSync(tmp, { recursive: true, force: true })
+    removeTreeSync(tmp)
   }
 })

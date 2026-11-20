@@ -10,7 +10,6 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
-  rmSync,
   statSync,
   writeFileSync,
 } from "node:fs"
@@ -93,6 +92,7 @@ test("activation fixture cleanup retains a recorded child after its owner record
   const child = spawn(process.execPath, ["--input-type=module", "-e", `
 import fs from "node:fs";
 import path from "node:path";
+import { removeTreeSync } from "../_remove_tree.js"
 const file = ${JSON.stringify(ownerFile)};
 fs.mkdirSync(path.dirname(file), { recursive: true });
 fs.writeFileSync(file, JSON.stringify({ owner: {
@@ -229,7 +229,7 @@ test("resolveDeskRootWithSource applies explicit, host-session, activation, DESK
     assert.equal(fallback.root, path.join(fixture.home, "desk"), "plain Desk skips the work overlay's ~/ms-desk")
     assert.equal(fallback.source, "home_fallback")
   } finally {
-    rmSync(fixture.root, { recursive: true, force: true })
+    removeTreeSync(fixture.root)
   }
 })
 
@@ -280,7 +280,7 @@ test("activation config loader validates schema and redacts malformed JSON conte
       /activation config desk\.root must be a non-empty string/u,
     )
   } finally {
-    rmSync(fixture.root, { recursive: true, force: true })
+    removeTreeSync(fixture.root)
   }
 })
 
@@ -311,7 +311,7 @@ test("activation config roots support tilde and relative paths with injectable c
     assert.equal(relative.root, relativeRoot)
     assert.equal(relative.source, "activation-config")
   } finally {
-    rmSync(fixture.root, { recursive: true, force: true })
+    removeTreeSync(fixture.root)
   }
 })
 
@@ -337,7 +337,7 @@ test("root resolver reports nonexistent explicit and host-session roots", () => 
       new RegExp(`host/session root path does not exist: ${escapeRegExp(missingHostSession)}`, "u"),
     )
   } finally {
-    rmSync(fixture.root, { recursive: true, force: true })
+    removeTreeSync(fixture.root)
   }
 })
 
@@ -368,7 +368,7 @@ test("a saved binding to a missing folder is root_unavailable and never falls ba
       )
     }
   } finally {
-    rmSync(fixture.root, { recursive: true, force: true })
+    removeTreeSync(fixture.root)
   }
 })
 
@@ -417,7 +417,7 @@ test("an explicit binding whose folder is not a folder or cannot be read is root
       }
     }
   } finally {
-    rmSync(fixture.root, { recursive: true, force: true })
+    removeTreeSync(fixture.root)
   }
 })
 
@@ -425,7 +425,7 @@ test("with no binding at all, a work overlay's ~/ms-desk is never bound by plain
   const resolveDeskRootWithSource = requireFunction(pathsModule, "resolveDeskRootWithSource")
   const fixture = makeFixture()
   try {
-    rmSync(path.join(fixture.home, "desk"), { recursive: true, force: true })
+    removeTreeSync(path.join(fixture.home, "desk"))
     assert.throws(
       () => resolveDeskRootWithSource({ env: {}, homeDir: fixture.home }),
       (err) => {
@@ -439,7 +439,7 @@ test("with no binding at all, a work overlay's ~/ms-desk is never bound by plain
       },
     )
   } finally {
-    rmSync(fixture.root, { recursive: true, force: true })
+    removeTreeSync(fixture.root)
   }
 })
 
@@ -497,7 +497,7 @@ test("numbered Agency source roots bind the declared overlay in the same session
       else delete options[key]
     }
   } finally {
-    rmSync(fixture.root, { recursive: true, force: true })
+    removeTreeSync(fixture.root)
   }
 })
 
@@ -521,7 +521,7 @@ test("numbered overlay discovery rejects other sessions, invalid manifests and u
       assert.deepEqual(pathsModule.loadedOverlayHomeDesks({ deskPluginRoot, homeDir: fixture.home }), [], label)
       assert.equal(pathsModule.resolveDeskRootWithSource({ deskPluginRoot, env: {}, homeDir: fixture.home }).root, path.join(fixture.home, "desk"), label)
     } finally {
-      rmSync(fixture.root, { recursive: true, force: true })
+      removeTreeSync(fixture.root)
     }
   }
   const fixture = makeFixture()
@@ -534,7 +534,7 @@ test("numbered overlay discovery rejects other sessions, invalid manifests and u
       assert.deepEqual(pathsModule.loadedOverlayHomeDesks({ deskPluginRoot, homeDir: fixture.home }), [], container)
     }
   } finally {
-    rmSync(fixture.root, { recursive: true, force: true })
+    removeTreeSync(fixture.root)
   }
 })
 
@@ -554,7 +554,7 @@ test("unavailable numbered Agency composition never becomes a personal-desk fall
       })
     }
   } finally {
-    rmSync(fixture.root, { recursive: true, force: true })
+    removeTreeSync(fixture.root)
   }
 })
 
@@ -577,7 +577,7 @@ test("a numbered Agency overlay never falls back to personal desks when its work
       })
     }
   } finally {
-    rmSync(fixture.root, { recursive: true, force: true })
+    removeTreeSync(fixture.root)
   }
 })
 
@@ -597,7 +597,7 @@ test("an Agency session that loads the ms-desk overlay still binds ~/ms-desk, in
     assert.equal(resolveDeskRootWithSource({ activationConfigPath: fixture.configPath, deskPluginRoot, env: {}, homeDir: fixture.home }).source, "activation-config")
     assert.equal(resolveDeskRootWithSource({ deskPluginRoot, env: { DESK: fixture.envRoot }, homeDir: fixture.home }).source, "env:DESK")
   } finally {
-    rmSync(fixture.root, { recursive: true, force: true })
+    removeTreeSync(fixture.root)
   }
 })
 
@@ -635,7 +635,7 @@ test("the ms-desk overlay counts as loaded only as a declared sibling in an Agen
     assert.deepEqual(pathsModule.loadedOverlayHomeDesks({ homeDir: fixture.home }), [])
     assert.deepEqual(pathsModule.loadedOverlayHomeDesks(), [])
   } finally {
-    rmSync(fixture.root, { recursive: true, force: true })
+    removeTreeSync(fixture.root)
   }
 })
 
@@ -666,7 +666,7 @@ test("root resolver final diagnostic lists every fallback source attempted in or
       },
     )
   } finally {
-    rmSync(root, { recursive: true, force: true })
+    removeTreeSync(root)
   }
 })
 
@@ -705,7 +705,7 @@ test("a set $DESK is explicit: a missing, non-folder or unreadable $DESK is root
     // An existing $DESK keeps today's acceptance even without the desk layout.
     assert.equal(resolveDeskRootWithSource({ env: { DESK: fixture.envRoot }, homeDir: fixture.home }).source, "env:DESK")
   } finally {
-    rmSync(fixture.root, { recursive: true, force: true })
+    removeTreeSync(fixture.root)
   }
 })
 
@@ -731,7 +731,7 @@ test("a home-folder guess binds only a folder with the desk layout; an empty ~/d
     makeDesk(path.join(home, "desk"))
     assert.equal(resolveDeskRootWithSource({ env: {}, homeDir: home }).root, path.join(home, "desk"))
   } finally {
-    rmSync(fixture.root, { recursive: true, force: true })
+    removeTreeSync(fixture.root)
   }
 })
 
@@ -761,7 +761,7 @@ test("a session that loads the ms-desk overlay tries only ~/ms-desk: a missing o
     assert.equal(bound.root, path.join(home, "ms-desk"))
     assert.equal(bound.source, "overlay_home_fallback")
   } finally {
-    rmSync(fixture.root, { recursive: true, force: true })
+    removeTreeSync(fixture.root)
   }
 })
 
@@ -782,7 +782,7 @@ test("legacy resolveDeskRoot delegates to the same root resolver with injectable
       resolveDeskRootWithSource(options).root,
     )
   } finally {
-    rmSync(fixture.root, { recursive: true, force: true })
+    removeTreeSync(fixture.root)
   }
 })
 
@@ -824,7 +824,7 @@ test("entrypoint startup root resolution uses parsed activation config and canon
       null,
     )
   } finally {
-    rmSync(fixture.root, { recursive: true, force: true })
+    removeTreeSync(fixture.root)
   }
 })
 
@@ -882,7 +882,7 @@ test("entrypoint startup runtime cache resolution uses activation config only", 
       path.join(fixture.home, "tilde-runtime-cache"),
     )
   } finally {
-    rmSync(fixture.root, { recursive: true, force: true })
+    removeTreeSync(fixture.root)
   }
 })
 
@@ -938,7 +938,7 @@ test("entrypoint startup activation context normalizes activation config metadat
       },
     )
   } finally {
-    rmSync(fixture.root, { recursive: true, force: true })
+    removeTreeSync(fixture.root)
   }
 })
 
@@ -964,7 +964,7 @@ test("entrypoint startup root resolution lets host/session root override activat
     assert.equal(result.root, fixture.hostSessionRoot)
     assert.equal(result.source, "host-session-root")
   } finally {
-    rmSync(fixture.root, { recursive: true, force: true })
+    removeTreeSync(fixture.root)
   }
 })
 
@@ -1003,7 +1003,7 @@ test("entrypoint main resolves startup root before launching injected runtime se
     assert.equal(started.statusContext.root.root, fixture.hostSessionRoot)
     assert.equal(started.person, "ari")
   } finally {
-    rmSync(fixture.root, { recursive: true, force: true })
+    removeTreeSync(fixture.root)
   }
 })
 

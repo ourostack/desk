@@ -17,6 +17,7 @@ import {
 } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 import { fakeGitHub } from "./_fake_github.js"
 import { STORE, json, scratch } from "./_session_helpers.js"
+import { removeTree } from "../_remove_tree.js"
 
 const GOLDEN = JSON.parse(readFileSync(fileURLToPath(new URL("./fixtures/local-golden.json", import.meta.url)), "utf8"))
 const LABELS = JSON.parse(readFileSync(fileURLToPath(new URL("./fixtures/labels-golden.json", import.meta.url)), "utf8"))
@@ -132,7 +133,7 @@ test("hardening: a retracted session whose only copy is held, with the retractin
   // The kept copy put back in the outbox by hand and held, the only copy left; the retracting file and status.json corrupt.
   const state = await root(ctx)
   await fs.rename(path.join(state, "retracted-copies", SLUG, nameOf(1)), path.join(state, "outbox", SLUG, nameOf(1)))
-  await fs.rm(path.join(state, "retracted-copies"), { recursive: true })
+  await removeTree(path.join(state, "retracted-copies"))
   await quarantine(ctx.env, STORE, nameOf(1), "invalid", { blob: "e".repeat(40) })
   await fs.writeFile(path.join(state, "retracting", `${SLUG}.json`), "{not json")
   await loseMarker(ctx)

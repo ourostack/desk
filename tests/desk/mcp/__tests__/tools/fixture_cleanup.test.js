@@ -1,9 +1,10 @@
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import { spawnSync } from "node:child_process"
-import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
+import { removeTreeSync } from "../_remove_tree.js"
 
 for (const [helper, prefix] of [
   ["_search_helpers.js", "desk-search-test-"],
@@ -64,7 +65,7 @@ for (const [helper, prefix] of [
         }
         assert.equal(readFileSync(path.join(sibling, "unrelated.txt"), "utf8"), "keep this fixture")
       } finally {
-        rmSync(sandbox, { recursive: true, force: true })
+        removeTreeSync(sandbox)
       }
     })
   }

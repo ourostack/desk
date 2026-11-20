@@ -8,7 +8,6 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
-  rmSync,
   writeFileSync,
 } from "node:fs"
 import { createRequire } from "node:module"
@@ -16,6 +15,7 @@ import { tmpdir } from "node:os"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 import { gzipSync } from "node:zlib"
+import { removeTreeSync } from "../_remove_tree.js"
 
 const repoRoot = path.resolve(
   fileURLToPath(new URL("../../../../..", import.meta.url)),
@@ -401,7 +401,7 @@ test("current shipped pack loads current source and the card persistence tools",
       assert.equal(typeof server.TOOL_IMPLS[name], "function", `${name} must come from the current source`)
     }
   } finally {
-    rmSync(tempDir, { recursive: true, force: true })
+    removeTreeSync(tempDir)
   }
 })
 
@@ -491,7 +491,7 @@ test("runtime archive extraction handles tar prefixes, blank sizes, and null fil
     assert.deepEqual([...nullTypeEntries.keys()], ["empty-null-type.json"])
     assert.equal(nullTypeEntries.get("empty-null-type.json").length, 0)
   } finally {
-    rmSync(tempDir, { recursive: true, force: true })
+    removeTreeSync(tempDir)
   }
 })
 
@@ -764,7 +764,7 @@ test("published runtime pack verifier rejects stale, unsafe, or fixture-only art
     assert.equal(stdout.join(""), "")
   } finally {
     for (const tempDir of tempDirs) {
-      rmSync(tempDir, { recursive: true, force: true })
+      removeTreeSync(tempDir)
     }
   }
 })

@@ -3,12 +3,13 @@
 // Everything lives under the OS temp dir: a bare origin, a clone that is the desk, a temporary HOME whose ~/.cache and ~/.local/state receive Desk's readiness and state files. Nothing touches a real desk, real host config or the real readiness cache.
 
 import { spawnSync } from "node:child_process"
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import * as path from "node:path"
 import { bootstrapPath, isolatedEnv, makeIsolatedHome, indexPath, mcpRoot, pluginRoot } from "../launch/_mcp_handshake.js"
 import { hashCurrentSource } from "../../../../../plugins/desk/mcp/src/runtime/bootstrap.js"
 import { openSession } from "../launch/_mcp_session.js"
 import { preloadArgs } from "./_readiness_failure_preload.mjs"
+import { removeTreeSync } from "../_remove_tree.js"
 
 export const HANDSHAKE_BUDGET_MS = 3000
 
@@ -59,7 +60,7 @@ export async function makeGitDesk(prefix = "desk-admission-") {
   git(seed, "commit", "-m", "feature work")
   git(seed, "push", "origin", "feature")
   // The desk replaces the empty folder makeIsolatedHome made.
-  rmSync(fixture.desk, { recursive: true, force: true })
+  removeTreeSync(fixture.desk)
   git(fixture.root, "clone", origin, fixture.desk)
   git(fixture.desk, "fetch", "origin", "feature:refs/remotes/origin/feature")
   return {

@@ -131,7 +131,7 @@ test("under a node:test run, acquireSyncLock refuses a real (non-temp) state hom
   // A HOME that genuinely exists and is genuinely writable, but sits outside the OS temp directory: stands in for
   // the developer's real home, so a lock file landing here would be exactly the incident the guard exists to stop.
   const fakeReal = mkFakeRealRoot("desk-sync-worker-fake-real-")
-  t.after(() => fs.rm(fakeReal, { recursive: true, force: true, maxRetries: 5 }))
+  t.after(() => removeTree(fakeReal))
   const lock = await acquireSyncLock({ root: "/some/desk-root", env: { HOME: fakeReal } })
   assert.deepEqual(lock, { refused: true })
   assert.equal(existsSync(path.join(fakeReal, ".local")), false, "the guard refuses before creating anything under the fake real home")
@@ -470,7 +470,7 @@ test("under a node:test run, runPushWorker treats a refused lock as a non-throwi
   // stdio is ignored in production (defaultSpawnWorker's real spawn uses `stdio: "ignore"`; this only matters to a
   // caller -- a test, a manual invocation -- that inspects this process's stderr directly).
   const fakeReal = mkFakeRealRoot("desk-sync-worker-runworker-fake-real-")
-  t.after(() => fs.rm(fakeReal, { recursive: true, force: true, maxRetries: 5 }))
+  t.after(() => removeTree(fakeReal))
   const written = []
   const stderr = { write: (chunk) => { written.push(chunk) } }
   const result = await runPushWorker({ root: "/some/desk-root", env: { HOME: fakeReal }, clock: instantClock, stderr })
@@ -913,7 +913,7 @@ test("under a node:test run, finalUnpushedCheck still reports unpushed even thou
   const { cloneA } = await mkOriginWithClone()
   await writeAndCommit(cloneA, "more.md", "more\n", "more")
   const fakeReal = mkFakeRealRoot("desk-sync-worker-status-fake-real-")
-  t.after(() => fs.rm(fakeReal, { recursive: true, force: true, maxRetries: 5 }))
+  t.after(() => removeTree(fakeReal))
   const env = { HOME: fakeReal }
   const result = finalUnpushedCheck({ root: cloneA, env })
   assert.equal(result.state, "unpushed")

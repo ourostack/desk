@@ -34,6 +34,7 @@ import {
   usageRow,
   writeLargeEvents,
 } from "./fixtures/copilot/make.js"
+import { removeTreeSync } from "../_remove_tree.js"
 
 // A POSIX-looking path that Desk resolves with the host's own rules comes back as `D:\\w\\a.md` on Windows; this reads it back as `/w/a.md` so the fixtures can state paths one way. Off Windows it changes nothing.
 const posixSpelling = (value) => (process.platform === "win32" && typeof value === "string" ? value.replace(/^[A-Za-z]:/u, "").replaceAll("\\", "/") : value)
@@ -99,7 +100,7 @@ test("a missing events log returns log_missing", async () => {
   try {
     assert.deepEqual(await derive(home, SESSIONS.full), { facts: null, events: null, reason: "log_missing" })
   } finally {
-    rmSync(home, { recursive: true, force: true })
+    removeTreeSync(home)
   }
 })
 
@@ -108,7 +109,7 @@ test("an events log with no session.start envelope is source_unreadable, never i
   try {
     assert.deepEqual(await derive(home, SESSIONS.noEnvelope), { facts: null, events: null, reason: "source_unreadable" })
   } finally {
-    rmSync(home, { recursive: true, force: true })
+    removeTreeSync(home)
   }
 })
 
@@ -136,7 +137,7 @@ test("the full session derives one valid session across three resumes and four s
     assert.deepEqual(facts.jobs, [])
     assert.deepEqual(intervalsOf(facts, "turn").map(({ start, end }) => ({ start, end })), [span(3, 43), span(45, 46), span(47, 48), span(61, 74), span(75.4, 75.6), span(91, 92), span(96, 97)])
   } finally {
-    rmSync(home, { recursive: true, force: true })
+    removeTreeSync(home)
   }
 })
 
@@ -162,7 +163,7 @@ test("usage comes from the last shutdown when one exists, never added to the dat
     assert.ok(!JSON.stringify(facts).includes("999999"), "the database row of this session was not added")
     assert.equal(facts.unavailable.some((entry) => entry.field === "tokens"), false)
   } finally {
-    rmSync(home, { recursive: true, force: true })
+    removeTreeSync(home)
   }
 })
 
@@ -181,7 +182,7 @@ test("usage comes from the database rows of this session only when there is no s
       [{ field: "models", reason: "source_unreadable" }, { field: "tokens", reason: "source_unreadable" }],
     )
   } finally {
-    rmSync(home, { recursive: true, force: true })
+    removeTreeSync(home)
   }
 })
 
@@ -203,7 +204,7 @@ test("with neither a shutdown nor database rows, tokens are unavailable, not zer
       { field: "entrypoint", reason: "host_does_not_record" },
     ])
   } finally {
-    rmSync(home, { recursive: true, force: true })
+    removeTreeSync(home)
   }
 })
 
@@ -236,7 +237,7 @@ test("tool outcomes: exit code 1 is an error, a failure is an error, a denial is
       compactions: 1,
     })
   } finally {
-    rmSync(home, { recursive: true, force: true })
+    removeTreeSync(home)
   }
 })
 
@@ -249,7 +250,7 @@ test("a permission answered by a human is a wait on the asking agent; an unatten
       { kind: "permission_wait", agent: 1, ...span(32.2, 32.6) },
     ])
   } finally {
-    rmSync(home, { recursive: true, force: true })
+    removeTreeSync(home)
   }
 })
 
@@ -266,7 +267,7 @@ test("human waits run from an interaction's end to the next human prompt, never 
       { kind: "human_wait", agent: 0, ...span(74, 75.2), stop: { end: "interrupted", asks: null, pending_agents: null } },
     ])
   } finally {
-    rmSync(home, { recursive: true, force: true })
+    removeTreeSync(home)
   }
 })
 
@@ -284,7 +285,7 @@ test("subagents get the next agent numbers, their own tools, their model and the
       { kind: "subagent", agent: 1, ...span(35, 38) },
     ])
   } finally {
-    rmSync(home, { recursive: true, force: true })
+    removeTreeSync(home)
   }
 })
 
@@ -299,7 +300,7 @@ test("API retries under both event spellings, and compactions", async () => {
     ])
     assert.deepEqual(intervalsOf(facts, "compaction"), [{ kind: "compaction", agent: 0, ...span(69, 72) }])
   } finally {
-    rmSync(home, { recursive: true, force: true })
+    removeTreeSync(home)
   }
 })
 
@@ -312,7 +313,7 @@ test("plugins merge the marker's list with skill.invoked plugin versions", async
       { name: "superpowers", version: "5.1.0", source: null },
     ], "a skill-invoked plugin with no marker plugin of its name has no known source")
   } finally {
-    rmSync(home, { recursive: true, force: true })
+    removeTreeSync(home)
   }
 })
 
@@ -343,7 +344,7 @@ test("refs come from this session's session_refs rows, validated", async () => {
     assert.ok(!JSON.stringify(facts).includes(OTHER_SESSION))
     assert.ok(!JSON.stringify(facts).includes("ourostack/secret"))
   } finally {
-    rmSync(home, { recursive: true, force: true })
+    removeTreeSync(home)
   }
 })
 
@@ -364,7 +365,7 @@ test("binding events: Desk task tools with track and slug, and only successful f
     ])
     assert.deepEqual(events.spawnTasks, [{ agent: 1, track: "eng", slug: "m3-3", start: "2026-09-25T08:00:31.000Z", end: "2026-09-25T08:00:40.000Z" }], "only the prompt with a Desk-Task line binds a worker; the nested spawn has none")
   } finally {
-    rmSync(home, { recursive: true, force: true })
+    removeTreeSync(home)
   }
 })
 
@@ -378,7 +379,7 @@ test("no content from any fixture field ever reaches the facts", async () => {
       if (sessionId === SESSIONS.full) assert.ok(JSON.stringify(events).includes(SENTINEL), "the fixture really planted the sentinel")
     }
   } finally {
-    rmSync(home, { recursive: true, force: true })
+    removeTreeSync(home)
   }
 })
 
@@ -417,7 +418,7 @@ test("an open session: open turn, orphan tool, failed subagent, truncated last l
       { field: "human_turns", reason: "host_records_partly" },
     ])
   } finally {
-    rmSync(home, { recursive: true, force: true })
+    removeTreeSync(home)
   }
 })
 
@@ -465,7 +466,7 @@ test("a 1,000,000-line events log derives in a single pass with bounded memory",
     assert.ok(facts.unavailable.some((entry) => entry.field === "tool_durations" && entry.reason === "capped"))
     assert.ok(facts.counts.tool_calls.shell >= 399000, "every call is still counted past the interval cap")
   } finally {
-    rmSync(home, { recursive: true, force: true })
+    removeTreeSync(home)
   }
 })
 
@@ -493,7 +494,7 @@ async function deriveText(events, { store = null, ...overrides } = {}) {
     }
     return result
   } finally {
-    rmSync(home, { recursive: true, force: true })
+    removeTreeSync(home)
   }
 }
 
@@ -541,13 +542,13 @@ test("the Copilot home defaults to COPILOT_HOME, then to ~/.copilot", async () =
     mkdirSync(path.join(fakeHome, ".copilot", "session-state", SESSIONS.noUsage), { recursive: true })
     cpSync(path.join(FIXTURES, SESSIONS.noUsage, "events.jsonl"), path.join(fakeHome, ".copilot", "session-state", SESSIONS.noUsage, "events.jsonl"))
     assert.equal((await derive(undefined, SESSIONS.noUsage)).facts.session.id, SESSIONS.noUsage)
-    rmSync(fakeHome, { recursive: true, force: true })
+    removeTreeSync(fakeHome)
   } finally {
     for (const [key, value] of Object.entries(saved)) {
       if (value === undefined) delete process.env[key]
       else process.env[key] = value
     }
-    rmSync(home, { recursive: true, force: true })
+    removeTreeSync(home)
   }
 })
 
@@ -557,7 +558,7 @@ test("an events path that cannot be read as a file is source_unreadable", async 
     mkdirSync(path.join(home, "session-state", EDGE, "events.jsonl"), { recursive: true })
     assert.deepEqual(await derive(home, EDGE), { facts: null, events: null, reason: "source_unreadable" })
   } finally {
-    rmSync(home, { recursive: true, force: true })
+    removeTreeSync(home)
   }
 })
 
@@ -749,7 +750,7 @@ test("an unreadable session database flags tokens and commits as source_unreadab
     assert.ok(facts.unavailable.some((entry) => entry.field === "commits" && entry.reason === "source_unreadable"))
     assert.ok(!facts.unavailable.some((entry) => entry.field === "tokens" && entry.reason === "session_open"))
   } finally {
-    rmSync(home, { recursive: true, force: true })
+    removeTreeSync(home)
   }
 })
 
@@ -773,7 +774,7 @@ test("the agent cap: past 9999 subagents, later ones are dropped and their tools
     assert.ok(facts.unavailable.some((entry) => entry.field === "turns" && entry.reason === "capped"))
     assert.ok(facts.unavailable.some((entry) => entry.field === "tool_durations" && entry.reason === "log_truncated"))
   } finally {
-    rmSync(home, { recursive: true, force: true })
+    removeTreeSync(home)
   }
 })
 
@@ -793,7 +794,7 @@ test("readSessionRefs reads the ambient COPILOT_HOME when no environment is pass
   } finally {
     if (saved === undefined) delete process.env.COPILOT_HOME
     else process.env.COPILOT_HOME = saved
-    rmSync(home, { recursive: true, force: true })
+    removeTreeSync(home)
   }
 })
 
@@ -908,7 +909,7 @@ test("the factory reader reports a missing, an unreadable or a driverless databa
     mkdirSync(path.join(home, "session-store.db"))
     assert.deepEqual(readSessionRefs({ sessionId: OTHER_SESSION, env }), { status: "unreadable", rows: [] })
   } finally {
-    rmSync(home, { recursive: true, force: true })
+    removeTreeSync(home)
   }
 })
 
@@ -925,7 +926,7 @@ test("the factory reader's first load of node:sqlite prints nothing", () => {
     assert.equal(child.stdout, "ok:1")
     assert.equal(child.stderr, "")
   } finally {
-    rmSync(home, { recursive: true, force: true })
+    removeTreeSync(home)
   }
 })
 
@@ -956,7 +957,7 @@ test("with no COPILOT_HOME the factory reader looks under the user's home direct
       if (value === undefined) delete process.env[key]
       else process.env[key] = value
     }
-    rmSync(fakeHome, { recursive: true, force: true })
+    removeTreeSync(fakeHome)
   }
 })
 
@@ -1047,7 +1048,7 @@ test("nativeCommitShas carries this session's session_refs commits, which bind d
     assert.deepEqual(events.nativeCommitShas, ["abcdef0000000000000000000000000000000001", "abcdef0120000000000000000000000000000001", "fc6ea8a0000000000000000000000000000000aa"].map((sha) => ({ sha, agent: 0 })), "full SHAs only, so binding gets full hashes")
     assert.deepEqual(events.shellGitCommits, [], "the fixture's bash calls hold no git commit")
   } finally {
-    rmSync(home, { recursive: true, force: true })
+    removeTreeSync(home)
   }
 })
 
@@ -1131,7 +1132,7 @@ test("readSessionRecord reads repository and cwd, each null when absent, not tex
     assert.deepEqual(readSessionRecord({ sessionId: OTHER_SESSION, env }), { repository: null, cwd: null })
     assert.deepEqual(readSessionRecord({ sessionId: EDGE, env: { COPILOT_HOME: path.join(home, "none") } }), { repository: null, cwd: null })
   } finally {
-    rmSync(home, { recursive: true, force: true })
+    removeTreeSync(home)
   }
 })
 
@@ -1463,7 +1464,7 @@ test("facts written by the Copilot deriver validate as /2", async () => {
       assertValid(facts)
     }
   } finally {
-    rmSync(home, { recursive: true, force: true })
+    removeTreeSync(home)
   }
 })
 
@@ -1484,7 +1485,7 @@ async function humanFacts() {
   try {
     return await derive(home, HUMAN_TURNS_SESSION, { endReason: "complete" })
   } finally {
-    rmSync(home, { recursive: true, force: true })
+    removeTreeSync(home)
   }
 }
 
@@ -1503,7 +1504,7 @@ async function deriveLines(build, { raw = [] } = {}) {
   try {
     return await derive(home, PLAIN_ID)
   } finally {
-    rmSync(home, { recursive: true, force: true })
+    removeTreeSync(home)
   }
 }
 
@@ -1569,7 +1570,7 @@ test("SENTINEL in a message reaches no fact", async () => {
     assert.equal(JSON.stringify(full.facts.human_turns).includes(SENTINEL), false)
     assert.deepEqual(full.facts.human_turns.map((turn) => turn.at), [at(2), at(44), at(60), at(75.2), at(90), at(95)])
   } finally {
-    rmSync(home, { recursive: true, force: true })
+    removeTreeSync(home)
   }
 })
 
@@ -1683,7 +1684,7 @@ test("a commit carries when the session recorded it: the earliest readable time 
     started = Date.parse(facts.session.started_at)
     through = Date.parse(facts.session.derived_through)
   } finally {
-    rmSync(probe, { recursive: true, force: true })
+    removeTreeSync(probe)
   }
   const iso = (ms) => new Date(ms).toISOString()
   const store = defaultStoreRows()
@@ -1718,7 +1719,7 @@ test("a commit carries when the session recorded it: the earliest readable time 
     ])
     assert.deepEqual(validateLocalFacts(facts), { ok: true, errors: [] })
   } finally {
-    rmSync(home, { recursive: true, force: true })
+    removeTreeSync(home)
   }
   // A store whose session_refs has no created_at still yields its commits, untimed.
   const old = makeHome({ store })
@@ -1733,7 +1734,7 @@ test("a commit carries when the session recorded it: the earliest readable time 
     assert.ok(facts.refs.commits.every((commit) => !Object.hasOwn(commit, "at_ms")))
     assert.ok(!facts.unavailable.some((entry) => entry.field === "commits"))
   } finally {
-    rmSync(old, { recursive: true, force: true })
+    removeTreeSync(old)
   }
 })
 
@@ -1755,6 +1756,6 @@ test("a PR the session created replaces the store's row for it, and the store's 
       { repo: "ourostack/factory", number: 3, created: false },
     ])
   } finally {
-    rmSync(home, { recursive: true, force: true })
+    removeTreeSync(home)
   }
 })

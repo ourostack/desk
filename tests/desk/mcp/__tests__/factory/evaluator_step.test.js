@@ -4,7 +4,7 @@
 
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { mkdtempSync, promises as fs, readFileSync, rmSync } from "node:fs"
+import { mkdtempSync, promises as fs, readFileSync } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
@@ -20,6 +20,7 @@ import { LEDGER_FILE, reserveAgentLaunch } from "../../../../../plugins/desk/mcp
 import { labelsBootCheck } from "../../../../../plugins/desk/mcp/src/factory/boot-check.js"
 import { factoryStateRoot, listEvaluationRequests, readStatus, requestEvaluation, setConsent, updateStatus, writeLocalFacts, writeLocalLabels, writeMarker } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 import { indexJob } from "./_index_helper.js"
+import { removeTreeSync } from "../_remove_tree.js"
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const LOCAL = JSON.parse(readFileSync(path.join(here, "fixtures", "local-golden.json"), "utf8"))
@@ -37,7 +38,7 @@ async function scratch(run) {
   try {
     return await run(env, base)
   } finally {
-    rmSync(base, { recursive: true, force: true })
+    removeTreeSync(base)
   }
 }
 

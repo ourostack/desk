@@ -12,9 +12,10 @@ import "../_isolated_env.mjs"
 import { COPILOT_SESSION_DIR, copilotBootClaimFile, copilotSessionFile, markBootDirected, readCopilotSession, recordCopilotSession, watchCopilotSessionRecord } from "../../../../../plugins/desk/mcp/src/runtime/copilot-session.js"
 import { resolveStartupActivationConfigPath, resolveStartupDeskRoot } from "../../../../../plugins/desk/mcp/src/runtime/startup-resolve.js"
 import { resolveAdmissionInputs } from "../../../../../plugins/desk/mcp/src/runtime/admission-worker.js"
+import { removeTreeSync } from "../_remove_tree.js"
 
 const ROOT = mkdtempSync(path.join(tmpdir(), "copilot-session-"))
-test.after(() => rmSync(ROOT, { recursive: true, force: true }))
+test.after(() => removeTreeSync(ROOT))
 let counter = 0
 const fresh = (name) => path.join(ROOT, `${name}-${(counter += 1)}`)
 const desk = (name = "desk") => {
@@ -175,7 +176,7 @@ test("a stale record falls through to the other bindings: a folder that is no lo
   const env = envFor({ COPILOT_AGENT_SESSION_ID: "s-stale" })
   const folder = desk()
   recordCopilotSession({ sessionId: "s-stale", folder, env })
-  rmSync(path.join(folder, "_meta"), { recursive: true })
+  removeTreeSync(path.join(folder, "_meta"))
   assert.throws(() => resolveStartupDeskRoot({ env, homeDir: env.HOME }), (error) => error.code === "DESK_ROOT_NOT_FOUND")
   const fallback = desk("fallback")
   assert.equal(resolveStartupDeskRoot({ env: { ...env, DESK: fallback }, homeDir: env.HOME }).source, "env:DESK", "$DESK still binds")

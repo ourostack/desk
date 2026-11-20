@@ -7,7 +7,7 @@
 
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { mkdtempSync, promises as fs, readFileSync, rmSync } from "node:fs"
+import { mkdtempSync, promises as fs, readFileSync } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
@@ -46,6 +46,7 @@ import {
 } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 import { indexJob } from "./_index_helper.js"
 import { osEnv } from "../_os_env.js"
+import { removeTree, removeTreeSync } from "../_remove_tree.js"
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const LOCAL = JSON.parse(readFileSync(path.join(here, "fixtures", "local-golden.json"), "utf8"))
@@ -109,7 +110,7 @@ async function scratch(run) {
   try {
     return await run(env, base)
   } finally {
-    rmSync(base, { recursive: true, force: true })
+    removeTreeSync(base)
   }
 }
 
@@ -958,11 +959,11 @@ test("the backstop skips a job whose request expired or was quarantined, and a s
   assert.deepEqual([...(await settledEvaluationRequests(env))], [JOB])
   assert.deepEqual(await requestFinishedJobs(env, { deskRoot }), { requested: [] })
   const root = await factoryStateRoot(env)
-  await fs.rm(path.join(root, "evaluate-requests", "expired"), { recursive: true })
+  await removeTree(path.join(root, "evaluate-requests", "expired"))
   await requestEvaluation(env, { job: JOB, deskRoot })
   await clearEvaluationRequest(env, JOB, "not_opted_in")
   assert.deepEqual(await requestFinishedJobs(env, { deskRoot }), { requested: [] })
-  await fs.rm(path.join(root, "evaluate-requests", "quarantine"), { recursive: true })
+  await removeTree(path.join(root, "evaluate-requests", "quarantine"))
   await quarantine(env, STORE, NAME, "evidence_unmatched")
   assert.deepEqual(await requestFinishedJobs(env, { deskRoot }), { requested: [] }, "held back")
 }))
@@ -985,7 +986,7 @@ test("the backstop asks for a relabel of a session labeled under an older rubric
   await expireEvaluationRequest(env, JOB)
   assert.deepEqual(await requestFinishedJobs(env, { deskRoot: markerDesk }), { requested: [] }, "an expired relabel is never asked for again")
   // Without the log, older labels stand and nothing is asked for.
-  await fs.rm(path.join(root, "evaluate-requests", "expired"), { recursive: true })
+  await removeTree(path.join(root, "evaluate-requests", "expired"))
   await fs.rm(log)
   assert.deepEqual(await requestFinishedJobs(env, { deskRoot: markerDesk }), { requested: [] })
 }))

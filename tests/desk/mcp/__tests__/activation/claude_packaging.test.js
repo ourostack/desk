@@ -4,13 +4,13 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
-  rmSync,
-} from "node:fs"
+  } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 import { spawnSync } from "node:child_process"
 import { fileURLToPath } from "node:url"
 import { validateClaudePackagingContract } from "./_contracts/claude-packaging.js"
+import { removeTreeSync } from "../_remove_tree.js"
 
 const repoRoot = path.resolve(
   fileURLToPath(new URL("../../../../..", import.meta.url)),
@@ -75,7 +75,7 @@ function runSessionStartHook() {
     assert.equal(result.status, 0, result.stderr)
     return JSON.parse(result.stdout).hookSpecificOutput.additionalContext
   } finally {
-    rmSync(deskRoot, { recursive: true, force: true })
+    removeTreeSync(deskRoot)
   }
 }
 
@@ -489,7 +489,7 @@ test("Claude SessionStart with no desk routes to bootstrap instead of offering t
     assert.match(startup, /crew:join-crew/u)
     assert.match(startup, /Do not offer to continue without Desk/u)
   } finally {
-    rmSync(scratch, { recursive: true, force: true })
+    removeTreeSync(scratch)
   }
 })
 

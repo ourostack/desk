@@ -19,6 +19,7 @@ import {
   validateMcpDeclarations,
 } from "./_contracts/mcp-declarations.js"
 import { TOOL_NAMES } from "../../../../../plugins/desk/mcp/src/tool-names.js"
+import { removeTreeSync } from "../_remove_tree.js"
 
 const require = createRequire(import.meta.url)
 const repoRoot = path.resolve(fileURLToPath(new URL("../../../../..", import.meta.url)))
@@ -209,7 +210,7 @@ test("collectMcpDeclarations reads plugin manifests with inline servers, string 
     assert.match(errors.join("\n"), /"web".*reserved/u)
     assert.match(errors.join("\n"), /plugins\/sparse\/activation\/named\.activation\.json: .*"python".*reserved/u)
   } finally {
-    rmSync(root, { recursive: true, force: true })
+    removeTreeSync(root)
   }
 })
 

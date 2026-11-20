@@ -2,11 +2,12 @@
 // or above, capped, and read from the person's own Crew desk only.
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { mkdtempSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 
 import { standingAuthorityLine, standingAuthoritySection } from "../../../../../plugins/desk/mcp/src/runtime/standing-authority.js"
+import { removeTreeSync } from "../_remove_tree.js"
 
 test("the section runs from its heading to the next heading at its level or above, nested headings included", () => {
   const text = "# Desk\n\n## Standing authority\n\n- grant one\n\n### Detail\n\n- grant two\n\n## Next\n\n- other\n"
@@ -50,7 +51,7 @@ test("the default reader takes the file from disk, and a missing file is no sect
     assert.match(standingAuthorityLine({ root }), /- grant on disk/u)
     assert.equal(standingAuthorityLine({ root: path.join(root, "missing") }), "")
   } finally {
-    rmSync(root, { recursive: true, force: true })
+    removeTreeSync(root)
   }
 })
 

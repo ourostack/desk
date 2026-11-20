@@ -1,10 +1,11 @@
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
-import { mkdtempSync, rmSync } from "node:fs"
+import { mkdtempSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 
 import { admitInProcess, idleSearchEngine } from "./_in_process_desk.js"
+import { removeTreeSync } from "../_remove_tree.js"
 
 function makeRoot() {
   return mkdtempSync(path.join(tmpdir(), "desk-startup-control-ready-"))
@@ -35,7 +36,7 @@ test("startup admits, then starts its search engine and warms it in the backgrou
     assert.notEqual(started.statusContext.search, null)
     assert.deepEqual(events, ["start", "warm"])
   } finally {
-    rmSync(root, { recursive: true, force: true })
+    removeTreeSync(root)
   }
 })
 
@@ -64,6 +65,6 @@ test("startup refuses writes for an unresolved configured authority provider", a
     assert.equal(started.snapshot.state, "degraded:authority_invalid")
     assert.equal(started.statusContext.search, null)
   } finally {
-    rmSync(root, { recursive: true, force: true })
+    removeTreeSync(root)
   }
 })

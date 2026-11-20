@@ -12,6 +12,7 @@ import { writeMarkdown } from "../../../../../plugins/desk/mcp/src/util/fm.js"
 import { factoryStateRoot } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 import { mkTempDeskRoot, readFront } from "./_helpers.js"
 import { notCommitted } from "./_route_around.js"
+import { removeTree } from "../_remove_tree.js"
 
 function initGit(root) {
   const run = (args) => {
@@ -1304,7 +1305,7 @@ async function withUnresolvableJob(run) {
       failing.mock.restore()
     }
   } finally {
-    await fs.rm(stateHome, { recursive: true, force: true })
+    await removeTree(stateHome)
   }
 }
 

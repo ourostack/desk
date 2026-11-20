@@ -8,6 +8,7 @@ import { vagueFailuresIn } from "../../../../../plugins/desk/mcp/src/lib/ouro-ui
 import { mkTempRoot } from "../_temp_roots.js"
 import { NO_POSIX_MODES } from "../_platform.js"
 import { nativeSnapshot, buttonSnapshot, editingSnapshot, inspectedDOM, fakeDriver, framedSnapshot, pageNode, PASSWORD, FRAME_TEXT, FALLBACK_TEXT, FRAME_TYPED, FRAME_EDITED } from "./_auth_fixtures.js"
+import { removeTreeSync } from "../_remove_tree.js"
 
 const require = createRequire(import.meta.url)
 const auth = require("../../../../../plugins/desk/mcp/web-auth.cjs")
@@ -3259,7 +3260,7 @@ test("a screenshot is saved in the evidence folder, outside the context's files,
     assert.equal(native.calls.find((call) => call[0] === "page.screenshot")[1].mask.length > 0, true, "the masking rules are unchanged")
     if (!NO_POSIX_MODES) assert.equal(fs.statSync(evidence).mode & 0o777, 0o700)
     await adapter.close()
-    fs.rmSync(root, { recursive: true, force: true })
+    removeTreeSync(root)
     assert.ok(fs.existsSync(shot.screenshot), "the picture is there after the context's folder is gone")
   } finally { await adapter.close().catch(() => {}) }
 })

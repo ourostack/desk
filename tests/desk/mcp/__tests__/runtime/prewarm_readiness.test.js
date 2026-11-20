@@ -1,14 +1,15 @@
 import assert from "node:assert/strict"
 import { EventEmitter } from "node:events"
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs"
+import { existsSync, mkdtempSync, readFileSync } from "node:fs"
 import os from "node:os"
 import * as path from "node:path"
 import { test } from "node:test"
 import { prewarm } from "./_prewarmed_recovery.js"
+import { removeTreeSync } from "../_remove_tree.js"
 
 function fixture(t, samples) {
   const root = mkdtempSync(path.join(os.tmpdir(), "desk-prewarm-readiness-"))
-  t.after(() => rmSync(root, { recursive: true, force: true }))
+  t.after(() => removeTreeSync(root))
   const marker = path.join(root, "completed.marker")
   const evidence = path.join(root, "completed.json")
   const output = new EventEmitter()

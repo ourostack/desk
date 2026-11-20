@@ -4,7 +4,7 @@
 
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { mkdtempSync, promises as fs, rmSync } from "node:fs"
+import { mkdtempSync, promises as fs } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 import { createHash } from "node:crypto"
@@ -15,6 +15,7 @@ import { RECONCILE_REASONS } from "../../../../../plugins/desk/mcp/src/factory/r
 import {
   DESK_STALE_DAYS, MAX_RECONCILE_DESKS, RECONCILE_CONFIRM_RUNS, RECONCILE_WINDOW_DAYS, runReconcileStep, summarizeReconcile,
 } from "../../../../../plugins/desk/mcp/src/factory/reconcile-step.js"
+import { removeTreeSync } from "../_remove_tree.js"
 
 async function scratch(run) {
   const base = await fs.realpath(mkdtempSync(path.join(os.tmpdir(), "desk-reconcile-step-")))
@@ -22,7 +23,7 @@ async function scratch(run) {
   try {
     return await run(env)
   } finally {
-    rmSync(base, { recursive: true, force: true })
+    removeTreeSync(base)
   }
 }
 

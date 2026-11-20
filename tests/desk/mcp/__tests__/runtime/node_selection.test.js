@@ -1,10 +1,11 @@
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import { EventEmitter } from "node:events"
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
+import { removeTreeSync } from "../_remove_tree.js"
 
 const repoRoot = path.resolve(fileURLToPath(new URL("../../../../..", import.meta.url)))
 const mcpRoot = path.join(repoRoot, "plugins", "desk", "mcp")
@@ -60,7 +61,7 @@ test("Node discovery is bounded to the current executable, PATH, and standard ve
       ],
     )
   } finally {
-    rmSync(root, { recursive: true, force: true })
+    removeTreeSync(root)
   }
 })
 
@@ -411,7 +412,7 @@ test("Node discovery and probes cover Windows, missing PATH, and malformed candi
     assert.equal(defaultProbe.mode, "reexec")
     assert.equal(defaultProbe.executable, process.execPath)
   } finally {
-    rmSync(root, { recursive: true, force: true })
+    removeTreeSync(root)
   }
 })
 
@@ -448,7 +449,7 @@ test("Node selection runs with its defaults: the real process, environment and p
     const result = await reexecWithCompatibleNode({ executable: process.execPath, entrypointPath })
     assert.deepEqual(result, { code: 0, signal: null, forwardedSignal: null })
   } finally {
-    rmSync(root, { recursive: true, force: true })
+    removeTreeSync(root)
   }
 })
 
@@ -468,6 +469,6 @@ test("a path the user cannot search is not a Node candidate", { skip: process.pl
   } finally {
     chmodSync(locked, 0o700)
     chmodSync(path.join(root, "locked-bin"), 0o700)
-    rmSync(root, { recursive: true, force: true })
+    removeTreeSync(root)
   }
 })

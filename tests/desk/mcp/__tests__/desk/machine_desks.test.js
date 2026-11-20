@@ -11,6 +11,7 @@ import { readMachineDesks, resolveMachineDesk, machineDesksLine, parseDeskRegist
 import { formatBootText } from "../../../../../plugins/desk/mcp/src/runtime/boot-text.js"
 import { bootOnce } from "../../../../../plugins/desk/mcp/src/runtime/boot.js"
 import { otherDeskContaining, otherDeskOwning } from "../../../../../plugins/desk/mcp/src/util/desk-owner.js"
+import { removeTree } from "../_remove_tree.js"
 
 const REGISTRY = `# Desks
 
@@ -52,7 +53,7 @@ test("the registry names every desk with path, owner and remote, and says which 
 
 test("a machine nobody recorded a registry for lists nothing, whatever folders exist", async () => {
   const home = await machine()
-  await fs.rm(path.join(home, ".config"), { recursive: true })
+  await removeTree(path.join(home, ".config"))
   assert.deepEqual(readMachineDesks({ homeDir: home, env: {} }), [])
 })
 
@@ -64,7 +65,7 @@ test("a crew roster is not read as a registry, and a machine with no registry ha
 
 test("a spoke desk's pointer leads to the hub's registry", async () => {
   const home = await machine()
-  await fs.rm(path.join(home, ".config"), { recursive: true })
+  await removeTree(path.join(home, ".config"))
   await fs.mkdir(path.join(home, "hub", "_meta"), { recursive: true })
   await fs.writeFile(path.join(home, "hub", "_meta", "desks.md"), REGISTRY)
   await fs.writeFile(path.join(home, "personal-desk", "_meta", "desks.md"), "> **Canonical registry → `~/hub/_meta/desks.md`**\n")
@@ -143,7 +144,7 @@ test("a desk named both by its home folder and by the registry counts once, and 
   assert.equal(otherDeskOwning(path.join(home, "personal-desk"), path.join("work-track", "a.md"), { homeDir: home, spawn: () => ({ status: 1 }) }).root, path.join(home, "ms-desk"))
   await fs.mkdir(path.join(home, "personal-desk", "work-track"), { recursive: true })
   assert.equal(otherDeskOwning(path.join(home, "personal-desk"), path.join("work-track", "a.md"), { homeDir: home, spawn: () => ({ status: 1 }) }), null)
-  await fs.rm(path.join(home, "personal-desk", "work-track"), { recursive: true })
+  await removeTree(path.join(home, "personal-desk", "work-track"))
   assert.equal(otherDeskOwning(path.join(home, "personal-desk"), "no-such-track", { homeDir: home, spawn: () => ({ status: 1 }) }), null)
   const twice = readMachineDesks({ homeDir: home, env: { DESK_REGISTRY: path.join(home, "ms-desk", "_meta", "desks.md") } })
   assert.deepEqual(twice.map((desk) => desk.name), ["work-default", "personal", "gone", "cit"])

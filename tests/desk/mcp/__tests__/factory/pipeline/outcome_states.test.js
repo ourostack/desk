@@ -3,7 +3,7 @@
 import "../../_isolated_env.mjs"
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { cpSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
@@ -15,6 +15,7 @@ import { firstPassFormula, reworkFormula, signoffFormula } from "../../../../../
 import { stated } from "../../../../../../plugins/desk/mcp/src/factory/pipeline/number-states.js"
 import { buildJobTimeline } from "../../../../../../plugins/desk/mcp/src/factory/pipeline/timeline.js"
 import { serializePublished } from "../../../../../../plugins/desk/mcp/src/factory/publish.js"
+import { removeTreeSync } from "../../_remove_tree.js"
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const STORE = path.join(here, "..", "fixtures", "store")
@@ -106,7 +107,7 @@ test("the built jobs/<job>.json carries the state and reasons of each outcome re
       }
     }
   } finally {
-    rmSync(root, { recursive: true, force: true })
+    removeTreeSync(root)
   }
 })
 

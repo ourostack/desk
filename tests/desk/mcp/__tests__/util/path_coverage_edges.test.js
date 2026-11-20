@@ -5,10 +5,11 @@ import os from "node:os"
 import path from "node:path"
 import { syncBuiltinESMExports } from "node:module"
 import { claudeBindingPath, deskRelativePath, expandHome, isPathContained, loadActivationConfig, resolveActivationConfigPath, resolveDeskRoot, resolveDeskRootWithSource, resolveLocalPath, resolveStateHome, resolveWriteTarget, toDeskPath } from "../../../../../plugins/desk/mcp/src/util/paths.js"
+import { removeTree } from "../_remove_tree.js"
 
 async function temporaryRoot(t) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "desk-path-coverage-"))
-  t.after(() => fs.rm(root, { recursive: true, force: true }))
+  t.after(() => removeTree(root))
   return root
 }
 

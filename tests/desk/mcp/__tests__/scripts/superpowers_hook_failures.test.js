@@ -6,7 +6,7 @@ import * as fs from "node:fs"
 import * as path from "node:path"
 import { tmpdir } from "node:os"
 import { mock, test } from "node:test"
-import { removeTree } from "../_remove_tree.js"
+import { removeTree, removeTreeSync } from "../_remove_tree.js"
 
 const repo = fileURLToPath(new URL("../../../../../", import.meta.url))
 const require = createRequire(import.meta.url)
@@ -184,7 +184,7 @@ test("unqualified recovery root with created parent retains directory instead of
   ], io: ioWith({ renameSync(from, to) {
     if (to === path.join(root, "later")) {
       const recovery = path.dirname(from)
-      fs.rmSync(recovery, { recursive: true }); fs.mkdirSync(recovery)
+      removeTreeSync(recovery); fs.mkdirSync(recovery)
       throw new Error("foreign recovery root")
     }
     return fs.renameSync(from, to)

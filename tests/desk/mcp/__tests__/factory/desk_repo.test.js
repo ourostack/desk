@@ -10,6 +10,7 @@ import * as path from "node:path"
 
 import { createDeskReaders, parseCardRenames, readDeskRemote, resolveJobIdentity } from "../../../../../plugins/desk/mcp/src/factory/desk-repo.js"
 import { bindSession, jobId } from "../../../../../plugins/desk/mcp/src/factory/binding.js"
+import { removeTreeSync } from "../_remove_tree.js"
 
 let scratch
 let desk
@@ -627,7 +628,7 @@ before(() => {
 })
 
 after(() => {
-  rmSync(scratch, { recursive: true, force: true })
+  removeTreeSync(scratch)
 })
 
 // --- readTask --------------------------------------------------------------------
@@ -1018,7 +1019,7 @@ test("deskCommitsBetween returns nothing for an invalid window, outside a reposi
   try {
     assert.deepEqual(between("2026-09-25T08:00:00.000Z", "2026-09-25T13:00:00.000Z", outside), [])
   } finally {
-    rmSync(outside, { recursive: true, force: true })
+    removeTreeSync(outside)
   }
   const noGit = createDeskReaders({ deskRoot: desk, git: path.join(desk, "no-such-git") })
   assert.deepEqual(noGit.deskCommitsBetween("2026-09-25T08:00:00.000Z", "2026-09-25T13:00:00.000Z"), [])
@@ -1318,7 +1319,7 @@ test("resolveJobIdentity falls back to the current path for a desk that is not a
     writeIn(outside, "a-track/a-slug/task.md", card(["status: drafting"]))
     assert.deepEqual(resolveJobIdentity({ deskRoot: outside, track: "a-track", slug: "a-slug" }), { track: "a-track", slug: "a-slug" })
   } finally {
-    rmSync(outside, { recursive: true, force: true })
+    removeTreeSync(outside)
   }
 })
 
@@ -1426,7 +1427,7 @@ test("resolveJobIdentity shares one deadline across its Git calls and throws on 
       { code: "git_deadline" },
     )
   } finally {
-    rmSync(deadlineDesk, { recursive: true, force: true })
+    removeTreeSync(deadlineDesk)
   }
 })
 
@@ -1443,7 +1444,7 @@ test("resolveJobIdentity never reads a Git call killed by its time limit or a si
       { code: "git_deadline" },
     )
   } finally {
-    rmSync(killedDesk, { recursive: true, force: true })
+    removeTreeSync(killedDesk)
   }
 })
 
@@ -1466,7 +1467,7 @@ test("native: resolveJobIdentity follows a rename back to its birth slug on a re
     commitIn(winDesk, "2026-09-27T08:14:10Z", "birth-win: rename the slug")
     assert.deepEqual(resolveJobIdentity({ deskRoot: winDesk, track: "birth-win", slug: "new-slug" }), { track: "birth-win", slug: "origin-slug" })
   } finally {
-    rmSync(winDesk, { recursive: true, force: true })
+    removeTreeSync(winDesk)
   }
 })
 
@@ -1557,7 +1558,7 @@ test("readDeskRemote shares one deadline across its Git calls and throws on reac
     const readings = [0, 1000]
     assert.throws(() => readDeskRemote({ deskRoot: desk, deadline: 500, clock: () => readings.shift() ?? 1000 }), { code: "git_deadline" })
   } finally {
-    rmSync(desk, { recursive: true, force: true })
+    removeTreeSync(desk)
   }
 })
 
@@ -1600,7 +1601,7 @@ function withRepos(run) {
     const gitCalls = () => spawnSync("cat", [log], { encoding: "utf8" }).stdout.split("\n").filter((line) => line !== "")
     return run({ root, repo, loggingGit, gitCalls })
   } finally {
-    rmSync(root, { recursive: true, force: true })
+    removeTreeSync(root)
   }
 }
 
@@ -1800,7 +1801,7 @@ test("readOutcome gives the card's record, its status and the time of its last u
     assert.equal(found.record.flow.deliveries, 1)
     assert.deepEqual(found.record.returns, [])
   } finally {
-    rmSync(home, { recursive: true, force: true })
+    removeTreeSync(home)
   }
 })
 
@@ -1812,7 +1813,7 @@ test("an archived card is found, in each of the four places a card can lie", () 
       assert.equal(readOutcome(track, slug)?.record.flow.rev, 4, `${track}/${slug}`)
     }
   } finally {
-    rmSync(home, { recursive: true, force: true })
+    removeTreeSync(home)
   }
 })
 
@@ -1826,7 +1827,7 @@ test("readOutcome gives an empty record for a legacy card, null status and time 
     assert.equal(readOutcome("track", "missing"), null)
     for (const [track, slug] of [["..", "x"], ["track", "../live"], ["_meta", "x"], ["track", ""], [7, "x"]]) assert.equal(readOutcome(track, slug), null, `${track}/${slug}`)
   } finally {
-    rmSync(home, { recursive: true, force: true })
+    removeTreeSync(home)
   }
 })
 
@@ -1837,7 +1838,7 @@ test("readOutcome follows a person prefix and a renamed task like readTask does"
     assert.equal(createDeskReaders({ deskRoot: home, personPrefix: "desks/ari" }).readOutcome("track", "mine")?.status, "done")
     assert.equal(createDeskReaders({ deskRoot: home }).readOutcome("track", "mine"), null)
   } finally {
-    rmSync(home, { recursive: true, force: true })
+    removeTreeSync(home)
   }
 })
 
@@ -1852,7 +1853,7 @@ test("readOutcome follows Git's rename history to a task folder that moved", () 
     const { readOutcome } = createDeskReaders({ deskRoot: home })
     assert.equal(readOutcome("track", "before")?.record.signoff.state, "accepted")
   } finally {
-    rmSync(home, { recursive: true, force: true })
+    removeTreeSync(home)
   }
 })
 

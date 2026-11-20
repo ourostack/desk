@@ -9,6 +9,7 @@ import { rebuildIndex } from "../../../../../plugins/desk/mcp/src/indexer/index.
 import { openDb, closeDb } from "../../../../../plugins/desk/mcp/src/db/init.js"
 import { chunkTextHash } from "../../../../../plugins/desk/mcp/src/indexer/text-hash.js"
 import { mkTempRoot } from "../_temp_roots.js"
+import { removeTree } from "../_remove_tree.js"
 
 async function mkRoot() {
   return mkTempRoot("desk-idx-")
@@ -184,7 +185,7 @@ test("a lexical failure rolls back deletions, earlier documents, chunks and refs
     const snapshot = () => ["docs", "chunks", "refs_graph"].map((table) =>
       db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all())
     const before = snapshot()
-    await fs.rm(path.join(root, "track", "removed"), { recursive: true })
+    await removeTree(path.join(root, "track", "removed"))
     await w(root, "track/a/task.md", "# after")
     await w(root, "track/z/task.md", "# fail-late")
     db.exec(`CREATE TRIGGER reject_late_chunk BEFORE INSERT ON chunks

@@ -11,6 +11,7 @@ import { build, jobReportUrl, storePublicPlugins, storeRecords } from "../../../
 import { REASON_TEXT } from "../../../../../../plugins/desk/mcp/src/factory/pipeline/report.js"
 import { serializePublished } from "../../../../../../plugins/desk/mcp/src/factory/publish.js"
 import { stableStringify } from "../../../../../../plugins/desk/mcp/src/factory/pipeline/normalize.js"
+import { removeTreeSync } from "../../_remove_tree.js"
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const FIXTURES = path.join(here, "..", "fixtures")
@@ -65,7 +66,7 @@ function scratch(run) {
   try {
     return run(root)
   } finally {
-    rmSync(root, { recursive: true, force: true })
+    removeTreeSync(root)
   }
 }
 
@@ -124,7 +125,7 @@ test("build reads labels as data only: dotfiles are ignored, and malformed or un
   const store = path.join(root, "store")
   const out = path.join(root, "out")
   const reset = () => {
-    rmSync(store, { recursive: true, force: true })
+    removeTreeSync(store)
     cpSync(ROLLUP_STORE, store, { recursive: true })
   }
   const golden = bytesByPath(ROLLUP_EXPECTED)
@@ -153,7 +154,7 @@ test("build reads labels as data only: dotfiles are ignored, and malformed or un
     [() => symlinkSync(labelsFile, path.join(jobDir, "10000000-0000-4000-8000-000000000099.json")), "invalid_labels_entry"],
     [() => symlinkSync(jobDir, path.join(labelsDir, "99999999999999999999999999999999")), "invalid_labels_entry"],
     [() => {
-      rmSync(labelsDir, { recursive: true })
+      removeTreeSync(labelsDir)
       writeFileSync(labelsDir, SENTINEL)
     }, "labels_not_directory"],
   ]
@@ -286,7 +287,7 @@ test("build reads facts as data only and rejects unexpected entries, invalid byt
   rmSync(path.join(store, "facts", "notes.txt"))
   mkdirSync(path.join(store, "facts", "nested"))
   assert.throws(() => build({ storeDir: store, outDir: path.join(root, "out") }), { code: "facts_entry_not_regular_file" })
-  rmSync(path.join(store, "facts", "nested"), { recursive: true })
+  removeTreeSync(path.join(store, "facts", "nested"))
 
   const fact = path.join(store, "facts", readdirSync(path.join(store, "facts")).sort()[0])
   writeFileSync(fact, "{")

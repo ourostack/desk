@@ -19,6 +19,7 @@ import {
 } from "../../../../../plugins/desk/mcp/src/util/fm.js"
 import { friction_add } from "../../../../../plugins/desk/mcp/src/tools/friction.js"
 import { mkTempDeskRoot } from "../tools/_helpers.js"
+import { removeTree } from "../_remove_tree.js"
 
 test("vendored Unicode 16 category tables match their pinned source", async () => {
   const root = fileURLToPath(new URL("../../../../../plugins/desk/mcp/src/util/unicode-16/", import.meta.url))
@@ -113,7 +114,7 @@ test("equivalent-name symlinks cannot escape friction roots", async () => {
       /resolves outside the desk \(via a symbolic link\)/,
     )
   } finally {
-    await fs.rm(outside, { recursive: true, force: true })
+    await removeTree(outside)
   }
 })
 

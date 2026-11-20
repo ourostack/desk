@@ -3,10 +3,11 @@ import { test } from "node:test"
 import assert from "node:assert/strict"
 import { spawnSync } from "node:child_process"
 import { createRequire } from "node:module"
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs"
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
+import { removeTreeSync } from "../_remove_tree.js"
 
 const scripts = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "..", "..", ".github", "scripts")
 const { assignShards, shardFiles, loadDurations, defaultTablePath, WINDOWS_SHARDS, SHARD_TARGET_SECONDS } = await import(pathToFileURL(path.join(scripts, "suite-shards.mjs")).href)
@@ -101,7 +102,7 @@ test("checkTable names stale, unlisted and invalid entries", () => {
     assert.deepEqual(result.unlisted, [])
     assert.deepEqual(checkTable({ defaultSeconds: 5, files: {} }, dir).unlisted, ["a.test.js", "b.test.js"])
   } finally {
-    rmSync(dir, { recursive: true, force: true })
+    removeTreeSync(dir)
   }
 })
 
@@ -117,7 +118,7 @@ test("refresh takes the median of the runs, drops files that are gone and keeps 
     assert.equal(out.inputs, 2)
     assert.throws(() => refreshTable([], dir))
   } finally {
-    rmSync(dir, { recursive: true, force: true })
+    removeTreeSync(dir)
   }
 })
 
@@ -131,7 +132,7 @@ test("refresh takes the median per file, so one outlier run does not set the wei
     }
     assert.deepEqual(refreshTable([path.join(dir, "r")], dir).files, { "a.test.js": 39 })
   } finally {
-    rmSync(dir, { recursive: true, force: true })
+    removeTreeSync(dir)
   }
 })
 
@@ -185,7 +186,7 @@ test("the shard runner runs only its own files and reports its predicted load", 
     assert.deepEqual(ran(1), ["a.test.js"])
     assert.deepEqual(ran(2), ["b.test.js", "c.test.js"])
   } finally {
-    rmSync(dir, { recursive: true, force: true })
+    removeTreeSync(dir)
   }
 })
 

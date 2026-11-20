@@ -2,7 +2,7 @@
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import { spawnSync } from "node:child_process"
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs"
 import { createRequire } from "node:module"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
@@ -10,6 +10,7 @@ import { fileURLToPath } from "node:url"
 import { REASON_TEXT, ATTENTION_REASON_TEXT } from "../../../../../plugins/desk/mcp/src/factory/pipeline/report.js"
 import { ATTENTION_REASONS } from "../../../../../plugins/desk/mcp/src/factory/pipeline/attention.js"
 import { ENUMS } from "../../../../../plugins/desk/mcp/src/factory/schema.js"
+import { removeTreeSync } from "../_remove_tree.js"
 
 const require = createRequire(import.meta.url)
 const check = require("../../../../../scripts/check-factory-reason-text.cjs")
@@ -88,7 +89,7 @@ test("a local copy of the store file can be named instead of fetching", async ()
     const result = await check.run({ env: { FACTORY_REASON_TEXT_FILE: file }, root: repoRoot, fetchImpl: never })
     assert.equal(result.code, 0)
   } finally {
-    rmSync(dir, { recursive: true, force: true })
+    removeTreeSync(dir)
   }
 })
 
@@ -102,7 +103,7 @@ function cli(env) {
     try { written = readFileSync(summary, "utf8") } catch { /* no summary written */ }
     return { ...result, written, dir }
   } finally {
-    rmSync(dir, { recursive: true, force: true })
+    removeTreeSync(dir)
   }
 }
 
@@ -113,7 +114,7 @@ function withStoreFile(codes, body) {
     writeFileSync(file, codes === null ? "nothing" : storeFile(codes))
     return body(file)
   } finally {
-    rmSync(dir, { recursive: true, force: true })
+    removeTreeSync(dir)
   }
 }
 

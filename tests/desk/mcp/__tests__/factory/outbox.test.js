@@ -14,7 +14,6 @@ import {
   promises as fs,
   readdirSync,
   readFileSync,
-  rmSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs"
@@ -56,6 +55,7 @@ import {
 import { fakeRealPath } from "../_fake_real_root.js"
 import { osEnv } from "../_os_env.js"
 import { isWindows } from "../_platform.js"
+import { removeTreeSync } from "../_remove_tree.js"
 
 const nativeMac = { skip: process.platform !== "darwin" }
 
@@ -98,7 +98,7 @@ async function scratch(run) {
   try {
     return await run(env, base)
   } finally {
-    rmSync(base, { recursive: true, force: true })
+    removeTreeSync(base)
   }
 }
 
@@ -271,8 +271,8 @@ test("factoryStateRoot refuses a symlinked ancestor of XDG_STATE_HOME before cre
 test("factoryStateRoot refuses a symlinked path component among its own three segments", () => scratch(async (env) => {
   const root = await factoryStateRoot(env)
   const deskDir = path.join(env.XDG_STATE_HOME, "ouroboros-skills", "desk")
-  rmSync(root, { recursive: true, force: true })
-  rmSync(deskDir, { recursive: true, force: true })
+  removeTreeSync(root)
+  removeTreeSync(deskDir)
   const decoy = path.join(env.HOME, "decoy")
   mkdirSync(decoy, { recursive: true })
   symlinkSync(decoy, deskDir)
@@ -302,7 +302,7 @@ test("factoryStateRoot refuses a temp-directory desk root paired with a state ho
     /a temp-directory desk root paired with a factory state home outside the OS temp directory is refused/u,
   )
   assert.equal(existsSync(outsideTemp), false, "the refused call created nothing")
-  rmSync(deskRoot, { recursive: true, force: true })
+  removeTreeSync(deskRoot)
 }))
 
 test("factoryStateRoot allows a temp-directory desk root when its state home is also under the OS temp directory", () => scratch(async (env, base) => {

@@ -5,7 +5,6 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
-  rmSync,
   utimesSync,
   writeFileSync,
 } from "node:fs"
@@ -20,6 +19,7 @@ import { indexDbPath } from "../../../../../plugins/desk/mcp/src/db/init.js"
 import { callTool, TOOL_IMPLS } from "../../../../../plugins/desk/mcp/src/server.js"
 import { desk_status } from "../../../../../plugins/desk/mcp/src/tools/status.js"
 import { TOOL_DESCRIPTIONS, TOOL_NAMES } from "../../../../../plugins/desk/mcp/src/tool-names.js"
+import { removeTreeSync } from "../_remove_tree.js"
 
 const packageJson = JSON.parse(
   readFileSync(fileURLToPath(new URL("../../../../../plugins/desk/mcp/package.json", import.meta.url)), "utf8"),
@@ -60,7 +60,7 @@ test("desk_status reports the exact workspace write scope for OFF person values"
       })
     }
   } finally {
-    rmSync(root, { recursive: true, force: true })
+    removeTreeSync(root)
   }
 })
 
@@ -83,7 +83,7 @@ test("desk_status reports the exact normalized person write scope", async () => 
     const fromRoster = parseToolResult(await callTool({ deskRoot: root, name: "desk_status", input: {}, person: "ari", statusContext: { member } }))
     assert.deepEqual(fromRoster.write_scope, { mode: "person", person: "ari", relative_path: "desks/ari", source: "crew-roster", identity: "ari_microsoft" })
   } finally {
-    rmSync(root, { recursive: true, force: true })
+    removeTreeSync(root)
   }
 })
 
@@ -101,7 +101,7 @@ test("desk_status rejects every traversal and multi-segment alias family", async
       assert.match(JSON.parse(response.content[0].text).message, /alias/iu)
     }
   } finally {
-    rmSync(root, { recursive: true, force: true })
+    removeTreeSync(root)
   }
 })
 
@@ -156,7 +156,7 @@ test("desk_status reports root, runtime and search without creating .state", asy
     assert.equal(existsSync(dbPath), false, "status must not create the local index DB")
     assert.equal(existsSync(path.dirname(dbPath)), false, "status must not create .state during first-run checks")
   } finally {
-    rmSync(root, { recursive: true, force: true })
+    removeTreeSync(root)
   }
 })
 
@@ -194,7 +194,7 @@ test("desk_status reports active activation target and overlay chain when provid
     })
     assert.match(body.summary, /Active activation: ms-area:worker/u)
   } finally {
-    rmSync(root, { recursive: true, force: true })
+    removeTreeSync(root)
   }
 })
 
@@ -259,7 +259,7 @@ test("desk_status normalizes activation aliases and ignores malformed chain entr
     }))
     assert.equal(idBody.activation.selected_id, "desk:worker")
   } finally {
-    rmSync(root, { recursive: true, force: true })
+    removeTreeSync(root)
   }
 })
 
@@ -303,7 +303,7 @@ test("desk_status sanitizes malformed root context and reports nonexistent roots
     assert.equal(body.root.diagnostic, "desk_root_not_found")
     assert.equal(body.root.malformed_context, true)
   } finally {
-    rmSync(parent, { recursive: true, force: true })
+    removeTreeSync(parent)
   }
 })
 
@@ -318,6 +318,6 @@ test("desk_status reports search in plain words from the session's engine, with 
     assert.deepEqual(body.search, search)
     assert.match(body.summary, /Search is preparing 3 of 10 sections.*Desk removed its old search index \(9\.7 GB\)/u)
   } finally {
-    rmSync(root, { recursive: true, force: true })
+    removeTreeSync(root)
   }
 })

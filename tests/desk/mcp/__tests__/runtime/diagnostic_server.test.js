@@ -1,12 +1,13 @@
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import { spawnSync } from "node:child_process"
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { EventEmitter } from "node:events"
 import { PassThrough } from "node:stream"
 import * as path from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
+import { removeTreeSync } from "../_remove_tree.js"
 
 const repoRoot = path.resolve(fileURLToPath(new URL("../../../../..", import.meta.url)))
 const mcpRoot = path.join(repoRoot, "plugins", "desk", "mcp")
@@ -314,7 +315,7 @@ test("diagnostic MCP imports and serves with native and SDK module resolution po
     assert.equal(result.status, 0, result.stderr || result.stdout)
     assert.equal(result.stdout, "diagnostic-ok\n")
   } finally {
-    rmSync(root, { recursive: true, force: true })
+    removeTreeSync(root)
   }
 })
 

@@ -23,9 +23,10 @@
 // API-error line's model can be `<synthetic>`; PR URLs are usually GitHub
 // but the deriver must not assume it.
 
-import { mkdirSync, rmSync, writeFileSync } from "node:fs"
+import { mkdirSync, writeFileSync } from "node:fs"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
+import { removeTreeSync } from "../../../_remove_tree.js"
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 
@@ -809,7 +810,7 @@ export function generate({ outDir = here } = {}) {
   const oddShapes = buildOddShapesSession()
   const humanTurns = buildHumanTurnsSession()
 
-  rmSync(path.join(outDir, full.sessionId), { recursive: true, force: true })
+  removeTreeSync(path.join(outDir, full.sessionId))
   writeFileSync(path.join(outDir, `${full.sessionId}.jsonl`), toJsonl(full.lines))
   writeSubagents(path.join(outDir, full.sessionId), full.subagents)
 
@@ -817,11 +818,11 @@ export function generate({ outDir = here } = {}) {
   writeFileSync(path.join(outDir, `${unreadable.sessionId}.jsonl`), unreadable.raw)
   writeFileSync(path.join(outDir, `${noEnvelope.sessionId}.jsonl`), noEnvelope.raw)
   writeFileSync(path.join(outDir, `${NON_UUID_FILE_STEM}.jsonl`), nonUuid.raw)
-  rmSync(path.join(outDir, oddShapes.sessionId), { recursive: true, force: true })
+  removeTreeSync(path.join(outDir, oddShapes.sessionId))
   writeFileSync(path.join(outDir, `${oddShapes.sessionId}.jsonl`), oddShapes.raw)
   writeSubagents(path.join(outDir, oddShapes.sessionId), oddShapes.subagents)
 
-  rmSync(path.join(outDir, humanTurns.sessionId), { recursive: true, force: true })
+  removeTreeSync(path.join(outDir, humanTurns.sessionId))
   writeFileSync(path.join(outDir, `${humanTurns.sessionId}.jsonl`), toJsonl(humanTurns.lines))
   writeSubagents(path.join(outDir, humanTurns.sessionId), humanTurns.subagents)
 

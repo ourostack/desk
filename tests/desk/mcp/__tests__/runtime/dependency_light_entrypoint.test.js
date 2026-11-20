@@ -21,6 +21,7 @@ import { tmpdir } from "node:os"
 import * as path from "node:path"
 import { performance } from "node:perf_hooks"
 import { fileURLToPath, pathToFileURL } from "node:url"
+import { removeTreeSync } from "../_remove_tree.js"
 
 const repoRoot = path.resolve(
   fileURLToPath(new URL("../../../../..", import.meta.url)),
@@ -875,7 +876,7 @@ test("MCP entrypoint is dependency-light before bootstrap", async () => {
     assert.equal(result.code, 0, result.stderr || result.stdout)
     assert.deepEqual(JSON.parse(result.stdout), { root: "desk", person: "agent" })
   } finally {
-    rmSync(fixture.root, { recursive: true, force: true })
+    removeTreeSync(fixture.root)
   }
 })
 
@@ -908,7 +909,7 @@ test("dependency-isolated runtime children cannot resolve host modules through N
   } finally {
     if (previousNodePath === undefined) delete process.env.NODE_PATH
     else process.env.NODE_PATH = previousNodePath
-    rmSync(fixture.root, { recursive: true, force: true })
+    removeTreeSync(fixture.root)
   }
 })
 
@@ -924,7 +925,7 @@ test("restored runtime server import stays dependency-light until its search eng
     assert.equal(existsSync(fixture.commandLog), false, "server import must not shell out to npm/npx/curl/wget")
     assert.equal(existsSync(fixture.networkLog), false, "server import must not touch forbidden network modules before connect")
   } finally {
-    rmSync(fixture.root, { recursive: true, force: true })
+    removeTreeSync(fixture.root)
   }
 })
 
@@ -982,7 +983,7 @@ test("MCP entrypoint restores runtime dependencies offline and serves list-tools
     )
     assert.equal(existsSync(path.join(fixture.mcpRoot, "node_modules")), false)
   } finally {
-    rmSync(fixture.root, { recursive: true, force: true })
+    removeTreeSync(fixture.root)
   }
 })
 
@@ -1002,10 +1003,10 @@ test("MCP entrypoint keeps a diagnostic MCP live when the current runtime pack i
         .find((candidate) => statSync(candidate).isDirectory())
     }
     assert.ok(seedTargetDir, "runtime fixture must contain at least one committed target to synthesize ABI mismatch")
-    rmSync(wrongTargetDir, { recursive: true, force: true })
+    removeTreeSync(wrongTargetDir)
     cpSync(seedTargetDir, wrongTargetDir, { recursive: true })
     if (path.basename(seedTargetDir).endsWith(".saved-for-test")) {
-      rmSync(seedTargetDir, { recursive: true, force: true })
+      removeTreeSync(seedTargetDir)
     }
 
     const result = await runMcpStatusSession(fixture)
@@ -1055,6 +1056,6 @@ test("MCP entrypoint keeps a diagnostic MCP live when the current runtime pack i
     assert.doesNotMatch(result.stderr, /\n\s+at\s+/u)
     assertNoBootstrapSideEffects(fixture)
   } finally {
-    rmSync(fixture.root, { recursive: true, force: true })
+    removeTreeSync(fixture.root)
   }
 })

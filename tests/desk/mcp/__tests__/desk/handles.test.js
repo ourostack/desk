@@ -4,7 +4,7 @@
 
 import { test, afterEach } from "node:test"
 import { strict as assert } from "node:assert"
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 import {
@@ -16,6 +16,7 @@ import {
   resolveTrackHandle,
 } from "../../../../../plugins/desk/mcp/src/desk/handles.js"
 import { mkFakeRealRoot } from "../_fake_real_root.js"
+import { removeTreeSync } from "../_remove_tree.js"
 
 const ORIGINAL_STATE_HOME = process.env.XDG_STATE_HOME
 
@@ -104,7 +105,7 @@ test("under a node:test run, a real (non-temp) key folder is refused -- falling 
     assert.ok(isHandle("task", first), "still returns a valid handle, from the per-process fallback")
     assert.equal(existsSync(path.join(fakeReal, "ouroboros-skills")), false, "the guard refuses before creating anything under the fake real home")
   } finally {
-    rmSync(fakeReal, { recursive: true, force: true })
+    removeTreeSync(fakeReal)
   }
 })
 

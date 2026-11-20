@@ -1,10 +1,11 @@
 import { strict as assert } from "node:assert"
 import { test } from "node:test"
 import { createRequire } from "node:module"
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs"
+import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
+import { removeTreeSync } from "../_remove_tree.js"
 
 const repoRoot = path.resolve(fileURLToPath(new URL("../../../../..", import.meta.url)))
 const require = createRequire(import.meta.url)
@@ -41,7 +42,7 @@ function writeJson(root, relativePath, value) {
 }
 
 function removePath(root, relativePath) {
-  rmSync(path.join(root, relativePath), { force: true, recursive: true })
+  removeTreeSync(path.join(root, relativePath))
 }
 
 function skillBody(name) {
@@ -102,7 +103,7 @@ async function withFixtureRepo(fn) {
     createFixtureRepo(fixtureRoot)
     return await fn(fixtureRoot)
   } finally {
-    rmSync(tempRoot, { force: true, recursive: true })
+    removeTreeSync(tempRoot)
   }
 }
 

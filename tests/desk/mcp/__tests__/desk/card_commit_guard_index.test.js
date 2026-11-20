@@ -4,11 +4,12 @@
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import { spawnSync } from "node:child_process"
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 import { ensureCardGuard, hookScript, TOOL_COMMIT_ENV } from "../../../../../plugins/desk/mcp/src/desk/card-commit-guard.js"
 import { openDb } from "../../../../../plugins/desk/mcp/src/db/init.js"
+import { removeTreeSync } from "../_remove_tree.js"
 
 const CARD = "---\ntitle: x\nstatus: processing\n---\n\nbody\n"
 
@@ -54,9 +55,9 @@ test("ensureCardGuard installs once per desk per process and tries again after a
       openDb(other).close()
       assert.equal(readFileSync(path.join(other, ".git", "hooks", "pre-commit"), "utf8"), hookScript())
     } finally {
-      rmSync(other, { recursive: true, force: true })
+      removeTreeSync(other)
     }
   } finally {
-    rmSync(root, { recursive: true, force: true })
+    removeTreeSync(root)
   }
 })

@@ -6,12 +6,13 @@ import path from "node:path"
 import { spawn, spawnSync } from "node:child_process"
 import { once } from "node:events"
 import { writePosixNodeProvider } from "./_private_state_helpers.js"
+import { removeTree } from "../_remove_tree.js"
 
 test("POSIX provider shim retains Node options, literal arguments, stdin, diagnostics and exit status", {
   skip: process.platform === "win32" ? "POSIX stand-in contract; native Windows uses the actual provider" : false,
 }, async (t) => {
   const root = await fs.mkdtemp(path.join(tmpdir(), "provider fixture-"))
-  t.after(() => fs.rm(root, { recursive: true, force: true }))
+  t.after(() => removeTree(root))
   const providerPath = path.join(root, "powershell.exe")
   const marker = "--stack-trace-limit=51"
   const priorOptions = process.env.NODE_OPTIONS ?? ""
@@ -91,7 +92,7 @@ async function withOwnedProviders(t, body) {
     for (const state of children) state.abort()
     await Promise.all(children.map(state => state.closed))
     for (const state of children) t.signal.removeEventListener("abort", state.abort)
-    await fs.rm(root, { recursive: true, force: true })
+    await removeTree(root)
     t.diagnostic(JSON.stringify({ fixtureRemoved: root }))
   }
 }

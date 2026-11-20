@@ -5,6 +5,7 @@ import * as os from "node:os"
 import * as path from "node:path"
 import { spawnSync } from "node:child_process"
 import { commitWaitingLogs, settleLogs, waitingLogs } from "../../../../../plugins/desk/mcp/src/runtime/append-lane.js"
+import { removeTree } from "../_remove_tree.js"
 
 // Which task logs wait for a commit, how the push worker waits for them to go quiet, and what it does when Git will not commit them yet.
 
@@ -16,7 +17,7 @@ const git = (root, args) => {
 
 async function fixture(t) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "desk-append-lane-"))
-  t.after(() => fs.rm(root, { recursive: true, force: true }))
+  t.after(() => removeTree(root))
   git(root, ["init", "-q", "-b", "main"])
   git(root, ["config", "user.name", "Test"])
   git(root, ["config", "user.email", "test@example.com"])

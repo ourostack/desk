@@ -563,7 +563,7 @@ test("job-link resolves the card's birth path first when --desk is given, so a r
   git("config", "user.email", "fixture@example.invalid")
   git("add", "-A")
   git("commit", "-q", "-m", "create")
-  await fs.rm(path.join(desk, "track", "origin-slug"), { recursive: true })
+  await removeTree(path.join(desk, "track", "origin-slug"))
   await fs.mkdir(path.join(desk, "track", "new-slug"), { recursive: true })
   await fs.writeFile(path.join(desk, "track", "new-slug", "task.md"), "---\nstatus: drafting\n---\n\n# A task\n")
   git("add", "-A")

@@ -27,9 +27,10 @@ import {
   operatorNames,
   describeNameRejection,
 } from "../../../../../plugins/desk/mcp/src/desk/naming.js"
+import { removeTree } from "../_remove_tree.js"
 
 const tempRoots = new Set()
-after(() => Promise.all([...tempRoots].map((root) => fs.rm(root, { recursive: true, force: true }))))
+after(() => Promise.all([...tempRoots].map((root) => removeTree(root))))
 
 async function mkTempRoot() {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "desk-naming-test-"))

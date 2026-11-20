@@ -10,6 +10,7 @@ import { fileURLToPath } from "node:url"
 import { COUNT_CAPS, HOSTS, claudeFolderOf, listRootSessions } from "../../../../../plugins/desk/mcp/src/factory/capture-count.js"
 import { deriveCodexSession } from "../../../../../plugins/desk/mcp/src/factory/derive-codex.js"
 import { SENTINEL } from "./_session_helpers.js"
+import { removeTree } from "../_remove_tree.js"
 
 const A = "3b0c1f5e-8a1d-4c2e-9f3a-1b2c3d4e5f60"
 const B = "4b0c1f5e-8a1d-4c2e-9f3a-1b2c3d4e5f61"
@@ -21,7 +22,7 @@ async function home(run) {
   try {
     return await run(base, { HOME: base })
   } finally {
-    await rm(base, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })
+    await removeTree(base)
   }
 }
 
@@ -239,7 +240,7 @@ test("the Codex root rule agrees with deriveCodexSession on the existing fixture
     assert.ok(derivable >= listed.size)
     assert.ok([...joined].some((n) => n > 1))
   } finally {
-    await rm(copy, { recursive: true, force: true })
+    await removeTree(copy)
   }
 })
 

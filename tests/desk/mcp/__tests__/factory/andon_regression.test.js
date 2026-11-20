@@ -10,11 +10,12 @@
 
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 
 import { runAndonCommand } from "../../../../../plugins/desk/mcp/scripts/factory.js"
+import { removeTreeSync } from "../_remove_tree.js"
 
 const REPO = "example/test-factory"
 const TOKEN = "ghs_SENTINEL"
@@ -124,7 +125,7 @@ test("andon opens one issue when a release makes tool failures clearly worse, an
     assert.match(github.comments[0].body, /3\.5\.0/u)
     assert.equal(github.issues.length, 1)
   } finally {
-    rmSync(store, { recursive: true, force: true })
+    removeTreeSync(store)
   }
 })
 
@@ -140,6 +141,6 @@ test("andon opens nothing while either version has fewer than six independent jo
     assert.deepEqual((await andon(store, github)).alarms, [])
     assert.equal(github.issues.length, 0)
   } finally {
-    rmSync(store, { recursive: true, force: true })
+    removeTreeSync(store)
   }
 })

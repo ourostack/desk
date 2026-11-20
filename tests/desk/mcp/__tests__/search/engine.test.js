@@ -8,6 +8,7 @@ import { createSearchEngine, SEARCH_WORDING } from "../../../../../plugins/desk/
 import { loadEmbedder } from "../../../../../plugins/desk/mcp/src/search/embedder.js"
 import { mkTempDeskRoot, writeFile } from "../tools/_search_helpers.js"
 import { fixtureModel } from "./_model_fixture.js"
+import { removeTree } from "../_remove_tree.js"
 
 const CAR = "# Car notes\n\nMy car engine is about the vehicle.\n"
 const SOUP = "# Kitchen\n\nA soup recipe for the kitchen.\n"
@@ -216,7 +217,7 @@ test("a changed Markdown file is reread on its own; a folder, a vanished folder 
   await writeFile(deskRoot, "more/task-g/task.md", "# Plants\n\nmoss\n")
   engine.noteChange("more\\task-g\\task.md")
   assert.deepEqual(await hits("moss"), ["more/task-g/task.md"], "noteChange is the call a Desk write makes")
-  await fs.rm(path.join(deskRoot, "food"), { recursive: true })
+  await removeTree(path.join(deskRoot, "food"))
   await writeFile(deskRoot, "deps/node_modules/x/task.md", SOUP)
   await fs.mkdir(path.join(deskRoot, "cars", "task-z", "task.md"), { recursive: true })
   for (const rel of ["food/task-b/task.md", "deps/node_modules/x/task.md", "cars/task-z/task.md"]) notify("rename", rel)
@@ -224,7 +225,7 @@ test("a changed Markdown file is reread on its own; a folder, a vanished folder 
 
   // A full read after an edit and a removal picks up both.
   await writeFile(deskRoot, "cars/task-a/task.md", "# Car notes\n\nA bicycle now.\n")
-  await fs.rm(path.join(deskRoot, "garden"), { recursive: true })
+  await removeTree(path.join(deskRoot, "garden"))
   engine.noteChange(null)
   assert.deepEqual(await hits("bicycle"), ["cars/task-a/task.md"])
   assert.deepEqual(await hits("flowers"), [])

@@ -5,7 +5,7 @@ import { test } from "node:test"
 import assert from "node:assert/strict"
 import childProcess from "node:child_process"
 import { promises as fs } from "node:fs"
-import { mkdtempSync, renameSync, rmSync, symlinkSync, unlinkSync, utimesSync, writeFileSync } from "node:fs"
+import { mkdtempSync, renameSync, symlinkSync, unlinkSync, utimesSync, writeFileSync } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 
@@ -21,6 +21,7 @@ import {
   realpathExistingPrefix,
 } from "../../../../../plugins/desk/mcp/src/factory/os-protect.js"
 import { NO_ENOTDIR, NO_POSIX_MODES } from "../_platform.js"
+import { removeTreeSync } from "../_remove_tree.js"
 
 const NAMING = { label: "desk_test", subject: "test thing" }
 const nativeMac = { skip: process.platform !== "darwin" }
@@ -30,7 +31,7 @@ async function scratch(run) {
   try {
     return await run(base)
   } finally {
-    rmSync(base, { recursive: true, force: true })
+    removeTreeSync(base)
   }
 }
 

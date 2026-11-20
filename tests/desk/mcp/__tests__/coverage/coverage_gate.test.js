@@ -14,6 +14,7 @@ import {
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
+import { removeTreeSync } from "../_remove_tree.js"
 
 const repoRoot = path.resolve(
   fileURLToPath(new URL("../../../../..", import.meta.url)),
@@ -119,7 +120,7 @@ test("coverage gate reports a missing coverage report as a hard failure", async 
     assert.equal(result.ok, false)
     assert.match(result.issues.join("\n"), /coverage report.*missing/i)
   } finally {
-    rmSync(tmp, { recursive: true, force: true })
+    removeTreeSync(tmp)
   }
 })
 
@@ -164,7 +165,7 @@ test("coverage gate requires 100% coverage for new MCP entrypoints, source, MCP 
     assert.match(result.issues.join("\n"), /activation\/validate\.js.*lines.*99\.99/i)
     assert.match(result.issues.join("\n"), /validate-desk-activation\.cjs.*branches.*50/i)
   } finally {
-    rmSync(tmp, { recursive: true, force: true })
+    removeTreeSync(tmp)
   }
 })
 
@@ -189,7 +190,7 @@ test("coverage gate fails when a required new file is absent from the report", a
     assert.equal(result.ok, false)
     assert.match(result.issues.join("\n"), /missing coverage.*activation\/validate\.js/i)
   } finally {
-    rmSync(tmp, { recursive: true, force: true })
+    removeTreeSync(tmp)
   }
 })
 
@@ -218,7 +219,7 @@ test("coverage gate accepts relative report keys and flags missing metric blocks
     assert.match(result.issues.join("\n"), /validate\.js.*statements.*undefined/i)
     assert.deepEqual(result.checkedFiles, [relativeFile, missingMetricFile].sort())
   } finally {
-    rmSync(tmp, { recursive: true, force: true })
+    removeTreeSync(tmp)
   }
 })
 
@@ -285,7 +286,7 @@ test("coverage exclusions require an explicit owner and reason", async () => {
     assert.equal(missingPathExclusion.ok, false)
     assert.match(missingPathExclusion.issues.join("\n"), /missing coverage/i)
   } finally {
-    rmSync(tmp, { recursive: true, force: true })
+    removeTreeSync(tmp)
   }
 })
 
@@ -473,7 +474,7 @@ test("coverage command parity rejects CI/local drift", async () => {
     assert.doesNotMatch(partialPathFilter.issues.join("\n"), /pull_request.*scripts\/\*\.cjs/i)
     assert.match(partialPathFilter.issues.join("\n"), /push.*scripts\/\*\.cjs/i)
   } finally {
-    rmSync(tmp, { recursive: true, force: true })
+    removeTreeSync(tmp)
   }
 })
 
@@ -557,7 +558,7 @@ test("coverage runner discovers changed files from git state and falls back from
       included.sort(),
     )
   } finally {
-    rmSync(tmp, { recursive: true, force: true })
+    removeTreeSync(tmp)
   }
 })
 
@@ -593,7 +594,7 @@ test("coverage runner reports a moved file at its new path, committed, staged or
       ["new/committed.js", "new/staged.js", "new/unstaged.js"],
     )
   } finally {
-    rmSync(tmp, { recursive: true, force: true })
+    removeTreeSync(tmp)
   }
 })
 
@@ -801,7 +802,7 @@ test("coverage runner default adapters use the current process environment", asy
 test("coverage discovery's default Git adapters read a real uncommitted source fixture", async t => {
   const { collectChangedFiles, collectChangedCoverageFiles, changedSinceMergeBase } = await loadRunner()
   const tmp = makeTempDir()
-  t.after(() => rmSync(tmp, { recursive: true, force: true }))
+  t.after(() => removeTreeSync(tmp))
   const fixtureRoot = path.join(tmp, "repo")
   const initialized = spawnSync("git", ["init", "--quiet", fixtureRoot], { encoding: "utf8" })
   assert.equal(initialized.status, 0, initialized.stderr)
@@ -989,7 +990,7 @@ test("coverage runner filters documented exclusions before maintained instrument
     const writes = { stdout: "", stderr: "" }
     const fsOps = {
       makeTempDir: () => path.join(tmp, `run-${Date.now()}-${Math.random()}`),
-      removeDir: (dir) => rmSync(dir, { recursive: true, force: true }),
+      removeDir: (dir) => removeTreeSync(dir),
       readText: (file) => readFileSync(file, "utf8"),
       writeText: (file, text) => writeFixture(path.dirname(file), path.basename(file), text),
     }
@@ -1014,7 +1015,7 @@ test("coverage runner filters documented exclusions before maintained instrument
     assert.deepEqual(producerConfig.include, ["plugins/desk/mcp/src/coverage/gate.js"])
     assert.match(writes.stdout, /passed for 1 changed production file/)
   } finally {
-    rmSync(tmp, { recursive: true, force: true })
+    removeTreeSync(tmp)
   }
 })
 
@@ -1085,7 +1086,7 @@ test("coverage runner returns child status, coverage failures, and success codes
     }
     const fsOps = {
       makeTempDir: () => path.join(tmp, `run-${Date.now()}-${Math.random()}`),
-      removeDir: (dir) => rmSync(dir, { recursive: true, force: true }),
+      removeDir: (dir) => removeTreeSync(dir),
       readText: (file) => readFileSync(file, "utf8"),
       writeText: (file, text) => writeFixture(path.dirname(file), path.basename(file), text),
     }
@@ -1160,7 +1161,7 @@ test("coverage runner returns child status, coverage failures, and success codes
     assert.equal(success, 0)
     assert.match(successIo.writes.stdout, /passed for 1 changed production file/)
   } finally {
-    rmSync(tmp, { recursive: true, force: true })
+    removeTreeSync(tmp)
   }
 })
 
@@ -1268,7 +1269,7 @@ test("coverage required-file discovery includes production targets and excludes 
       [],
     )
   } finally {
-    rmSync(tmp, { recursive: true, force: true })
+    removeTreeSync(tmp)
   }
 })
 
@@ -1304,7 +1305,7 @@ test("coverage required-file discovery admits the offline evaluation implementat
       included.sort(),
     )
   } finally {
-    rmSync(tmp, { recursive: true, force: true })
+    removeTreeSync(tmp)
   }
 })
 

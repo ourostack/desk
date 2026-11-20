@@ -8,7 +8,7 @@
 
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
-import { mkdirSync, mkdtempSync, cpSync, readFileSync, rmSync } from "node:fs"
+import { mkdirSync, mkdtempSync, cpSync, readFileSync } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
@@ -23,6 +23,7 @@ import { deriveCopilotSession } from "../../../../../plugins/desk/mcp/src/factor
 import { bindSession } from "../../../../../plugins/desk/mcp/src/factory/binding.js"
 import { SESSION_IDS } from "./fixtures/claude/make.js"
 import { SESSIONS, buildSessionStore, defaultStoreRows, fakeCommitResolver } from "./fixtures/copilot/make.js"
+import { removeTreeSync } from "../_remove_tree.js"
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const FIXTURES = path.join(here, "fixtures")
@@ -730,7 +731,7 @@ async function derivedFixtures() {
       }
     }
   } finally {
-    rmSync(home, { recursive: true, force: true })
+    removeTreeSync(home)
   }
   return out
 }

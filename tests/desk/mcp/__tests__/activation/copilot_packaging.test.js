@@ -13,6 +13,7 @@ import {
   runCopilotBundleGenerator,
   validateCopilotPackagingContract,
 } from "../../../../../tools/desk-build/activation/copilot-bundle.js"
+import { removeTreeSync } from "../_remove_tree.js"
 
 const repoRoot = path.resolve(
   fileURLToPath(new URL("../../../../..", import.meta.url)),
@@ -620,7 +621,7 @@ test("the bundle writer and its CLI entry point produce the artifact in a scratc
     assert.deepEqual(written, [`wrote ${copilotBundlePath}\n`])
     assert.deepEqual(JSON.parse(readFileSync(generated.artifactPath, "utf8")), expectedCopilotBundle())
   } finally {
-    rmSync(scratchRoot, { recursive: true, force: true })
+    removeTreeSync(scratchRoot)
   }
   assert.deepEqual(
     readFileSync(committedBundlePath),
@@ -683,7 +684,7 @@ test("the bundle writer resolves its destination from an explicit root, the envi
   } finally {
     if (previous === undefined) delete process.env.DESK_COPILOT_BUNDLE_REPO_ROOT
     else process.env.DESK_COPILOT_BUNDLE_REPO_ROOT = previous
-    rmSync(scratchRoot, { recursive: true, force: true })
+    removeTreeSync(scratchRoot)
   }
   assert.deepEqual(
     readFileSync(committedBundlePath),

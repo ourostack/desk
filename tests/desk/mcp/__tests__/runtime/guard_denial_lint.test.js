@@ -6,7 +6,7 @@
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import { spawnSync } from "node:child_process"
-import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
+import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
@@ -16,6 +16,7 @@ import { assertNotRealStateUnderTest as assertNotRealFactoryState } from "../../
 import { hookScript } from "../../../../../plugins/desk/mcp/src/desk/card-commit-guard.js"
 import { checkDelivery } from "../../../../../plugins/desk/hooks/lib/delivery-stop.cjs"
 import { scratch, ID, START, END } from "../factory/_session_helpers.js"
+import { removeTreeSync } from "../_remove_tree.js"
 
 const plugin = fileURLToPath(new URL("../../../../../plugins/desk/", import.meta.url))
 
@@ -34,7 +35,7 @@ test("the rule: a first sentence of at most 120 characters that starts with a ve
 
 test("the pre-commit card guard's refusal opens with the fix, naming the staged card", (t) => {
   const root = realpathSync(mkdtempSync(path.join(tmpdir(), "lint-precommit-")))
-  t.after(() => rmSync(root, { recursive: true, force: true }))
+  t.after(() => removeTreeSync(root))
   const git = (...args) => spawnSync("git", args, { cwd: root, encoding: "utf8", env: { ...process.env, GIT_CONFIG_GLOBAL: path.join(root, "none"), GIT_CONFIG_NOSYSTEM: "1" } })
   git("init", "-q", "-b", "main")
   git("config", "user.email", "fixture@example.invalid"); git("config", "user.name", "Fixture")

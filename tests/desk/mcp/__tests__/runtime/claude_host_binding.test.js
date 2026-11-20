@@ -1,12 +1,12 @@
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import { execFileSync } from "node:child_process"
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 // A session that has just closed can still hold a fixture file for a moment on Windows, and the synchronous removal does not retry that refusal.
-import { removeTree } from "../_remove_tree.js"
+import { removeTree, removeTreeSync } from "../_remove_tree.js"
 
 const repoRoot = path.resolve(fileURLToPath(new URL("../../../../..", import.meta.url)))
 const mcpRoot = path.join(repoRoot, "plugins", "desk", "mcp")
@@ -65,7 +65,7 @@ test("isDeskWorkspace recognizes solo desks and crew workspaces but not ordinary
     assert.equal(pathsModule.isDeskWorkspace(""), false)
     assert.equal(pathsModule.isDeskWorkspace(undefined), false)
   } finally {
-    rmSync(fixture.root, { recursive: true, force: true })
+    removeTreeSync(fixture.root)
   }
 })
 
@@ -84,7 +84,7 @@ test("a host project that is itself a desk outranks the saved binding and $DESK 
     assert.equal(result.root, fixture.project)
     assert.equal(result.source, "host-project")
   } finally {
-    rmSync(fixture.root, { recursive: true, force: true })
+    removeTreeSync(fixture.root)
   }
 })
 
@@ -104,7 +104,7 @@ test("explicit and host-session roots still outrank the host project", () => {
     })
     assert.equal(hostSession.source, "host-session-root")
   } finally {
-    rmSync(fixture.root, { recursive: true, force: true })
+    removeTreeSync(fixture.root)
   }
 })
 
@@ -120,7 +120,7 @@ test("a host project that is not a desk is recorded and falls through without fa
     assert.equal(result.source, "env:DESK")
     assert.deepEqual(result.tried.map((entry) => entry.source), ["host-project", "env:DESK"], "the folder is looked at first and recorded")
   } finally {
-    rmSync(fixture.root, { recursive: true, force: true })
+    removeTreeSync(fixture.root)
   }
 })
 
@@ -148,7 +148,7 @@ test("startup activation config falls back to the Claude plugin data binding", (
     assert.equal(pathsModule.claudeBindingPath({ CLAUDE_PLUGIN_DATA: fixture.pluginData }), binding)
     assert.equal(pathsModule.claudeBindingPath({}), null)
   } finally {
-    rmSync(fixture.root, { recursive: true, force: true })
+    removeTreeSync(fixture.root)
   }
 })
 
@@ -171,7 +171,7 @@ test("startup root resolution uses CLAUDE_PROJECT_DIR and the plugin data bindin
     assert.equal(fromBinding.root, fixture.bound)
     assert.equal(fromBinding.source, "activation-config")
   } finally {
-    rmSync(fixture.root, { recursive: true, force: true })
+    removeTreeSync(fixture.root)
   }
 })
 
@@ -410,7 +410,7 @@ test("resolve-desk-root runs when its path goes through a symlink, as under the 
     assert.equal(isEntrypoint(undefined, scriptUrl), false)
     assert.equal(isEntrypoint(), false, "under the test runner this module is not the entrypoint")
   } finally {
-    rmSync(fixture.root, { recursive: true, force: true })
+    removeTreeSync(fixture.root)
   }
 })
 
@@ -430,6 +430,6 @@ test("resolve-desk-root script reports the same root the server would use", () =
     assert.ok(none.tried.length >= 3)
     assert.ok(none.tried.every((entry) => !entry.path.endsWith(`${path.sep}ms-desk`)))
   } finally {
-    rmSync(fixture.root, { recursive: true, force: true })
+    removeTreeSync(fixture.root)
   }
 })

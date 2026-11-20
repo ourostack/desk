@@ -2,16 +2,17 @@
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import { spawnSync } from "node:child_process"
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 
 import { readCopilotSession } from "../../../../../plugins/desk/mcp/src/runtime/copilot-session.js"
+import { removeTreeSync } from "../_remove_tree.js"
 
 const plugin = fileURLToPath(new URL("../../../../../plugins/desk/", import.meta.url))
 const ROOT = realpathSync(mkdtempSync(path.join(tmpdir(), "copilot-start-")))
-test.after(() => rmSync(ROOT, { recursive: true, force: true }))
+test.after(() => removeTreeSync(ROOT))
 
 function start(input, name, extraEnv = {}) {
   const home = path.join(ROOT, name)

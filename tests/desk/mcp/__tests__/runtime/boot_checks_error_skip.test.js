@@ -12,12 +12,13 @@
 // HOME or the network -- `launchRepair` is the same test seam
 // `index_drift` boot checks already use.
 import { test, after, beforeEach } from "node:test"
-import { mkdtempSync, rmSync } from "node:fs"
+import { mkdtempSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { strict as assert } from "node:assert"
 
 import { runBootChecks } from "../../../../../plugins/desk/hooks/lib/boot-checks.cjs"
+import { removeTreeSync } from "../_remove_tree.js"
 // Every call gets its own throwaway HOME, so the filing throttle's stamp files never land under the process HOME and a rerun within the hour is never "already queued".
 const tempHomes = []
 const isolatedEnv = () => {
@@ -25,7 +26,7 @@ const isolatedEnv = () => {
   tempHomes.push(home)
   return { HOME: home, XDG_STATE_HOME: path.join(home, "state") }
 }
-after(() => { for (const home of tempHomes) rmSync(home, { recursive: true, force: true }) })
+after(() => { for (const home of tempHomes) removeTreeSync(home) })
 const quiet = { launchRepair: async () => {}, launch: async () => {} }
 // These cases test error classification, not cold import or filesystem latency.
 beforeEach((t) => { t.mock.method(performance, "now", () => 0) })

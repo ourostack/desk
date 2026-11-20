@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs"
+import { mkdtempSync, readFileSync, readdirSync } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
@@ -14,6 +14,7 @@ import { LABEL_UNAVAILABLE } from "../../../../../../plugins/desk/mcp/src/factor
 import { ATTENTION_REASONS } from "../../../../../../plugins/desk/mcp/src/factory/pipeline/attention.js"
 import { build } from "../../../../../../plugins/desk/mcp/src/factory/pipeline/build.js"
 import { buildJobTimeline, buildTimelines } from "../../../../../../plugins/desk/mcp/src/factory/pipeline/timeline.js"
+import { removeTreeSync } from "../../_remove_tree.js"
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const STORE = path.join(here, "..", "fixtures", "store")
@@ -443,7 +444,7 @@ test("every reason and field a page can print has plain text, found structurally
       }
     }
   } finally {
-    rmSync(root, { recursive: true, force: true })
+    removeTreeSync(root)
   }
   // Reasons that are not reasons to print: the label-check codes, the schema string, and facts keys named `reason` in the coverage entries are all in the map or listed here.
   const NOT_PRINTED = new Set(["completed"])
@@ -693,7 +694,7 @@ test("a store with finished jobs and no outcome records does not say that nothin
     assert.match(page, /Left out of the count: 2 jobs \(no outcome record is available\)/u)
     assert.doesNotMatch(page, /no job has been delivered/u)
   } finally {
-    rmSync(root, { recursive: true, force: true })
+    removeTreeSync(root)
   }
 })
 

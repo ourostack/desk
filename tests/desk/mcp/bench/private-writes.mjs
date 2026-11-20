@@ -6,6 +6,7 @@ import * as fs from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
+import { removeTreeSync } from "../__tests__/_remove_tree.js"
 
 const args = process.argv.slice(2)
 const arg = (name, fallback) => (args.includes(name) ? args[args.indexOf(name) + 1] : fallback)
@@ -43,7 +44,7 @@ try {
 } catch (error) {
   failure = String(error?.message ?? error)
 }
-fs.rmSync(base, { recursive: true, force: true })
+removeTreeSync(base)
 const percentile = (values, p) => [...values].sort((a, b) => a - b)[Math.min(values.length - 1, Math.floor(values.length * p))]
 const stat = (rows) => (rows.length === 0 ? null : { count: rows.length, totalMs: Math.round(rows.reduce((sum, r) => sum + r.ms, 0)), meanMs: +(rows.reduce((sum, r) => sum + r.ms, 0) / rows.length).toFixed(1), p50Ms: +percentile(rows.map((r) => r.ms), 0.5).toFixed(1), p95Ms: +percentile(rows.map((r) => r.ms), 0.95).toFixed(1), maxMs: +Math.max(...rows.map((r) => r.ms)).toFixed(1) })
 console.log(JSON.stringify({ label, platform: process.platform, n, failure, firstWrite: times[0] ? +times[0].ms.toFixed(1) : null, createNew: stat(times.filter((t) => t.pass === 0)), overwrite: stat(times.filter((t) => t.pass === 1)) }))

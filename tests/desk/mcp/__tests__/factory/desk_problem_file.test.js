@@ -16,6 +16,7 @@ import { osEnv } from "../_os_env.js"
 import { mkTempRoot } from "../_temp_roots.js"
 import { LAUNCH_STAMP_DIR, MAX_LAUNCH_STAMPS, endLaunch, launchStampKey, pendingLaunchTimes } from "../../../../../plugins/desk/mcp/src/factory/filer-launch.js"
 import { shouldLaunchFiler } from "../../../../../plugins/desk/mcp/src/runtime/filer-throttle.js"
+import { removeTree } from "../_remove_tree.js"
 
 const SCRIPT = fileURLToPath(new URL("../../../../../plugins/desk/mcp/scripts/file-desk-problem.js", import.meta.url))
 
@@ -714,11 +715,11 @@ test("finding 11: a stamp that cannot be read is a pending launch as of its time
   endLaunch(env, { mechanism: "done", signature: "x" })
   assert.deepEqual(JSON.parse(await fs.readFile(done, "utf8")), { at: 7, pending: false })
   for (const name of ["broken.json", "big.json", "timeless.json"]) await fs.rm(path.join(dir, name))
-  await fs.rm(path.join(dir, "folder.json"), { recursive: true })
+  await removeTree(path.join(dir, "folder.json"))
   assert.deepEqual(pendingLaunchTimes(env), [])
   for (let index = 0; index < MAX_LAUNCH_STAMPS + 1; index += 1) await fs.writeFile(path.join(dir, `${index}.json`), "{}")
   assert.deepEqual(pendingLaunchTimes(env, { now: () => 42 }), [42])
-  await fs.rm(dir, { recursive: true })
+  await removeTree(dir)
   await fs.writeFile(dir, "not a folder")
   assert.deepEqual(pendingLaunchTimes(env, { now: () => 43 }), [43])
 }))

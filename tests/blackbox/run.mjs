@@ -16,6 +16,7 @@ import { McpSession, NativeReceiptCollector, nativeReceiptLaunch, nativeReceiptT
 import { hookContext, hookEntries, runHook } from "./lib/hooks.mjs"
 import { claudeConfigDir, copyTree, deskStateDir, git, installPlugins, makeDesk, makeHome, makeTempRoot, NOTES, personEnv, WINDOWS } from "./lib/world.mjs"
 import { treeRssKiB } from "./lib/proc.mjs"
+import { removeTreeSync } from "../desk/mcp/__tests__/_remove_tree.js"
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const repoRoot = path.resolve(here, "..", "..")
@@ -1155,7 +1156,7 @@ async function cleanup(tempRoot, keep) {
   if (!keep) {
     for (let attempt = 0; attempt < 5; attempt++) {
       try {
-        fs.rmSync(tempRoot, { recursive: true, force: true })
+        removeTreeSync(tempRoot)
         break
       } catch {
         await sleep(1000)

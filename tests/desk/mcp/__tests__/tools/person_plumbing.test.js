@@ -7,12 +7,13 @@
 
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { mkdtempSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 import { parseArgs, resolveStartupRuntimeCacheDir } from "../../../../../plugins/desk/mcp/index.js"
 import { callTool, TOOL_IMPLS } from "../../../../../plugins/desk/mcp/src/server.js"
 import { mkTempDeskRoot } from "./_helpers.js"
+import { removeTreeSync } from "../_remove_tree.js"
 
 // ── arg-parse ───────────────────────────────────────────────────────────────
 
@@ -75,7 +76,7 @@ test("parseArgs and runtime cache resolution handle activation-config edge cases
       path.join(root, "runtime-cache"),
     )
   } finally {
-    rmSync(root, { recursive: true, force: true })
+    removeTreeSync(root)
   }
 })
 

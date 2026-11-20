@@ -14,6 +14,7 @@ import * as path from "node:path"
 import { doctorRuntime } from "../../../../../plugins/desk/mcp/src/tools/doctor.js"
 import { legacyLedgerPartitions, LEGACY_LEDGER_SEGMENTS } from "../../../../../plugins/desk/mcp/src/protected/legacy-ledger.js"
 import { resolveStateHome } from "../../../../../plugins/desk/mcp/src/util/paths.js"
+import { removeTreeSync } from "../_remove_tree.js"
 
 function makeState() {
   const base = mkdtempSync(path.join(tmpdir(), "desk-legacy-ledger-"))
@@ -77,7 +78,7 @@ test("doctor reports zero legacy partitions when the retired store never existed
     writeFileSync(path.join(state.stateHome, "ouroboros-skills", "desk"), "not a folder")
     assert.deepEqual(legacyLedgerPartitions({ env }), { partitions: 0, path: state.ledgerDir })
   } finally {
-    rmSync(state.base, { recursive: true, force: true })
+    removeTreeSync(state.base)
   }
 })
 
@@ -98,7 +99,7 @@ test("doctor reports one and many legacy partitions by count only and never chan
       assert.doesNotMatch(JSON.stringify(body), /private payload/u)
       assert.deepEqual(snapshot(state.stateHome), before)
     } finally {
-      rmSync(state.base, { recursive: true, force: true })
+      removeTreeSync(state.base)
     }
   }
 })
@@ -116,7 +117,7 @@ test("the legacy count uses ~/.local/state when XDG_STATE_HOME is unset or blank
     // Without HOME in the environment, an absolute XDG_STATE_HOME still decides the path on its own.
     assert.deepEqual(legacyLedgerPartitions({ env: { XDG_STATE_HOME: path.join(state.base, ".local", "state") } }), { partitions: 2, path: ledgerDir })
   } finally {
-    rmSync(state.base, { recursive: true, force: true })
+    removeTreeSync(state.base)
   }
 })
 
@@ -137,7 +138,7 @@ test("a symlinked legacy folder or partition is reported, never followed", () =>
     symlinkSync(path.join(elsewhere, readdirSync(elsewhere)[0]), path.join(state.ledgerDir, "linked"))
     assert.deepEqual(legacyLedgerPartitions({ env }), { partitions: 1, path: state.ledgerDir })
   } finally {
-    rmSync(state.base, { recursive: true, force: true })
+    removeTreeSync(state.base)
   }
 })
 
@@ -150,7 +151,7 @@ test("an unreadable legacy folder is reported as uncounted, not as zero", { skip
     assert.deepEqual(legacyLedgerPartitions({ env }), { partitions: null, path: state.ledgerDir, unavailable: "unreadable" })
   } finally {
     chmodSync(state.ledgerDir, 0o700)
-    rmSync(state.base, { recursive: true, force: true })
+    removeTreeSync(state.base)
   }
 })
 
@@ -166,7 +167,7 @@ test("a legacy folder whose parent cannot be searched is reported as uncounted, 
     assert.match(doctorRuntime({ input: {}, env }).summary, /the legacy folder could not be counted \(unreadable\)/u)
   } finally {
     chmodSync(parent, 0o700)
-    rmSync(state.base, { recursive: true, force: true })
+    removeTreeSync(state.base)
   }
 })
 
@@ -178,6 +179,6 @@ test("preview doctor carries no legacy ledger count", () => {
     assert.equal(body.legacy_work_ledger, undefined)
     assert.doesNotMatch(JSON.stringify(body), /work-ledger/u)
   } finally {
-    rmSync(state.base, { recursive: true, force: true })
+    removeTreeSync(state.base)
   }
 })

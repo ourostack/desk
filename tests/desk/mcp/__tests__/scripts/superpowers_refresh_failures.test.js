@@ -7,7 +7,7 @@ import { createRequire } from "node:module"
 import { fileURLToPath } from "node:url"
 import { test } from "node:test"
 import { execFileSync, spawnSync } from "node:child_process"
-import { removeTree } from "../_remove_tree.js"
+import { removeTree, removeTreeSync } from "../_remove_tree.js"
 import { otherFile } from "../_file_identity.js"
 
 const repo = fileURLToPath(new URL("../../../../../", import.meta.url))
@@ -293,8 +293,8 @@ for (const fault of ["journal", "directory", "missing", "rearm-fails"]) {
       if (!injected && path.basename(file).startsWith("superpowers-hook-candidate-")) {
         injected = true
         const guard = path.join(f.root, fs.readdirSync(f.root).find((name) => name.startsWith(".superpowers-hook-transaction-guard-")))
-        if (fault === "directory") { fs.rmSync(guard, { recursive: true }); fs.mkdirSync(guard) }
-        if (["missing", "rearm-fails"].includes(fault)) fs.rmSync(guard, { recursive: true })
+        if (fault === "directory") { removeTreeSync(guard); fs.mkdirSync(guard) }
+        if (["missing", "rearm-fails"].includes(fault)) removeTreeSync(guard)
         else fs.writeFileSync(path.join(guard, "journal.json"), "foreign bytes")
       }
     } }
@@ -317,7 +317,7 @@ for (const fault of ["journal", "directory"]) {
       fs.rmSync(file, ...args)
       if (file === candidate) {
         const guard = path.join(f.root, fs.readdirSync(f.root).find((name) => name.startsWith(".superpowers-hook-transaction-guard-")))
-        if (fault === "directory") { fs.rmSync(guard, { recursive: true }); fs.mkdirSync(guard) }
+        if (fault === "directory") { removeTreeSync(guard); fs.mkdirSync(guard) }
         fs.writeFileSync(path.join(guard, "journal.json"), "foreign during cleanup")
       }
     } }

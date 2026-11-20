@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs"
+import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs"
 import { resolveBash } from "../../../../../plugins/desk/mcp/src/util/bash.js"
 import { execFileSync, spawn, spawnSync } from "node:child_process"
 import * as path from "node:path"
@@ -22,6 +22,7 @@ import {
 const mcpRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../../../plugins/desk/mcp")
 const deskPluginRoot = path.resolve(mcpRoot, "..")
 import { migrationLine as bootMigrationLine } from "../../../../../plugins/desk/hooks/lib/boot-checks.cjs"
+import { removeTreeSync } from "../_remove_tree.js"
 
 function migrationText({ id, safety = "safe", restart = false, agent = null, detect = "exit 0", check = "exit 0", migrate = "exit 0", announce = "Done.", description = "a test migration" }) {
   return [
@@ -311,7 +312,7 @@ test("a block file that cannot be removed after the run does not fail the run", 
   } finally {
     for (const folder of folders) {
       chmodSync(folder, 0o700)
-      rmSync(folder, { recursive: true, force: true })
+      removeTreeSync(folder)
     }
   }
 })

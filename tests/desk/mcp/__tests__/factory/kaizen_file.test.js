@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { mkdirSync, mkdtempSync, promises as fs, rmSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, promises as fs, writeFileSync } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 
@@ -9,6 +9,7 @@ import { readStatus, setConsent, writeMarker, writeStatus } from "../../../../..
 import { indexJob } from "./_index_helper.js"
 import { parseCard } from "../../../../../plugins/desk/mcp/src/factory/pipeline/kaizen.js"
 import { osEnv } from "../_os_env.js"
+import { removeTreeSync } from "../_remove_tree.js"
 
 const TOKEN = "ghs_SENTINEL"
 const JOB = "9f2c4b1a7d3e5f60718293a4b5c6d7e8"
@@ -25,7 +26,7 @@ async function scratch(run) {
   try {
     return await run({ env, deskRoot, base })
   } finally {
-    rmSync(base, { recursive: true, force: true })
+    removeTreeSync(base)
   }
 }
 
