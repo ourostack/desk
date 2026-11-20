@@ -5,7 +5,7 @@ import { strict as assert } from "node:assert"
 import * as path from "node:path"
 import { promises as fs } from "node:fs"
 import { spawnSync } from "node:child_process"
-import { friction_add } from "../../../../../plugins/desk/mcp/src/tools/friction.js"
+import { friction_add as fileFriction } from "../../../../../plugins/desk/mcp/src/tools/friction.js"
 import { today } from "../../../../../plugins/desk/mcp/src/util/fm.js"
 import { mkTempDeskRoot, exists } from "./_helpers.js"
 import { osEnv } from "../_os_env.js"
@@ -13,6 +13,9 @@ import { factoryStateRoot } from "../../../../../plugins/desk/mcp/src/factory/ou
 import { fingerprintOf } from "../../../../../plugins/desk/mcp/src/factory/kaizen-file.js"
 import { cardFile, claimNext, readCards, updateCard } from "../../../../../plugins/desk/mcp/src/desk/improvement-cards.js"
 import { notCommitted } from "./_route_around.js"
+
+// The older cases are about the entry and the card; none may reach GitHub, so they file no issue unless they say so.
+const friction_add = (args) => fileFriction({ fileIssue: null, ...args })
 
 function initGit(root) {
   const run = (args) => {
@@ -652,4 +655,53 @@ test("a noninteractive session records the friction and opens the card the same 
   const result = await friction_add({ deskRoot: root, input: sysInput(), env })
   assert.equal(result.improvement, "opened")
   assert.equal((await cardsOf(root)).length, 1)
+})
+
+// ── friction about a tool reaches that tool's repo as an issue ───────────────
+
+function issueFiler(answer) {
+  const calls = []
+  return { calls, fileIssue: async (env, options) => { calls.push(options); return answer } }
+}
+const ISSUE = "https://github.com/ourostack/desk/issues/77"
+
+test("system friction about Desk, by default or as a desk-* part, files an issue on ourostack/desk and keeps the card", async () => {
+  for (const plugin of [undefined, "desk-web", "superpowers"]) {
+    const root = await mkTempDeskRoot()
+    const { calls, fileIssue } = issueFiler({ result: "filed", repo: "ourostack/desk", url: ISSUE })
+    const result = await fileFriction({ deskRoot: root, input: { about: "system", title: "Screenshots paint over inputs", body: "Evidence.", plugin }, env: await stateEnv(), fileIssue })
+    assert.equal(result.status, "filed")
+    assert.equal(result.issue, "filed")
+    assert.equal(result.issue_url, ISSUE)
+    assert.equal(result.repo, "ourostack/desk")
+    assert.equal(result.improvement, "opened")
+    assert.equal(calls[0].tool, plugin === "desk-web" ? "desk" : plugin ?? "desk")
+    assert.match(await fs.readFile(path.join(root, "_meta", "friction.md"), "utf8"), new RegExp(`Issue for "Screenshots paint over inputs" on ourostack/desk: filed at ${ISSUE}`, "u"))
+  }
+})
+
+test("a filing that fails is an error that names the fix, after the note is saved", async () => {
+  const root = await mkTempDeskRoot()
+  const { fileIssue } = issueFiler({ result: "not_filed", reason: "no_suitable_account", repo: "ourostack/desk", body: "paste me" })
+  await assert.rejects(
+    fileFriction({ deskRoot: root, input: { about: "system", title: "Broken", body: "Evidence." }, env: await stateEnv(), fileIssue }),
+    (error) => error.code === "friction_add_issue_not_filed" && /sign in to GitHub/u.test(error.message) && /_meta\/friction\.md/u.test(error.message),
+  )
+  assert.match(await fs.readFile(path.join(root, "_meta", "friction.md"), "utf8"), /not filed \(no_suitable_account\)/u)
+})
+
+test("a plugin Desk does not know says so and names the argument that files it", async () => {
+  const root = await mkTempDeskRoot()
+  const { calls, fileIssue } = issueFiler({ result: "filed", repo: "x", url: ISSUE })
+  const result = await fileFriction({ deskRoot: root, input: { about: "system", title: "Odd", body: "Evidence.", plugin: "mystery" }, env: await stateEnv(), fileIssue })
+  assert.equal(calls.length, 0)
+  assert.equal(result.issue, "unknown_tool")
+  assert.match(result.issue_next, /Pass `plugin` as one of m365crawl, .*desk/u)
+})
+
+test("an error_code report files no issue", async () => {
+  const root = await mkTempDeskRoot()
+  const { calls, fileIssue } = issueFiler({ result: "filed", repo: "ourostack/desk", url: ISSUE })
+  await fileFriction({ deskRoot: root, input: { error_code: "desk_push_blocked" }, env: await stateEnv(), fileIssue })
+  assert.equal(calls.length, 0)
 })

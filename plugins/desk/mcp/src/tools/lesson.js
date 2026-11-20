@@ -195,6 +195,7 @@ async function addDesk({ deskRoot, person, env, now, topic, body, owner, addFric
     search,
     spawnGit,
     schedulePush,
+    fileIssue: null,
     input: {
       about: "system",
       title: `Lesson for ${target.owner}: ${topic}`,

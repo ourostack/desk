@@ -33,9 +33,16 @@ import { unfinishedNext } from "../util/route-around.js"
 import { cardKey, openImprovement } from "../desk/improvement-cards.js"
 import { FRICTION_CLASSES, fileKaizenCard, fingerprintOf } from "../factory/kaizen-file.js"
 import { PATTERNS } from "../factory/schema.js"
-import { fileToolIssue, isOwnedTool } from "../factory/tool-issue-file.js"
+import { OWNED_TOOLS, fileToolIssue, ownedToolFor } from "../factory/tool-issue-file.js"
 import { factoryStateRoot } from "../factory/outbox.js"
 import { failureEvidence } from "../runtime/failure-evidence.js"
+
+const ISSUE_FIXES = {
+  not_generic: "the repo is public, so take credentials, home paths and email addresses out of `title` and `body`, then call again",
+  invalid_title: "`title` must be one line of at most 120 characters, then call again",
+  invalid_body: "`body` must hold the evidence and be at most 8000 characters, then call again",
+  no_suitable_account: "sign in to GitHub with an account that can open issues on that repo, then call again",
+}
 
 const ABOUT = new Set(["setup", "system"])
 
@@ -170,10 +177,13 @@ async function openCard({ deskRoot, person, card, fingerprint, lesson, now, comm
  * the card from the lesson. A refused or failed card never loses the entry.
  * The call behaves the same in a noninteractive session; only picking a card up is refused there.
  *
- * A `plugin` that names a tool owned in ourostack other than Desk (m365crawl, shepherd, housesitter, hackamore, ouroboros)
- * files a GitHub issue on that tool's repo for its drain (`src/factory/tool-issue-file.js`): the title and `body` are the
- * issue, so the body carries the evidence; no improvement card opens. The result gains `repo` and `issue`: "filed" | "known",
- * or the reason it was not filed (the entry then holds the paste-ready text).
+ * System friction about a tool owned in ourostack files a GitHub issue on that tool's repo for its drain
+ * (`src/factory/tool-issue-file.js`): `plugin` defaults to "desk", and `desk-*` names and `superpowers` are Desk's repo. The title
+ * and `body` are the issue, so the body carries the evidence. Desk's own parts also keep the improvement card; the other
+ * tools get the issue alone. The result gains `issue` ("filed" | "known"), `issue_url` and `repo`. A `plugin` that names no
+ * owned tool gains `issue: "unknown_tool"` and `issue_next`, which names the argument that files it. A filing that fails
+ * writes the entry (with the paste-ready text), then throws `friction_add_issue_not_filed`. `error_code` reports and a
+ * `fileIssue` of `null` (a caller that must not file, such as lesson_add) file nothing.
  *
  * Returns: { status: "added", path, commit? }; { status: "added", path,
  * kaizen: "candidate", commit? } for system friction; with `file_card`,
@@ -237,25 +247,31 @@ export async function friction_add({ deskRoot, input, person = null, search, env
   // whether another session already left this file dirty.
   const stage = stagingAllowed(filePath, spawnGit)
 
-  // A tool owned in ourostack other than Desk gets its issue on its own repo, where its drain reads it; no Desk card opens for it.
-  const toolIssue = card !== null && card.plugin !== "desk" && isOwnedTool(card.plugin)
-  const fingerprint = card === null || toolIssue ? null : await fingerprintIfReady(env, deskRoot, card)
+  // Friction about a tool owned in ourostack (Desk included) becomes an issue on that tool's repo, where its drain reads it.
+  // Desk's own parts also keep their improvement card; the other tools get the issue alone.
+  const tool = card !== null && !reporting && fileIssue !== null ? ownedToolFor(card.plugin) : null
+  const keepsCard = card !== null && (tool === null || tool === "desk" || tool === "superpowers")
+  const fingerprint = card === null || !keepsCard ? null : await fingerprintIfReady(env, deskRoot, card)
   let filed = null
+  let issue = null
   let entry = body
-  if (toolIssue) {
-    filed = await fileIssue(env, { tool: card.plugin, title: card.title, body })
-    entry = filed.result === "filed" || filed.result === "known"
-      ? `Issue for "${card.title}" on ${filed.repo}: ${filed.result === "filed" ? "filed" : "already open, new evidence added"} at ${filed.url}`
-      : `Issue for "${card.title}" on ${filed.repo ?? card.plugin}: not filed (${filed.reason ?? filed.result}); file it by hand with the text below.\n\n${filed.body ?? body}`
-  } else if (card !== null && fileNow) {
+  if (keepsCard && fileNow) {
     filed = await fileCard(env, { deskRoot, title: card.title, body, plugin: card.plugin, frictionClass: card.frictionClass, signal: card.signal, evidenceJobs: card.evidenceJobs })
     entry = filed.result === "filed" || filed.result === "duplicate"
       ? `Kaizen card for "${card.title}": ${filed.result === "filed" ? "filed" : "already open"} at ${filed.url}`
       : `Kaizen card for "${card.title}": not filed (${filed.result}); it stays a candidate.`
-  } else if (card !== null) {
+  } else if (keepsCard) {
     const measure = card.signal === null ? "not chosen" : `\`${card.signal}\``
     const jobs = Array.isArray(card.evidenceJobs) && card.evidenceJobs.length > 0 ? card.evidenceJobs.join(", ") : "none yet"
     entry = `${body.trimEnd()}\n\nSystem friction: "${card.title}"; plugin \`${card.plugin}\`, class \`${card.frictionClass}\`, measure ${measure}, evidence jobs ${jobs}.`
+  }
+  if (tool !== null) {
+    issue = await fileIssue(env, { tool, title: card.title, body })
+    const ok = issue.result === "filed" || issue.result === "known"
+    const line = ok
+      ? `Issue for "${card.title}" on ${issue.repo}: ${issue.result === "filed" ? "filed" : "already open, new evidence added"} at ${issue.url}`
+      : `Issue for "${card.title}" on ${issue.repo ?? tool}: not filed (${issue.reason ?? issue.result}); file it by hand with the text below.\n\n${issue.body ?? body}`
+    entry = keepsCard ? `${entry.trimEnd()}\n\n${line}` : line
   }
 
   // The card's key carries the fingerprint, so the note names it: the agent that picks the card up finds the note by it.
@@ -285,20 +301,32 @@ export async function friction_add({ deskRoot, input, person = null, search, env
   let result
   if (card === null) {
     result = { status: "added", path: written }
-  } else if (toolIssue) {
-    result = filed.url ? { status: "filed", path: written, url: filed.url, issue: filed.result, repo: filed.repo } : { status: "added", path: written, issue: filed.reason ?? filed.result, repo: filed.repo }
-  } else if (filed === null) {
+  } else if (keepsCard && filed === null) {
     result = { status: "added", path: written, kaizen: "candidate" }
-  } else if (filed.result === "filed" || filed.result === "duplicate") {
+  } else if (keepsCard && (filed.result === "filed" || filed.result === "duplicate")) {
     result = { status: "filed", path: written, url: filed.url, kaizen: filed.result }
-  } else {
+  } else if (keepsCard) {
     result = { status: "added", path: written, kaizen: filed.result }
+  } else {
+    result = { status: issue.url ? "filed" : "added", path: written }
+  }
+  if (issue !== null) Object.assign(result, issue.url ? { issue: issue.result, issue_url: issue.url, repo: issue.repo } : { issue: issue.reason ?? issue.result, repo: issue.repo })
+  if (issue?.url) {
+    result.status = "filed"
+    if (!keepsCard) result.url = issue.url
+  }
+  if (card !== null && !reporting && fileIssue !== null && tool === null) {
+    result.issue = "unknown_tool"
+    result.issue_next = `Not filed as an issue: Desk does not know a tool called \`${card.plugin}\`. Pass \`plugin\` as one of ${Object.keys(OWNED_TOOLS).join(", ")} to file it on that tool's repo.`
   }
   if (commit) result.commit = commit
-  if (card !== null && !toolIssue) {
+  if (keepsCard) {
     const opened = await openCard({ deskRoot, person, card, fingerprint, lesson, now, commitCard, spawnGit, schedulePush })
     // A card whose commit did not finish says what to do first, as the answer's first key (#623).
     result = opened.next === undefined ? { ...result, ...opened } : { next: opened.next, ...result, ...opened }
+  }
+  if (issue !== null && issue.url === undefined) {
+    throw Object.assign(new Error(`friction_add: Pass a title and body the repo can take, or sign in: the issue on ${issue.repo ?? tool} was not filed (${issue.reason ?? issue.result}); ${ISSUE_FIXES[issue.reason] ?? "run the call again"}. Your note is saved at ${written}`), { code: "friction_add_issue_not_filed" })
   }
   return result
 }

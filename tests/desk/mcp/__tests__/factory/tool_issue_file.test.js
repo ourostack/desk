@@ -39,8 +39,8 @@ const BODY = "`content fetch image` admits chats only; a channel post is refused
 const created = (calls) => calls.filter((call) => call.args[2] === "POST")
 
 test("every tool Ari's agents own routes to its ourostack repo", () => {
-  assert.deepEqual(Object.keys(OWNED_TOOLS).sort(), ["desk", "hackamore", "housesitter", "m365crawl", "ouroboros", "shepherd"])
-  for (const [tool, repo] of Object.entries(OWNED_TOOLS)) assert.equal(repo, `ourostack/${tool}`)
+  assert.deepEqual(Object.keys(OWNED_TOOLS).sort(), ["desk", "hackamore", "housesitter", "m365crawl", "ouroboros", "shepherd", "superpowers"])
+  for (const [tool, repo] of Object.entries(OWNED_TOOLS)) assert.equal(repo, tool === "superpowers" ? "ourostack/desk" : `ourostack/${tool}`)
 })
 
 test("a failure of m365crawl becomes a real issue on ourostack/m365crawl, with the fingerprint marker and the evidence", () => scratch(async ({ env }) => {
@@ -84,15 +84,14 @@ test("friction_add with an owned tool as plugin files the issue, opens no Desk c
   const fileIssue = async (env, options) => { seen.push(options); return { result: "filed", repo: "ourostack/m365crawl", url: "https://github.com/ourostack/m365crawl/issues/404" } }
   const result = await friction_add({ deskRoot: root, input: { about: "system", plugin: "m365crawl", title: TITLE, body: BODY }, fileIssue })
   assert.deepEqual(seen, [{ tool: "m365crawl", title: TITLE, body: BODY }])
-  assert.deepEqual(result, { status: "filed", path: "_meta/friction.md", url: "https://github.com/ourostack/m365crawl/issues/404", issue: "filed", repo: "ourostack/m365crawl" })
+  assert.deepEqual(result, { status: "filed", path: "_meta/friction.md", url: "https://github.com/ourostack/m365crawl/issues/404", issue: "filed", issue_url: "https://github.com/ourostack/m365crawl/issues/404", repo: "ourostack/m365crawl" })
   assert.match(await fs.readFile(path.join(root, "_meta", "friction.md"), "utf8"), /Issue for ".*" on ourostack\/m365crawl: filed at https:\/\/github\.com\/ourostack\/m365crawl\/issues\/404/u)
 })
 
 test("friction_add keeps the paste-ready text on the desk when the issue could not be filed", async () => {
   const root = await mkTempDeskRoot()
   const fileIssue = async () => ({ result: "not_filed", reason: "no_suitable_account", repo: "ourostack/m365crawl", body: `${TITLE}\n\n${BODY}` })
-  const result = await friction_add({ deskRoot: root, input: { about: "system", plugin: "m365crawl", title: TITLE, body: BODY }, fileIssue })
-  assert.deepEqual(result, { status: "added", path: "_meta/friction.md", issue: "no_suitable_account", repo: "ourostack/m365crawl" })
+  await assert.rejects(friction_add({ deskRoot: root, input: { about: "system", plugin: "m365crawl", title: TITLE, body: BODY }, fileIssue }), { code: "friction_add_issue_not_filed" })
   assert.match(await fs.readFile(path.join(root, "_meta", "friction.md"), "utf8"), /not filed \(no_suitable_account\)[\s\S]*admits chats only/u)
 })
 
@@ -142,7 +141,7 @@ test("a refused create comes back as its code with paste-ready text; an unexpect
 test("friction_add names the reason, repo and text of a filing result however much of it is missing", async () => {
   const root = await mkTempDeskRoot()
   const run = (filed) => friction_add({ deskRoot: root, input: { about: "system", plugin: "m365crawl", title: TITLE, body: BODY }, fileIssue: async () => filed })
-  assert.deepEqual(await run({ result: "no_suitable_account" }), { status: "added", path: "_meta/friction.md", issue: "no_suitable_account", repo: undefined })
+  await assert.rejects(run({ result: "no_suitable_account" }), /issue on m365crawl was not filed \(no_suitable_account\)/u)
   assert.match(await fs.readFile(path.join(root, "_meta", "friction.md"), "utf8"), /on m365crawl: not filed \(no_suitable_account\)[\s\S]*admits chats only/u)
   assert.equal((await run({ result: "known", repo: "ourostack/m365crawl", url: "https://github.com/ourostack/m365crawl/issues/1" })).issue, "known")
 })
