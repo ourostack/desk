@@ -77,7 +77,7 @@ const CODE = /^[a-z0-9][a-z0-9_:-]{0,63}$/u
 
 const isObject = (value) => typeof value === "object" && value !== null && !Array.isArray(value)
 /** The newest complete Desk release copy on this machine (`runtime/newest-release.js` keeps them), or null. */
-export function newestInstalledRelease(env, homeDir = os.homedir()) {
+function newestInstalledRelease(env, homeDir = os.homedir()) {
   const cacheHome = typeof env.XDG_CACHE_HOME === "string" && env.XDG_CACHE_HOME.trim() !== "" ? env.XDG_CACHE_HOME : path.join(env.HOME || homeDir, ".cache")
   const copies = path.join(cacheHome, "ouroboros-skills", "desk", "release-copies")
   try {
