@@ -5,6 +5,7 @@ import { afterEach, beforeEach, test } from "node:test"
 import { strict as assert } from "node:assert"
 import { spawnSync } from "node:child_process"
 import { EventEmitter } from "node:events"
+import crypto from "node:crypto"
 import fs from "node:fs"
 import http from "node:http"
 import os from "node:os"
@@ -212,6 +213,35 @@ test("copyProfile copies the last-used profile and Local State, skipping caches,
   assert.ok(fs.existsSync(path.join(dest, "Local State")))
   assert.equal(fs.readFileSync(path.join(dest, "Profile 1", "Network", "Cookies"), "utf8"), "cookies")
   for (const skipped of ["Cache", "Sessions", "Extensions"]) assert.equal(fs.existsSync(path.join(dest, "Profile 1", skipped)), false, skipped)
+})
+
+test("copyProfile stores copied cookie values as plain values so a newer browser still reads them, and leaves the source alone", async () => {
+  const { DatabaseSync } = await import("node:sqlite")
+  const { root } = await setup()
+  const source = path.join(root, "src")
+  makeProfile(source)
+  const key = Buffer.alloc(16, 7)
+  const seal = (host, value) => {
+    const cipher = crypto.createCipheriv("aes-128-cbc", key, Buffer.alloc(16, 0x20))
+    const body = Buffer.concat([crypto.createHash("sha256").update(host).digest(), Buffer.from(value)])
+    return Buffer.concat([Buffer.from("v10"), cipher.update(body), cipher.final()])
+  }
+  const cookies = path.join(source, "Profile 1", "Network", "Cookies")
+  fs.rmSync(cookies)
+  const db = new DatabaseSync(cookies)
+  db.exec("CREATE TABLE cookies (host_key TEXT, name TEXT, value TEXT, encrypted_value BLOB)")
+  const insert = db.prepare("INSERT INTO cookies VALUES (?, ?, ?, ?)")
+  insert.run("github.com", "user_session", "", seal("github.com", "secret-session"))
+  insert.run("example.com", "broken", "", Buffer.from("v10not-decryptable-bytes"))
+  db.close()
+  const before = fs.readFileSync(cookies)
+  const dest = path.join(root, "dest")
+  web.copyProfile(source, dest, "Microsoft Edge", { cookieKey: key })
+  const copy = new DatabaseSync(path.join(dest, "Profile 1", "Network", "Cookies"))
+  const rows = copy.prepare("SELECT name, value, length(encrypted_value) AS n FROM cookies ORDER BY name").all()
+  copy.close()
+  assert.deepEqual(rows.map((row) => [row.name, row.value, row.n]), [["broken", "", 24], ["user_session", "secret-session", 0]])
+  assert.deepEqual(fs.readFileSync(cookies), before)
 })
 
 test("copyProfile falls back to Default for a missing, unsafe or malformed last_used", async () => {

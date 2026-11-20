@@ -255,9 +255,61 @@ function readProfileFile(file) {
   }
 }
 
+// The browser on this computer may be newer than the copy's source: macOS Edge 158 cannot read the cookies that the
+// still-running Edge 157 encrypted, drops every one at start and the copy reads signed out. So on macOS the copied
+// cookie file's values are decrypted here with the browser's own Safe Storage key and stored as plain values in the
+// private copy, which any version reads and which is deleted with the context.
+var SAFE_STORAGE = { "Microsoft Edge": ["Microsoft Edge Safe Storage", "Microsoft Edge"], "Google Chrome": ["Chrome Safe Storage", "Chrome"] };
+
+function keychainCookieKey(app) {
+  var item = SAFE_STORAGE[app];
+  if (process.platform !== "darwin" || !item) return null;
+  try {
+    var secret = childProcess.execFileSync("security", ["find-generic-password", "-w", "-s", item[0], "-a", item[1]], { timeout: 10000, stdio: ["ignore", "pipe", "ignore"] });
+    return crypto.pbkdf2Sync(secret.toString("utf8").trim(), "saltysalt", 1003, 16, "sha1");
+  } catch (error) {
+    return null;
+  }
+}
+
+function decryptCookie(key, host, value) {
+  value = value instanceof Uint8Array ? Buffer.from(value) : null;
+  if (!value || value.length < 19 || value.slice(0, 3).toString("latin1") !== "v10") return null;
+  try {
+    var decipher = crypto.createDecipheriv("aes-128-cbc", key, Buffer.alloc(16, 0x20));
+    var plain = Buffer.concat([decipher.update(value.slice(3)), decipher.final()]);
+    var digest = crypto.createHash("sha256").update(host).digest();
+    if (plain.length >= 32 && plain.slice(0, 32).equals(digest)) plain = plain.slice(32);
+    return plain.toString("utf8");
+  } catch (error) {
+    return null;
+  }
+}
+
+function transcodeCookies(file, key) {
+  var db;
+  try {
+    var sqlite = require("node:sqlite");
+    db = new sqlite.DatabaseSync(file);
+    var rows = db.prepare("SELECT rowid AS id, host_key AS host, encrypted_value AS value FROM cookies WHERE length(encrypted_value) > 0").all();
+    var update = db.prepare("UPDATE cookies SET value = ?, encrypted_value = x'' WHERE rowid = ?");
+    db.exec("BEGIN");
+    rows.forEach(function (row) {
+      var plain = decryptCookie(key, row.host, row.value);
+      if (plain !== null) update.run(plain, row.id);
+    });
+    db.exec("COMMIT");
+  } catch (error) {
+    // not a cookie database this Node can open: leave the bytes as copied
+  } finally {
+    try { if (db) db.close(); } catch (error) { /* already closed */ }
+  }
+}
+
 // Admission precedes both parsing and copying. The opened descriptor supplies the bytes;
 // a later pathname copy would undo identity/link qualification.
-function copyProfile(source, dest, app) {
+function copyProfile(source, dest, app, options) {
+  var cookieKey = options && "cookieKey" in options ? options.cookieKey : keychainCookieKey(app);
   var state;
   try { state = readProfileFile(path.join(source, "Local State")); } catch (error) {
     if (error && error.permissionDenied) throw copyPermissionError(app);
@@ -309,6 +361,7 @@ function copyProfile(source, dest, app) {
       try { fs.writeFileSync(path.join(to, entry.name), bytes, { mode: 384 }); }
       catch (error) { throw copyDestinationError(); }
       finally { bytes.fill(0); }
+      if (cookieKey && /^(?:Network\/)?Cookies$/.test(inner)) transcodeCookies(path.join(to, entry.name), cookieKey);
     });
   }
   copy(path.join(source, name), path.join(dest, name), "");
