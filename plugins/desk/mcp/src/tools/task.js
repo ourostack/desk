@@ -513,7 +513,12 @@ function resourceList(given, one) {
     throw Object.assign(new Error("task_update: Pass at least one row in `resources`: `resources` is empty; nothing was changed. Leave it out to change no resource."), { code: "task_update_resources_is_empty" })
   }
   if (one === undefined && many === undefined) return undefined
-  return [...(one === undefined ? [] : [one]), ...(many ?? []).map((row, index) => objectInput(row, { ...RESOURCE_INPUT, field: `resources[${index}]` }) ?? objectInput("null", { ...RESOURCE_INPUT, field: `resources[${index}]` }))]
+  const parsed = (many ?? []).map((row, index) => {
+    const object = objectInput(row, { ...RESOURCE_INPUT, field: `resources[${index}]` })
+    if (object === undefined) throw Object.assign(new Error(`task_update: Pass every \`resources\` row as an object: \`resources[${index}]\` is empty; nothing was changed. Example: {"identity": "branch:sample/widgets#feat/a", "disposition": "removed-and-absent", "details": "the branch is gone"}.`), { code: "task_update_resources_row_is_empty" })
+    return object
+  })
+  return [...(one === undefined ? [] : [one]), ...parsed]
 }
 
 const RESOURCE_INPUT = { tool: "task_update", field: "resource", effect: "no resource was changed", example: '{"identity": "worktree:/Users/me/code/widgets-worktrees/api", "step": "api-change"}' }
