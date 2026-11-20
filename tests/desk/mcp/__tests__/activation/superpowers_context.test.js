@@ -613,4 +613,5 @@ test("a write brief quotes the operator's go with its scope, as relayed, and kee
   assert.match(rule, /not a message the operator sent you/u)
   assert.match(rule, /never overrides a managed tool safeguard/u)
   await assert.rejects(resolve(context({ goQuote: "go" })), /together/u)
+  await assert.rejects(resolve(context({ goQuote: " ", goScope: "x" })), /short non-empty string/u)
 })

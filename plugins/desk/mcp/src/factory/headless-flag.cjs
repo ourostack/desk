@@ -29,4 +29,4 @@ function startupChangesNothing(env) {
   return isHeadlessFactorySession(env) || isReadOnlyChildSession(env);
 }
 
-module.exports = { isHeadlessFactorySession, isProofFactorySession, isReadOnlyChildSession, startupChangesNothing };
+module.exports = { isHeadlessFactorySession, isProofFactorySession, startupChangesNothing };
