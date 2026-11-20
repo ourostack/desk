@@ -18,6 +18,7 @@ import * as path from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import { openSession } from "../launch/_mcp_session.js"
 import { mkTempRoot, recordControllers, removeRootsAfterControllers } from "../_temp_roots.js"
+import { removeTreeSync } from "../_remove_tree.js"
 
 // The stdio helper records live controllers for registered session roots before owner.json can disappear.
 const removeFixture = root => removeRootsAfterControllers([root])
@@ -92,7 +93,6 @@ test("activation fixture cleanup retains a recorded child after its owner record
   const child = spawn(process.execPath, ["--input-type=module", "-e", `
 import fs from "node:fs";
 import path from "node:path";
-import { removeTreeSync } from "../_remove_tree.js"
 const file = ${JSON.stringify(ownerFile)};
 fs.mkdirSync(path.dirname(file), { recursive: true });
 fs.writeFileSync(file, JSON.stringify({ owner: {

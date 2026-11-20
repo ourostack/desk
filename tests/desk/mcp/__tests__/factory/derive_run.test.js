@@ -11,6 +11,7 @@ import { jobId } from "../../../../../plugins/desk/mcp/src/factory/binding.js"
 import { deliver, formatReturn, sign } from "../../../../../plugins/desk/mcp/src/factory/outcome.js"
 import { deriveCopilotSession } from "../../../../../plugins/desk/mcp/src/factory/derive-copilot.js"
 import { END, ID, SENTINEL, START, STORE, json, scratch, session } from "./_session_helpers.js"
+import { removeTree } from "../_remove_tree.js"
 
 const moduleUrl = new URL("../../../../../plugins/desk/mcp/src/factory/derive-run.js", import.meta.url)
 async function runner() {
@@ -669,7 +670,6 @@ test("a derive process whose home is removed while it waits exits and leaves not
 import { writeFileSync } from "node:fs";
 import timers from "node:timers/promises";
 import { syncBuiltinESMExports } from "node:module";
-import { removeTree } from "../_remove_tree.js"
 const timer = timers.setTimeout;
 let observed = false;
 timers.setTimeout = (ms, ...args) => {

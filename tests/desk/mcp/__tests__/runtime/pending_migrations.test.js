@@ -18,11 +18,11 @@ import {
   shellQuote,
   startupMigrationLine,
 } from "../../../../../plugins/desk/mcp/src/runtime/pending-migrations.js"
+import { removeTreeSync } from "../_remove_tree.js"
 
 const mcpRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../../../plugins/desk/mcp")
 const deskPluginRoot = path.resolve(mcpRoot, "..")
 import { migrationLine as bootMigrationLine } from "../../../../../plugins/desk/hooks/lib/boot-checks.cjs"
-import { removeTreeSync } from "../_remove_tree.js"
 
 function migrationText({ id, safety = "safe", restart = false, agent = null, detect = "exit 0", check = "exit 0", migrate = "exit 0", announce = "Done.", description = "a test migration" }) {
   return [

@@ -9,6 +9,7 @@ import { mkTempRoot } from "../_temp_roots.js"
 import { bootOnce } from "../../../../../plugins/desk/mcp/src/runtime/boot.js"
 import { UNMATCHED_TASK_INSTRUCTION, UNMATCHED_TASK_INSTRUCTION_TEXT, formatBootText } from "../../../../../plugins/desk/mcp/src/runtime/boot-text.js"
 import { task_create, task_update } from "../../../../../plugins/desk/mcp/src/tools/task.js"
+import { removeTree } from "../_remove_tree.js"
 
 // ── task_update says how to report an unfinished task ───────────────────
 
@@ -223,7 +224,6 @@ test("no desk_commit when the commit failed, git cannot name HEAD, or the desk i
 
 import { ensureStateIgnored } from "../../../../../plugins/desk/mcp/src/util/state-ignore.js"
 import { openDb } from "../../../../../plugins/desk/mcp/src/db/init.js"
-import { removeTree } from "../_remove_tree.js"
 
 const gitIn = (root, ...args) => spawnSync("git", ["-C", root, ...args], { encoding: "utf8" })
 async function gitRoot() {

@@ -29,6 +29,7 @@ import {
 } from "../../../../../plugins/desk/mcp/src/factory/windows-acl.js"
 import * as windowsAcl from "../../../../../plugins/desk/mcp/src/factory/windows-acl.js"
 import { nativeProbe, writePosixNodeProvider } from "./_private_state_helpers.js"
+import { removeTree } from "../_remove_tree.js"
 
 const PROVIDER_SEGMENTS = ["System32", "WindowsPowerShell", "v1.0", "powershell.exe"]
 const isWindows = process.platform === "win32"
@@ -1654,5 +1655,3 @@ test("protectWindowsPaths uses the ambient environment and the real runner when 
   // An empty batch is refused before either default is used to start a process.
   await assert.rejects(() => protectWindowsPaths([]), /at least one path/u)
 })
-
-import { removeTree } from "../_remove_tree.js"

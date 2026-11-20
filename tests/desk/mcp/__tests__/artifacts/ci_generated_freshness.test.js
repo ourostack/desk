@@ -14,12 +14,12 @@ import {
 } from "node:fs"
 import { createRequire } from "node:module"
 import { devNull, tmpdir } from "node:os"
+import { removeTreeSync } from "../_remove_tree.js"
 // Git for Windows rejects Node's `\\.\nul` spelling of the null device but maps `/dev/null` itself.
 const gitNull = process.platform === "win32" ? "/dev/null" : devNull
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 import matter from "gray-matter"
-import { removeTreeSync } from "../_remove_tree.js"
 
 const repoRoot = path.resolve(
   fileURLToPath(new URL("../../../../..", import.meta.url)),
