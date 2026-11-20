@@ -110,6 +110,16 @@ test("watchParent's default liveness check treats a missing parent as gone and a
   assert.deepEqual(outcomes, [1, 0, 0])
 })
 
+test("watchParent reads the real parent by default and stays quiet while it is there", () => {
+  let tick
+  let fired = 0
+  watchParent({ onGone: () => { fired += 1 }, setTimer: (callback) => { tick = callback; return { unref() {} } }, clearTimer() {} })
+  if (process.ppid > 1) {
+    tick()
+    assert.equal(fired, 0)
+  }
+})
+
 test("main closes the session when the host's output fails", async () => {
   const { main } = await import("../../../../../plugins/desk/mcp/index.js")
   const { PassThrough } = await import("node:stream")
