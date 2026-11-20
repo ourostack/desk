@@ -398,7 +398,8 @@ test("waitingOnChecks: a check that is not required blocks while it failed or ru
   const verdict = (runs, statuses) => waitingOnChecks(["typecheck"], [check("typecheck"), ...runs], false, statuses)
   assert.deepEqual(verdict([check("weekly-page", "failure")]), ["1 other check on the head not green (weekly-page failure)"])
   assert.deepEqual(verdict([check("weekly-page", null, "in_progress")]), ["1 other check on the head not green (weekly-page in_progress)"])
-  assert.deepEqual(verdict([check("weekly-page", null, "queued"), check("docs", "cancelled")]), ["2 other checks on the head not green (weekly-page queued, docs cancelled)"])
+  assert.deepEqual(verdict([check("weekly-page", null, "queued"), check("docs", "cancelled")]), ["1 other check on the head not green (weekly-page queued)"])
+  assert.deepEqual(verdict([check("docs", "cancelled")]), [], "a cancelled check that is not required does not hold")
   for (const conclusion of ["timed_out", "action_required", "stale", "startup_failure"]) assert.equal(verdict([check("weekly-page", conclusion)]).length, 1, conclusion)
   assert.deepEqual(verdict([check("weekly-page", "skipped"), check("docs", "neutral"), check("lint")]), [])
   assert.deepEqual(waitingOnChecks(["typecheck"], [check("typecheck"), check("weekly-page", "skipped")], true), [])
@@ -463,9 +464,9 @@ test("waitingOnChecks: a matrix job cancelled before it expanded is ignored when
   assert.deepEqual(waitingOnChecks([], [check(TEMPLATE, "cancelled"), ...shards]), [])
   assert.deepEqual(waitingOnChecks(["site (*"], [check(TEMPLATE, "cancelled"), ...shards]), [])
   assert.deepEqual(waitingOnChecks([], [check(TEMPLATE, "cancelled"), check("site (1/2)", "failure"), check("site (2/2)")]), ["1 other check on the head not green (site (1/2) failure)"])
-  assert.deepEqual(waitingOnChecks([], [check(TEMPLATE, "cancelled")]), [`1 other check on the head not green (${TEMPLATE} cancelled)`])
+  assert.deepEqual(waitingOnChecks([], [check(TEMPLATE, "cancelled")]), [])
   assert.deepEqual(waitingOnChecks([], [check(TEMPLATE, "failure"), ...shards]), [`1 other check on the head not green (${TEMPLATE} failure)`])
-  assert.deepEqual(waitingOnChecks([], [check("lint (${{ matrix.x }})", "cancelled"), ...shards]), ["1 other check on the head not green (lint (${{ matrix.x }}) cancelled)"], "another job's shards do not excuse it")
+  assert.deepEqual(waitingOnChecks([], [check("lint (${{ matrix.x }})", "cancelled"), ...shards]), [], "a cancelled check that is not required does not hold")
 })
 
 test("merge-when-green: main's cancelled runs are skipped and the latest completed run that was not cancelled is judged", async () => {
@@ -966,10 +967,15 @@ test("merge-when-green: .github/merge-checks.json on the base replaces the confi
   for (const conclusion of ["failure", "timed_out"]) {
     const red = await withFile(["ci checks"], [check("ci checks"), check("test (3)", conclusion)])
     assert.deepEqual(prWrites(red.world), [], "a red check the list does not name still holds the head")
-    assert.match(red.state("pages merge").prs["7"].waitingOn[0], /1 other check on the head failed \(test \(3\)/u)
+    assert.match(red.state("pages merge").prs["7"].waitingOn[0], /1 other check on the head not green \(test \(3\)/u)
   }
   const two = await withFile(["ci checks"], [check("ci checks"), check("test (1)", "failure"), check("test (2)", "failure")])
-  assert.match(two.state("pages merge").prs["7"].waitingOn[0], /2 other checks on the head failed/u)
+  assert.match(two.state("pages merge").prs["7"].waitingOn[0], /2 other checks on the head not green/u)
+  const running = await withFile(["ci checks"], [check("ci checks"), check("shard-1", null, "in_progress"), check("shard-2", null, "queued")])
+  assert.deepEqual(prWrites(running.world), [], "required is green but other checks are still running")
+  assert.match(running.state("pages merge").prs["7"].waitingOn[0], /2 other checks on the head not green/u)
+  const finished = await withFile(["ci checks"], [check("ci checks"), check("shard-1"), check("shard-2", "skipped"), check("shard-3", "cancelled")])
+  assert.equal(finished.state("pages merge").prs["7"].status, "merged", "finished, skipped and cancelled checks do not hold")
   const missing = await withFile(["ci checks"], [check("typecheck")])
   assert.deepEqual(prWrites(missing.world), [])
   assert.equal(missing.state("pages merge").prs["7"].waitingOn[0], "ci checks: not started")
@@ -1049,6 +1055,26 @@ test("merge-when-green: more than one page of check runs is read in full every p
   await w.poll()
   assert.equal(prWrites(w.world).length, 1)
   assert.equal(Object.keys(w.state("pages merge").cache).some((route) => route.includes("check-runs")), false)
+})
+
+test("merge-checks.json: a check running on a later page of more than 100 check runs holds the head, and a commit status still pending holds it", async () => {
+  const file = { content: Buffer.from(JSON.stringify({ required: ["ci checks"] })).toString("base64"), encoding: "base64" }
+  for (const [late, merges] of [[check("shard-109", null, "in_progress"), false], [check("shard-109"), true]]) {
+    const w = await setup([MERGE])
+    const many = [check("ci checks"), ...Array.from({ length: 118 }, (_, index) => check(`shard-${index}`)), late]
+    mergeWorld(w.world)
+    w.world.on("GET", /\/contents\/\.github\/merge-checks\.json\?ref=main$/u, () => file)
+    w.world.on("GET", /\/commits\/a+\/check-runs\?per_page=100$/u, () => ({ total_count: 120, check_runs: many.slice(0, 100) }))
+    w.world.on("GET", /\/commits\/a+\/check-runs\?per_page=100&page=2$/u, () => ({ total_count: 120, check_runs: many.slice(100) }))
+    await w.poll(NOW)
+    assert.equal(prWrites(w.world).length > 0, merges)
+  }
+  const pending = await setup([MERGE])
+  mergeWorld(pending.world, { checks: [check("ci checks")] })
+  pending.world.on("GET", /\/contents\/\.github\/merge-checks\.json\?ref=main$/u, () => file)
+  pending.world.on("GET", /\/commits\/a+\/status/u, () => ({ state: "pending", total_count: 1, statuses: [{ context: "legacy/ci", state: "pending" }] }))
+  await pending.poll(NOW)
+  assert.deepEqual(prWrites(pending.world), [])
 })
 
 test("drains status shows each relay, and why answers for a relay name and for a pull request", async () => {
