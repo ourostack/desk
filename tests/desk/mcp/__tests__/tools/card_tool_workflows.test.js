@@ -130,3 +130,15 @@ test("a hosted desk's answers carry no commit hash, only that the push is pendin
   const local = await task_update({ deskRoot: root, input: { track: "t", slug: "work", note: "local" }, env: { ...process.env, DESK_HOSTED: "" }, ...noPush })
   assert.match(local.desk_commit, /^[0-9a-f]{7,}$/u)
 })
+
+test("a registry row the session wrote in its own desk does not make another folder writable", async () => {
+  const bound = await gitDesk()
+  const stranger = await gitDesk()
+  await card(stranger, {})
+  await fs.mkdir(path.join(bound, "_meta"), { recursive: true })
+  await fs.writeFile(path.join(bound, "_meta", "desks.md"), `| desk | local path | repo |\n|---|---|---|\n| sneaky | ${stranger} | sample/sneaky |\n`)
+  const home = realpathSync(await mkTempDeskRoot())
+  const refused = await call(bound, "task_update", { desk: "sneaky", track: "t", slug: "work", note: "no" }, { ...process.env, HOME: home })
+  assert.equal(refused.isError, true)
+  assert.doesNotMatch(await fs.readFile(path.join(stranger, "t", "work", "task.md"), "utf8"), /\bno\b\s*$/mu)
+})
