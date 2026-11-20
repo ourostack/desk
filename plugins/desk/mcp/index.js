@@ -552,7 +552,7 @@ export function launcherMode(args) {
 }
 
 // Last-resort handlers for the process: an exception or rejection nothing caught is recorded by the session (degraded:runtime_exception, then re-admission) instead of ending the process and the host's connection with it. Returns a function that removes them.
-export function installCrashHandlers({ session, stderr, target = process, onPeerGone }) {
+export function installCrashHandlers({ session, stderr, target, onPeerGone }) {
   // A write or read on a host connection that is gone can never succeed: ending is the only useful answer, and recording it would degrade and re-admit on every later write.
   const handle = (kind, error) => {
     if (isPeerGoneError(error)) {
