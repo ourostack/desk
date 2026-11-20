@@ -30,6 +30,7 @@ import { promises as fs, constants as fsConstants } from "node:fs"
 import * as path from "node:path"
 import { createHash, randomBytes, randomUUID } from "node:crypto"
 import { PUBLIC_PLUGINS, isGeneric } from "../factory/kaizen-file.js"
+import { SLUG_SOURCE } from "../factory/repo-name.js"
 import { PATTERNS } from "../factory/schema.js"
 import { readMachineSecret } from "../factory/outbox.js"
 import { RECONCILE_REASONS } from "../factory/reconcile-reasons.js"
@@ -87,7 +88,7 @@ const FIELDS = [
 ]
 const IMMUTABLE = ["key", "source", "opened_at"]
 const REPO_ISSUE = /^(.+)#(\d{1,9})$/u
-const URL_SHAPE = /^https:\/\/github\.com\/([A-Za-z0-9-]{1,39}\/[A-Za-z0-9._-]{1,100})\/(pull|issues)\/\d{1,9}$/u
+const URL_SHAPE = new RegExp(`^https://github\\.com/(${SLUG_SOURCE})/(pull|issues)/\\d{1,9}$`, "u")
 const FILE_NAME = /^([a-z_]+)--([0-9a-f]{12})\.md$/u
 const CONTROL = /[\u0000-\u001f\u007f]/u
 const ABSOLUTE_PATH = /(^|[\s("'`=])(\/[A-Za-z0-9._-]+|[A-Za-z]:[\\/])/u

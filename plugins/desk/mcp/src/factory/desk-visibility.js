@@ -10,6 +10,7 @@
 // `src/factory/**` imports only `node:` built-ins and other `src/factory/` files.
 
 import { normalizeRemote } from "./binding.js"
+import { SLUG_SOURCE } from "./repo-name.js"
 import { isPlainObject } from "./schema.js"
 
 /** How long a cached visibility answer is used before it is asked again. */
@@ -21,7 +22,7 @@ export const VISIBILITY_SKEW_MS = 5 * 60 * 1000
 /** The visibilities that are not public: a desk with one keeps its job timing, and a store with one names every plugin. */
 export const PRIVATE_VISIBILITIES = new Set(["private", "internal"])
 
-const GITHUB_REMOTE = /^https:\/\/github\.com\/([A-Za-z0-9-]{1,39}\/[A-Za-z0-9._-]{1,100})$/u
+const GITHUB_REMOTE = new RegExp(`^https://github\\.com/(${SLUG_SOURCE})$`, "u")
 
 /** `owner/name` of the GitHub repository a desk remote names, or `null` (no remote, or not GitHub). */
 export const githubRepoOfRemote = (remote) => (remote === null ? null : GITHUB_REMOTE.exec(normalizeRemote(remote))?.[1] ?? null)

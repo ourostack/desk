@@ -97,6 +97,7 @@ import { PUBLISHED_LIMITS, validatePublishedBytes } from "./published-schema.js"
 import { REFUSALS, keyedJobId } from "./publish.js"
 import { jobActiveMs } from "./pipeline/timeline.js"
 import { RECONCILE_REASONS } from "./reconcile-reasons.js"
+import { OWNER_SOURCE, REPO_SOURCE } from "./repo-name.js"
 import { ENUMS, PATTERNS, isPlainObject } from "./schema.js"
 import { RETRACTED_COPIES, declared, derivedStoreOf, deskRootOf, markerRoute, routeProven, sessionPlace, sessionRoute } from "./session-route.js"
 import { resolveStore } from "./store-route.js"
@@ -104,7 +105,7 @@ import { normalizeTimestamp } from "./time.js"
 
 const SESSION_SRC = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
 const OUTBOX_NAME = new RegExp(`^(?:${ENUMS.host.join("|")})-${SESSION_SRC}\\.json$`, "u")
-const STORE_SLUG = /^[A-Za-z0-9][A-Za-z0-9-]{0,38}__[A-Za-z0-9._-]{1,100}$/u
+const STORE_SLUG = new RegExp(`^${OWNER_SOURCE}__${REPO_SOURCE}$`, "u")
 // The refusal codes the flush records in a quarantine record (`outbox.js`, `flush.js`, `publish.js`); any other
 // reason in a local file, including the open-ended gate and store-CI codes, is printed as `refused_other`.
 const REFUSAL_CODES = new Set(["invalid", "facts_quarantined", "private_plugins_missing", ...REFUSALS])
