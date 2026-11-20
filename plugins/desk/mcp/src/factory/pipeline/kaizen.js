@@ -43,6 +43,7 @@
 // `src/factory/**` imports only `node:` built-ins and other `src/factory/`
 // files.
 
+import { SLUG_SOURCE } from "../repo-name.js"
 import { PATTERNS } from "../schema.js"
 import { BOOTSTRAP_RESAMPLES, CONFIDENCE, MIN_GROUPS_PER_SIDE, clusterJobs, compareMedians } from "./compare.js"
 import { JOB_CLASSES, MEASURE_IDS, PUBLISHED_JOB_CLASSES, formatMeasure } from "./rollups.js"
@@ -57,7 +58,7 @@ const MAX_BLOCK_CHARS = 4096
 const MAX_EVIDENCE_JOBS = 100
 const BLOCK = /^```ya?ml[ \t]*\r?\n([\s\S]*?)^```[ \t]*\r?$/gmu
 const KEY_LINE = /^([A-Za-z_][A-Za-z0-9_]*):(?:[ \t]+(.*))?$/u
-const COUNTERMEASURE = /^https:\/\/github\.com\/[A-Za-z0-9-]{1,39}\/[A-Za-z0-9._-]{1,100}\/pull\/[1-9]\d{0,9}$/u
+const COUNTERMEASURE = new RegExp(`^https://github\\.com/${SLUG_SOURCE}/pull/[1-9]\\d{0,9}$`, "u")
 const FIELDS = Object.freeze(["kaizen", "signal", "job_class", "evidence_jobs", "countermeasure", "plugin", "version", "hypothesis"])
 const REQUIRED = new Set(["kaizen", "signal", "job_class", "plugin", "hypothesis"])
 const DIRECTIONS = new Set(["down", "up"])

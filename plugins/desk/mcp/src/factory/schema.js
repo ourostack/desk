@@ -34,6 +34,8 @@
 // files; this module needs no import at all — `Buffer` is a Node global, and
 // every other check here is plain object/regex/Date arithmetic.
 
+import { SLUG } from "./repo-name.js"
+
 export const ENUMS = Object.freeze({
   host: Object.freeze(["claude-code", "copilot-cli", "codex-cli"]),
   entrypoint: Object.freeze(["cli", "desktop", "sdk", "launcher", "unknown"]),
@@ -108,7 +110,7 @@ export const PATTERNS = Object.freeze({
   // The harness's own agent type (`general-purpose`, `plugin:name`). A requested model
   // uses `modelId`: a short alias such as `sonnet` is a subset of that pattern.
   agentType: /^[A-Za-z0-9][A-Za-z0-9:_.-]{0,63}$/u,
-  prRepo: /^[A-Za-z0-9-]{1,39}\/[A-Za-z0-9._-]{1,100}$/u,
+  prRepo: SLUG,
   commitSha: /^[0-9a-f]{40}$/u,
   jobId: /^[0-9a-f]{32}$/u,
 })

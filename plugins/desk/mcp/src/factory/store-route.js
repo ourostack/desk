@@ -48,9 +48,11 @@
 import { readFileSync, statSync } from "node:fs"
 import * as path from "node:path"
 
+import { SLUG } from "./repo-name.js"
+
 export const DEFAULT_STORE = "ourostack/factory"
 
-const STORE = /^[A-Za-z0-9-]{1,39}\/[A-Za-z0-9._-]{1,100}$/u
+const STORE = SLUG
 const MANIFESTS = ["plugin.json", path.join(".claude-plugin", "plugin.json"), path.join(".codex-plugin", "plugin.json")]
 const invalid = () => ({ store: null, source: "invalid_declaration" })
 

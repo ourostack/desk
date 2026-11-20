@@ -103,6 +103,7 @@ import {
 } from "./os-protect.js"
 import { EXACT, lstatExactIfPresent, sameFile } from "../util/file-identity.js"
 import { freshVisibility } from "./desk-visibility.js"
+import { OWNER_SOURCE, REPO_SOURCE } from "./repo-name.js"
 import { assertWindowsAclAvailable, protectWindowsPaths } from "./windows-acl.js"
 import { DESK_VERSION, LABELS_SCHEMA, LABEL_CHECK_CODES, compareVersions, validateLabels } from "./label-schema.js"
 import { ENUMS, LIMITS, LOCAL_SCHEMA, PATTERNS, isPlainObject, validateLocalFacts } from "./schema.js"
@@ -138,7 +139,7 @@ const LABELS_KEY_PATTERN = new RegExp(`^labels/[0-9a-f]{32}/${SESSION_ID_SRC}\\.
 // The session id of a facts file name or a labels key; the name is checked against its pattern before this is read.
 const sessionIdOfName = (name) => name.slice(-41, -5)
 const BRIEF_NAME_PATTERN = new RegExp(`^((?:${ENUMS.host.join("|")})-${SESSION_ID_SRC})\\.brief\\.json$`, "u")
-const STORE_SLUG_PATTERN = /^([A-Za-z0-9](?:[A-Za-z0-9-]{0,38})?)__([A-Za-z0-9._-]{1,100})$/u
+const STORE_SLUG_PATTERN = new RegExp(`^(${OWNER_SOURCE})__(${REPO_SOURCE})$`, "u")
 
 // A file written by a newer Desk: it declares a newer schema version, or it parses and fails local validation only with `unknown_key` (a newer
 // Desk added optional keys). This Desk leaves it in place and never quarantines it; the Desk that wrote it publishes it.

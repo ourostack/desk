@@ -277,7 +277,7 @@ async function readTriageActor({ repo, pr, head, runner, token }) {
     if (response?.code !== 0) return null
     const value = JSON.parse(response.stdout)
     const actor = value?.user?.login
-    if (value?.head?.sha !== head || typeof actor !== "string" || !/^[A-Za-z0-9-]{1,39}(?:\[bot\])?$/u.test(actor)) return null
+    if (value?.head?.sha !== head || typeof actor !== "string" || !/^[A-Za-z0-9_-]{1,39}(?:\[bot\])?$/u.test(actor)) return null
     return actor
   } catch { return null }
 }

@@ -326,7 +326,15 @@ export function assembleLoop({ status, read, nowMs, version }) {
   const blocked = evaluator !== null && isObject(evaluator.headless) && isInteger(evaluator.headless.blocked_days) ? evaluator.headless.blocked_days : null
   // A facts quarantine that has not settled within the keep limit (`capture-sweep.js`): its hosts go to the store as not counted, which no store alarm reads.
   const notSettling = isObject(stored.coverage_kept) && stored.coverage_kept.code === "quarantine_not_settling"
-  return { loop, signals: { blocked_days: blocked, cards_invalid: invalid, slot_invalid: !slotValid(loop), facts_quarantine_not_settling: notSettling }, cards: cards.cards }
+  return { loop, signals: { blocked_days: blocked, cards_invalid: invalid, slot_invalid: !slotValid(loop), facts_quarantine_not_settling: notSettling, held_sessions: agedHolds(stored.held_sessions, nowMs) }, cards: cards.cards }
+}
+
+const HELD_ALARM_MS = 24 * 60 * 60 * 1000
+/** The held-session groups whose oldest hold is older than a day, from the sweep's record (`derive-run.js` `heldSessions`), or null when there is no record. */
+function agedHolds(record, nowMs) {
+  if (!isObject(record) || !Array.isArray(record.groups)) return null
+  return record.groups.filter((group) => isObject(group) && typeof group.route === "string" && typeof group.reason === "string" && isInteger(group.sessions) && group.sessions > 0 && nowMs - Date.parse(group.oldest_at) >= HELD_ALARM_MS)
+    .map(({ route, reason, sessions, oldest_at: oldest }) => ({ route, reason, sessions, oldest_at: oldest }))
 }
 
 function toMillis(now) {
@@ -382,6 +390,7 @@ export function loopAlarms(loop, signals = {}) {
   if (!LAG_SILENT_STATES.includes(evaluator.headless.state) && measuredAbove(evaluator.label_lag_minutes, LABEL_LAG_ALARM_MINUTES)) alarms.push({ name: "label_lag", evidence: { minutes: evaluator.label_lag_minutes.value, jobs: evaluator.unlabeled_finished.value } })
   if (signals.facts_quarantine_not_settling === true) alarms.push({ name: "facts_quarantine_not_settling", evidence: {} })
   // The record's own slot fails the store's rule, so the capture record goes without it: said once as an alarm, never silence.
+  if (Array.isArray(signals.held_sessions) && signals.held_sessions.length > 0) alarms.push({ name: "held_sessions", evidence: { sessions: signals.held_sessions.reduce((sum, group) => sum + group.sessions, 0), groups: signals.held_sessions } })
   if (signals.slot_invalid === true) alarms.push({ name: "capture_loop_slot", evidence: {} })
   for (const step of signals.attempted ?? []) if (STEPS.includes(step) && steps[step].stale) alarms.push({ name: `step_stale:${step}`, evidence: { failures: steps[step].failures.value } })
   return alarms
@@ -401,6 +410,7 @@ export function unreadAlarms(loop, signals = {}) {
   if (evaluator.labels_quarantined.state === "unavailable") unread.push("labels_quarantined")
   if (evaluator.label_lag_minutes.state === "unavailable") unread.push("label_lag")
   if (typeof signals.facts_quarantine_not_settling !== "boolean") unread.push("facts_quarantine_not_settling")
+  if (!Array.isArray(signals.held_sessions)) unread.push("held_sessions")
   const attempted = signals.attempted ?? []
   for (const step of STEPS) if (!attempted.includes(step)) unread.push(`step_stale:${step}`)
   return unread
