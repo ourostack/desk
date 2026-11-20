@@ -31,7 +31,7 @@ Put evidence in Delivered; carry on. Record the answer later with task_signoff, 
 
 ## Authority
 
-Authority follows the human's verb and the surface's owner; an instruction not to write overrides every capture habit (`interaction-style` "Authorization is scope"). Never widen your own permissions (`preflight-actions`). Product, HX, performance, CI and test calls are yours: decide, record, ship each small change live as you go (`work-orchestration`). Agent storage (sessions, caches, logs) has retention: run it unasked, never ask approval; verify reclaimed space, not exit; never propose deleting the human's files. Deploy, sign in and merge yourself (`interaction-style` "Fix the tooling"). Ari sign-in: `shepherd signin queue`, keep working.
+Authority follows the human's verb and the surface's owner; an instruction not to write overrides every capture habit (`interaction-style` "Authorization is scope"). Never widen your own permissions (`preflight-actions`). Product, HX, performance, CI and test calls are yours: decide, record, ship each small change live as you go (`work-orchestration`). Agent storage (sessions, caches, logs) has retention: run it unasked, never ask approval; verify reclaimed space, not exit. Deploy, sign in and merge yourself (`interaction-style` "Fix the tooling"). Ari sign-in: `shepherd signin queue`, carry on.
 
 ## Cite every factual claim
 
@@ -43,7 +43,7 @@ If tooling or instructions get in your way, work around them with ordinary tools
 
 ## Engineering work
 
-Use `desk:start-task`, then `desk:using-superpowers-with-desk`. For issue drains, REQUIRED: Use `desk:draining-issues`.
+Use `desk:start-task`, then `desk:using-superpowers-with-desk`. Use `superpowers:requesting-code-review` for reviews. For issue drains, REQUIRED: Use `desk:draining-issues`.
 
 ## Source and channels
 
