@@ -1,12 +1,13 @@
 name: Hosted gateway tests
 
-# The hosted Desk gateway's own test suite (hosted/, `node --test`). It runs only when the gateway changes, so it is
+# The hosted Desk gateway's own test suite and tracked-lockfile source guard. It runs when the gateway or any npm lockfile changes, so it is
 # not one of main's required checks: a required check from a path-filtered workflow would never report on other pull
 # requests and would block them.
 
 on:
   pull_request:
     paths:
+      - "**/package-lock.json"
       - "hosted/**"
       - "plugins/desk/mcp/**"
       - ".github/workflows/hosted-tests.yml"
@@ -16,6 +17,7 @@ on:
     branches:
       - main
     paths:
+      - "**/package-lock.json"
       - "hosted/**"
       - "plugins/desk/mcp/**"
       - ".github/workflows/hosted-tests.yml"
@@ -55,22 +57,7 @@ jobs:
       # Lockfiles must fetch from npm itself, never a mirror a developer's machine happened to use, so that `npm ci`
       # here and in the image build checks every sha512 against npmjs. infra/normalize-lockfile.mjs fixes a lockfile.
       - name: Check that the lockfiles resolve from registry.npmjs.org with sha512 integrity
-        run: |
-          node --input-type=module -e '
-            import { readFileSync } from "node:fs";
-            import { nonNpmResolved } from "./hosted/infra/normalize-lockfile.mjs";
-            let failed = false;
-            for (const path of ["hosted/package-lock.json", "plugins/desk/mcp/package-lock.json"]) {
-              const lock = JSON.parse(readFileSync(path, "utf8"));
-              const bad = nonNpmResolved(lock);
-              if (bad.length) { failed = true; console.error(`${path}: ${bad.length} packages resolve outside registry.npmjs.org: ${bad.slice(0, 5).join(", ")}`); }
-            }
-            const hosted = JSON.parse(readFileSync("hosted/package-lock.json", "utf8"));
-            const weak = Object.entries(hosted.packages).filter(([key, entry]) => key && entry.resolved && !entry.link && !entry.integrity?.startsWith("sha512-")).map(([key]) => key);
-            if (weak.length) { failed = true; console.error(`hosted/package-lock.json: ${weak.length} packages lack sha512 integrity: ${weak.slice(0, 5).join(", ")}`); }
-            if (failed) process.exit(1);
-            console.log("lockfiles resolve from registry.npmjs.org");
-          '
+        run: node hosted/infra/check-lockfiles.mjs
 
       - name: Install dependencies
         working-directory: hosted
