@@ -1,0 +1,53 @@
+{
+  "generator": "ouro-actions 1.6.0",
+  "set": "desk-web",
+  "tool": "desk-web",
+  "commands": [
+    {
+      "name": "browser-context",
+      "summary": "Use when you need a browser: open or close one for this agent. \"fresh\" starts an empty throwaway profile; \"mine\" opens a private Edge/Chrome copy of the person's profile without saved logins, whose snapshots and screenshots hide typed values. Both run in the background and leave the person's windows alone. A failed mine open never authorizes computer control, attaching to the person's browser, interactive sign-in, or switching identity or transport. Keep the contextId and close when done.",
+      "effect": "private",
+      "flags": {
+        "action": {
+          "type": "enum",
+          "description": "open starts a new browser and returns its contextId; close shuts it and deletes its folder.",
+          "values": [
+            "open",
+            "close"
+          ],
+          "required": true
+        },
+        "browser": {
+          "type": "enum",
+          "description": "open only. fresh (default): empty legacy profile, outside copied-profile protection. mine: private copy of the person's profile with no saved-login stores, deleted on close. A failed mine open carries COPY_SOURCE_PERMISSION (the OS refused access; Desk cannot grant it) or COPY_SOURCE_POLICY (source qualification failed). The open reply's runtime names the Desk version and plugin root that ran.",
+          "values": [
+            "fresh",
+            "mine"
+          ]
+        },
+        "context-id": {
+          "type": "string",
+          "description": "close only. The contextId that open returned."
+        }
+      }
+    },
+    {
+      "name": "browser-command",
+      "summary": "Use when you drive an owned browser context: run one command with `args`, a list of literal strings, never shell. Start with [\"goto\",\"https://example.com\"] or [\"snapshot\"], then act on current refs; on AUTH_SNAPSHOT_INVALIDATED snapshot again. Every reply says where the tab is and whether the action navigated or changed the page. eval and run-code return what the script returns, unredacted. Open and close only through browser_context.",
+      "effect": "private",
+      "flags": {
+        "context-id": {
+          "type": "string",
+          "description": "The contextId that browser_context open returned.",
+          "required": true
+        },
+        "args": {
+          "type": "string",
+          "description": "The command and its arguments, for example [\"snapshot\"] or [\"fill\",\"e4\",\"text\"]. In mine the commands are: snapshot [--interactive|--save], find <text>, goto <url>, go-back, go-forward, reload, wait [<seconds>|<text>|--gone <text>], click/dblclick/hover/check/uncheck <ref>, fill/type <ref> <text>, press [<ref>] <key>, select <ref> <value>, mousewheel <dx> <dy>, resize <w> <h>, screenshot [<ref>] [--full], tab-list, tab-new, tab-select <n>, tab-close [<n>], eval <function or expression> [<ref>], run-code <async function of page>, console [<level>], keydown/keyup <key>, mousemove <x> <y>, mousedown/mouseup [<button>], upload <ref> <file>..., dialog-accept [<text>], dialog-dismiss, localstorage-* and sessionstorage-* (list, get, set, delete, clear). Act on a ref soon after its snapshot. To type into a rich-text editor, fill its textbox ref, then press Enter; typed.verified says whether it holds the text. screenshot saves a PNG (real secrets blurred, nothing else hidden; do not crop the operator's own content out) in the evidence folder, which stays after close, and returns its path. A transient error page: [\"reload\"], then wait. Fresh keeps the legacy CLI commands, as JSON.",
+          "required": true
+        }
+      }
+    }
+  ],
+  "personOnly": {}
+}
