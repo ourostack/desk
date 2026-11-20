@@ -23,7 +23,7 @@ import { spawnSync } from "node:child_process"
 import { personPrefix, isPathContained, resolveWriteTarget } from "../util/paths.js"
 import { otherDeskOwning, otherDeskContaining } from "../util/desk-owner.js"
 import { isLiveCardPath } from "../desk/card-commit-guard.js"
-import { DESK_COMMIT_HASH_NOTE, headSha } from "./task.js"
+import { commitHashAnswer, headSha } from "./task.js"
 import { isGitRepository, hasUnmergedPath, hasUnstagedWork, stagedChanges, indexEntries, stagePaths, commitPaths, commitIndexPaths } from "../util/git-stage.js"
 import { commitFailure, commitRoute, withNext } from "../util/route-around.js"
 import { operationAnswer } from "../util/cas-commit.js"
@@ -249,7 +249,7 @@ function misdirectedPath(deskRoot, relativePath) {
   })), { code, owner_desk: owner.root })
 }
 
-async function saveDesk({ deskRoot, input, person = null, spawnGit = spawnSync, schedulePush = schedulePushDefault }) {
+async function saveDesk({ deskRoot, input, person = null, env = process.env, spawnGit = spawnSync, schedulePush = schedulePushDefault }) {
   const values = input ?? {}
   if (values.paths === undefined && values.files === undefined) {
     throw Object.assign(new Error("desk_save: pass `paths` (a non-empty array of path strings), `files`, or both"), { code: "desk_save_pass_paths_a_non_empty" })
@@ -356,7 +356,7 @@ async function saveDesk({ deskRoot, input, person = null, spawnGit = spawnSync, 
   schedulePush({ root: deskRoot })
   const answer = { status: "committed", ...deskPushNote({ root: deskRoot, spawnGit, note: DESK_SAVE_NOTE }), desk_pushed: false }
   if (contentAdmission !== null) answer.content_admission = contentAdmission
-  return deskCommit === null ? answer : { ...answer, desk_commit: deskCommit, desk_commit_note: DESK_COMMIT_HASH_NOTE }
+  return deskCommit === null ? answer : { ...answer, ...commitHashAnswer({ env, hash: deskCommit }) }
 }
 
 // A stage or read failure: nothing was committed, and the route finishes the commit by hand (#623).

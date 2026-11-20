@@ -1,5 +1,37 @@
 # desk plugin — changelog
 
+## 3.2.357 — 2026-11-20
+
+### Card tools
+
+`task_create`, `task_update`, `task_archive` and `task_signoff` take `desk` to write a card in another desk registered on this machine; an unregistered desk, a Crew desk and a person-scoped session are refused, and only the operator's registry counts. `task_update` takes `resources`, a list of Resources rows recorded in one write and one commit, so a cleanup no longer makes one commit per row. A `task_signoff` refusal at `validating` names the exact `task_update` call that closes the card. A hosted `desk_save`, `task_update` or `task_signoff` whose commit is not yet pushed reports `desk_commit_pending` instead of a hash the push can change.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.356 — 2026-11-20
+
+The `mine` browser copy now keeps you signed in when the Edge on this Mac is newer than your running Edge. A newer Edge could not read the cookies the older one encrypted and dropped every one of them at start, so GitHub and other sites landed on a sign-in page. On macOS the copied cookie file's values are now decrypted with the browser's own Safe Storage key and stored as plain values in the private copy, which is deleted when the context closes. Your real profile is not changed.
+
+Desk's MCP server now vendors Ouro UI v1.3.378, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.355 — 2026-11-20
+
+### Child agents: reply-based reports, unique scratch, relayed go, read-only startup
+
+Child briefs now ask for the report as text in the child's reply, and the coordinator saves it at the mapped report path, so a host that refuses a subagent's file write (Claude Code) no longer strands the report. The brief mapper (`superpowers-context.js`) also puts a unique scratch folder and pull-request body file name in every brief, so concurrent children never share a `pr-body.md`. It takes an optional `--go-quote` and `--go-scope` and adds an authority entry: a go the brief quotes with its scope, relayed by the root, satisfies a project confirm-first rule for that scope only. It is never presented as the operator's own message and never overrides a managed safeguard, permission prompt or denial. `using-desk` and `work-orchestration` say the same.
+
+A child launched with `DESK_READ_ONLY_CHILD=1` now starts read-only: the boot, the tidy repair launch and the session-end sync skip the desk sync, the background fetch, the card guard and any move or commit, so a read-only investigator cannot change the shared desk before it reads its brief. The `using-desk` budget rises by 200 bytes for the child rules, backed by the new `child-execution-contracts` eval.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.354 — 2026-11-20
+
+Browser `mine` now opens on Claude Code and Codex. Their `desk-web` launch form (`node -e <bootstrap>`) tripped the runtime check that protects authenticated output, so every `mine` open was refused with `AUTH_LOGGING_REFUSED`. The check now allows exactly the bootstrap Desk ships in `.mcp.claude-codex.json`; any other inline script, `--require`, inspector or other Node flag is still refused, and the refusal names the flag that disqualified the runtime.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.353 — 2026-11-20
 
 Desk's MCP server now vendors Ouro UI v1.3.377, moved by Ouro Current.

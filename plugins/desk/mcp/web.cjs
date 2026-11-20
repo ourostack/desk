@@ -255,9 +255,61 @@ function readProfileFile(file) {
   }
 }
 
+// The browser on this computer may be newer than the copy's source: macOS Edge 158 cannot read the cookies that the
+// still-running Edge 157 encrypted, drops every one at start and the copy reads signed out. So on macOS the copied
+// cookie file's values are decrypted here with the browser's own Safe Storage key and stored as plain values in the
+// private copy, which any version reads and which is deleted with the context.
+var SAFE_STORAGE = { "Microsoft Edge": ["Microsoft Edge Safe Storage", "Microsoft Edge"], "Google Chrome": ["Chrome Safe Storage", "Chrome"] };
+
+function keychainCookieKey(app, platform, run) {
+  var item = SAFE_STORAGE[app];
+  if (platform !== "darwin" || !item) return null;
+  try {
+    var secret = run("security", ["find-generic-password", "-w", "-s", item[0], "-a", item[1]], { timeout: 10000, windowsHide: true, stdio: ["ignore", "pipe", "ignore"] });
+    return crypto.pbkdf2Sync(secret.toString("utf8").trim(), "saltysalt", 1003, 16, "sha1");
+  } catch (error) {
+    return null;
+  }
+}
+
+function decryptCookie(key, host, value) {
+  value = value instanceof Uint8Array ? Buffer.from(value) : null;
+  if (!value || value.length < 19 || value.slice(0, 3).toString("latin1") !== "v10") return null;
+  try {
+    var decipher = crypto.createDecipheriv("aes-128-cbc", key, Buffer.alloc(16, 0x20));
+    var plain = Buffer.concat([decipher.update(value.slice(3)), decipher.final()]);
+    var digest = crypto.createHash("sha256").update(host).digest();
+    if (plain.length >= 32 && plain.slice(0, 32).equals(digest)) plain = plain.slice(32);
+    return plain.toString("utf8");
+  } catch (error) {
+    return null;
+  }
+}
+
+function transcodeCookies(file, key) {
+  try {
+    var db = new (require("node:sqlite").DatabaseSync)(file);
+    try {
+      var rows = db.prepare("SELECT rowid AS id, host_key AS host, encrypted_value AS value FROM cookies WHERE length(encrypted_value) > 0").all();
+      var update = db.prepare("UPDATE cookies SET value = ?, encrypted_value = x'' WHERE rowid = ?");
+      db.exec("BEGIN");
+      rows.forEach(function (row) {
+        var plain = decryptCookie(key, row.host, row.value);
+        if (plain !== null) update.run(plain, row.id);
+      });
+      db.exec("COMMIT");
+    } finally {
+      db.close();
+    }
+  } catch (error) {
+    // not a cookie database this Node can open: leave the bytes as copied
+  }
+}
+
 // Admission precedes both parsing and copying. The opened descriptor supplies the bytes;
 // a later pathname copy would undo identity/link qualification.
-function copyProfile(source, dest, app) {
+function copyProfile(source, dest, app, options) {
+  var cookieKey = options && "cookieKey" in options ? options.cookieKey : keychainCookieKey(app, process.platform, childProcess.execFileSync);
   var state;
   try { state = readProfileFile(path.join(source, "Local State")); } catch (error) {
     if (error && error.permissionDenied) throw copyPermissionError(app);
@@ -309,6 +361,7 @@ function copyProfile(source, dest, app) {
       try { fs.writeFileSync(path.join(to, entry.name), bytes, { mode: 384 }); }
       catch (error) { throw copyDestinationError(); }
       finally { bytes.fill(0); }
+      if (cookieKey && /^(?:Network\/)?Cookies$/.test(inner)) transcodeCookies(path.join(to, entry.name), cookieKey);
     });
   }
   copy(path.join(source, name), path.join(dest, name), "");
@@ -419,9 +472,27 @@ function checkAuthLogging(s) {
     runtime.inspectorActive || require("node:inspector").url()) {
     throw plain("AUTH_LOGGING_REFUSED: Active or unqualified Node inspection is incompatible with authenticated output protection.");
   }
-  if (runtime.execArgv.some(function (arg) {
+  var args = shippedLauncherArgs(s, runtime.execArgv) ? [] : runtime.execArgv;
+  var bad = args.filter(function (arg) {
     return typeof arg !== "string" || !(arg === "--test" || /^--test-(?:name|skip)-pattern=/.test(arg));
-  })) throw plain("AUTH_LOGGING_REFUSED: Node runtime flags or preloads are unqualified for authenticated output protection.");
+  });
+  if (bad.length) {
+    throw plain("AUTH_LOGGING_REFUSED: Node runtime flag " + (typeof bad[0] === "string" ? bad[0].split("=")[0] : "(not text)") +
+      " is unqualified for authenticated output protection. Start desk-web without Node flags or preloads; Desk's own launcher is the only inline script allowed.");
+  }
+}
+
+// Claude Code and Codex start desk-web as `node -e <bootstrap>`, so execArgv is exactly ["-e", <that bootstrap>].
+// Only the bootstrap Desk ships in .mcp.claude-codex.json is allowed; any other script or extra flag is still refused.
+function shippedLauncherArgs(s, execArgv) {
+  if (execArgv.length !== 2 || execArgv[0] !== "-e" || typeof execArgv[1] !== "string") return false;
+  try {
+    var config = JSON.parse(fs.readFileSync(path.join(s.pluginRoot, ".mcp.claude-codex.json"), "utf8"));
+    var args = config.mcpServers["desk-web"].args;
+    return args.length === 2 && args[0] === "-e" && args[1] === execArgv[1];
+  } catch (error) {
+    return false;
+  }
 }
 
 function loadAuthDriver(s) {
@@ -466,7 +537,7 @@ async function openAuth(s) {
     s.contexts[id].adapter = authBrowser.create(context, outputDir, s.commandMs, function () { checkAuthLogging(s); }, { evidenceDir: evidenceDir(s) });
     var opened = {
       contextId: id, browser: "mine", app: BROWSERS[browser.channel].name, files: outputDir, evidence: evidenceDir(s),
-      note: "Owned native output: only real secrets are hidden (password and one-time-code fields, token-looking values) plus rich-text and shadow text that cannot be told from page text; typed values in ordinary fields show. Pages are read with their child frames, refs act in any frame, and screenshot blurs real secrets and paints nothing else, and it is the operator's own page, so do not crop or hide it from them; every command is yours to run. Screenshots are saved in the evidence folder, which stays after close. Close this context when done."
+      note: "Owned native output: only real secrets are hidden (password and one-time-code fields, token-looking values) plus rich-text and shadow text that cannot be told from page text; typed values in ordinary fields show. Pages are read with their child frames, refs act in any frame, and screenshot blurs real secrets and paints nothing else, and it is the operator's own page, so do not crop or hide it from them; every command is yours to run. Screenshots are saved in the evidence folder, which stays after close. Close this context when done. GitHub shows the account that was active in the copied profile; this copy holds every GitHub account signed in there, so to use another one goto https://github.com/switch_account and click its \"Select <account>\" entry, with no sign-in."
     };
     if (copied.skipped.length) opened.copyLimitations = "Some nonessential profile files were omitted because their regular-file identity, single-link ownership or readable bytes could not be qualified.";
     return opened;
@@ -1140,6 +1211,7 @@ module.exports = {
   npmCli: npmCli,
   profileRoot: profileRoot,
   copyProfile: copyProfile,
+  keychainCookieKey: keychainCookieKey,
   processTableCommand: processTableCommand,
   parseProcessTable: parseProcessTable,
   readProcessTable: readProcessTable,

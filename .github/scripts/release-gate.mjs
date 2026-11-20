@@ -2,6 +2,7 @@
 // Pull requests run every check, so a merge whose pull request was tested against the main it landed on needs no second run. When
 // main moved while the pull request's checks ran, two green pull requests could combine into a broken main, so the release holds
 // until main's own run on that commit has passed, and the passing run starts the release again (desk-release.yml, workflow_run).
+// While the judged commit's own CI is still running, an open "main is red" issue whose failures the commit carries does not fail the run: it exits 0 and releases nothing, and the release after CI decides.
 // A "main is red" issue (report-main-health.sh) holds every release, unless the commit being judged carries every failure the issue records and
 // main's own CI passed on it: the issue is then only waiting for the run that closes it, and the code is what the gate judges.
 // Usage: node release-gate.mjs --repo <owner/name> --head <sha> --event <push|workflow_run|workflow_dispatch|schedule> [--trigger-sha <sha> --trigger-conclusion <conclusion>]
@@ -22,13 +23,15 @@ export function movedSince(sha, commitsSince) {
 // Whether each CI workflow's newest push run for `sha` finished green. A commit no run covers is not verified.
 export function mainVerified(sha, runsFor) {
   const missing = []
+  let pending = 0
+  let failed = 0
   for (const workflow of CI_WORKFLOWS) {
     const run = newest(runsFor(workflow, sha).filter((candidate) => candidate.event === "push" || (candidate.event === "workflow_dispatch" && !String(candidate.display_title ?? "").startsWith("Partial:"))))
-    if (!run) missing.push(`${workflow} has no run on this commit`)
-    else if (run.status !== "completed") missing.push(`${workflow} is still running`)
-    else if (run.conclusion !== "success") missing.push(`${workflow} finished ${run.conclusion}`)
+    if (!run) { pending += 1; missing.push(`${workflow} has no run on this commit`) }
+    else if (run.status !== "completed") { pending += 1; missing.push(`${workflow} is still running`) }
+    else if (run.conclusion !== "success") { failed += 1; missing.push(`${workflow} finished ${run.conclusion}`) }
   }
-  return { ok: missing.length === 0, reason: missing.join("; ") }
+  return { ok: missing.length === 0, waiting: pending > 0 && failed === 0, reason: missing.join("; ") }
 }
 
 // `api(path)` returns the parsed JSON of a GitHub API read; `redMain()` lists the open "main is red" issues as `{ label, shas }`, the commits whose failure each records.
@@ -41,6 +44,10 @@ export function gate({ repo, head, event, trigger = {}, api, redMain }) {
   const open = redMain()
   const stale = verified.ok ? open.filter((issue) => issue.shas.length > 0 && issue.shas.every(carries)).map((issue) => issue.label) : []
   const red = open.map((issue) => issue.label).filter((label) => !stale.includes(label))
+  // The head's CI is still running and the open issues only record failures the head carries: the run that finishes decides (workflow_run), so this one releases nothing and does not fail.
+  if (red.length > 0 && verified.waiting && open.every((issue) => issue.shas.length > 0 && issue.shas.every(carries))) {
+    return { red: [], stale, release: false, reason: `waiting for CI on ${head.slice(0, 12)} (${verified.reason}); the release after CI decides (open: ${red.join(", ")})` }
+  }
   if (red.length > 0) return { red, stale, release: false, reason: `main is red: ${red.join(", ")}` }
 
   if (event === "push") {

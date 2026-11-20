@@ -11,7 +11,7 @@ const { limitWorker, startDetached } = require("./detach-worker.cjs");
 const syncEnd = require("./sync-end.cjs");
 
 const ENTRY = path.join(__dirname, "..", "session-end.cjs");
-const headless = (env) => { try { return require("../../mcp/src/factory/headless-flag.cjs").isHeadlessFactorySession(env); } catch { const v = String(env?.DESK_FACTORY_HEADLESS ?? ""); return v !== "" && v !== "0"; } };
+const headless = (env) => { try { return require("../../mcp/src/factory/headless-flag.cjs").startupChangesNothing(env); } catch { return [env?.DESK_FACTORY_HEADLESS, env?.DESK_READ_ONLY_CHILD].some((v) => String(v ?? "") !== "" && String(v ?? "") !== "0"); } };
 
 /** The session-end job for one payload. It is fail-open. */
 function runJobs({ host, payload, env = process.env }) {

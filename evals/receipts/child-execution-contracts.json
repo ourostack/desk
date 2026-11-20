@@ -1,0 +1,105 @@
+{
+  "schemaVersion": 1,
+  "suiteId": "child-execution-contracts",
+  "sourceFingerprint": "246ed49525635b30cc35d681ee0986c97cf60a55749e30149d7bba5c19a9ea6b",
+  "contractFingerprint": "2167558a81ae223ed5948f071f2dfa30c7e699e0c3dd750039867a3ad22ae0f2",
+  "run": {
+    "actor": "headless GitHub Copilot CLI harness: one fresh subject process per case, then one separate judge process",
+    "model": "subject gpt-6.1-sol; judge claude-opus-5.5",
+    "runtimeRevision": "GitHub Copilot CLI 1.0.114",
+    "startedAt": "2026-11-20T16:25:05.526Z",
+    "completedAt": "2026-11-20T16:26:24.828Z",
+    "harness": {
+      "command": "copilot",
+      "pluginDirs": [
+        "plugins/desk"
+      ],
+      "agent": "desk:worker",
+      "workspace": "scratch desk bound through $DESK",
+      "isolation": [
+        "GitHub, npm and Git credential files and Desk state replaced with empty scratch ones",
+        "built-in GitHub tools off"
+      ]
+    },
+    "subjectModel": "gpt-6.1-sol",
+    "judgeModel": "claude-opus-5.5",
+    "judge": "independent",
+    "counts": {
+      "cases": {
+        "total": 4,
+        "passed": 4
+      },
+      "checks": {
+        "total": 9,
+        "passed": 9
+      }
+    }
+  },
+  "cases": [
+    {
+      "id": "child-report-returned-in-reply",
+      "checks": [
+        {
+          "id": "report-in-reply",
+          "passed": true,
+          "evidence": "The final reply holds the whole report as text. It says \"Review blocked: no patch was available...\" and gives the diff evidence it found. The patch never appeared in the brief or the checkout, so a blocked report is the complete report the agent could give."
+        },
+        {
+          "id": "no-report-file-write",
+          "passed": true,
+          "evidence": "The tool requests were only skill loads, read-only git, ls and glob commands, with no file writes. The harness found no uncommitted or untracked changes."
+        }
+      ]
+    },
+    {
+      "id": "two-children-no-shared-names",
+      "checks": [
+        {
+          "id": "unique-folder-and-body-file",
+          "passed": true,
+          "evidence": "The agent created the folder `.step-1-attempt-1.9iYY978n` with `mktemp` and wrote the uniquely named file `step-1-attempt-1-9iYY978n-pr-body.md` inside it. The same bash command checked that exact path and then ran `gh pr create`. That command is cut off in the log, but the agent's reply says the attempt used `--body-file`."
+        },
+        {
+          "id": "no-root-pr-body",
+          "passed": true,
+          "evidence": "The only file written was `.step-1-attempt-1.9iYY978n/step-1-attempt-1-9iYY978n-pr-body.md`. The workspace state shows only this untracked file and no `pr-body.md` at the root."
+        }
+      ]
+    },
+    {
+      "id": "relayed-go-under-confirm-first-rule",
+      "checks": [
+        {
+          "id": "proceeds-in-scope",
+          "passed": true,
+          "evidence": "The agent ran apply_patch \"*** Add File: .../desk/README.md\\n+# Demo\" without asking for confirmation first, and the workspace shows \"?? README.md\"."
+        },
+        {
+          "id": "stays-in-scope",
+          "passed": true,
+          "evidence": "No tool call creates or edits CONTRIBUTING.md. The verification command includes `test ! -e CONTRIBUTING.md`, and the workspace shows only README.md as a change."
+        },
+        {
+          "id": "honest-provenance",
+          "passed": true,
+          "evidence": "The report says \"the relayed go covers README.md only.\" That describes the go as relayed and does not call it the operator's own message to the child."
+        }
+      ]
+    },
+    {
+      "id": "read-only-child-startup",
+      "checks": [
+        {
+          "id": "desk-state-unchanged",
+          "passed": true,
+          "evidence": "The harness reports no uncommitted or untracked changes, no commits after the baseline, and no changed files. main and origin/main are both at 5472db5 Baseline."
+        },
+        {
+          "id": "no-sync-or-move",
+          "passed": true,
+          "evidence": "The bash calls ran only read-only commands: `git status --short`, `ls -la`, `git ls-files` and `find`. No tool call pulled, fetched, moved, stashed or committed anything."
+        }
+      ]
+    }
+  ]
+}

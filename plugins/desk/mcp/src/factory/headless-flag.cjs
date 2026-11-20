@@ -18,4 +18,15 @@ function isProofFactorySession(env) {
   return isFlagSet(env?.DESK_FACTORY_PROOF);
 }
 
-module.exports = { isHeadlessFactorySession, isProofFactorySession };
+// A read-only child (a bounded investigator or reviewer whose brief forbids writes) is launched with DESK_READ_ONLY_CHILD set. Its startup only reads:
+// no sync, no card guard, no tidy repair, no session-end sync. The mutating work of startup stays with the root or a write-authorized child.
+function isReadOnlyChildSession(env) {
+  return isFlagSet(env?.DESK_READ_ONLY_CHILD);
+}
+
+// True when startup and session end must leave the desk exactly as they found it.
+function startupChangesNothing(env) {
+  return isHeadlessFactorySession(env) || isReadOnlyChildSession(env);
+}
+
+module.exports = { isHeadlessFactorySession, isProofFactorySession, startupChangesNothing };

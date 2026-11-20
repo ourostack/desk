@@ -19,7 +19,7 @@
 //
 // Session end runs it from `session-end.cjs`, in the same detached worker as the factory capture.
 
-const headless = (env) => { try { return require("../../mcp/src/factory/headless-flag.cjs").isHeadlessFactorySession(env); } catch { const v = String(env?.DESK_FACTORY_HEADLESS ?? ""); return v !== "" && v !== "0"; } };
+const headless = (env) => { try { return require("../../mcp/src/factory/headless-flag.cjs").startupChangesNothing(env); } catch { return [env?.DESK_FACTORY_HEADLESS, env?.DESK_READ_ONLY_CHILD].some((v) => String(v ?? "") !== "" && String(v ?? "") !== "0"); } };
 const MAX_INPUT = 1024 * 1024;
 
 async function readInput(stream, timeoutMs = 150) {

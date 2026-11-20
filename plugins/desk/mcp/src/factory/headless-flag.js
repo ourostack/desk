@@ -15,6 +15,9 @@ export const READ_ONLY_TOOLS = Object.freeze(["desk_search", "desk_recall", "des
 /** True when `env.DESK_FACTORY_HEADLESS` is set and is not empty or `0`; the rule itself is `mcp/src/factory/headless-flag.cjs`. */
 export const isHeadlessFactorySession = createRequire(import.meta.url)("./headless-flag.cjs").isHeadlessFactorySession
 
+/** True when startup must not sync, install, repair or write: a headless evaluator or a read-only child. */
+export const startupChangesNothing = createRequire(import.meta.url)("./headless-flag.cjs").startupChangesNothing
+
 /** The refusal payload for `name` under the flag, or null when the call may go ahead. Carries no input text. */
 export function headlessRefusal(name, env) {
   if (!isHeadlessFactorySession(env) || READ_ONLY_TOOLS.includes(name)) return null

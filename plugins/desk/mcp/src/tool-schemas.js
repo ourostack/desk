@@ -30,6 +30,8 @@ const TASK_TARGET = {
   slug: text("The task folder name."),
 }
 
+const SIBLING_DESK = text("Write the task in another desk registered on this machine instead of this session's desk: its name, repo or absolute folder as desk_status lists it under machine_desks. A desk that is not registered, or a Crew desk, is refused and nothing is written; the answer carries `desk_root`.")
+
 const DISPLAY_LABEL = text("Optional short description of the focused task, at most 72 characters; never paths, URLs, emails or credentials. Unsafe labels are ignored.")
 
 const CONTENT_HOME = {
@@ -147,7 +149,7 @@ const TASK_ARCHIVE_OUTCOME = {
 }
 
 const HAND_WRITTEN_INPUT_SCHEMAS = Object.freeze({
-  task_create: schema({
+  task_create: schema({ desk: SIBLING_DESK,
     ...TASK_TARGET,
     slug: text("The task folder name: an outcome name, 2-6 lowercase kebab-case words."),
     title: text("The task title."),
@@ -206,9 +208,10 @@ const HAND_WRITTEN_INPUT_SCHEMAS = Object.freeze({
     origin_note: text("When the agent started the task: one line on what it noticed."),
     steps: { type: "array", items: STEP, description: "The outcome's steps, in order, written as the card's `## Steps` table. A new step needs `id`, `repo` and `depends_on`." },
   }, ["track", "slug", "title"]),
-  task_update: schema({ ...TASK_TARGET, status: text("Shorthand for `frontmatter.status`: one of drafting, processing, validating, collaborating, paused, blocked, done, cancelled. Moving to `done` needs `evidence`."), ...CARD_UPDATE, ...TASK_PROGRESS, evidence: TASK_DONE_EVIDENCE, repos_removed_reason: REPOS_REMOVED_REASON, return_reason: RETURN_REASON, step: STEP, resource: RESOURCE, display_label: DISPLAY_LABEL, replace_section: REPLACE_SECTION, log: TASK_LOG, content_home: CONTENT_HOME, ...TASK_MOVE }, []),
-  task_archive: schema({ ...TASK_TARGET, evidence: TASK_DONE_EVIDENCE, outcome: TASK_ARCHIVE_OUTCOME }, ["track", "slug"]),
+  task_update: schema({ ...TASK_TARGET, status: text("Shorthand for `frontmatter.status`: one of drafting, processing, validating, collaborating, paused, blocked, done, cancelled. Moving to `done` needs `evidence`."), ...CARD_UPDATE, ...TASK_PROGRESS, evidence: TASK_DONE_EVIDENCE, repos_removed_reason: REPOS_REMOVED_REASON, return_reason: RETURN_REASON, step: STEP, resource: RESOURCE, resources: { type: "array", items: RESOURCE, description: "Several `resource` rows in one call, written and committed once, in order after `resource` when both are given; use it for a cleanup of many worktrees or branches. Any bad row refuses the whole call." }, desk: SIBLING_DESK, display_label: DISPLAY_LABEL, replace_section: REPLACE_SECTION, log: TASK_LOG, content_home: CONTENT_HOME, ...TASK_MOVE }, []),
+  task_archive: schema({ ...TASK_TARGET, desk: SIBLING_DESK, evidence: TASK_DONE_EVIDENCE, outcome: TASK_ARCHIVE_OUTCOME }, ["track", "slug"]),
   task_signoff: schema({
+    desk: SIBLING_DESK,
     track: text("The track folder of the delivered task."),
     slug: text("The task folder name."),
     outcome: { type: "string", enum: ["accepted", "refused"], description: "The operator's answer; refused sends the task back to processing." },
