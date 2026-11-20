@@ -81,17 +81,18 @@ Incremental milestones do not change the authorized endpoint or lower its standa
 Resolve the map once, with explicit existing paths, before handing over:
 
 ```sh
-node <loaded-desk-plugin>/mcp/src/activation/superpowers-context.js --desk-root <desk-root> --person <alias> --task-path <task-directory> --iteration-path <iteration-directory> [--plan-path <existing-plan>] [--progress-path <existing-progress>] [--evidence-root <folder>] --step <positive-step> --attempt <positive-attempt>
+node <loaded-desk-plugin>/mcp/src/activation/superpowers-context.js --desk-root <desk-root> --person <alias> --task-path <task-directory> --iteration-path <iteration-directory> [--plan-path <existing-plan>] [--progress-path <existing-progress>] [--evidence-root <folder>] [--go-quote <operator's go> --go-scope <what it covers>] --step <positive-step> --attempt <positive-attempt>
 ```
 
 Omit `--person` for a single-person Desk. Use the actually loaded, admitted Desk artifact, not a guessed sibling directory or mutable cache path. The mapper reads and creates nothing: it reuses Desk's path authority without creating missing roots, verifies existing regular files, and returns JSON.
 
 | Option | Meaning |
 | --- | --- |
+| `--go-quote`, `--go-scope` | Optional, together. For a write brief: the operator's go, quoted verbatim, and the scope it covers. The mapper puts them in a `briefRules` authority entry saying the go is relayed by the root, satisfies a project confirm-first rule for that scope only, and never overrides a managed tool safeguard, permission prompt or denial. |
 | `--plan-path` | Optional. A supplied plan must be an existing regular file within the Desk root; a shared cross-repository plan stays at its existing Desk planning path. Omit it while the task has no plan: the mapper returns `planPath: null`, and the selection above is `writing-plans`, not `executing-plans`. |
 | `--progress-path` | Optional. A supplied progress record must be an existing regular file inside this task's own directory, resolved through any symlink, and within the effective person prefix, because progress and rulings are written. Omit it to select the iteration's existing `doing.md`, then the canonical `task.md`. |
 
-Apply the outputs in place of upstream SDD's path-producing helpers: `planPath` is the plan input or `null`; `progressPath` is the existing progress record and `rulingsPath` is derived from it, so a provider progress file never becomes a second ruling store and a legacy `doing.md` is never renamed; `briefPath`, `implementationReportPath`, `reviewPackagePath` and `reviewReportPath` are the explicit artifact destinations, by default under `<iteration-directory>/superpowers/step-<n>/attempt-<m>/` in the desk. Produce the normal Superpowers brief and review contents at those paths with native file and diff tools. This changes storage binding, not the engineering method.
+Apply the outputs in place of upstream SDD's path-producing helpers: `planPath` is the plan input or `null`; `progressPath` is the existing progress record and `rulingsPath` is derived from it, so a provider progress file never becomes a second ruling store and a legacy `doing.md` is never renamed; `briefPath`, `implementationReportPath`, `reviewPackagePath` and `reviewReportPath` are the explicit artifact destinations, by default under `<iteration-directory>/superpowers/step-<n>/attempt-<m>/` in the desk. Write the brief at `briefPath` with native file tools. A child never writes its own report file, because some hosts refuse a subagent's file write: it returns the report as text in its reply (`briefRules` says so), and the controller saves that reply at `implementationReportPath` or `reviewReportPath`, then reads it from there. `scratchFolderName` and `prBodyFileName` are unique per step and attempt; the briefs carry them so concurrent children never share a scratch file or a pull-request body. This changes storage binding, not the engineering method.
 
 Include the mapper's `briefRules` in **both the implementer brief and every reviewer brief**, including re-reviews. The Desk-owned addition to each brief template is:
 
