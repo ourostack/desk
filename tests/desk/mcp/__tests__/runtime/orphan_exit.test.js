@@ -120,14 +120,20 @@ test("main closes the session when the host's output fails", async () => {
   const output = new PassThrough()
   const writes = []
   const closedWith = []
+  const crashTarget = new (await import("node:events")).EventEmitter()
+  let parentGone
   const handle = await main({
     argv: ["--root", root], env: {}, cwd: root, homeDir: root, stateHome: path.join(root, "state"),
     input, output, stderr: { write(text) { writes.push(text); return true } }, admissionKickoffMs: 0,
     runtimeInspector: null, runtimeImporter: async () => ({ createSearchEngine: () => idleSearchEngine() }),
-    crashHandlers: true, onClosed: (code) => closedWith.push(code),
+    crashHandlers: true, crashTarget, parentWatcher: ({ onGone }) => { parentGone = onGone }, onClosed: (code) => closedWith.push(code),
   })
   output.emit("error", Object.assign(new Error("write EPIPE"), { code: "EPIPE" }))
   assert.deepEqual(closedWith, [0])
+  crashTarget.emit("uncaughtException", Object.assign(new Error("write EPIPE"), { code: "EPIPE" }))
+  parentGone()
+  assert.deepEqual(closedWith, [0, 0, 0])
+  assert.match(writes.join(""), /the parent process has ended/u)
   input.end()
   await within(handle.closed, 5000, "the close")
   assert.match(writes.join(""), /the host's output is gone/u)

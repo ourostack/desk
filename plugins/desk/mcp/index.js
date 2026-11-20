@@ -167,6 +167,8 @@ export async function main({
   newestRelease,
   runtimeRefresher: injectedRefresher,
   crashHandlers = false,
+  crashTarget = process,
+  parentWatcher = watchParent,
   spawnDetached = spawn,
   onClosed = () => {},
 }) {
@@ -321,7 +323,7 @@ export async function main({
   const kickoff = setTimeout(kick, admissionKickoffMs)
   kickoff.unref?.()
   // Once the server is up, nothing that throws later may end the process: the session records it, degrades and keeps serving.
-  const removeCrashHandlers = crashHandlers ? installCrashHandlers({ session, stderr, onPeerGone: () => onClosed(0) }) : () => {}
+  const removeCrashHandlers = crashHandlers ? installCrashHandlers({ session, stderr, target: crashTarget, onPeerGone: () => onClosed(0) }) : () => {}
   // A host that is gone leaves nothing to serve: a failed write to it, or a parent that has ended, closes the session instead of keeping it alive with no client.
   const peerGone = (why) => {
     stderr.write(`[desk-mcp] ${why}; closing the session\n`)
@@ -329,7 +331,7 @@ export async function main({
   }
   if (crashHandlers) {
     output.on?.("error", (error) => peerGone(`the host's output is gone (${describeError(error)})`))
-    watchParent({ onGone: () => peerGone("the parent process has ended") })
+    parentWatcher({ onGone: () => peerGone("the parent process has ended") })
   }
   // The host's input failing ends the session the same way its ending does: nothing can arrive on it again.
   const closed = frontDoor.closed.catch((error) => stderr.write(`[desk-mcp] the host's input failed (${describeError(error)}); closing the session\n`)).then(async () => {
