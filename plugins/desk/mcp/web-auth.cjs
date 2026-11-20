@@ -83,9 +83,6 @@ var FOCUSED = function (node) {
   return doc.hasFocus() && inside;
 };
 var EMBEDDED = new Set(["IFRAME", "FRAME", "FENCEDFRAME", "PORTAL", "OBJECT", "EMBED"]);
-var UNTYPED = new Set(["hidden", "submit", "button", "reset", "image"]);
-// Shorter values in fields nobody types into are page codes ("US", "0", "USD"), never a typed value's copy.
-var UNTYPED_CODE_LENGTH = 8;
 var EXCLUDED = new Set(["HEAD", "SCRIPT", "STYLE", "TEMPLATE", "META", "LINK", "NOSCRIPT"]);
 var ROLES = { INPUT: "textbox", TEXTAREA: "textbox", BUTTON: "button", A: "link", SELECT: "combobox", OPTION: "option", FORM: "form", H1: "heading", H2: "heading", H3: "heading" };
 var ARITY = {
@@ -120,11 +117,18 @@ var STORE = function (input) {
 };
 // A ref is bound this many times when the page keeps moving it between the read and the browser's confirmation.
 var BIND_ATTEMPTS = 3;
-// What a screenshot never shows, as a snapshot never shows it: every input, textarea and editable region. The browser
-// paints a box over each in every frame (its CSS engine reaches into open shadows), including any that appear while
-// the picture is taken; the read before the picture adds what markup alone does not say (CSS-editable regions and
-// open-shadow content, masked by their host).
-var OPAQUE_FIELDS = "input, textarea, [contenteditable]";
+// Mine is the operator's own workspace, so a snapshot or screenshot hides only real secrets: a password field, a
+// one-time-code field, or a value that looks like a token. A screenshot blurs them (never a filled box), in every frame.
+var BLUR_SECRETS = "input[type=password], input[autocomplete~=one-time-code], [data-desk-blur] { filter: blur(8px) !important; }";
+// Runs in each frame to mark the token-looking values the stylesheet cannot select; the marks are removed after the picture.
+function markTokens(on) {
+  var found = 0;
+  document.querySelectorAll(on ? "input, textarea" : "[data-desk-blur]").forEach(function (field) {
+    if (!on) { field.removeAttribute("data-desk-blur"); return; }
+    if (/^[\w.+=~%-]{32,}$/u.test(field.value) && /\d/u.test(field.value) && /[A-Za-z]/u.test(field.value)) { field.setAttribute("data-desk-blur", ""); found++; }
+  });
+  return found;
+}
 
 var COMMANDS = "snapshot [--interactive | --save] / find <text> / goto <url> / go-back / go-forward / reload / wait [<seconds> | <text> | --gone <text>] / " +
   "click, dblclick, hover, check or uncheck <ref> / fill or type <ref> <text> / press [<ref>] <key> / select <ref> <value> / " +
@@ -356,12 +360,11 @@ function unrenderedDocument(document) {
 }
 function laidOut(row) { return row.css.length === 3 || row.children.some(laidOut); }
 
-// Whether a native control value could have been typed, and so must be scrubbed wherever it appears.
-function typedValue(value, attrs) {
+// Whether a native control holds a real secret: a password, a one-time code, or a token-looking value.
+function secretControl(value, attrs) {
   var type = (attrs.get("type") || "").toLowerCase();
-  // A checkbox or radio value is page markup nobody types ("on" when unset).
-  if ((type === "checkbox" || type === "radio") && value === (attrs.has("value") ? attrs.get("value") : "on")) return false;
-  return !(UNTYPED.has(type) && value.length < UNTYPED_CODE_LENGTH);
+  return type === "password" || /(?:^|\s)one-time-code(?:\s|$)/iu.test(attrs.get("autocomplete") || "") ||
+    (/^[\w.+=~%-]{32,}$/u.test(value) && /\d/u.test(value) && /[A-Za-z]/u.test(value));
 }
 
 // One DOMSnapshot capture is one instant of the page: every value and every text in it are from the same moment, so a
@@ -421,15 +424,6 @@ function prepare(packet, scope, frameId, nextRef, outside) {
   }
   var targets = [];
   var frames = 0;
-  // The outermost element of each opaque region, in every capture: what a screenshot must cover. A frame whose content
-  // was not read (its own read failed, or the browser gave no way in) is covered whole by its owner.
-  var masks = [];
-  [main].concat(reads).forEach(function (read) {
-    read.rows.forEach(function (row) {
-      var unread = row.frame && !row.content;
-      if (row.type === 1 && (row.opaque || unread) && !row.excluded && !(row.parent && row.parent.opaque)) masks.push({ key: read.key, id: row.id });
-    });
-  });
   function render(row) {
     if (row.excluded) return null;
     // Only what the page renders is read: text with no layout, or hidden, is not on screen (Teams keeps a hidden
@@ -465,7 +459,7 @@ function prepare(packet, scope, frameId, nextRef, outside) {
       if (inner) node.children.push(inner);
       else frames++;
     } else if (row.name === "INPUT" || row.name === "TEXTAREA") {
-      node.children.push({ role: "text", text: "[redacted]" });
+      node.children.push({ role: "text", text: row.opaque ? "[redacted]" : scrub(row.typed || "") });
     } else {
       row.children.forEach(function (child) {
         var rendered = render(child);
@@ -494,7 +488,7 @@ function prepare(packet, scope, frameId, nextRef, outside) {
     var title = packet.strings[top.title];
     var place = packet.strings[top.documentURL];
     return {
-      tree: tree, targets: targets, frames: frames, masks: masks, place: place, unrendered: unrenderedDocument(main.rows[0]),
+      tree: tree, targets: targets, frames: frames, place: place, unrendered: unrenderedDocument(main.rows[0]),
       page: { url: pageAddress(place), title: typeof title === "string" ? scrub(title).replace(/\s+/gu, " ").trim().slice(0, TITLE_CHARS) : "" }
     };
   } finally {
@@ -588,20 +582,19 @@ function rowsOf(packet, scope, frameId, key, secret, budget) {
       var modify = editingMode(style.has(i), css, attrs, parent && parent.modify);
       var shadow = Boolean(shadows.has(i) || (parent && parent.shadow));
       var excluded = EXCLUDED.has(name) || framed || Boolean(parent && parent.excluded);
+      var typed = control ? (name === "INPUT" ? input : textarea).get(i) : undefined;
       var unknown = table.nodeType[i] !== 9 && (modify !== "read-only" || shadow);
-      var opaque = control || unknown || Boolean(parent && parent.opaque);
+      var opaque = (control && secretControl(typed, attrs)) || unknown || Boolean(parent && parent.opaque);
       var row = { id: id, name: name, type: table.nodeType[i], attrs: attrs, parent: parent, doc: id, read: read,
         css: css, shadow: shadow, excluded: excluded, opaque: opaque, modify: modify, frame: EMBEDDED.has(name), framed: framed,
-        value: text(table.nodeValue[i]), children: [] };
+        value: text(table.nodeValue[i]), typed: typed, children: [] };
       if (parent) { row.doc = parent.doc; parent.children.push(row); }
       rows.push(row);
       read.rows.push(row);
     }
     requireTrue(rows[0].type === 9, "AUTH_DOCUMENT_REFUSED");
     // Complete the native value pass before any label or text is rendered.
-    input.forEach(function (value, index) { if (typedValue(value, rows[index].attrs)) secret(value); });
-    textarea.forEach(secret);
-    rows.forEach(function (row) { if (row.opaque && !row.excluded) secret(row.value); });
+    rows.forEach(function (row) { if (row.opaque && !row.excluded) { secret(row.value); secret(row.typed); } });
     return { rows: rows, owners: owners };
   });
   // Only frame owners own child documents, each at most once, and the top document is nobody's child.
@@ -1394,47 +1387,22 @@ function create(context, outputDir, timeoutMs, runtimePolicy, options) {
       if (cleanup.length) throw fail((primary || "AUTH_OPERATION_FAILED") + "; retained cleanup uncertainty: " + cleanup.join(", "), applied);
     }
   }
-  // Every opaque region of the tab as one read sees it, each with the element that covers it: itself, or the nearest
-  // ancestor the browser can name (an open shadow's host, or the frame owner of a frame it cannot reach). A closed
-  // shadow anywhere fails the read, so a picture is never taken of what no mask can cover.
-  async function opaqueRegions(reader) {
+  // Where the tab is, as a snapshot's read of it gives (scrubbed as a snapshot's is). A closed shadow anywhere fails the read.
+  async function pageOf(reader) {
     var before = await qualify(reader);
     var packet = await send(reader, "DOMSnapshot.captureSnapshot", { computedStyles: STYLES.slice() });
     var outside = await readOutside(reader, true);
-    var prepared;
-    var counter = 0;
     try {
-      prepared = prepare(packet, before.scope, before.frameId, function () { return ++counter; }, outside.map(function (frame) {
+      return prepare(packet, before.scope, before.frameId, function () { return 0; }, outside.map(function (frame) {
         return { packet: frame.packet, scope: frame.read.scope, frameId: frame.read.frameId, key: frame };
-      }));
+      })).page;
     } finally {
       packet = null;
       outside.forEach(function (frame) { frame.packet = null; });
     }
-    var found = prepared.masks.map(function (mask) {
-      var session = mask.key ? mask.key.session : reader;
-      var scope = mask.key ? mask.key.read.scope : before.scope;
-      var entry = scope.nodes.get(mask.id);
-      var region = entry;
-      while (region && !(region.path && region.reach)) region = scope.nodes.get(region.parent);
-      // The capture has a region the DOM read lacks: the page changed between the two, so the read is tried again.
-      requireTrue(region, "AUTH_SNAPSHOT_INVALIDATED");
-      var marked = region === entry && (entry.name === "INPUT" || entry.name === "TEXTAREA" ||
-        entry.raw.attributes.some(function (name, index) { return index % 2 === 0 && name === "contenteditable"; }));
-      return { session: session, scope: scope, id: mask.id, region: region, marked: marked };
-    });
-    // Where the tab was at this read, scrubbed as a snapshot's is.
-    found.page = prepared.page;
-    return found;
   }
-  function maskOf(reader, found) {
-    var at = found.session === reader ? reader.page.mainFrame() : found.session.frame;
-    found.region.chain.forEach(function (id) { at = at.frameLocator("css=" + found.scope.nodes.get(id).path); });
-    return at.locator("css=" + found.region.path);
-  }
-  // A picture of the tab, or of one element, in the evidence folder (else the context's private files folder). Every input, textarea and editable
-  // region is painted over in every frame, as a snapshot redacts them. The tab is read before and after the picture; an
-  // opaque region the first read did not mask (one markup alone does not mark) means the picture is taken again.
+  // A picture of the tab, or of one element, in the evidence folder (else the context's private files folder). Real
+  // secrets (password and one-time-code fields, token-looking values) are blurred in every frame; nothing else is hidden.
   // `limitMs` bounds the browser's wait for the picture (the command's time when none is given).
   async function screenshot(reader, args, limitMs) {
     var picked = args.slice(1).filter(function (value) { return value !== "--full"; })[0];
@@ -1450,26 +1418,21 @@ function create(context, outputDir, timeoutMs, runtimePolicy, options) {
     try {
       if (evidenceDir) await fs.promises.mkdir(evidenceDir, { recursive: true, mode: 448 });
       if (record) bound = await bind(reader, record, "screenshot");
-      for (var attempt = 1; ; attempt++) {
-        var regions = await opaqueRegions(reader);
-        checkRuntime();
-        var mask = reader.page.frames().map(function (frame) { return frame.locator(OPAQUE_FIELDS); })
-          .concat(regions.map(function (found) { return maskOf(reader, found); }));
-        var options = { path: file, mask: mask, timeout: limitMs || timeoutMs };
+      var frames = reader.page.frames();
+      var marked = [];
+      try {
+        for (var f = 0; f < frames.length; f++) {
+          try { await frames[f].evaluate(markTokens, true); marked.push(frames[f]); } catch (markError) { /* a frame that went away has nothing left to blur */ }
+        }
+        var options = { path: file, style: BLUR_SECRETS, timeout: limitMs || timeoutMs };
         written = true;
         if (bound) await bound.handle.screenshot(options);
         else await reader.page.screenshot(Object.assign(options, { fullPage: args.indexOf("--full") !== -1 }));
-        checkRuntime();
-        // What markup marks was masked by selector even if it is new; anything else must have been masked by the read.
-        var after = await opaqueRegions(reader);
-        var covered = after.every(function (found) {
-          return found.marked || regions.some(function (old) { return old.session === found.session && old.region.id === found.region.id; });
-        });
-        if (covered) { page = after.page; break; }
-        await fs.promises.unlink(file);
-        written = false;
-        requireTrue(attempt < BIND_ATTEMPTS, "AUTH_SNAPSHOT_INVALIDATED");
+      } finally {
+        for (var m = 0; m < marked.length; m++) { try { await marked[m].evaluate(markTokens, false); } catch (markError) { /* gone with its frame */ } }
       }
+      checkRuntime();
+      page = await pageOf(reader);
       requireTrue(evidencing || !closed, "AUTH_CONTEXT_REFUSED");
       var picture = { screenshot: file, page: page };
       if (evidenceDir) {
@@ -1485,7 +1448,7 @@ function create(context, outputDir, timeoutMs, runtimePolicy, options) {
     }
   }
   // Why the tab is not ready: its address, main document status, requests (hosts and codes only), console counts, whether it
-  // sits on a sign-in redirect, and a masked picture taken within `ms` (none is kept when it does not finish in time).
+  // sits on a sign-in redirect, and a picture taken within `ms` (none is kept when it does not finish in time).
   async function diagnose(page, reader, ms) {
     var rec = recorderFor(page);
     var now = Date.now();

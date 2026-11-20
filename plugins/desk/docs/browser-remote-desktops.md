@@ -47,7 +47,7 @@ The remote screen is a canvas. A read shows it as a `textbox`, usually next to t
 
 On a canvas, `type` returns `"typed": { "verified": false }`, because Desk can't read characters back from pixels. Don't report typing as verified, and don't take the canvas's own text as proof. The proof is a `["screenshot"]` that shows the nonce echoed and the date printed.
 
-Screenshots mask every input, textarea and editable region, so the canvas's input layer shows as `[redacted]`, and the remote session's pixels show around it. A screenshot is refused with no file when part of the page is in a closed shadow root (`AUTH_SHADOW_COVERAGE_REFUSED`) or a child frame can't be read (`AUTH_FRAME_COVERAGE_REFUSED`). Wait and try again, or `goto` that frame's own page.
+Screenshots blur only real secrets (password and one-time-code fields, token-looking values) and paint nothing else, so the remote session shows as it is. It is the operator's own page: don't crop or hide parts of it from them. A screenshot is refused with no file when part of the page is in a closed shadow root (`AUTH_SHADOW_COVERAGE_REFUSED`) or a child frame can't be read (`AUTH_FRAME_COVERAGE_REFUSED`). Wait and try again, or `goto` that frame's own page.
 
 ## 6. Finish
 
@@ -59,7 +59,7 @@ With a PowerShell window open, the person can set up a coding agent there by fol
 
 ## When it stops
 
-- `AUTH_TIMEOUT`: the command ran too long and the context is closed. Before the close, Desk keeps a masked screenshot and names it in the failure, with the failed and pending hosts. Look at that picture, open a new context and start again from step 1, and keep waits under a minute.
+- `AUTH_TIMEOUT`: the command ran too long and the context is closed. Before the close, Desk keeps a screenshot and names it in the failure, with the failed and pending hosts. Look at that picture, open a new context and start again from step 1, and keep waits under a minute.
 - `wait` for text that never shows: the context stays open, and the result has a `diagnosis` (the page's address without its query, the main document's status, failed and pending request hosts with codes, console counts, whether it sat on a sign-in redirect, and a screenshot path) and a hint that names the likeliest cause and how to keep working. For a sign-in redirect, complete sign-in in your own browser and open a new context.
 - `AUTH_ACTION_COVERED`, `AUTH_ACTION_NOT_READY` or `AUTH_ACTION_TIMEOUT`: that one control could not be used in time, and the context is still open. Look at the page with a snapshot or a find, clear what covers the control or wait for the page to settle, then act on a fresh ref.
 - `AUTH_CONTEXT_REFUSED`: the tab or context is gone. Open a new one.

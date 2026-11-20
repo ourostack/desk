@@ -466,7 +466,7 @@ async function openAuth(s) {
     s.contexts[id].adapter = authBrowser.create(context, outputDir, s.commandMs, function () { checkAuthLogging(s); }, { evidenceDir: evidenceDir(s) });
     var opened = {
       contextId: id, browser: "mine", app: BROWSERS[browser.channel].name, files: outputDir, evidence: evidenceDir(s),
-      note: "Owned native output: all input/textarea/editable values are opaque. Pages are read with their child frames, refs act in any frame, and screenshot masks every input/textarea/editable region; every command is yours to run. Screenshots are saved in the evidence folder, which stays after close. Close this context when done."
+      note: "Owned native output: only real secrets are hidden (password and one-time-code fields, token-looking values) plus rich-text and shadow text that cannot be told from page text; typed values in ordinary fields show. Pages are read with their child frames, refs act in any frame, and screenshot blurs real secrets and paints nothing else, and it is the operator's own page, so do not crop or hide it from them; every command is yours to run. Screenshots are saved in the evidence folder, which stays after close. Close this context when done."
     };
     if (copied.skipped.length) opened.copyLimitations = "Some nonessential profile files were omitted because their regular-file identity, single-link ownership or readable bytes could not be qualified.";
     return opened;

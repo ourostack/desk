@@ -1,7 +1,7 @@
 import { EventEmitter } from "node:events"
 import fs from "node:fs"
 
-export const PASSWORD = "FAKE_PROPERTY_PASSWORD_577"
+export const PASSWORD = "FAKE_PROPERTY_PASSWORD_577_0000000"
 
 export function nativeSnapshot({ value = PASSWORD, userModify = "read-only", type = "password" } = {}) {
   const strings = []
@@ -54,7 +54,7 @@ export function inspectedDOM(packet, index = 0) {
 
 export const FRAME_TEXT = "CHILD_FRAME_TEXT_688"
 export const FALLBACK_TEXT = "FRAME_FALLBACK_TEXT_688"
-export const FRAME_TYPED = "CHILD_FRAME_TYPED_688"
+export const FRAME_TYPED = "CHILD_FRAME_TYPED_688_0000000000"
 export const FRAME_EDITED = "CHILD_FRAME_EDITED_688"
 
 // The sign-in page plus a visible main-document paragraph and an iframe (with fallback text) whose
@@ -135,6 +135,7 @@ function fakeFrames(packet, calls, frameOf, focus) {
       },
       locator: (selector) => ({ frame: d, through: [], selector }),
       frameLocator: (selector) => through(d, [selector]),
+      evaluate: async (fn, arg) => { calls.push(["frame.evaluate", d, arg]); return 0 },
     }
     for (const id of table.backendNodeId) {
       const handle = { dispose: async () => { calls.push(["dispose", id]) } }
