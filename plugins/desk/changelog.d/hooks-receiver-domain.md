@@ -1,1 +1,0 @@
-The webhooks receiver now answers at `https://hooks.ouro.bot`. `hosted/infra/provision-hooks.sh` binds the domain with a managed certificate and points `DESK_HOOKS_PUBLIC_URL` at it once ouro.bot's DNS has the CNAME and verification records, and until then prints the two records to add ([webhooks](docs/webhooks.md#the-receiver)).

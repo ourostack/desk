@@ -1,5 +1,15 @@
 # desk plugin — changelog
 
+## 3.2.372 — 2026-11-21
+
+Make the browser-close deadline test cover both graceful-stop and hung-table cleanup without depending on CLI startup speed. Production shutdown behavior is unchanged.
+
+The webhooks receiver now answers at `https://hooks.ouro.bot`. `hosted/infra/provision-hooks.sh` binds the domain with a managed certificate and points `DESK_HOOKS_PUBLIC_URL` at it once ouro.bot's DNS has the CNAME and verification records, and until then prints the two records to add ([webhooks](docs/webhooks.md#the-receiver)).
+
+Desk's MCP server now vendors Ouro UI core v1.7.0, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.371 — 2026-11-21
 
 Desk's MCP server now vendors Ouro UI v1.3.389, moved by Ouro Current.
