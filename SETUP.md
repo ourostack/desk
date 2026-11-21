@@ -161,5 +161,6 @@ Copilot has no setting that picks a default agent for every session, so start wi
 
 - **Codex:** Desk does not support Codex and ships no Codex manifests ([RFC section 8](plugins/desk/docs/agentic-engineering-v2-rfc.md#8-limits)).
 - **Ouroboros:** see `plugins/desk/README.md` ("Under Ouroboros").
+- **Orca:** [Orca](https://orca.dev) runs Claude Code in its terminals and its chat view, and Desk loads there from the Claude Code install above, so follow the Claude Code section; Orca needs no setup of its own. Checked with Orca 1.4.268: Desk booted and `desk_status` answered in both a terminal and a chat session.
 
 The host defaults and the no-attribution rule above apply on every host; set them wherever that host keeps its user configuration.
