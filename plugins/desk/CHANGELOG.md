@@ -1,5 +1,67 @@
 # desk plugin — changelog
 
+## 3.2.390 — 2026-11-21
+
+Desk's MCP server now vendors Ouro UI v1.3.408, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.389 — 2026-11-21
+
+Desk's MCP server now vendors Ouro UI v1.3.407, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.388 — 2026-11-21
+
+Desk's MCP server now vendors Ouro UI v1.3.405, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.387 — 2026-11-21
+
+Desk's MCP server now vendors Ouro UI v1.3.404, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.386 — 2026-11-21
+
+Desk's MCP server now vendors Ouro UI v1.3.403, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.385 — 2026-11-21
+
+Desk's MCP server now vendors Ouro UI v1.3.402, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.384 — 2026-11-21
+
+Desk's MCP server now vendors Ouro UI v1.3.401, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.383 — 2026-11-21
+
+Desk's MCP server now vendors Ouro UI v1.3.400, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.382 — 2026-11-21
+
+Desk's MCP server now vendors Ouro UI v1.3.399, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.381 — 2026-11-21
+
+Qualify browser-test cleanup by each fixture's unique daemon and browser script paths as well as its recorded PIDs. A recycled PID no longer counts as a leaked fake or authorizes cleanup of an unrelated process. Production browser shutdown and deadlines are unchanged.
+
+Report a disappearing or unreadable process entry during checker namespace enumeration as an incomplete survey, not an uncaught controller error. Incomplete surveys still refuse namespace closure and checker availability; confinement and time limits are unchanged.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.380 — 2026-11-21
 
 Desk's MCP server now vendors Ouro UI v1.3.398, moved by Ouro Current.
