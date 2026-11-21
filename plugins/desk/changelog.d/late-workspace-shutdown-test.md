@@ -1,1 +1,0 @@
-Fix the late-workspace protocol fixture to close its input and await real session shutdown before asserting admission has stopped. Cover a fresh resolution queued behind a retained reply; production shutdown and time limits are unchanged.
