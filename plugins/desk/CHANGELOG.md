@@ -1,5 +1,13 @@
 # desk plugin — changelog
 
+## 3.2.381 — 2026-11-21
+
+Qualify browser-test cleanup by each fixture's unique daemon and browser script paths as well as its recorded PIDs. A recycled PID no longer counts as a leaked fake or authorizes cleanup of an unrelated process. Production browser shutdown and deadlines are unchanged.
+
+Report a disappearing or unreadable process entry during checker namespace enumeration as an incomplete survey, not an uncaught controller error. Incomplete surveys still refuse namespace closure and checker availability; confinement and time limits are unchanged.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.380 — 2026-11-21
 
 Desk's MCP server now vendors Ouro UI v1.3.398, moved by Ouro Current.

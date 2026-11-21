@@ -1,1 +1,0 @@
-Qualify browser-test cleanup by each fixture's unique daemon and browser script paths as well as its recorded PIDs. A recycled PID no longer counts as a leaked fake or authorizes cleanup of an unrelated process. Production browser shutdown and deadlines are unchanged.
