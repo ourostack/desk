@@ -30,7 +30,7 @@ import { publishedJobId } from "../src/factory/local-status.js"
 import { readMachineSecret } from "../src/factory/outbox.js"
 import { keyedJobId } from "../src/factory/publish.js"
 import { parseFrontmatterLite } from "../src/desk/frontmatter-lite.js"
-import { defineCli, defineCommand } from "../src/lib/ouro-ui/registry/ouro/ax/command.ts"
+import { defineCli, defineCommand } from "../src/lib/ouro-ui/registry/ouro/ax/ax-command.ts"
 import { runCli } from "../src/lib/ouro-ui/registry/ouro/ax/cli.ts"
 import { resolveHookDeskRoot } from "./resolve-desk-root.js"
 

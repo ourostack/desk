@@ -53,7 +53,7 @@ import * as os from "node:os"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 
-import { defineCli, defineCommand } from "../lib/ouro-ui/registry/ouro/ax/command.ts"
+import { defineCli, defineCommand } from "../lib/ouro-ui/registry/ouro/ax/ax-command.ts"
 import { runCli } from "../lib/ouro-ui/registry/ouro/ax/cli.ts"
 import { normalizeRemote } from "../factory/binding.js"
 import { ghRunner, chooseAccount, signedInAccounts } from "../factory/flush.js"

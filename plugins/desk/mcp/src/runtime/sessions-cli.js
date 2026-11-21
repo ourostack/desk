@@ -12,7 +12,7 @@ import { spawnSync } from "node:child_process"
 import * as os from "node:os"
 import * as path from "node:path"
 import { AxError } from "../lib/ouro-ui/registry/ouro/ax/problem.ts"
-import { defineCli, defineCommand } from "../lib/ouro-ui/registry/ouro/ax/command.ts"
+import { defineCli, defineCommand } from "../lib/ouro-ui/registry/ouro/ax/ax-command.ts"
 import { runCli } from "../lib/ouro-ui/registry/ouro/ax/cli.ts"
 import { deskFailure } from "./desk-failure.js"
 

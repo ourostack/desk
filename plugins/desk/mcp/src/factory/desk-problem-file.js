@@ -40,7 +40,7 @@
 // `src/factory/**` imports only `node:` built-ins and other `src/factory/`
 // files.
 
-import { defineCli, defineCommand } from "../lib/ouro-ui/registry/ouro/ax/command.ts"
+import { defineCli, defineCommand } from "../lib/ouro-ui/registry/ouro/ax/ax-command.ts"
 import { runCli } from "../lib/ouro-ui/registry/ouro/ax/cli.ts"
 import { deskVersion } from "../package-metadata.js"
 
