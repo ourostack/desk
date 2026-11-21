@@ -409,6 +409,22 @@ test("an input root that becomes unreadable during the run is an unfrozen observ
   assert.equal(result.availability.available, false);
 });
 
+test("an unreadable runtime binary cannot supply a frozen preflight identity", async t => {
+  const tree = roots("checker-unreadable-runtime");
+  const platform = Object.getOwnPropertyDescriptor(process, "platform");
+  t.after(() => Object.defineProperty(process, "platform", platform));
+  Object.defineProperty(process, "platform", { value: "darwin" });
+  const open = fs.openSync;
+  t.mock.method(fs, "openSync", (filename, ...args) => {
+    if (filename === process.execPath) throw Object.assign(new Error("runtime identity denied"), { code: "EACCES" });
+    return open(filename, ...args);
+  });
+  const receipt = await qualifyCheckerBoundary({ workRoot: path.join(tree.root, "preflight"), sourceRoot: tree.subject, controllerRoot: tree.checker, limits: { timeoutMs: 1000, maxStreamBytes: 4096, cleanupMs: 50 } });
+  assert.equal(receipt.identities.runtimeSha256, null);
+  assert.equal(receipt.checks.frozenIdentities, false);
+  assert.equal(receipt.status, "unavailable");
+});
+
 // Each probe's parent-side observation, keyed by the frozen program the preflight materializes.
 const probeResponses = {
   "hidden-read": '{"hiddenReadable":false,"hasNodeOptions":false,"hasNodePath":false,"hasCoverage":false,"environment":["HOME","PATH"]}\n',
