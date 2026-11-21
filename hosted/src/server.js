@@ -81,6 +81,18 @@ export function createApp({ provider, relay, githubCallback, issuer, resource, u
   // Container Apps terminates TLS one hop in front of the app; the SDK's
   // rate limiters read the client address from X-Forwarded-For.
   app.set("trust proxy", 1);
+  // One line per request, so the logs show who keeps the app awake: Container Apps keeps a replica while requests
+  // arrive within its 300 s scale-down cooldown. The path drops its query (OAuth codes and states travel there) and
+  // any segment long enough to be a token, such as an invite's (/invite/<token>).
+  app.use((req, res, next) => {
+    const started = Date.now();
+    res.on("finish", () => {
+      const agent = String(req.get("user-agent") ?? "").slice(0, 160);
+      const path = req.path.split("/").map((segment) => (segment.length >= 16 ? "<redacted>" : segment)).join("/");
+      log(`request ${req.method} ${path} ${res.statusCode} ${Date.now() - started}ms ua=${JSON.stringify(agent)}`);
+    });
+    next();
+  });
   app.use("/assets", express.static(PUBLIC_DIR, {
     index: false,
     dotfiles: "deny",

@@ -371,3 +371,27 @@ esac
   assert.deepEqual(probes, [["Startup", "/healthz"], ["Liveness", "/healthz"]], spec);
   assert.ok(!spec.includes("/healthz/deep"));
 });
+
+test("each request logs one line: method, path without its query, status, time and user agent", async (t) => {
+  const lines = [];
+  const provider = createProvider({ key: KEY, issuer: ISSUER, github: { clientId: "x", clientSecret: "y" }, allowedLogins: ["arimendelow"], resource: RESOURCE, log: () => {} });
+  const app = createApp({ provider, relay: {}, githubCallback: provider.githubCallback, issuer: ISSUER, resource: RESOURCE, log: (line) => lines.push(line) });
+  const server = app.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  t.after(() => {
+    server.closeAllConnections();
+    server.close();
+  });
+  const base = `http://127.0.0.1:${server.address().port}`;
+  await (await fetch(`${base}/healthz?code=secret-code&state=s`, { headers: { "user-agent": "probe/1.0 \"quoted\"" } })).text();
+  await (await fetch(`${base}/no-such-route`)).text();
+  await (await fetch(`${base}/invite/CZ0TkzbN5A21vKTY1X9kVo-MR2vz0mmx7XZw2ktuqfI`, { redirect: "manual" })).text();
+  await new Promise((resolve) => setImmediate(resolve));
+  const requests = lines.filter((line) => line.startsWith("request "));
+  assert.equal(requests.length, 3, JSON.stringify(lines));
+  assert.match(requests[2], /^request GET \/invite\/<redacted> /);
+  assert.ok(!requests[2].includes("CZ0Tkzb"), "a token in the path never reaches the log");
+  assert.match(requests[0], /^request GET \/healthz 200 \d+ms ua="probe\/1\.0 \\"quoted\\""$/);
+  assert.ok(!requests.join("\n").includes("secret-code"), "a query string never reaches the log");
+  assert.match(requests[1], /^request GET \/no-such-route 404 /);
+});
