@@ -868,8 +868,12 @@ test("legacy cleanup uses only qualified synthetic process rows and an owned fak
   } finally { process.kill = originalKill; Date.now = originalNow }
 })
 
-test("a close answers within its own budget when the process table never answers (#763)", async () => {
+for (const firstReadMs of [0, 100]) {
+test(`a close answers within its own budget when the process table never answers (#763, first read at ${firstReadMs} ms)`, async () => {
+  const childProcess = require("node:child_process")
+  const originalExec = childProcess.execFile
   const originalKill = process.kill
+  const originalNow = Date.now
   const row = { pid: 42420002, ppid: 1, start: "2026-01-01" }
   const signals = []
   process.kill = (pid, signal) => { signals.push([pid, signal]) }
@@ -885,14 +889,35 @@ test("a close answers within its own budget when the process table never answers
     owner.processes = [{ pid: row.pid, start: row.start }]
     fs.writeFileSync(file, JSON.stringify(owner))
     reads = 0
-    const started = Date.now()
+    let clock = 0
+    childProcess.execFile = (file, args, options, callback) => {
+      assert.equal(args.at(-1), "close")
+      queueMicrotask(() => callback(null, "", ""))
+      return { kill() { assert.fail("the synthetic close must not time out") } }
+    }
+    controller.settings.processTable = () => {
+      // Expiring the initial exit wait permits SIGTERM; hanging while it is still active goes straight to SIGKILL.
+      clock = reads === 0 ? firstReadMs : 250
+      return reads++ === 0 ? Promise.resolve([row]) : new Promise(() => {})
+    }
+    Date.now = () => clock
+    const started = originalNow()
     const result = await controller.call("browser_context", { action: "close", contextId: opened.contextId })
     assert.equal(result.isError, false, text(result))
-    assert.ok(Date.now() - started < 2000, `close took ${Date.now() - started} ms`)
+    assert.ok(originalNow() - started < 2000, `close took ${originalNow() - started} ms`)
+    assert.equal(reads, 2, "the second process-table read hangs")
     assert.equal(fs.existsSync(path.dirname(file)), false)
-    assert.deepEqual(signals, [[row.pid, "SIGKILL"]])
-  } finally { process.kill = originalKill }
+    assert.deepEqual(signals, [
+      ...(firstReadMs === 100 ? [[row.pid, "SIGTERM"]] : []),
+      [row.pid, "SIGKILL"],
+    ])
+  } finally {
+    childProcess.execFile = originalExec
+    process.kill = originalKill
+    Date.now = originalNow
+  }
 })
+}
 
 test("an open answers within its record budget when the process table never answers (#763)", async () => {
   const { options } = await setup()
