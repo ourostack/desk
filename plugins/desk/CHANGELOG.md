@@ -1,5 +1,57 @@
 # desk plugin — changelog
 
+## 3.2.380 — 2026-11-21
+
+Desk's MCP server now vendors Ouro UI v1.3.398, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.379 — 2026-11-21
+
+Desk's MCP server now vendors Ouro UI v1.3.397, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.378 — 2026-11-21
+
+Desk's MCP server now vendors Ouro UI v1.3.396, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.377 — 2026-11-21
+
+Desk's MCP server now vendors Ouro UI v1.3.395, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.376 — 2026-11-21
+
+Desk's MCP server now vendors Ouro UI v1.3.394, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.375 — 2026-11-21
+
+Desk's MCP server now vendors Ouro UI v1.3.392, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.374 — 2026-11-21
+
+Desk's MCP server now vendors Ouro UI core v1.8.0 and Ouro UI v1.3.391, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.373 — 2026-11-21
+
+Qualify browser-test cleanup by each fixture's unique daemon and browser script paths as well as its recorded PIDs. A recycled PID no longer counts as a leaked fake or authorizes cleanup of an unrelated process. Production browser shutdown and deadlines are unchanged.
+
+Fix the late-workspace protocol fixture to close its input and await real session shutdown before asserting admission has stopped. Cover a fresh resolution queued behind a retained reply; production shutdown and time limits are unchanged.
+
+Desk's MCP server now vendors Ouro UI v1.3.390, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.372 — 2026-11-21
 
 Make the browser-close deadline test cover both graceful-stop and hung-table cleanup without depending on CLI startup speed. Production shutdown behavior is unchanged.
