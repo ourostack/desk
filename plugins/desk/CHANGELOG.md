@@ -1,5 +1,67 @@
 # desk plugin — changelog
 
+## 3.2.371 — 2026-11-21
+
+Desk's MCP server now vendors Ouro UI v1.3.389, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.370 — 2026-11-20
+
+### Relays spend less of a shared GitHub quota
+
+A relay can name a `readAccount`: it reads the repository with that account (for example `arimendelow` for a public ourostack repo) and uses `account` only for the write, so a Microsoft account is no longer billed for reading a personal repository. Every relay with nothing pending now backs off to at least two minutes, and goes back to its own interval as soon as a labelled pull request or a new run appears. `drains status` shows each relay's counted and free (304) calls for the last full hour.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.369 — 2026-11-20
+
+Desk's MCP server now vendors Ouro UI v1.3.388, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.368 — 2026-11-20
+
+Any outside service can now wake a session through a webhook. `drains hooks create <name>` makes a hook on the new hooks receiver and prints its address and signing secret; `hooks.json` routes each hook to a session with a prompt; and `drains hooks poll`, run by the same runner as drains and schedules, turns a hook's waiting events into one wake, with each body saved as a private file. The receiver checks Standard Webhooks, Stripe, GitHub, Sentry and Linear signatures, keeps every event until a delivered wake acknowledges it, and runs as its own always-on Container App built from the hosted Desk image. See [docs/webhooks.md](docs/webhooks.md).
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.367 — 2026-11-20
+
+Desk's MCP server now vendors Ouro UI core v1.6.0, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.366 — 2026-11-20
+
+Desk's MCP server now vendors Ouro UI v1.3.387, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.365 — 2026-11-20
+
+Desk's MCP server now vendors Ouro UI v1.3.386, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.364 — 2026-11-20
+
+Desk's MCP server now vendors Ouro UI core v1.4.1 and Ouro UI v1.3.385, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.363 — 2026-11-20
+
+A fresh session now starts with less text it has to read before the first message. On a busy desk the boot lists at most five active tasks and five unsigned deliveries, each with a shorter blocker or next step, and ends with a one-line count that points to `desk_status` for the rest. The session-start hook no longer repeats the standing-authority grants or the `Desk RFC:` line when the boot text already carries them. In a CIT workspace the session-start text fell from 29,476 to about 23,000 characters.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.362 — 2026-11-20
+
+Desk's MCP server now vendors Ouro UI v1.3.384, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.361 — 2026-11-20
 
 A factory flush no longer ends as `deadline` because one Git call stalled. Reading a desk's remote is asked once more when the first call passes its own time limit and the flush's deadline still has room; a second stall still ends the flush as `deadline`, as before. This closed the Windows suite's red main on the idle flush in `flush_retract.test.js` (ourostack/desk#1428).

@@ -37,6 +37,8 @@ const WAIT_READ_MAX_MS = 60_000
 /** A merge relay with nothing labelled polls less often: its interval stretches by one step per this many empty polls, up to `MAX_IDLE_STRETCH` times. */
 const IDLE_POLLS_PER_STEP = 20
 const MAX_IDLE_STRETCH = 4
+/** An idle relay (nothing labelled, nothing pending) never polls faster than this once it has backed off, however short its `everySeconds`. */
+const IDLE_FLOOR_SECONDS = 120
 const SPEND_WINDOW_MS = 60 * 60_000
 const CHECKS_PAGE = 100
 const COMMENT_PAGES = 5
@@ -84,14 +86,15 @@ export function parseRelayConfig(raw, file) {
   return list.map((entry, index) => {
     const at = `relays[${index}]`
     if (!isObject(entry)) throw bad(`${at} is not an object`)
-    const { name, type, account, everySeconds } = entry
+    const { name, type, account, readAccount, everySeconds } = entry
     if (typeof name !== "string" || !/^\w[\w .-]*$/u.test(name.trim())) throw bad(`${at}.name is not a name (letters, digits, spaces, "." and "-")`)
     if (names.has(name.trim())) throw bad(`${at} reuses the name ${name.trim()}`)
     names.add(name.trim())
     if (!TYPES.includes(type)) throw bad(`${at}.type is not ${TYPES.map((value) => JSON.stringify(value)).join(" or ")}`)
     if (account !== undefined && !isText(account)) throw bad(`${at}.account is not a GitHub login`)
+    if (readAccount !== undefined && !isText(readAccount)) throw bad(`${at}.readAccount is not a GitHub login`)
     if (everySeconds !== undefined && (!Number.isInteger(everySeconds) || everySeconds < MIN_EVERY_SECONDS)) throw bad(`${at}.everySeconds is not a whole number of seconds, ${MIN_EVERY_SECONDS} or more`)
-    const common = { name: name.trim(), type, ...(account === undefined ? {} : { account: account.trim() }), everySeconds: everySeconds ?? DEFAULT_EVERY_SECONDS }
+    const common = { name: name.trim(), type, ...(account === undefined ? {} : { account: account.trim() }), ...(readAccount === undefined ? {} : { readAccount: readAccount.trim() }), everySeconds: everySeconds ?? DEFAULT_EVERY_SECONDS }
     if (type === "dispatch") return { ...common, ...parseDispatch(entry, at, bad) }
     return { ...common, ...parseMerge(entry, at, bad) }
   })
@@ -197,7 +200,7 @@ function note(state, now, event) {
 async function cached(ctx, state, route, reduce) {
   const hit = state.cache[route]
   ctx.touched.add(route)
-  const answer = await ctx.api.get(route, { etag: hit?.etag })
+  const answer = await (ctx.readApi ?? ctx.api).get(route, { etag: hit?.etag })
   if (answer.notModified) return hit.value
   const value = await reduce(answer.body)
   if (value?.volatile) delete state.cache[route]
@@ -276,6 +279,7 @@ async function runDispatch(relay, state, ctx) {
     recordHead(state, ctx, fresh)
   }
   const { pending } = state
+  state.idlePolls = pending || fresh.length > 0 ? 0 : (state.idlePolls ?? 0) + 1
   if (!pending) return
   const { head_sha: sha, id } = pending.run
   if (ctx.now < Date.parse(pending.at) + relay.settleSeconds * 1000) {
@@ -856,8 +860,9 @@ export async function pollRelays({ paths, drainFiles, connect, now, signedIn = (
   }
   await Promise.all(relays.map(async (relay) => {
     const state = states[relay.name]
-    const stretch = relay.type === "merge-when-green" ? Math.min(MAX_IDLE_STRETCH, 1 + Math.floor((state.idlePolls ?? 0) / IDLE_POLLS_PER_STEP)) : 1
-    if (state.lastPollAt && now - Date.parse(state.lastPollAt) < relay.everySeconds * 1000 * stretch - DUE_SLACK_MS) return
+    const stretch = Math.min(MAX_IDLE_STRETCH, 1 + Math.floor((state.idlePolls ?? 0) / IDLE_POLLS_PER_STEP))
+    const intervalMs = stretch > 1 ? Math.max(relay.everySeconds * stretch, IDLE_FLOOR_SECONDS) * 1000 : relay.everySeconds * 1000
+    if (state.lastPollAt && now - Date.parse(state.lastPollAt) < intervalMs - DUE_SLACK_MS) return
     if (!accountOf(relay, drains, states)) {
       try {
         const login = await resolveAccount(relay)
@@ -869,21 +874,25 @@ export async function pollRelays({ paths, drainFiles, connect, now, signedIn = (
       }
     }
     const account = accountOf(relay, drains, states)
-    const readings = [
-      ...drains.filter((drain) => drain.account === account).map((drain) => drainStates[drain.repo]?.quota),
-      ...relays.filter((other) => accountOf(other, drains, states) === account).map((other) => states[other.name].quota),
+    const readAccount = relay.readAccount && relay.readAccount !== account ? relay.readAccount : undefined
+    const readingsOf = (login) => [
+      ...drains.filter((drain) => drain.account === login).map((drain) => drainStates[drain.repo]?.quota),
+      ...relays.filter((other) => accountOf(other, drains, states) === login).map((other) => states[other.name].quota),
+      ...relays.filter((other) => other.readAccount === login).map((other) => states[other.name].readQuota),
     ]
-    const hold = quotaHold(freshest(readings), state.lastPollAt, now)
+    const hold = quotaHold(freshest(readingsOf(account)), state.lastPollAt, now) ?? (readAccount ? quotaHold(freshest(readingsOf(readAccount)), state.lastPollAt, now) : null)
     if (hold) {
       state.hold = hold
       return
     }
     delete state.hold
     let api = null
+    let readApi = null
     const meter = { counted: 0, free: 0 }
     try {
       api = await connectOnce(account)
-      const ctx = { api: metered(api, meter), now, save, touched: new Set() }
+      if (readAccount) readApi = await connectOnce(readAccount)
+      const ctx = { api: metered(api, meter), ...(readApi ? { readApi: metered(readApi, meter) } : {}), now, save, touched: new Set() }
       await RUNNERS[relay.type](relay, state, ctx)
       forget(state, ctx.touched)
       state.lastOkAt = new Date(now).toISOString()
@@ -894,6 +903,7 @@ export async function pollRelays({ paths, drainFiles, connect, now, signedIn = (
       if (state.resolvedAccount && [401, 403, 404].includes(error.status)) delete state.resolvedAccount
     }
     if (api?.quota()) state.quota = api.quota()
+    if (readApi?.quota()) state.readQuota = readApi.quota()
     recordSpend(state, meter, now)
     state.lastPollAt = new Date(now).toISOString()
   }))
@@ -920,7 +930,7 @@ export function relayStatusLines(relays, states, now) {
   return relays.map((relay) => {
     const state = states[relay.name] ?? {}
     const head = `relay ${relay.name} (${relay.type})`
-    const tail = `${state.spend && state.spend.counted + state.spend.free > 0 ? `, spent ${state.spend.counted} counted calls (${state.spend.free} free) since ${state.spend.at}` : ""}${state.hold ? `, held: ${state.hold}` : ""}${state.lastError ? `, last error: ${state.lastError}` : ""}`
+    const tail = `${state.spend && state.spend.counted + state.spend.free > 0 ? `, spent ${state.spend.counted} counted calls (${state.spend.free} free) since ${state.spend.at}` : ""}${state.spendLastHour ? `, last full hour ${state.spendLastHour.counted} counted calls (${state.spendLastHour.free} free)` : ""}${state.hold ? `, held: ${state.hold}` : ""}${state.lastError ? `, last error: ${state.lastError}` : ""}`
     if (!state.lastPollAt) return `${head}: not polled yet${tail}`
     const polled = `polled ${ago(state.lastPollAt, now)}`
     if (relay.type === "dispatch") {

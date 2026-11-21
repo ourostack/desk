@@ -10,7 +10,8 @@ name: Hosted Desk deploy
 # DESK_PUBLIC_URL for the health check (the app's Azure address when unset).
 #
 # Steps: refuse a commit whose Desk is not released (a pending changelog fragment); build the image in the registry with `az acr build`, tagged with the commit SHA; point the app at it; wait for
-# the new revision to be ready; then poll /healthz until it answers 200, and then /healthz/deep for up to 5 minutes, or fail.
+# the new revision to be ready; then poll /healthz until it answers 200; poll the gateway's /healthz/deep for up to 5
+# minutes, or fail; and last, point the hooks receiver, ouro-desk-hooks, at the same image and wait for its /healthz.
 
 on:
   workflow_run:
@@ -181,3 +182,64 @@ jobs:
             sleep 10
           done
           echo "$url answers 200."
+
+      # The hooks receiver (plugins/desk/docs/webhooks.md) runs the same image as Container App ouro-desk-hooks, made
+      # once by hosted/infra/provision-hooks.sh. Until it exists this step only says so. It follows the gateway even
+      # when the gateway already ran this image, so a receiver left behind catches up. It also copies the gateway's
+      # account mapping and store settings (none of them secret), so an account removed from the gateway can't keep
+      # managing hooks on the receiver.
+      - name: Deploy the hooks receiver
+        env:
+          IMAGE: ${{ steps.image.outputs.image }}
+          HOOKS_APP: ouro-desk-hooks
+        run: |
+          set -euo pipefail
+          # stderr apart from the image: the containerapp extension warns on stderr, and that must not become part of it.
+          if ! shown="$(az containerapp show -n "$HOOKS_APP" -g "$RESOURCE_GROUP" --subscription "$SUBSCRIPTION" --query "properties.template.containers[0].image" -o tsv 2>"$RUNNER_TEMP/hooks-show.err")"; then
+            if grep -qiE "ResourceNotFound|was not found" "$RUNNER_TEMP/hooks-show.err"; then
+              echo "::notice title=No hooks receiver::$HOOKS_APP does not exist yet; hosted/infra/provision-hooks.sh creates it."
+              exit 0
+            fi
+            cat "$RUNNER_TEMP/hooks-show.err" >&2
+            exit 1
+          fi
+          settings=(DESK_GITHUB_ACCOUNTS DESK_GITHUB_LOGINS DESK_ACCOUNTS_ENDPOINT AZURE_CLIENT_ID)
+          env_of() { az containerapp show -n "$1" -g "$RESOURCE_GROUP" --subscription "$SUBSCRIPTION" --query "properties.template.containers[0].env" -o json; }
+          wanted=()
+          gateway_env="$(env_of "$APP")"
+          hooks_env="$(env_of "$HOOKS_APP")"
+          for name in "${settings[@]}"; do
+            value="$(jq -r --arg n "$name" '.[] | select(.name == $n and .secretRef == null) | .value' <<<"$gateway_env")"
+            if [ -z "$value" ]; then
+              echo "::error title=Gateway setting missing::$APP has no $name to copy to $HOOKS_APP."
+              exit 1
+            fi
+            current="$(jq -r --arg n "$name" '.[] | select(.name == $n) | .value' <<<"$hooks_env")"
+            if [ "$current" != "$value" ]; then
+              wanted+=("$name=$value")
+              echo "$HOOKS_APP's $name differs from $APP's; copying it."
+            fi
+          done
+          if [ "$shown" != "$IMAGE" ] || [ "${#wanted[@]}" -gt 0 ]; then
+            if [ "$shown" != "$IMAGE" ]; then echo "$HOOKS_APP runs $shown; deploying $IMAGE."; fi
+            az containerapp update -n "$HOOKS_APP" -g "$RESOURCE_GROUP" --subscription "$SUBSCRIPTION" --image "$IMAGE" ${wanted[@]+--set-env-vars "${wanted[@]}"} --output none
+          fi
+          show() { az containerapp show -n "$HOOKS_APP" -g "$RESOURCE_GROUP" --subscription "$SUBSCRIPTION" --query "$1" -o tsv; }
+          deadline=$((SECONDS + 600))
+          until [ "$(show properties.latestReadyRevisionName)" = "$(show properties.latestRevisionName)" ] \
+            && [ "$(show 'properties.template.containers[0].image')" = "$IMAGE" ]; do
+            if [ "$SECONDS" -ge "$deadline" ]; then
+              echo "::error title=Hooks receiver revision not ready::$HOOKS_APP's new revision was not ready after 10 minutes; see az containerapp logs show -n $HOOKS_APP."
+              exit 1
+            fi
+            sleep 10
+          done
+          url="https://$(show properties.configuration.ingress.fqdn)/healthz"
+          until [ "$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "$url")" = "200" ]; do
+            if [ "$SECONDS" -ge "$deadline" ]; then
+              echo "::error title=Hooks receiver is not healthy::$url did not answer 200."
+              exit 1
+            fi
+            sleep 10
+          done
+          echo "$url answers 200; $HOOKS_APP runs $IMAGE."

@@ -105,7 +105,8 @@ test("tasks are listed oldest first and only the first fifteen are shown, with t
   assert.equal(found.tasks[0].age_days, 17)
   assert.equal(found.tasks[14].slug, "task-03")
   const lines = unsignedLines(found)
-  assert.equal(lines.at(-1), "- ...and 2 more")
+  assert.equal(lines.length, 2 + 5 + 1)
+  assert.equal(lines.at(-1), "- ...and 12 more (desk_status lists them)")
   assert.equal((await scan(desk, { now: NOW, shown: 2 })).tasks.length, 2)
 }))
 

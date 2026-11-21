@@ -107,12 +107,12 @@ function collapsePending(pending) {
 }
 
 /** How many active tasks the boot text lists; the rest are counted, never cut mid-sentence. */
-export const TASKS_SHOWN_CAP = 10
+export const TASKS_SHOWN_CAP = 5
 
 const NO_NEXT_STEP = "no next step recorded"
 
 /** The longest next step or blocker boot prints; longer ones are cut at a word boundary and point at the card. */
-export const TEXT_CEILING = 600
+export const TEXT_CEILING = 300
 
 /**
  * `text` as it is printed: whole when it fits `TEXT_CEILING`, otherwise cut at the last space inside the ceiling, backing
@@ -348,7 +348,7 @@ function taskSection(result, lines) {
   const hidden = everyTask.length + pinned.length - shownTasks.length
   if (namedOnly) {
     if (hidden > 0) lines.push("", `Other active tasks: ${hidden} (say 'where were we' to list them)`)
-  } else if (hidden > 0) lines.push("", `...and ${hidden} more active tasks (all of them are in \`active_tasks\` with \`--json\`)`)
+  } else if (hidden > 0) lines.push("", `...and ${hidden} more active tasks (\`desk_status\` lists them)`)
 }
 
 // One line when any card has resource rows due for cleanup (over every card boot read and this machine's cleanup index, not only the tasks shown), then a line for each finished or archived card, which has no task line; nothing when none are due.
