@@ -83,7 +83,7 @@ if (verb === "open" && mode === "ghost") process.stdout.write("### Browser \`des
 
 const FAKE_DAEMON = `
 const fs = require("fs")
-const browser = require("child_process").spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore", windowsHide: true })
+const browser = require("child_process").spawn(process.execPath, [process.env.FAKE_BROWSER_SOURCE], { stdio: "ignore", windowsHide: true })
 fs.appendFileSync(process.env.FAKE_DAEMON_LOG, process.pid + " " + browser.pid + "\\n")
 fs.writeFileSync(process.argv[2] + ".tmp", JSON.stringify({ daemon: process.pid, browser: browser.pid }))
 fs.renameSync(process.argv[2] + ".tmp", process.argv[2])
@@ -117,6 +117,8 @@ async function setup({ cli = true, mode = "", npmMode, platform } = {}) {
   fs.writeFileSync(npm, FAKE_NPM)
   const daemonSource = path.join(root, "fake-daemon.js")
   fs.writeFileSync(daemonSource, FAKE_DAEMON)
+  const browserSource = path.join(root, "fake-browser.js")
+  fs.writeFileSync(browserSource, "setInterval(() => {}, 1000)\n")
   const installDir = path.join(state, `playwright-core-${web.PLAYWRIGHT_VERSION}`)
   const cliDir = path.join(installDir, "node_modules", "playwright-core", "lib", "tools", "cli-client")
   if (cli) {
@@ -124,7 +126,7 @@ async function setup({ cli = true, mode = "", npmMode, platform } = {}) {
     fs.copyFileSync(cliSource, path.join(cliDir, "cli.js"))
   }
   const profiles = path.join(root, "profiles")
-  const env = { ...process.env, DESK_BROWSER_STATE_DIR: state, FAKE_CLI_MODE: mode, FAKE_CLI_SOURCE: cliSource, FAKE_DAEMON_SOURCE: daemonSource, FAKE_DAEMON_LOG: path.join(root, "daemons.log"), FAKE_NPM_MODE: npmMode ?? "ok", FAKE_FINAL: installDir }
+  const env = { ...process.env, DESK_BROWSER_STATE_DIR: state, FAKE_CLI_MODE: mode, FAKE_CLI_SOURCE: cliSource, FAKE_DAEMON_SOURCE: daemonSource, FAKE_BROWSER_SOURCE: browserSource, FAKE_DAEMON_LOG: path.join(root, "daemons.log"), FAKE_NPM_MODE: npmMode ?? "ok", FAKE_FINAL: installDir }
   const options = {
     env, tmpDir: tmp, npmCli: npm, exists: onlyEdge, platform: platform ?? process.platform,
     authDriver: fakeDriver().driver,
@@ -1568,11 +1570,39 @@ const running = (pid) => {
   }
 }
 
-// Every fake daemon and browser a setup started that is still running.
-const fakesRunning = (root) => {
-  const log = path.join(root, "daemons.log")
-  return (fs.existsSync(log) ? fs.readFileSync(log, "utf8").split(/\s+/u).filter(Boolean).map(Number) : []).filter(running)
+function fakeProcessTable() {
+  const command = isWindows
+    ? [web.processTableCommand("win32", process.env)[0], ["-NoProfile", "-NonInteractive", "-Command", "Get-CimInstance Win32_Process | Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress"]]
+    : ["ps", ["-A", "-o", "pid=", "-o", "command="]]
+  const result = spawnSync(command[0], command[1], { encoding: "utf8", timeout: 20000, windowsHide: true, maxBuffer: 16 * 1024 * 1024 })
+  assert.equal(result.status, 0, `fixture process table failed (${result.error?.code ?? result.signal ?? "no signal"}): ${result.stderr}`)
+  if (isWindows) {
+    const rows = JSON.parse(result.stdout)
+    return (Array.isArray(rows) ? rows : [rows]).map((row) => ({ pid: row.ProcessId, command: row.CommandLine ?? "" }))
+  }
+  return result.stdout.split(/\r?\n/u).flatMap((line) => {
+    const match = /^\s*(\d+)\s+(.*)$/u.exec(line)
+    return match ? [{ pid: Number(match[1]), command: match[2] }] : []
+  })
 }
+
+// The log's PIDs can be reused; only this fixture's unique script paths identify its fakes.
+const fakesRunning = (root, table = fakeProcessTable()) => {
+  const log = path.join(root, "daemons.log")
+  const pids = new Set(fs.existsSync(log) ? fs.readFileSync(log, "utf8").split(/\s+/u).filter(Boolean).map(Number) : [])
+  const scripts = ["fake-daemon.js", "fake-browser.js"].map((file) => path.join(root, file))
+  return table.filter((row) => pids.has(row.pid) && scripts.some((script) => row.command.includes(script))).map((row) => row.pid)
+}
+
+test("a reused fixture PID does not identify another process as a fake browser", async () => {
+  const root = await mkTempRoot("desk-web-reused-pid-")
+  fs.writeFileSync(path.join(root, "daemons.log"), "42420003 42420004\n")
+  assert.deepEqual(fakesRunning(root, [
+    { pid: 42420003, command: "node unrelated.js" },
+    { pid: 42420004, command: `node "${path.join(root, "fake-browser.js")}"` },
+    { pid: 42420005, command: `node "${path.join(root, "fake-daemon.js")}"` },
+  ]), [42420004])
+})
 
 // A test that starts fake daemons stops any that are left, so a leak fails the test instead of keeping the runner alive.
 const stopFakes = (t, root) => t.after(() => {
