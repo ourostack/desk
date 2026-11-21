@@ -16,7 +16,9 @@
 #   desk-client-key secret, copied into the receiver's own desk-client-key secret through a file only this user can
 #   read (never an argument, never printed). The receiver creates its tables, hooks and hookevents, in that storage
 #   account when it starts.
-# It never changes the gateway, and it never writes DNS: the receiver answers at its Azure address.
+# Then, on every run, it binds the receiver's custom domain, hooks.ouro.bot (HOOKS_DOMAIN for another), with a managed
+# certificate and points DESK_HOOKS_PUBLIC_URL at it, once ouro.bot's DNS has the two records it prints. It never
+# changes the gateway, and it never writes DNS (_meta/tips/ouro-bot-dns.md in the desk has how to add the records).
 set -euo pipefail
 umask 077
 
@@ -25,6 +27,7 @@ RESOURCE_GROUP=rg-ouro-work-substrate
 ENVIRONMENT=ouro-prod-cae
 GATEWAY=ouro-desk-hosted
 APP=ouro-desk-hooks
+DOMAIN="${HOOKS_DOMAIN:-hooks.ouro.bot}"
 
 DRY_RUN="${DRY_RUN:-0}"
 for arg in "$@"; do
@@ -46,13 +49,16 @@ not_found() { grep -qiE "ResourceNotFound|was not found|could not be found" <<<"
 default_domain="$(az_read containerapp env show -n "$ENVIRONMENT" -g "$RESOURCE_GROUP" --query properties.defaultDomain -o tsv)"
 fqdn="$APP.$default_domain"
 
+exists=0
 if show_error="$(az_read containerapp show -n "$APP" -g "$RESOURCE_GROUP" --query name -o tsv 2>&1 >/dev/null)"; then
-  say "$APP exists at https://$fqdn; nothing to do (hosted-deploy.yml keeps its image current)"
-  exit 0
+  exists=1
+  say "$APP exists at https://$fqdn (hosted-deploy.yml keeps its image current)"
 elif ! not_found "$show_error"; then
   printf 'Could not read Container App %s:\n%s\n' "$APP" "$show_error" >&2
   exit 1
 fi
+
+create_app() {
 
 az_read containerapp show -n "$GATEWAY" -g "$RESOURCE_GROUP" -o json >"$work/gateway.json"
 image="${IMAGE:-$(node -e 'process.stdout.write(JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).properties.template.containers[0].image)' "$work/gateway.json")}"
@@ -71,8 +77,7 @@ node "$SPEC" --gateway "$work/gateway.json" --image "$image" --public-url "https
 
 if [[ "$DRY_RUN" == 1 ]]; then
   printf '    would run: az containerapp create -n %s -g %s --yaml <the spec above> --output none --subscription %s\n' "$APP" "$RESOURCE_GROUP" "$SUBSCRIPTION"
-  say "Dry run: nothing was changed."
-  exit 0
+  return 0
 fi
 
 az containerapp create -n "$APP" -g "$RESOURCE_GROUP" --yaml "$work/app.json" --output none --subscription "$SUBSCRIPTION"
@@ -90,4 +95,46 @@ until [[ "$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "https://$fqdn/
   if ((SECONDS >= deadline)); then printf 'https://%s/healthz did not answer 200\n' "$fqdn" >&2; exit 1; fi
   sleep "${READY_POLL_SECONDS:-10}"
 done
-say "Done. $APP answers at https://$fqdn"
+}
+
+[[ "$exists" == 1 ]] || create_app
+
+# --- Custom domain -------------------------------------------------------------------------------------------------
+# The same steps as hosted/infra/provision.sh's for desk.ouro.bot: a DNS-only CNAME to the app's Azure address and an
+# asuid TXT record holding the environment's verification id, then a managed certificate.
+verification_id="$(az_read containerapp env show -n "$ENVIRONMENT" -g "$RESOURCE_GROUP" --query properties.customDomainConfiguration.customDomainVerificationId -o tsv)"
+bound=""
+[[ "$exists" == 1 ]] && bound="$(az_read containerapp show -n "$APP" -g "$RESOURCE_GROUP" --query "properties.configuration.ingress.customDomains[?name=='$DOMAIN'].bindingType" -o tsv)"
+public_url="https://$fqdn"
+if [[ "$bound" == SniEnabled ]]; then
+  say "$DOMAIN is bound with a certificate"
+  public_url="https://$DOMAIN"
+else
+  cname="$(dig +short CNAME "$DOMAIN" | sed 's/\.$//')"
+  txt="$(dig +short TXT "asuid.$DOMAIN" | tr -d '"')"
+  if [[ "$cname" == "$fqdn" && "$txt" == "$verification_id" ]]; then
+    if [[ "$DRY_RUN" == 1 ]]; then
+      printf '    would run: az containerapp hostname add and bind -n %s --hostname %s (managed certificate)\n' "$APP" "$DOMAIN"
+    else
+      [[ -n "$bound" ]] || { say "Adding $DOMAIN to $APP"; az_read containerapp hostname add -n "$APP" -g "$RESOURCE_GROUP" --hostname "$DOMAIN" --output none; }
+      say "Binding $DOMAIN with a managed certificate (this can take up to 20 minutes)"
+      az_read containerapp hostname bind -n "$APP" -g "$RESOURCE_GROUP" --hostname "$DOMAIN" --environment "$ENVIRONMENT" --validation-method CNAME --output none
+      public_url="https://$DOMAIN"
+    fi
+  else
+    say "Skipping $DOMAIN until its DNS exists. Create these records in ouro.bot's DNS (Cloudflare, DNS only, not proxied), then run this again:"
+    printf '    CNAME  %-26s %s\n' "$DOMAIN" "$fqdn"
+    printf '    TXT    %-26s %s\n' "asuid.$DOMAIN" "$verification_id"
+  fi
+fi
+
+if [[ "$public_url" == "https://$DOMAIN" && "$DRY_RUN" != 1 ]]; then
+  current="$(az_read containerapp show -n "$APP" -g "$RESOURCE_GROUP" --query "properties.template.containers[0].env[?name=='DESK_HOOKS_PUBLIC_URL'].value" -o tsv)"
+  if [[ "$current" != "$public_url" ]]; then
+    say "Pointing DESK_HOOKS_PUBLIC_URL at $public_url"
+    az_read containerapp update -n "$APP" -g "$RESOURCE_GROUP" --set-env-vars "DESK_HOOKS_PUBLIC_URL=$public_url" --output none
+  fi
+fi
+
+[[ "$DRY_RUN" == 1 ]] && say "Dry run: nothing was changed."
+say "Done. $APP answers at $public_url"

@@ -149,6 +149,8 @@ It checks each event's signature on the raw bytes, stores it in the accounts sto
 
 Run `hosted/infra/provision-hooks.sh --dry-run`, read the plan, then run it without `--dry-run` once, after a release carrying `hosted/src/hooks` has reached the gateway. It copies the gateway's registry, identities, store and account mapping, and the value of its `desk-client-key` secret through a private file. The deploy workflow then, after the gateway's deep health check, points the receiver at each new image, copies the gateway's account mapping and store settings again so they never drift, and waits for its `/healthz`. Until the app exists, that step only leaves a notice.
 
+The receiver answers at `https://hooks.ouro.bot`. Each run of `provision-hooks.sh` binds that domain with a managed certificate and sets `DESK_HOOKS_PUBLIC_URL` to it, once ouro.bot's DNS (Cloudflare, DNS only) has a CNAME from `hooks.ouro.bot` to the app's Azure address and a TXT record `asuid.hooks.ouro.bot` holding the environment's verification id. Until then it prints the two records and the receiver answers at its Azure address. `HOOKS_DOMAIN` names another domain.
+
 ## Ouro identity
 
 People sign in to hosted Desk through an Ouro tenant, a Microsoft Entra External ID directory, with Apple or an email one-time code. Production uses the tenant `ourobot` (`de8841c3-7799-4523-bbad-44f8a2426eaa`). The staging app, `ouro-desk-hosted-staging`, uses the test tenant `ourobottest` (`c12edfb6-c5ab-4bf8-b1d5-1f053311d396`), which stays for later rehearsals.

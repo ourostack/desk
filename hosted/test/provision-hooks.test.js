@@ -46,12 +46,16 @@ const fs = require("fs"), path = require("path");
 const dir = process.env.FAKE_DIR, args = process.argv.slice(2), has = (...words) => words.every((w) => args.includes(w));
 fs.appendFileSync(path.join(dir, "argv.log"), JSON.stringify(args) + "\\n");
 const created = path.join(dir, "created.json");
-if (has("env", "show")) { console.log("blueflower-44af4710.eastus2.azurecontainerapps.io"); process.exit(0); }
+if (has("hostname") || has("update")) { process.exit(0); }
+if (has("env", "show")) { console.log(args.some((a) => a.includes("VerificationId")) ? "VERIFY-ID" : "blueflower-44af4710.eastus2.azurecontainerapps.io"); process.exit(0); }
 if (has("secret", "show")) { console.log(${JSON.stringify(CLIENT_KEY)}); process.exit(0); }
 if (has("create")) { fs.copyFileSync(args[args.indexOf("--yaml") + 1], created); process.exit(0); }
 if (has("show", "ouro-desk-hosted")) { process.stdout.write(fs.readFileSync(path.join(dir, "gateway.json"), "utf8")); process.exit(0); }
 if (has("show", "ouro-desk-hooks")) {
   if (!fs.existsSync(created) && !process.env.FAKE_EXISTS) { console.error("ERROR: (ResourceNotFound) The Resource was not found."); process.exit(1); }
+  const query = args[args.indexOf("--query") + 1] || "";
+  if (query.includes("customDomains")) { console.log(process.env.FAKE_BOUND || ""); process.exit(0); }
+  if (query.includes("DESK_HOOKS_PUBLIC_URL")) { console.log(process.env.FAKE_PUBLIC_URL || ""); process.exit(0); }
   console.log(args.includes("name") ? "ouro-desk-hooks" : "ouro-desk-hooks--r1"); process.exit(0);
 }
 console.error("fake az: unexpected " + args.join(" ")); process.exit(3);
@@ -63,6 +67,9 @@ function run(t, { args = [], env = {} } = {}) {
   writeFileSync(join(dir, "fake-az.cjs"), FAKE_AZ);
   writeFileSync(join(dir, "az"), `#!/bin/sh\nexec "${process.execPath}" "${join(dir, "fake-az.cjs")}" "$@"\n`);
   writeFileSync(join(dir, "curl"), "#!/bin/sh\nprintf 200\n");
+  // dig answers from FAKE_CNAME and FAKE_TXT, so a test chooses whether ouro.bot's DNS has the records.
+  writeFileSync(join(dir, "dig"), '#!/bin/sh\ncase "$*" in *CNAME*) [ -n "$FAKE_CNAME" ] && echo "$FAKE_CNAME." ;; *TXT*) [ -n "$FAKE_TXT" ] && echo "\\"$FAKE_TXT\\"" ;; esac\nexit 0\n');
+  chmodSync(join(dir, "dig"), 0o755);
   chmodSync(join(dir, "az"), 0o755);
   chmodSync(join(dir, "curl"), 0o755);
   writeFileSync(join(dir, "gateway.json"), JSON.stringify(gateway()));
@@ -134,7 +141,51 @@ test("IMAGE picks another image, an existing app is left alone, and unknown argu
   assert.equal(run(t, { env: { IMAGE: "registry/other:1" } }).created.properties.template.containers[0].image, "registry/other:1");
   const existing = run(t, { env: { FAKE_EXISTS: "1" } });
   assert.equal(existing.status, 0);
-  assert.match(existing.output, /exists at https:\/\/ouro-desk-hooks\..*nothing to do/);
+  assert.match(existing.output, /exists at https:\/\/ouro-desk-hooks\./);
   assert.ok(!existing.argv.some((args) => args.includes("create")));
   assert.equal(run(t, { args: ["--force"] }).status, 2);
+});
+
+const AZURE = "ouro-desk-hooks.blueflower-44af4710.eastus2.azurecontainerapps.io";
+const DNS = { FAKE_CNAME: AZURE, FAKE_TXT: "VERIFY-ID" };
+const calls = (argv, word) => argv.filter((args) => args[0] === "containerapp" && args[1] === word);
+
+test("without DNS records it prints the two records to add and binds nothing", (t) => {
+  const { status, output, argv } = run(t, { env: { FAKE_EXISTS: "1" } });
+  assert.equal(status, 0, output);
+  assert.match(output, new RegExp(`CNAME +hooks\\.ouro\\.bot +${AZURE.replaceAll(".", "\\.")}`));
+  assert.match(output, /TXT +asuid\.hooks\.ouro\.bot +VERIFY-ID/);
+  assert.deepEqual(calls(argv, "hostname"), []);
+  assert.deepEqual(calls(argv, "update"), []);
+  assert.match(output, new RegExp(`Done\\. ouro-desk-hooks answers at https://${AZURE.replaceAll(".", "\\.")}`));
+});
+
+test("with the DNS records it binds hooks.ouro.bot with a managed certificate and points the public URL at it", (t) => {
+  const { status, output, argv } = run(t, { env: { FAKE_EXISTS: "1", ...DNS } });
+  assert.equal(status, 0, output);
+  const hostname = calls(argv, "hostname");
+  assert.deepEqual(hostname.map((args) => args[2]), ["add", "bind"]);
+  assert.ok(hostname[1].includes("--validation-method") && hostname[1].includes("CNAME"));
+  const [update] = calls(argv, "update");
+  assert.ok(update.includes("DESK_HOOKS_PUBLIC_URL=https://hooks.ouro.bot"), JSON.stringify(update));
+  assert.match(output, /Done\. ouro-desk-hooks answers at https:\/\/hooks\.ouro\.bot/);
+});
+
+test("a bound domain is left alone, and the public URL is set only when it differs", (t) => {
+  const settled = run(t, { env: { FAKE_EXISTS: "1", FAKE_BOUND: "SniEnabled", FAKE_PUBLIC_URL: "https://hooks.ouro.bot" } });
+  assert.equal(settled.status, 0, settled.output);
+  assert.deepEqual(calls(settled.argv, "hostname"), []);
+  assert.deepEqual(calls(settled.argv, "update"), []);
+  assert.match(settled.output, /hooks\.ouro\.bot is bound with a certificate/);
+  const stale = run(t, { env: { FAKE_EXISTS: "1", FAKE_BOUND: "SniEnabled", FAKE_PUBLIC_URL: `https://${AZURE}` } });
+  assert.equal(calls(stale.argv, "update").length, 1);
+});
+
+test("a dry run with the DNS records says what it would bind and changes nothing", (t) => {
+  const { status, output, argv } = run(t, { args: ["--dry-run"], env: { FAKE_EXISTS: "1", ...DNS } });
+  assert.equal(status, 0, output);
+  assert.match(output, /would run: az containerapp hostname add and bind -n ouro-desk-hooks --hostname hooks\.ouro\.bot/);
+  assert.deepEqual(calls(argv, "hostname"), []);
+  assert.deepEqual(calls(argv, "update"), []);
+  assert.match(output, /Dry run: nothing was changed/);
 });
