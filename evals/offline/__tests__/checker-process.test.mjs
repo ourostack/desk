@@ -196,7 +196,7 @@ const complete = status => `{"child-pid":4242}\n{"exit-code":${status}}\n`;
 // namespace this run created; `initAlive` keeps the launcher's reported init alive in that namespace.
 function procOptions(t) {
   const runNamespace = "pid:[4026999999]";
-  const view = { runNamespace, surveys: 0, initReads: 0, surviving: 0, initAlive: false, unreadable: false, tail: null, procMissing: false, identityUnobservable: false, identityUnreadable: false, retirementUnreadable: false };
+  const view = { runNamespace, surveys: 0, initReads: 0, surviving: 0, initAlive: false, unreadable: false, tail: null, procMissing: false, readError: null, closedSurveys: 0, identityUnobservable: false, identityUnreadable: false, retirementUnreadable: false };
   const opendir = fs.opendirSync;
   t.mock.method(fs, "opendirSync", (target, ...args) => {
     if (target !== "/proc") return opendir(target, ...args);
@@ -211,7 +211,13 @@ function procOptions(t) {
       names = [...base, ...filler, view.tail === "occupant" ? "5555" : "6666"];
     }
     let index = 0;
-    return { readSync: () => index < names.length ? { name: names[index++] } : null, closeSync: () => {} };
+    return {
+      readSync: () => {
+        if (view.readError !== null && index === 1) throw Object.assign(new Error("proc entry changed during enumeration"), { code: view.readError });
+        return index < names.length ? { name: names[index++] } : null;
+      },
+      closeSync: () => { view.closedSurveys += 1; },
+    };
   });
   const readlink = fs.readlinkSync;
   t.mock.method(fs, "readlinkSync", (target, ...args) => {
@@ -401,6 +407,22 @@ test("an input root that becomes unreadable during the run is an unfrozen observ
   assert.equal(result.boundary.inputs.inputsManifestSha256After, null, "The closing manifest could not be read");
   assert.equal(result.availability.frozenInputs, false);
   assert.equal(result.availability.available, false);
+});
+
+test("an unreadable runtime binary cannot supply a frozen preflight identity", async t => {
+  const tree = roots("checker-unreadable-runtime");
+  const platform = Object.getOwnPropertyDescriptor(process, "platform");
+  t.after(() => Object.defineProperty(process, "platform", platform));
+  Object.defineProperty(process, "platform", { value: "darwin" });
+  const open = fs.openSync;
+  t.mock.method(fs, "openSync", (filename, ...args) => {
+    if (filename === process.execPath) throw Object.assign(new Error("runtime identity denied"), { code: "EACCES" });
+    return open(filename, ...args);
+  });
+  const receipt = await qualifyCheckerBoundary({ workRoot: path.join(tree.root, "preflight"), sourceRoot: tree.subject, controllerRoot: tree.checker, limits: { timeoutMs: 1000, maxStreamBytes: 4096, cleanupMs: 50 } });
+  assert.equal(receipt.identities.runtimeSha256, null);
+  assert.equal(receipt.checks.frozenIdentities, false);
+  assert.equal(receipt.status, "unavailable");
 });
 
 // Each probe's parent-side observation, keyed by the frozen program the preflight materializes.
@@ -792,6 +814,29 @@ for (const [name, statusBytes, statusSplits] of [
   assert.equal(result.lifetime.launcherAgreement, null, "No complete launcher record exists to agree with");
   assert.equal(result.lifetime.statusRefused, null);
   assert.equal(result.namespaceClosed, false);
+});
+
+for (const code of ["ENOENT", "ESRCH", "EACCES"]) test(`a process entry enumeration failure refuses namespace closure (${code})`, async t => {
+  const tree = roots(`checker-survey-read-${code.toLowerCase()}`);
+  const { transport, options } = linuxLauncher(t, tree);
+  transport.statusBytes = complete(0);
+  transport.proc.readError = code;
+  const result = await captureConfinedChecker(options);
+  assert.equal(result.lifetime.surveyComplete, false);
+  assert.equal(result.lifetime.unreadable, 1);
+  assert.equal(result.lifetime.reconciled, false);
+  assert.equal(result.namespaceClosed, false);
+  assert.equal(result.availability.available, false);
+  assert.equal(transport.proc.closedSurveys, transport.proc.surveys);
+});
+
+test("unexpected process survey errors propagate after closing its directory", async t => {
+  const tree = roots("checker-survey-read-unexpected");
+  const { transport, options } = linuxLauncher(t, tree);
+  transport.statusBytes = complete(0);
+  transport.proc.readError = "EIO";
+  await assert.rejects(captureConfinedChecker(options), { code: "EIO" });
+  assert.equal(transport.proc.closedSurveys, transport.proc.surveys);
 });
 
 for (const tail of ["unreadable", "occupant"]) test(`a process survey that cannot examine its whole tail is incomplete, not empty (${tail})`, async t => {
