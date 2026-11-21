@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # Creates the hooks receiver, Container App ouro-desk-hooks, beside hosted Desk (plugins/desk/docs/webhooks.md).
-# Run it once, after a Desk release that carries hosted/src/hooks has been deployed to the gateway; later releases
-# reach the receiver through .github/workflows/hosted-deploy.yml. Safe to run again: an existing app is left alone.
+# Run it after a Desk release that carries hosted/src/hooks has been deployed to the gateway, and again after adding
+# the DNS records it prints; later releases reach the receiver through .github/workflows/hosted-deploy.yml. Safe to
+# run again: an existing app gets only its domain binding and DESK_HOOKS_PUBLIC_URL, never a new spec or secret.
 #
-#   hosted/infra/provision-hooks.sh --dry-run     # read Azure and print the app it would create, secret masked
-#   hosted/infra/provision-hooks.sh               # create it
+#   hosted/infra/provision-hooks.sh --dry-run     # read Azure and print every change it would make, secret masked
+#   hosted/infra/provision-hooks.sh               # make them
 #   IMAGE=<full image> hosted/infra/provision-hooks.sh
 #                                                 # a given image instead of the gateway's current one
 #
@@ -58,6 +59,21 @@ elif ! not_found "$show_error"; then
   exit 1
 fi
 
+# Wait for the latest revision, then for /healthz, as hosted-deploy.yml does. READY_TIMEOUT_SECONDS and
+# READY_POLL_SECONDS exist for the tests.
+wait_ready() {
+  local deadline=$((SECONDS + ${READY_TIMEOUT_SECONDS:-600}))
+  until [[ "$(az_read containerapp show -n "$APP" -g "$RESOURCE_GROUP" --query properties.latestReadyRevisionName -o tsv)" == \
+           "$(az_read containerapp show -n "$APP" -g "$RESOURCE_GROUP" --query properties.latestRevisionName -o tsv)" ]]; do
+    if ((SECONDS >= deadline)); then printf '%s was not ready after %s seconds; see az containerapp logs show -n %s -g %s\n' "$APP" "${READY_TIMEOUT_SECONDS:-600}" "$APP" "$RESOURCE_GROUP" >&2; exit 1; fi
+    sleep "${READY_POLL_SECONDS:-10}"
+  done
+  until [[ "$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "https://$fqdn/healthz")" == 200 ]]; do
+    if ((SECONDS >= deadline)); then printf 'https://%s/healthz did not answer 200\n' "$fqdn" >&2; exit 1; fi
+    sleep "${READY_POLL_SECONDS:-10}"
+  done
+}
+
 create_app() {
 
 az_read containerapp show -n "$GATEWAY" -g "$RESOURCE_GROUP" -o json >"$work/gateway.json"
@@ -83,18 +99,7 @@ fi
 az containerapp create -n "$APP" -g "$RESOURCE_GROUP" --yaml "$work/app.json" --output none --subscription "$SUBSCRIPTION"
 rm -f "$work/client-key" "$work/app.json"
 
-# Wait for the first revision, then for /healthz, as hosted-deploy.yml does. READY_TIMEOUT_SECONDS and
-# READY_POLL_SECONDS exist for the tests.
-deadline=$((SECONDS + ${READY_TIMEOUT_SECONDS:-600}))
-until [[ "$(az_read containerapp show -n "$APP" -g "$RESOURCE_GROUP" --query properties.latestReadyRevisionName -o tsv)" == \
-         "$(az_read containerapp show -n "$APP" -g "$RESOURCE_GROUP" --query properties.latestRevisionName -o tsv)" ]]; do
-  if ((SECONDS >= deadline)); then printf '%s was not ready after %s seconds; see az containerapp logs show -n %s -g %s\n' "$APP" "${READY_TIMEOUT_SECONDS:-600}" "$APP" "$RESOURCE_GROUP" >&2; exit 1; fi
-  sleep "${READY_POLL_SECONDS:-10}"
-done
-until [[ "$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "https://$fqdn/healthz")" == 200 ]]; do
-  if ((SECONDS >= deadline)); then printf 'https://%s/healthz did not answer 200\n' "$fqdn" >&2; exit 1; fi
-  sleep "${READY_POLL_SECONDS:-10}"
-done
+wait_ready
 }
 
 [[ "$exists" == 1 ]] || create_app
@@ -111,10 +116,13 @@ if [[ "$bound" == SniEnabled ]]; then
   public_url="https://$DOMAIN"
 else
   cname="$(dig +short CNAME "$DOMAIN" | sed 's/\.$//')"
-  txt="$(dig +short TXT "asuid.$DOMAIN" | tr -d '"')"
-  if [[ "$cname" == "$fqdn" && "$txt" == "$verification_id" ]]; then
+  # asuid may hold more than one TXT value; any line equal to the verification id counts.
+  txt_matches=0
+  dig +short TXT "asuid.$DOMAIN" | tr -d '"' | grep -qxF "$verification_id" && txt_matches=1
+  if [[ "$cname" == "$fqdn" && "$txt_matches" == 1 ]]; then
     if [[ "$DRY_RUN" == 1 ]]; then
       printf '    would run: az containerapp hostname add and bind -n %s --hostname %s (managed certificate)\n' "$APP" "$DOMAIN"
+      public_url="https://$DOMAIN"
     else
       [[ -n "$bound" ]] || { say "Adding $DOMAIN to $APP"; az_read containerapp hostname add -n "$APP" -g "$RESOURCE_GROUP" --hostname "$DOMAIN" --output none; }
       say "Binding $DOMAIN with a managed certificate (this can take up to 20 minutes)"
@@ -128,11 +136,17 @@ else
   fi
 fi
 
-if [[ "$public_url" == "https://$DOMAIN" && "$DRY_RUN" != 1 ]]; then
-  current="$(az_read containerapp show -n "$APP" -g "$RESOURCE_GROUP" --query "properties.template.containers[0].env[?name=='DESK_HOOKS_PUBLIC_URL'].value" -o tsv)"
+if [[ "$public_url" == "https://$DOMAIN" ]]; then
+  current=""
+  [[ "$exists" == 1 ]] && current="$(az_read containerapp show -n "$APP" -g "$RESOURCE_GROUP" --query "properties.template.containers[0].env[?name=='DESK_HOOKS_PUBLIC_URL'].value" -o tsv)"
   if [[ "$current" != "$public_url" ]]; then
-    say "Pointing DESK_HOOKS_PUBLIC_URL at $public_url"
-    az_read containerapp update -n "$APP" -g "$RESOURCE_GROUP" --set-env-vars "DESK_HOOKS_PUBLIC_URL=$public_url" --output none
+    if [[ "$DRY_RUN" == 1 ]]; then
+      printf '    would run: az containerapp update -n %s --set-env-vars DESK_HOOKS_PUBLIC_URL=%s\n' "$APP" "$public_url"
+    else
+      say "Pointing DESK_HOOKS_PUBLIC_URL at $public_url"
+      az_read containerapp update -n "$APP" -g "$RESOURCE_GROUP" --set-env-vars "DESK_HOOKS_PUBLIC_URL=$public_url" --output none
+      wait_ready
+    fi
   fi
 fi
 

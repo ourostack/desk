@@ -189,3 +189,33 @@ test("a dry run with the DNS records says what it would bind and changes nothing
   assert.deepEqual(calls(argv, "update"), []);
   assert.match(output, /Dry run: nothing was changed/);
 });
+
+test("a binding left Disabled is bound again without a second add", (t) => {
+  const { status, output, argv } = run(t, { env: { FAKE_EXISTS: "1", FAKE_BOUND: "Disabled", ...DNS } });
+  assert.equal(status, 0, output);
+  assert.deepEqual(calls(argv, "hostname").map((args) => args[2]), ["bind"]);
+});
+
+test("a new app is created and then bound in the same run", (t) => {
+  const { status, output, argv, created } = run(t, { env: DNS });
+  assert.equal(status, 0, output);
+  assert.ok(created, "the app was created");
+  assert.deepEqual(calls(argv, "hostname").map((args) => args[2]), ["add", "bind"]);
+  assert.ok(calls(argv, "update")[0].includes("DESK_HOOKS_PUBLIC_URL=https://hooks.ouro.bot"));
+});
+
+test("a CNAME pointing elsewhere, or a missing verification value, binds nothing", (t) => {
+  for (const env of [{ ...DNS, FAKE_CNAME: "somewhere.else.example" }, { ...DNS, FAKE_TXT: "other-id" }]) {
+    const { status, output, argv } = run(t, { env: { FAKE_EXISTS: "1", ...env } });
+    assert.equal(status, 0, output);
+    assert.deepEqual(calls(argv, "hostname"), []);
+    assert.match(output, /Skipping hooks\.ouro\.bot until its DNS exists/);
+  }
+});
+
+test("a dry run names the public-URL change a bound domain still needs", (t) => {
+  const { status, output, argv } = run(t, { args: ["--dry-run"], env: { FAKE_EXISTS: "1", FAKE_BOUND: "SniEnabled", FAKE_PUBLIC_URL: `https://${AZURE}` } });
+  assert.equal(status, 0, output);
+  assert.match(output, /would run: az containerapp update -n ouro-desk-hooks --set-env-vars DESK_HOOKS_PUBLIC_URL=https:\/\/hooks\.ouro\.bot/);
+  assert.deepEqual(calls(argv, "update"), []);
+});
