@@ -126,7 +126,17 @@ function namespaceOccupants(identity) {
   if (handle !== null) {
     try {
       let entry;
-      while ((entry = handle.readSync()) !== null) {
+      while (true) {
+        try { entry = handle.readSync(); }
+        catch (error) {
+          if (!["ENOENT", "ESRCH", "EACCES"].includes(error.code)) throw error;
+          // Dir.readSync can lose buffered entries when a /proc entry vanishes during its lstat fallback.
+          // The unexamined tail is not proof of retirement, even when this particular PID disappeared.
+          unreadable += 1;
+          complete = false;
+          break;
+        }
+        if (entry === null) break;
         if (!/^\d+$/u.test(entry.name)) continue;
         // The bound is applied while enumerating. An unexamined tail makes the survey incomplete rather than
         // silently producing an apparently empty result for a prefix of the process table.
