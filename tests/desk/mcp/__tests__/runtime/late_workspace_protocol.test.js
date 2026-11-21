@@ -142,10 +142,10 @@ async function fixture(t, { explicit = false, person = null, capturedFolder = fa
     }),
   })
   t.after(async () => {
-    await handle.admission.idle({ waitMs: 15000 })
-    assert.equal(handle.admission.running, false)
+    // An idle wait joins only the current attempt; shutdown stops queued work too.
     input.end()
     await handle.closed
+    assert.equal(handle.admission.running, false)
   })
   await rpc("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "late-context-fixture", version: "1" } })
   await rpc("tools/list", {})
@@ -253,6 +253,15 @@ test("an explicit A remains A when the same host record later associates B", asy
   assert.equal(readFileSync(f.card(f.b), "utf8"), text)
   assert.ok(f.connectedRoots.length > 0)
   assert.ok(f.connectedRoots.every((root) => root === f.a))
+})
+
+test("protocol shutdown retires admission with a fresh resolution queued behind a retained reply", async (t) => {
+  const f = await fixture(t, { explicit: true })
+  await f.holdNextResolution()
+  await f.handle.admission.refresh({ force: true, waitMs: 0 })
+  await f.waitHeld()
+  await f.handle.admission.refresh({ fresh: true, waitMs: 0 })
+  setImmediate(() => f.releaseResolution())
 })
 
 test("invalid late associations and missing binding files refuse without changing either desk", async (t) => {
