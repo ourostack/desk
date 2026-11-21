@@ -83,12 +83,16 @@ export function createApp({ provider, relay, githubCallback, issuer, resource, u
   app.set("trust proxy", 1);
   // One line per request, so the logs show who keeps the app awake: Container Apps keeps a replica while requests
   // arrive within its 300 s scale-down cooldown. The path drops its query (OAuth codes and states travel there) and
-  // any segment long enough to be a token, such as an invite's (/invite/<token>).
+  // any segment that looks like a token: 16 or more characters with a digit, capital or underscore, such as an
+  // invite's (/invite/<token>), and never a route name like oauth-authorization-server.
   app.use((req, res, next) => {
     const started = Date.now();
     res.on("finish", () => {
       const agent = String(req.get("user-agent") ?? "").slice(0, 160);
-      const path = req.path.split("/").map((segment) => (segment.length >= 16 ? "<redacted>" : segment)).join("/");
+      // Azure's own probes hit /healthz every 30 s from inside the environment and never keep a replica; skip them.
+      if (agent.startsWith("kube-probe/") && res.statusCode < 300) return;
+      // originalUrl, not path: a router mounted with app.use(prefix) has removed its prefix from req.path by now.
+      const path = req.originalUrl.split("?")[0].split("/").map((segment) => (segment.length >= 16 && /[0-9A-Z_]/.test(segment) ? "<redacted>" : segment)).join("/");
       log(`request ${req.method} ${path} ${res.statusCode} ${Date.now() - started}ms ua=${JSON.stringify(agent)}`);
     });
     next();
