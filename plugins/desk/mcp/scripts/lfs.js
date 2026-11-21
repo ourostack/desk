@@ -3,7 +3,7 @@ import process from "node:process"
 import { realpathSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 import { inspectLfs } from "../src/runtime/lfs.js"
-import { defineCli, defineCommand } from "../src/lib/ouro-ui/registry/ouro/ax/command.ts"
+import { defineCli, defineCommand } from "../src/lib/ouro-ui/registry/ouro/ax/ax-command.ts"
 import { runCli } from "../src/lib/ouro-ui/registry/ouro/ax/cli.ts"
 
 const lfsCli = (cwd) => defineCli({

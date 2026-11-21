@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 import { AxError } from "../lib/ouro-ui/registry/ouro/ax/problem.ts"
-import { defineCli, defineCommand } from "../lib/ouro-ui/registry/ouro/ax/command.ts"
+import { defineCli, defineCommand } from "../lib/ouro-ui/registry/ouro/ax/ax-command.ts"
 import { runCli } from "../lib/ouro-ui/registry/ouro/ax/cli.ts"
 import { buildRuntimeDependencyPack, deriveRuntimeDependencyPackPaths, verifyRuntimeDependencyPack } from "./runtime-deps.js"
 

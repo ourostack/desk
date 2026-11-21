@@ -54,7 +54,7 @@ import { pathToFileURL } from "node:url"
 
 import { deskFailure } from "../src/runtime/desk-failure.js"
 import { AxError } from "../src/lib/ouro-ui/registry/ouro/ax/problem.ts"
-import { defineCli, defineCommand } from "../src/lib/ouro-ui/registry/ouro/ax/command.ts"
+import { defineCli, defineCommand } from "../src/lib/ouro-ui/registry/ouro/ax/ax-command.ts"
 import { runCli } from "../src/lib/ouro-ui/registry/ouro/ax/cli.ts"
 import { jobId } from "../src/factory/binding.js"
 import { readDeskRemote, resolveJobIdentity } from "../src/factory/desk-repo.js"

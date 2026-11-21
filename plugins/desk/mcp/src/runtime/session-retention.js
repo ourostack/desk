@@ -10,7 +10,7 @@ import os from "node:os"
 import path from "node:path"
 import { resolveStateHome } from "../util/paths.js"
 import { AxError } from "../lib/ouro-ui/registry/ouro/ax/problem.ts"
-import { defineCli, defineCommand } from "../lib/ouro-ui/registry/ouro/ax/command.ts"
+import { defineCli, defineCommand } from "../lib/ouro-ui/registry/ouro/ax/ax-command.ts"
 import { runCli } from "../lib/ouro-ui/registry/ouro/ax/cli.ts"
 
 const DAY = 86_400_000

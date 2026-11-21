@@ -43,7 +43,7 @@ import { diffStagedPaths, formatDeskProblem, formatIndexDriftProblem, snapshotSt
 import { isWslRelay, resolveBash } from "../util/bash.js"
 import { isGitRepository } from "../util/git-stage.js"
 import { AxError } from "../lib/ouro-ui/registry/ouro/ax/problem.ts"
-import { defineCli, defineCommand } from "../lib/ouro-ui/registry/ouro/ax/command.ts"
+import { defineCli, defineCommand } from "../lib/ouro-ui/registry/ouro/ax/ax-command.ts"
 import { runCli } from "../lib/ouro-ui/registry/ouro/ax/cli.ts"
 
 // All Detect blocks together, plus any Safety check and Migrate the hook runs,

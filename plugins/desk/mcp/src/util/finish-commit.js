@@ -37,7 +37,7 @@ import { commitCaptured, git, headOf, held, operationAnswer, same, treeLines } f
 import { readCaptureRecord, removeCaptureRecord } from "./capture-record.js"
 import { resolveDeskStateDir } from "../runtime/last-start.js"
 import { defineExitCodes, BASE_EXIT_CODES } from "../lib/ouro-ui/registry/ouro/ax/exit-codes.ts"
-import { defineCli, defineCommand } from "../lib/ouro-ui/registry/ouro/ax/command.ts"
+import { defineCli, defineCommand } from "../lib/ouro-ui/registry/ouro/ax/ax-command.ts"
 import { runCli } from "../lib/ouro-ui/registry/ouro/ax/cli.ts"
 
 /**

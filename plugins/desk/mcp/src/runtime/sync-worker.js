@@ -70,7 +70,7 @@ import { publicationDeferred } from "./publication-mode.js"
 import { deliveryIsPublication } from "../util/main-publish.js"
 import { NOT_A_DESK_DEFECT, blockedWords, deliver, gitEnv, undeliveredCommits } from "./deliver.js"
 import { commitWaitingLogs, settleLogs, waitingLogs } from "./append-lane.js"
-import { defineCli, defineCommand } from "../lib/ouro-ui/registry/ouro/ax/command.ts"
+import { defineCli, defineCommand } from "../lib/ouro-ui/registry/ouro/ax/ax-command.ts"
 import { runCli } from "../lib/ouro-ui/registry/ouro/ax/cli.ts"
 
 const GIT_TIMEOUT_MS = 10_000
