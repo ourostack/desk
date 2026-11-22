@@ -47,7 +47,18 @@
     {"id": "superpowers-skills-design", "when": "Before building, settling what someone wants, the approach, and a step-by-step implementation plan"},
     {"id": "superpowers-skills-execution", "when": "Carrying out an approved plan in an isolated checkout, alone or through helper agents, and integrating the finished branch"},
     {"id": "superpowers-skills-quality", "when": "Proving code works: test-first changes, root-cause debugging, fresh verification runs and code review in both directions"},
-    {"id": "superpowers-skills-foundation", "when": "Learning how the Superpowers library is found and loaded, and how a new skill in it is written and tested"}
+    {"id": "superpowers-skills-foundation", "when": "Learning how the Superpowers library is found and loaded, and how a new skill in it is written and tested"},
+    {"id": "desk-cli-session-start", "when": "Commands a session-start hook or migration runs to find the bound desk, boot it, pull its remote, tidy it and fix its Agency entry"},
+    {"id": "desk-cli-desk-delivery", "when": "Committing and pushing desk writes that a tool call left unfinished, could not run, or queued for the background push worker"},
+    {"id": "desk-cli-factory-workers", "when": "Detached factory workers the hooks start to record sessions, flush facts and run the loop, plus filing Desk defects and a private site view"},
+    {"id": "desk-cli-servers", "when": "The stdio server entry points hosts launch for Desk's tools and for its headless browser"},
+    {"id": "desk-cli-local-checks", "when": "Local helpers skills and operators run: instruction byte budgets, Git LFS inspection, reviewer audits, worker path maps and session storage cleanup"},
+    {"id": "superpowers-cli-brainstorm", "when": "Running the brainstorming visual companion: a local browser page that shows mockup screens and collects the person's clicks"},
+    {"id": "superpowers-cli-plan-tasks", "when": "Carrying out a written implementation plan task by task: briefs, BASE commits, test runs, ledger lines and review packages"},
+    {"id": "superpowers-cli-debugging", "when": "Finding which single test file leaves an unwanted file or folder behind, by running each test alone"},
+    {"id": "hosted-cli-credentials", "when": "Inside a hosted Desk child, getting GitHub access for Git or gh from the gateway's token socket instead of a stored secret"},
+    {"id": "hosted-cli-provision", "when": "Creating or reconciling hosted Desk's Azure Container Apps, their secrets, domains and GitHub App from an operator's az sign-in"},
+    {"id": "hosted-cli-identity", "when": "Building, rotating and checking the Ouro tenant's sign-in pieces (Entra apps, Key Vault secrets, Apple keys) for hosted Desk"}
   ],
   "bookletWords": { "allow": [] }
 }

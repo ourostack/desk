@@ -530,6 +530,359 @@
         { "code": "ambiguous", "means": "More than one host records this session id.", "fix": "Check which host's session it is; proof marks only a single-host session." },
         { "code": "foreign", "means": "No desk recorded the session, its desk folder is gone, or it is not the --desk given.", "fix": "Pass --desk as the absolute root of the desk that recorded the session." }
       ]
+    },
+    {
+      "id": "cli:session-boot",
+      "group": "desk-cli-session-start",
+      "when": "At the start of a session, to get the one boot report: bound desk, host, prerequisites, sync, active tasks, push accounts and open PRs",
+      "effect": "consequential",
+      "errors": [
+        { "code": "degraded", "means": "A source names a desk whose folder is missing, unreadable or malformed, or the boot itself threw; the degraded lines say which.", "fix": "Read the degraded lines, then call desk_status or desk_doctor to see which binding or prerequisite to fix." },
+        { "code": "setup-required", "means": "No source names a desk at all, as on a first run on this machine.", "fix": "Set up a desk with the first-run-bootstrap skill, then boot again." },
+        { "code": "ambiguous", "means": "The --task name matched more than one open task card, so no task was opened.", "fix": "Run it again with --task set to one of the listed candidates' handle or track/slug." },
+        { "code": "not-found", "means": "The --task name matched no open task card.", "fix": "Check the name against the open task cards, or leave --task out." }
+      ],
+      "confirm": "Outside a headless run, the boot may commit waiting task logs and start a background push of the desk's unpushed commits to its remote; go ahead?"
+    },
+    {
+      "id": "cli:session-sync.js",
+      "group": "desk-cli-session-start",
+      "when": "Pulling the desk's remote into the bound checkout at session start, fast-forward only, and starting delivery of local commits the remote lacks",
+      "effect": "consequential",
+      "confirm": "This may commit waiting task logs and start a background push of the desk's unpushed commits to its remote; go ahead?",
+      "errors": [
+        { "code": "session-sync-unresolved", "means": "The sync did not resolve; a Desk problem block names the reason and what to look at.", "fix": "Follow the block's look line, for example git status in the desk, then let the next sync catch up." },
+        { "code": "fetch-failed", "means": "git fetch of the upstream failed or timed out, so the checkout was left as it was.", "fix": "Check the network and the Git sign-in for the desk's remote, then run session-sync.js again." },
+        { "code": "local-changes-in-the-way", "means": "Files the remote also changed are modified or untracked here, so the checkout stayed behind.", "fix": "Commit or move the files the block lists, then run the sync again." }
+      ]
+    },
+    {
+      "id": "cli:resolve-desk-root",
+      "group": "desk-cli-session-start",
+      "when": "From a startup hook, to learn which desk Desk's MCP server would bind here, or to print the startup and boot-check lines",
+      "effect": "consequential",
+      "errors": [
+        { "code": "desk-root-not-found", "means": "No source names a desk, so root is null and the error and tried fields list every path looked at.", "fix": "Bind a desk, for example by setting $DESK or saving a binding, then run it again." }
+      ],
+      "confirm": "With --boot-checks this may start workspace repairs and the detached Desk-problem filer, which can open a public ourostack/desk issue; go ahead?"
+    },
+    {
+      "id": "cli:node plugins/desk/hooks/boot-checks.cjs",
+      "group": "desk-cli-session-start",
+      "when": "Run by path from session-start hooks to fast-forward the desk's state branch, repair leftover worktrees, or run a script under a supported Node",
+      "effect": "write",
+      "errors": [
+        { "code": "diverged", "means": "--fast-forward skipped: the state branch has local commits its upstream lacks.", "fix": "Let the push worker deliver those commits, then run --fast-forward again." },
+        { "code": "no-upstream", "means": "--fast-forward skipped: the branch has no remote or upstream to catch up to.", "fix": "Set an upstream for the state branch with git branch --set-upstream-to, or keep the desk local." },
+        { "code": "fetch-failed", "means": "--fast-forward skipped because git fetch of the branch's remote failed.", "fix": "Check the network and Git sign-in, then run --fast-forward again." },
+        { "code": "workspace-tidy-release-revocation-ownership-mismatch", "means": "--revoke refused: the worktree's closeout record names a different repository, worktree, branch or owner.", "fix": "Pass the exact repository, worktree, branch ref and owner that the closeout record holds." }
+      ]
+    },
+    {
+      "id": "cli:tidy-status",
+      "group": "desk-cli-session-start",
+      "when": "During the 02-tidy-desk migration, to check whether this session's desk needs its one-time tidy, then claim, defer or record it",
+      "effect": "write",
+      "errors": [
+        { "code": "defer-reason", "means": "--defer was given without a one-line reason.", "fix": "Run tidy-status --defer with a short reason after it." },
+        { "code": "refresh-root", "means": "--refresh-identity was given without --root.", "fix": "Add --root with the Desk tools' root from desk_status." },
+        { "code": "busy", "means": "The desk repository is not a Git repository or is mid-merge, rebase or similar, so it printed the line to say and exited 1; with --report it also holds the tidy.", "fix": "Say the printed line and carry on; a later session start offers the tidy again." }
+      ]
+    },
+    {
+      "id": "cli:node plugins/desk/mcp/scripts/agency-desk-channel.js",
+      "group": "desk-cli-session-start",
+      "when": "In the 03-desk-release-channel migration, to move an agency.toml Desk entry pinned to main over to the release channel",
+      "effect": "write",
+      "errors": [
+        { "code": "busy", "means": "Another Desk session holds the agency.toml lock and is moving the entry now, so nothing changed.", "fix": "Leave it; the next session start checks agency.toml again." },
+        { "code": "changed", "means": "agency.toml changed while this ran, so the rewrite was dropped and the file kept as it was.", "fix": "Run it again with --migrate, or let the next session start retry." }
+      ]
+    },
+    {
+      "id": "cli:sync-push.js",
+      "group": "desk-cli-desk-delivery",
+      "when": "Started detached after a desk commit, to wait out the debounce and push the desk's unpushed commits to its remote",
+      "effect": "consequential",
+      "confirm": "This pushes the desk's local commits to its Git remote; go ahead?",
+      "errors": [
+        { "code": "sync-push-publication-blocked", "means": "The push worker could not publish; local commits are kept and nothing was forced.", "fix": "Call desk_status for the blocked reason, fix that cause, then run the recovery command the error names." },
+        { "code": "sync-push-unexpected-result", "means": "The worker ended in a state this command does not know.", "fix": "Call desk_status for the sync state and unpushed count, then run the recovery command the error names." },
+        { "code": "busy", "means": "Another push worker holds this desk's lock and pushes everything, so this run ends quietly with exit 0.", "fix": "Wait for the holder to finish, then read desk_status to confirm the push." }
+      ]
+    },
+    {
+      "id": "cli:local-recovery",
+      "group": "desk-cli-desk-delivery",
+      "when": "When a session's Desk tools cannot run a write, to run one task_update, task_create, task_archive or desk_save through a fresh bootstrap",
+      "effect": "consequential",
+      "confirm": "This runs one Desk write on that root, which commits on the desk and leaves a push to its remote pending unless --publication deferred; go ahead?",
+      "errors": [
+        { "code": "invalid-arguments", "means": "The flags did not parse, or one was given as an empty value.", "fix": "Pass --root and --operation with real values, and the tool input as JSON on stdin or --input-file." },
+        { "code": "root-mismatch", "means": "The Desk server bound a different desk than --root names, so the write was not dispatched.", "fix": "Pass the root desk_status reports, or bind the intended desk first." },
+        { "code": "admission-refused", "means": "Desk's server was not admitting or ready for writes; the report carries its status.", "fix": "Read the status in the report, fix what it names, then run the command once more." },
+        { "code": "timeout", "means": "A step ran past the deadline, so the report says what is known and what is uncertain.", "fix": "Carry out the report's readback steps before trying the write again." }
+      ]
+    },
+    {
+      "id": "cli:finish-commit",
+      "group": "desk-cli-desk-delivery",
+      "when": "When a Desk tool left a commit unfinished, to check its captured change against HEAD and the index and, with --commit, commit it once",
+      "effect": "write",
+      "errors": [
+        { "code": "held", "means": "A check failed, such as another commit to these paths or a different staged index, so nothing was committed (exit 4).", "fix": "Read the reason and decide by hand what those paths should hold." },
+        { "code": "unknown", "means": "Git could not say where the change stands, or a hook or the branch update was cut off (exit 5).", "fix": "Read HEAD and git log for the commit the answer names before running it again." }
+      ]
+    },
+    {
+      "id": "cli:file-desk-problem",
+      "group": "desk-cli-factory-workers",
+      "when": "Started detached by a boot check after a Desk mechanism failed, to file it as a public ourostack/desk issue or count a known one",
+      "effect": "consequential",
+      "confirm": "This opens, or comments on, a public issue on ourostack/desk from a signed-in GitHub account; go ahead?",
+      "errors": [
+        { "code": "no-suitable-account", "means": "No signed-in, unmanaged GitHub account can see ourostack/desk, so nothing was filed; the run stays silent.", "fix": "Sign in a personal account with gh auth login; a later session start can file it." },
+        { "code": "held-cap", "means": "Today's cap on Desk problems filed from this machine is reached, so no issue was opened.", "fix": "Wait for a later day's session start, or report it by hand with the desk-problem skill." },
+        { "code": "record-failed", "means": "The local count of this hit could not be written; a stderr line names it.", "fix": "Run the same command again so the hit is counted." }
+      ]
+    },
+    {
+      "id": "cli:private-view",
+      "group": "desk-cli-factory-workers",
+      "when": "To browse the published factory site locally with this desk's real task names, served on 127.0.0.1 until stopped",
+      "effect": "write",
+      "errors": [
+        { "code": "private-view-no-desk", "means": "No desk is bound on this machine.", "fix": "Bind a desk with desk_start, then run private-view again." },
+        { "code": "private-view-dir-in-git", "means": "The view folder sits inside a Git work tree, where the task names could be committed.", "fix": "Point XDG_STATE_HOME at a folder outside every Git work tree, then run it again." },
+        { "code": "private-view-visibility-unknown", "means": "This desk's visibility is not known yet, so its job IDs cannot be derived.", "fix": "Run a factory flush, then run private-view again." },
+        { "code": "private-view-secret-missing", "means": "The machine secret that keys this desk's job IDs does not exist yet.", "fix": "Run a factory flush to create the secret, then start private-view once more." }
+      ]
+    },
+    {
+      "id": "cli:node plugins/desk/hooks/factory-start.cjs",
+      "group": "desk-cli-factory-workers",
+      "when": "Started detached by session-start hooks when a store opts in, to sweep session markers, flush facts and refresh andon issues",
+      "effect": "consequential",
+      "confirm": "This delivers pending session facts to each opted-in GitHub store and updates its andon issues; go ahead?",
+      "errors": [
+        { "code": "deadline", "means": "The 120-second budget ran out before a store's flush or andon refresh, so that store waits.", "fix": "Let the next session start flush it, or run factory flush for that store." },
+        { "code": "locked", "means": "Another flush held the factory state lock until the deadline, so this store sent nothing.", "fix": "Wait for that flush to end; the next session start retries." },
+        { "code": "no-account", "means": "The store's consent record names no account to deliver with.", "fix": "Record an account with factory consent, then flush again." },
+        { "code": "store-missing", "means": "GitHub answered 404 for the store repository.", "fix": "Check the store name in the consent record and the account's access to it." }
+      ]
+    },
+    {
+      "id": "cli:node plugins/desk/hooks/loop-start.cjs",
+      "group": "desk-cli-factory-workers",
+      "when": "Started detached at session start, to launch the factory improvement loop worker for the bound desk under a hard stop",
+      "effect": "consequential",
+      "confirm": "This starts the factory loop, which may run a headless evaluator and file kaizen issues; go ahead?",
+      "errors": [
+        { "code": "invalid-scope", "means": "Explicit arguments were not exactly --desk <absolute path> --person-prefix <empty or desks/alias>.", "fix": "Pass both flags in that order, or no arguments to use the bound desk." },
+        { "code": "no-desk", "means": "No bound desk was found, so nothing started.", "fix": "Bind a desk, or pass --desk with its absolute path." },
+        { "code": "person-unresolved", "means": "The person whose desk this is could not be resolved without a network call.", "fix": "Run desk_status to see the resolved person, then start it again." },
+        { "code": "person-mismatch", "means": "--person-prefix differs from the person resolved for that desk.", "fix": "Pass the person prefix desk_status reports for that desk." },
+        { "code": "disabled", "means": "DESK_FACTORY_LOOP is set to something other than 1, true, on or yes, which switches the loop off.", "fix": "Unset DESK_FACTORY_LOOP, or set it to 1, to let the loop run." }
+      ]
+    },
+    {
+      "id": "cli:node plugins/desk/mcp/bootstrap.cjs",
+      "group": "desk-cli-servers",
+      "when": "How hosts launch the Desk tool server under whatever node they found: it picks a compatible Node and runs index.js in it",
+      "effect": "write",
+      "errors": [
+        { "code": "node-missing", "means": "No installed Node satisfies Desk's engines range, so every tool answers degraded with this machine's install command.", "fix": "Run the install command the answer names, then reconnect the Desk server." },
+        { "code": "node-spawn-failed", "means": "A compatible Node was found but could not be started.", "fix": "Check that Node runs from a shell, or reinstall it, then reconnect." },
+        { "code": "bootstrap-failed", "means": "Something threw while picking or starting a Node, so the tools answer degraded.", "fix": "Read the [desk-mcp] bootstrap line on stderr, fix what it names, then reconnect." }
+      ]
+    },
+    {
+      "id": "cli:node plugins/desk/mcp/index.js",
+      "group": "desk-cli-servers",
+      "when": "Starting Desk's stdio tool server directly in a supported Node, with --root or an activation config, as the bootstrap does",
+      "effect": "write",
+      "errors": [
+        { "code": "node-below-engines-floor", "means": "This Node is older than Desk's engines floor and no compatible Node could take over.", "fix": "Install a Node at or above the floor, or start the server through bootstrap.cjs." },
+        { "code": "runtime-restore-failed", "means": "The offline runtime pack could not be restored, so the server starts degraded.", "fix": "Run desk_doctor for the pack's state, then reconnect." },
+        { "code": "runtime-restore-locked", "means": "Another process held the runtime publication lock for the whole wait, so this one started degraded.", "fix": "Wait for that process to finish restoring, then call desk_status." },
+        { "code": "launcher-refused", "means": "A launcher passed --degraded with a code outside Desk's pattern, so every data tool is refused.", "fix": "Fix what the launcher reported, then start the server without --degraded." }
+      ]
+    },
+    {
+      "id": "cli:node plugins/desk/mcp/web.cjs",
+      "group": "desk-cli-servers",
+      "when": "How hosts launch Desk's headless browser server, which opens throwaway or copied-profile browsers for browser_context and browser_command",
+      "effect": "write",
+      "errors": [
+        { "code": "unknown-door", "means": "A tool call named something other than browser_context or browser_command.", "fix": "Call one of those two tools, by the names the server lists." }
+      ]
+    },
+    {
+      "id": "cli:node plugins/desk/mcp/src/activation/superpowers-context.js",
+      "group": "desk-cli-local-checks",
+      "when": "Before dispatching a Superpowers implementer or reviewer, to map a task's brief, report, review and progress paths inside the desk",
+      "effect": "read",
+      "errors": [
+        { "code": "superpowers-context-superpowers-context-pass-is-required", "means": "--desk-root, --task-path or --iteration-path is missing; the message shows an example path.", "fix": "Pass the flag the message names, shaped like the example it gives." },
+        { "code": "superpowers-context-superpowers-context-remove-the-unknown", "means": "An argument is not one of the flags the mapper knows.", "fix": "Remove that argument and keep to the mapper's flags, such as --desk-root, --task-path and --iteration-path." },
+        { "code": "superpowers-context-superpowers-context-pass-a-value", "means": "A flag was given with no value after it.", "fix": "Put the value right after that flag." },
+        { "code": "superpowers-context-superpowers-context-keep-planpath-within", "means": "--plan-path points outside the desk.", "fix": "Pass a plan file inside the desk root, or leave --plan-path out." }
+      ]
+    },
+    {
+      "id": "cli:node plugins/desk/skills/lesson-capture/agents-md-budget.mjs",
+      "group": "desk-cli-local-checks",
+      "when": "In CI or before merging, to hold AGENTS.md, CLAUDE.md and similar instruction files to the byte budgets in .github/agents-md-budget.json",
+      "effect": "write",
+      "errors": [
+        { "code": "over", "means": "An instruction file is bigger than its budget, so the check exits 1.", "fix": "Turn a rule into a check or delete one, or raise the budget with --set and say why in the pull request." },
+        { "code": "missing", "means": "An instruction file has no budget yet, so the check exits 1.", "fix": "Run it with --set to record today's sizes as the budgets." }
+      ]
+    },
+    {
+      "id": "cli:lfs inspect",
+      "group": "desk-cli-local-checks",
+      "when": "Before adding binaries to a repository, to see its Git LFS tool, filters, hooks and which tracked files are pointers",
+      "effect": "read",
+      "errors": [
+        { "code": "not-git", "means": "The --repo folder is missing, not a folder, or not a Git repository, so the command exits 1.", "fix": "Pass --repo with the path of an existing Git checkout." },
+        { "code": "git-metadata-unavailable", "means": "Git could not read the repository's top level, config or index, so the report stops there.", "fix": "Run git status in that checkout to see Git's own error, then inspect again." },
+        { "code": "inspection-limit", "means": "The time or byte budget ran out, so the report is limited.", "fix": "Treat files the report leaves out as not checked." },
+        { "code": "invalid-pointer", "means": "A tracked file reads as an LFS pointer but does not parse as a valid one; the finding names its path.", "fix": "Restore that file from its real content and add it again under LFS." }
+      ]
+    },
+    {
+      "id": "cli:session-retention",
+      "group": "desk-cli-local-checks",
+      "when": "When agent session storage, worktrees or logs grow large, to list what is safe to remove and, with --apply, delete it",
+      "effect": "write",
+      "errors": [
+        { "code": "skip-unknown-name", "means": "--skip named something other than logs, sessions, worktrees or state.", "fix": "Pass --skip with only those names." },
+        { "code": "session-retention-check-the-app-database-path", "means": "The app database could not be read, so sessions and worktrees were left untouched and the report says so.", "fix": "Check the app database path the line names, then run it again." }
+      ]
+    },
+    {
+      "id": "cli:python3 plugins/desk/skills/pr-reviewer-audit/helpers/audit.py",
+      "group": "desk-cli-local-checks",
+      "when": "Asked who must approve an Azure DevOps pull request, to map its changed files to required reviewer groups and rank approvers",
+      "effect": "read",
+      "errors": [
+        { "code": "tenant-mismatch", "means": "The active az account is not in the expected tenant, so no request was sent and the result is empty.", "fix": "Run az login --tenant microsoft.onmicrosoft.com, then run the audit again." },
+        { "code": "token-unavailable", "means": "az could not issue an Azure DevOps bearer token, so the result is empty.", "fix": "Check az account show and sign in again with az login." },
+        { "code": "http-error", "means": "An Azure DevOps request failed and the script stopped with its HTTP error.", "fix": "Check the org, project, repository GUID and PR number, and the account's access to them." }
+      ]
+    },
+    {
+      "id": "cli:node plugins/superpowers/skills/brainstorming/scripts/server.cjs",
+      "group": "superpowers-cli-brainstorm",
+      "when": "The companion's HTTP and WebSocket server itself, normally launched by start-server.sh with BRAINSTORM_DIR and friends in its environment",
+      "effect": "write",
+      "errors": [
+        { "code": "owner-pid-invalid", "means": "BRAINSTORM_OWNER_PID was already dead at startup, so the owner watchdog is off and only the idle timeout stops the server.", "fix": "Stop it with stop-server.sh when done, or pass a live owner PID next start." },
+        { "code": "server-stopped", "means": "The server shut down because its owner process exited or it sat idle past the timeout (4 hours by default).", "fix": "Start a fresh session with start-server.sh and reopen the printed URL." },
+        { "code": "generated-fallback", "means": "The saved port was taken, so the server bound a random port and, because the key came from .last-token, a new key; an open tab on the old URL no longer connects.", "fix": "Open the new url from the server-started line." }
+      ]
+    },
+    {
+      "id": "cli:plugins/superpowers/skills/brainstorming/scripts/start-server.sh",
+      "group": "superpowers-cli-brainstorm",
+      "when": "Once the person agrees to the visual companion, launching a server session and getting its URL and screen folder back as JSON",
+      "effect": "write",
+      "errors": [
+        { "code": "unknown-argument", "means": "An option the script doesn't know was passed; it prints a JSON error and exits 1.", "fix": "Pass only --project-dir, --host, --url-host, --idle-timeout-minutes, --open, --foreground or --background." },
+        { "code": "bad-idle-timeout", "means": "--idle-timeout-minutes was not a positive whole number.", "fix": "Pass a whole number of minutes, 1 or more." },
+        { "code": "bad-project-dir", "means": "The --project-dir folder could not be created or entered.", "fix": "Pass a folder path this user can create and write." },
+        { "code": "killed-after-start", "means": "The server started but the environment reaped the background process.", "fix": "Rerun with --foreground in a persistent terminal, as the error message prints." },
+        { "code": "start-timeout", "means": "No server-started line reached the log within 5 seconds.", "fix": "Read state/server.log in the session folder for the reason, then start again." }
+      ]
+    },
+    {
+      "id": "cli:plugins/superpowers/skills/brainstorming/scripts/stop-server.sh",
+      "group": "superpowers-cli-brainstorm",
+      "when": "Ending a companion session: stops the server whose instance id matches, and deletes the session folder only when it sits under /tmp",
+      "effect": "write",
+      "errors": [
+        { "code": "usage", "means": "No session folder argument was given.", "fix": "Pass the session folder start-server.sh created, the parent of its state folder." },
+        { "code": "stale-pid", "means": "The pid file names a process that is gone or lacks this session's instance id, or the instance id file is missing; nothing was signalled and it exits 0.", "fix": "Nothing to stop; start a new session if one is still needed." },
+        { "code": "failed", "means": "The server was still running after SIGTERM and SIGKILL.", "fix": "Find the process by its --brainstorm-server-id argument and end it by hand." },
+        { "code": "not-running", "means": "The session has no pid file, so no server was running for it.", "fix": "Check the session folder path, or treat the session as already stopped." }
+      ]
+    },
+    {
+      "id": "cli:plugins/superpowers/skills/executing-plans/scripts/task-start",
+      "group": "superpowers-cli-plan-tasks",
+      "when": "Starting one task of an inline plan run: writes its brief and prints the brief path plus the BASE commit in one call",
+      "effect": "write",
+      "errors": [
+        { "code": "usage", "means": "It was not given exactly a plan file and a task number; exit 2.", "fix": "Call it as task-start PLAN_FILE TASK_NUMBER." },
+        { "code": "no-repo", "means": "The current folder is outside a Git working tree or the repository has no commit yet; exit 2.", "fix": "Run it from inside the working tree being executed in, after a first commit." },
+        { "code": "task-not-found", "means": "task-brief found no heading Task N in the plan and exited 3, which stops task-start with no brief.", "fix": "Check the task number against the plan's Task headings, written with the English word Task." }
+      ]
+    },
+    {
+      "id": "cli:plugins/superpowers/skills/executing-plans/scripts/task-done",
+      "group": "superpowers-cli-plan-tasks",
+      "when": "Closing an inline plan task: runs its test command, keeps the full log, and appends the completion line to the ledger only on success",
+      "effect": "write",
+      "errors": [
+        { "code": "usage", "means": "The arguments were not PLAN_FILE TASK_NUMBER BASE -- TEST_COMMAND; exit 2.", "fix": "Pass the BASE task-start printed, then -- and the test command." },
+        { "code": "bad-base", "means": "BASE is not a commit in the working tree's repository; exit 2.", "fix": "Pass the full SHA that task-start printed for this task." },
+        { "code": "tests-failed", "means": "The test command exited non-zero, so the task was not recorded and its exit status is returned.", "fix": "Read the task's tests log in the workspace, fix the failure and run task-done again." }
+      ]
+    },
+    {
+      "id": "cli:plugins/superpowers/skills/subagent-driven-development/scripts/sdd-repo",
+      "group": "superpowers-cli-plan-tasks",
+      "when": "Finding the top folder of the Git working tree the plan scripts act in, optionally insisting it already has a commit",
+      "effect": "read",
+      "errors": [
+        { "code": "usage", "means": "An argument other than --with-commit was passed; exit 2.", "fix": "Call it with no arguments or with --with-commit only." },
+        { "code": "no-repo", "means": "The current folder is outside a working tree, or with --with-commit the repository has no commit; git's own line follows; exit 2.", "fix": "Change into the working tree being executed in, or make a first commit in a new project." }
+      ]
+    },
+    {
+      "id": "cli:plugins/superpowers/skills/subagent-driven-development/scripts/sdd-workspace",
+      "group": "superpowers-cli-plan-tasks",
+      "when": "Getting, and creating if needed, one plan's scratch folder under .superpowers/sdd for briefs, reports, review packages and its ledger",
+      "effect": "write",
+      "errors": [
+        { "code": "bad-directory", "means": "The folder given with -C does not exist; exit 2.", "fix": "Pass -C with an existing checkout or worktree folder." },
+        { "code": "no-plan-file", "means": "The argument count was wrong, the plan file path does not name a file, or no workspace name can be derived from it; exit 2.", "fix": "Pass the path of the plan's Markdown file." },
+        { "code": "no-repo", "means": "sdd-repo found no Git working tree at the current or -C folder; exit 2.", "fix": "Run it inside the working tree being executed in, or pass -C with that folder." }
+      ]
+    },
+    {
+      "id": "cli:plugins/superpowers/skills/subagent-driven-development/scripts/task-brief",
+      "group": "superpowers-cli-plan-tasks",
+      "when": "Copying one task's full text out of an implementation plan into a brief file an implementer subagent reads in one call",
+      "effect": "write",
+      "errors": [
+        { "code": "no-plan-file", "means": "The plan file path does not name a file, or the argument count was wrong; exit 2.", "fix": "Call it as task-brief [-C DIR] PLAN_FILE TASK_NUMBER [OUTFILE]." },
+        { "code": "task-not-found", "means": "No heading Task N matches the requested number, so the empty brief is refused; exit 3.", "fix": "Check the number against the plan's headings, which say Task in English; if a never-closing fence is reported above, close it and rerun." },
+        { "code": "unclosed-fence", "means": "A code fence that never closes hides the end of the task, so the brief was refused; exit 4.", "fix": "Close the fence at the line the message names and rerun." }
+      ]
+    },
+    {
+      "id": "cli:plugins/superpowers/skills/subagent-driven-development/scripts/review-package",
+      "group": "superpowers-cli-plan-tasks",
+      "when": "Before dispatching a reviewer, writing one file with a task's commit list, file stats and the BASE..HEAD diff with extra context",
+      "effect": "write",
+      "errors": [
+        { "code": "usage", "means": "The arguments were not PLAN_FILE BASE HEAD [OUTFILE], or the plan file is missing; exit 2.", "fix": "Call it as review-package [-C DIR] PLAN_FILE BASE HEAD [OUTFILE]." },
+        { "code": "bad-revision", "means": "BASE or HEAD is not a commit in the repository; exit 2.", "fix": "Pass the BASE recorded for the task and the task's last commit." },
+        { "code": "bad-range", "means": "HEAD does not descend from BASE, or the range holds no commits; exit 3.", "fix": "Check out the task's branch, or pass the right BASE, so BASE..HEAD holds the task's commits." }
+      ]
+    },
+    {
+      "id": "cli:plugins/superpowers/skills/systematic-debugging/find-polluter.sh",
+      "group": "superpowers-cli-debugging",
+      "when": "A test run leaves a stray file such as .git behind and the guilty test is unknown; runs npm test on each matching file in turn",
+      "effect": "write",
+      "errors": [
+        { "code": "usage", "means": "It was not given exactly a path to watch and a test file pattern; exit 1.", "fix": "Call it as find-polluter.sh <path to check> <test pattern>." },
+        { "code": "polluter-found", "means": "A test file created the watched path; the script names it and exits 1.", "fix": "Run that test alone with npm test and fix its cleanup." },
+        { "code": "already-polluted", "means": "The watched path existed before a test ran, so that test was skipped; if it existed from the start every test is skipped and it still reports all tests clean and exits 0.", "fix": "Delete the watched path and run the search again." }
+      ]
     }
   ]
 }
