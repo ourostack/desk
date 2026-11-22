@@ -10,7 +10,7 @@ const FIX = relative(ROOT, join(dirname(fileURLToPath(import.meta.url)), "fixtur
 const at = (file: string) => `${FIX}/${file}`;
 const options = (source: string, more: Record<string, unknown> = {}) => ({ product: "desk", module: "", source: at(source), root: ROOT, ...more });
 
-test("kit commands, hand-written entry points and their first words, and shell and Python scripts are doors", async () => {
+test("kit commands, hand-written entry points and their first words, and shell and Python scripts are doors; an `ax: read-only` line in a script's leading comments is its read-only evidence", async () => {
   const { doors, errors } = await walk(options("plug"));
   assert.deepEqual(errors, []);
   assert.deepEqual(
@@ -22,10 +22,15 @@ test("kit commands, hand-written entry points and their first words, and shell a
       ["cli:node " + at("plug/scripts/credential.js"), at("plug/scripts/credential.js"), 1, {}],
       ["cli:node " + at("plug/scripts/credential.js") + " erase", at("plug/scripts/credential.js"), 6, {}],
       ["cli:node " + at("plug/scripts/credential.js") + " get", at("plug/scripts/credential.js"), 1, {}],
+      ["cli:node " + at("plug/scripts/late-marker.js"), at("plug/scripts/late-marker.js"), 2, {}],
       ["cli:node " + at("plug/scripts/main-check.cjs"), at("plug/scripts/main-check.cjs"), 2, {}],
+      ["cli:node " + at("plug/scripts/peek.js"), at("plug/scripts/peek.js"), 4, { readOnly: true }],
+      ["cli:node " + at("plug/scripts/peek.js") + " list", at("plug/scripts/peek.js"), 4, { readOnly: true }],
       ["cli:node " + at("plug/scripts/run-main.mjs"), at("plug/scripts/run-main.mjs"), 6, {}],
       ["cli:python3 " + at("plug/skills/helper/audit.py"), at("plug/skills/helper/audit.py"), 8, {}],
+      ["cli:python3 " + at("plug/skills/helper/report.py"), at("plug/skills/helper/report.py"), 5, { readOnly: true }],
       ["cli:" + at("plug/hooks/node-missing.sh"), at("plug/hooks/node-missing.sh"), 1, {}],
+      ["cli:" + at("plug/scripts/peek-repo"), at("plug/scripts/peek-repo"), 1, { readOnly: true }],
       ["cli:" + at("plug/scripts/task-done"), at("plug/scripts/task-done"), 1, {}],
       ["cli:session-boot", at("plug/src/one-cli.js"), 4, { readOnly: true }],
       ["cli:tasks add", at("plug/src/tasks-cli.js"), 13, {}],
@@ -38,6 +43,13 @@ test("kit commands, hand-written entry points and their first words, and shell a
       ["cli:tasks show", at("plug/src/tasks-cli.js"), 14, { readOnly: true }],
     ].sort(),
   );
+});
+
+test("only an exact `ax: read-only` line before a script's first code declares it: a block comment's line counts; code first, other spellings and a marker after code don't", async () => {
+  const { doors, errors } = await walk(options("read-only"));
+  assert.deepEqual(errors, []);
+  const readOnly = Object.fromEntries(doors.map((d) => [d.id.split("/").pop(), d.evidence.readOnly === true]));
+  assert.deepEqual(readOnly, { "block.js": true, "code-first.js": false, "question.js": false, "upper.js": false, "suffix.js": false, "spaced.sh": true, "late.py": false });
 });
 
 test("an entry point that runs a kit CLI, a script a hooks file registers (directly or through a dispatcher), a library, vendored kits and tests are not doors of their own", async () => {
