@@ -16,7 +16,7 @@ node <state>/ouroboros-skills/desk/drains/run.mjs why <owner/name>#<number> # th
 
 `relays.json` sits beside the drains' `config.json`, on the machine that runs the poll, and is never committed. An invalid entry fails the command with the reason; it is never dropped, because a dropped relay would stop a deploy or a merge.
 
-Every relay has `name` (unique), `type`, and optionally `account` and `everySeconds` (10 or more, default 30). The account is the relay's own `account`, else the account the drains config gives the relay's repository, else the active `gh` account.
+Every relay has `name` (unique), `type`, and optionally `account` and `everySeconds` (10 or more, default 30). The account is the relay's own `account`, else the account the drains config gives the relay's repository, else the active `gh` account. A relay with nothing pending (no new run, nothing labelled) backs off: after 20 empty polls its interval stretches, to at least two minutes. `backOffWhenIdle: false` keeps it on `everySeconds` however long it is idle, for a relay whose idle polls are free 304s and whose event must be heard within seconds (a release that a consuming repository's update bot is waiting for, say).
 
 ### `dispatch`
 
