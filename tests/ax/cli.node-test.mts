@@ -45,6 +45,13 @@ test("kit commands, hand-written entry points and their first words, and shell a
   );
 });
 
+test("only an exact `ax: read-only` line before a script's first code declares it: a block comment's line counts; code first, other spellings and a marker after code don't", async () => {
+  const { doors, errors } = await walk(options("read-only"));
+  assert.deepEqual(errors, []);
+  const readOnly = Object.fromEntries(doors.map((d) => [d.id.split("/").pop(), d.evidence.readOnly === true]));
+  assert.deepEqual(readOnly, { "block.js": true, "code-first.js": false, "question.js": false, "upper.js": false, "suffix.js": false, "spaced.sh": true, "late.py": false });
+});
+
 test("an entry point that runs a kit CLI, a script a hooks file registers (directly or through a dispatcher), a library, vendored kits and tests are not doors of their own", async () => {
   const ids = (await walk(options("plug"))).doors.map((d) => d.id);
   const files = ["scripts/tasks.js", "hooks/start.cjs", "hooks/fallback.sh", "hooks/session-start", "src/library.js", "src/lib/ouro-ui/ax-command.ts", "__tests__/x.test.js", "skills/helper/module.py", "skills/helper/test_audit.py"];

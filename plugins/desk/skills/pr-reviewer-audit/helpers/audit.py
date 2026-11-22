@@ -1,4 +1,3 @@
-# ax: read-only. It asks az for the tenant and a token and sends only GET requests to Azure DevOps.
 """ADO PR reviewer audit — 4-step recipe from ``../SKILL.md``.
 
 Implements the file→required-groups map + approver ranking for a

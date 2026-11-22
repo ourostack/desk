@@ -22,9 +22,11 @@
 // `cards` is the sidecar of cards, `{ "doors": [DoorCard] }`. A card whose door isn't found is a census error.
 // `handlers` are extra files or folders whose literals count as raised for every door, beside the door's own file;
 // a code counts as raised as written or with its hyphens as underscores. Read-only evidence is the kit's `readOnly:
-// true` on the command. A hand-written entry point, shell script or Python script declares itself read-only with a
-// comment line `ax: read-only` (`// ax: read-only` or `# ax: read-only`, optionally followed by why) in its leading
-// comments, before its first line of code; the declaration covers every door the file is, its first words included.
+// true` on the command. A hand-written script declares itself read-only with a comment line that reads exactly
+// `ax: read-only`, alone or followed by a space, `.` or `;` and the reason, in the comments before its first code (a
+// `#!` line aside): for a Node script, its leading `//` or `/* */` comments (a block's lines may start with `*`); for a
+// shell or Python script, its leading `#` lines, so in Python the line goes above the docstring. It covers every door
+// the file is, its first words included.
 import { closeSync, openSync, readFileSync, readSync, readdirSync, statSync } from "node:fs";
 import { basename, dirname, extname, join, relative, resolve } from "node:path";
 import ts from "typescript";
@@ -382,14 +384,26 @@ function literals(sf: ts.SourceFile): Set<string> {
   return found;
 }
 
-/** Whether a script's leading comments, before its first line of code, hold an `ax: read-only` line. */
-function declaresReadOnly(text: string): boolean {
-  for (const line of text.split(/\r?\n/)) {
+/** `ax: read-only`, exactly, then the end of the line, a space, or `.` or `;` and the reason. */
+const READ_ONLY = /^ax: read-only(?:$|[ .;])/;
+
+/** Whether the comments before a JavaScript or TypeScript file's first code (after a `#!` line) hold a READ_ONLY line. */
+function declaresReadOnlyScript(sf: ts.SourceFile): boolean {
+  return (ts.getLeadingCommentRanges(sf.text, 0) ?? []).some((range) => {
+    const body = sf.text.slice(range.pos, range.end);
+    const lines = range.kind === ts.SyntaxKind.SingleLineCommentTrivia ? [body.slice(2)] : body.slice(2, -2).split(/\r?\n/).map((l) => l.replace(/^\s*\*/, ""));
+    return lines.some((l) => READ_ONLY.test(l.trim()));
+  });
+}
+
+/** Whether the `#` lines before a shell or Python script's first code (after a `#!` line) hold a READ_ONLY line. */
+function declaresReadOnlyHash(text: string): boolean {
+  const lines = text.split(/\r?\n/);
+  for (const [i, line] of lines.entries()) {
     const trimmed = line.trim();
-    if (trimmed === "" || trimmed.startsWith("#!")) continue;
-    const comment = /^(?:\/\/|#|\/\*+|\*+\/?)\s*(.*)$/.exec(trimmed);
-    if (!comment) return false;
-    if (/^ax:\s*read-only(?![a-z0-9-])/i.test(comment[1]!)) return true;
+    if (trimmed === "" || (i === 0 && trimmed.startsWith("#!"))) continue;
+    if (!trimmed.startsWith("#")) return false;
+    if (READ_ONLY.test(trimmed.slice(1).trim())) return true;
   }
   return false;
 }
@@ -421,11 +435,11 @@ export async function walk(opts: WalkerOptions): Promise<WalkResult> {
   for (const path of all) {
     if (path.endsWith(".py")) {
       const line = pythonEntry(path);
-      if (line !== null && !claimedByHooks.has(path)) found.push(door(`python3 ${relative(opts.root, path)}`, path, line, declaresReadOnly(readFileSync(path, "utf8"))));
+      if (line !== null && !claimedByHooks.has(path)) found.push(door(`python3 ${relative(opts.root, path)}`, path, line, declaresReadOnlyHash(readFileSync(path, "utf8"))));
       continue;
     }
     if (!SCRIPT.test(path) || NOT_SCRIPT.test(path)) {
-      if (isShellScript(path) && !claimedByHooks.has(path)) found.push(door(relative(opts.root, path), path, 1, declaresReadOnly(readFileSync(path, "utf8"))));
+      if (isShellScript(path) && !claimedByHooks.has(path)) found.push(door(relative(opts.root, path), path, 1, declaresReadOnlyHash(readFileSync(path, "utf8"))));
       continue;
     }
     const text = readFileSync(path, "utf8");
@@ -448,7 +462,7 @@ export async function walk(opts: WalkerOptions): Promise<WalkResult> {
     if (imports.some((i) => kitFiles.has(i))) continue;
     const sf = sourceOf(path);
     const name = `node ${relative(opts.root, path)}`;
-    const readOnly = declaresReadOnly(sf.text);
+    const readOnly = declaresReadOnlyScript(sf);
     found.push(door(name, path, lineOf(sf, node), readOnly));
     for (const [word, line] of firstWords(sf)) found.push(door(`${name} ${word}`, path, line, readOnly));
   }

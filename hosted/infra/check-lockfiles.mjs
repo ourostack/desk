@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // ax: read-only. It lists the tracked lockfiles with git ls-files and reads them; it changes nothing.
-// Each failing lockfile is one stderr line that leads with its stable code.
+// Each failure is one stderr line that leads with its stable code.
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { nonNpmResolved } from "./normalize-lockfile.mjs";

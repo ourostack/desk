@@ -24,7 +24,8 @@ for (const [args, expected] of [
     const result = spawnSync(process.execPath, [cli, ...args], { encoding: "utf8" })
     assert.equal(result.status, 1)
     assert.equal(result.stdout, "")
-    assert.equal(result.stderr, `Superpowers context: ${expected}\n`)
+    const code = expected.startsWith("Remove") ? "superpowers_context_superpowers_context_remove_the_unknown" : "superpowers_context_superpowers_context_pass_a_value"
+    assert.equal(result.stderr, `Superpowers context: ${expected}\ncode: ${code}\n`)
   })
 }
 test("context rejects a whitespace-only evidence root", async () => {
@@ -112,4 +113,15 @@ test("an evidence root whose every ancestor is unreadable, up to the filesystem 
     t.mock.restoreAll()
     syncBuiltinESMExports()
   }
+})
+
+test("the context CLI prints only the sentence for an error with no stable code", () => {
+  // Every filesystem read fails with a bare Error, which has no code to print on a line of its own.
+  const preload = 'data:text/javascript,import fs from "node:fs";import {syncBuiltinESMExports} from "node:module";' +
+    'fs.promises.realpath=async()=>{throw new Error("uncoded failure")};fs.promises.stat=async()=>{throw new Error("uncoded failure")};syncBuiltinESMExports();'
+  const args = ["--desk-root", "/desk", "--task-path", "/desk/task", "--iteration-path", "/desk/task/iteration", "--step", "1", "--attempt", "1", "--evidence-root", "/evidence"]
+  const result = spawnSync(process.execPath, ["--import", preload, cli, ...args], { encoding: "utf8" })
+  assert.equal(result.status, 1)
+  assert.equal(result.stdout, "")
+  assert.equal(result.stderr, "uncoded failure\n")
 })

@@ -17,6 +17,7 @@
     "cli:node plugins/desk/skills/pr-surface-hygiene/check-visual-proof.cjs",
     "cli:node plugins/superpowers/skills/writing-skills/render-graphs.js",
     "cli:plugins/superpowers/skills/subagent-driven-development/scripts/sdd-repo",
+    "cli:python3 plugins/desk/skills/pr-reviewer-audit/helpers/audit.py",
     "cli:resolve-desk-root",
     "cli:session-boot",
     "hook:desk copilot postToolUse copilot-intake-context.cjs",

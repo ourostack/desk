@@ -252,7 +252,8 @@ if (isEntrypoint()) {
     }
     process.stdout.write(`${JSON.stringify(await resolveSuperpowersContext(input))}\n`)
   } catch (error) {
-    process.stderr.write(`${error.message}\n`)
+    // The sentence stays the first line; a stable code, when the error has one, follows on its own line.
+    process.stderr.write(`${error.message}\n${typeof error.code === "string" ? `code: ${error.code}\n` : ""}`)
     process.exitCode = 1
   }
 }
