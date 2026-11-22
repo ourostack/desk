@@ -97,11 +97,11 @@ async function nativeMemoryLine() {
     const { disableNativeMemory } = await import(pathToFileURL(path.join(pluginRoot, "mcp", "src", "runtime", "copilot-commit-trailer.js")).href);
     const result = disableNativeMemory({ env: process.env });
     if (result.state === "already") return "";
-    if (result.state === "set") return "Desk memory: native memory is set off.";
+    if (result.state === "set") return result.line;
     if (result.line) process.stderr.write(result.line + "\n");
     return "Desk memory: repair native memory now.";
   } catch {
-    process.stderr.write("Desk memory: Use the supported memory:false setting before continuing: native settings helper failed; use the supported memory:false setting before continuing.\n");
+    process.stderr.write("Desk memory: set memory:false before continuing; the native settings helper failed.\n");
     return "Desk memory: repair native memory now.";
   }
 }
@@ -200,7 +200,6 @@ async function startupDirection() {
     const optional = Promise.all([
       runBootChecks({ host: "copilot", env: process.env, sessionFolder }),
       migrationLine({ host: "copilot", env: process.env, sessionFolder }),
-      hostSettingLines(),
     ]);
     // The awaits below must not leave a rejection here unhandled (it would end the hook with no output); the race still
     // rejects into this function's catch, as before.
@@ -238,7 +237,6 @@ function emit(additionalContext) {
 }
 
 (async () => {
-  const memory = await nativeMemoryLine();
   // A headless evaluator session gets no startup output and starts nothing (mcp/src/factory/headless-flag.cjs); a missing rule file falls back to the same exact comparison.
   try { if (require("../mcp/src/factory/headless-flag.cjs").isHeadlessFactorySession(process.env)) return; } catch { const v = String(process.env.DESK_FACTORY_HEADLESS ?? ""); if (v !== "" && v !== "0") return; }
   // A Node older than Desk needs, with no newer one installed: say what to install and that a new session is needed, and nothing else.
@@ -248,6 +246,8 @@ function emit(additionalContext) {
     emit(nodeRequired);
     return;
   }
+  const memory = await nativeMemoryLine();
+  const settings = await hostSettingLines();
   try {
     // The frontmatter only names and describes the skill for the host's skill list; dropping it here pays for the worker pointer
     // inside the startup context budget.
@@ -256,9 +256,9 @@ function emit(additionalContext) {
     // The startup line leads, as in the Claude hook: a host that keeps only a preview of a long context still shows the boot imperative.
     // The boot names the RFC itself; the foundation's pointer to it needs a line only when the boot has not arrived.
     const rfcLine = direction.includes("Desk RFC:") ? "" : `\n\nDesk RFC: ${rfcPath}`;
-    const output = `${direction}${memory ? `\n\n${memory}` : ""}\n\n${plainLanguagePointer()}${workerPointer}\n\n${foundation}${rfcLine}`;
+    const output = `${direction}${settings ? `\n\n${settings}` : ""}${memory ? `\n\n${memory}` : ""}\n\n${plainLanguagePointer()}${workerPointer}\n\n${foundation}${rfcLine}`;
     emit(output);
   } catch {
-    emit(`desk worker boot — the Desk foundation could not be read from ${foundationPath}. Desk runs its own boot; its result comes with your first Desk tool reply, and desk:session-start explains it. ${BOOT_STAND_DOWN}`);
+    emit([settings, memory, `desk worker boot — the Desk foundation could not be read from ${foundationPath}. Desk runs its own boot; its result comes with your first Desk tool reply, and desk:session-start explains it. ${BOOT_STAND_DOWN}`].filter(Boolean).join("\n\n"));
   }
 })();

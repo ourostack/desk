@@ -7,7 +7,7 @@ const SUCCESS = 'Skill "brainstorming" loaded successfully. Follow the instructi
 
 function matching(input) {
   if (!input || typeof input !== "object" || Array.isArray(input) ||
-      Object.keys(input).sort().join(",") !== "cwd,sessionId,timestamp,toolArgs,toolName,toolResult" ||
+      ["agentId", "agentType", "parentAgentId"].some(key => Object.hasOwn(input, key)) ||
       typeof input.sessionId !== "string" || !UUID.test(input.sessionId) || !Number.isFinite(input.timestamp) ||
       typeof input.cwd !== "string" || !path.isAbsolute(input.cwd) || input.toolName !== "skill")
     return false;
@@ -16,11 +16,15 @@ function matching(input) {
     try { args = JSON.parse(args); } catch { return false; }
   }
   const result = input.toolResult;
-  return !!args && typeof args === "object" && !Array.isArray(args) &&
-    Object.keys(args).join(",") === "skill" && args.skill === "brainstorming" &&
+  if (!(!!args && typeof args === "object" && !Array.isArray(args) && args.skill === "brainstorming" &&
     !!result && typeof result === "object" && !Array.isArray(result) &&
-    Object.keys(result).sort().join(",") === "resultType,textResultForLlm" &&
-    result.resultType === "success" && result.textResultForLlm === SUCCESS;
+    result.resultType === "success")) return false;
+  if (Object.keys(input).sort().join(",") !== "cwd,sessionId,timestamp,toolArgs,toolName,toolResult" ||
+      Object.keys(args).join(",") !== "skill" ||
+      Object.keys(result).sort().join(",") !== "resultType,textResultForLlm" ||
+      result.textResultForLlm !== SUCCESS)
+    throw Object.assign(new Error("unrecognized brainstorming payload"), { code: "input_schema_changed" });
+  return true;
 }
 
 function intakeContext(pluginRoot) {
@@ -61,7 +65,7 @@ async function main() {
       }
     }
   } catch (error) {
-    process.stderr.write("Check Desk's intake context, then try again: Desk intake context unavailable: " + (error.code || error.name) + "\n");
+    process.stderr.write("Desk intake context unavailable (" + (error.code || error.name) + "): check the hook payload and Desk install, then try again.\n");
   }
   process.stdout.write(JSON.stringify(output) + "\n");
 }

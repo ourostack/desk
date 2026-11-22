@@ -59,3 +59,14 @@ test("scratch, other folders and unreadable input are left alone, and the hook n
   assert.deepEqual(invoke(env, null, "not json"), {})
   assert.deepEqual(invoke(env, { toolName: "create", toolArgs: "{" }), {})
 })
+
+test("oversized input stays fail-open but reports its byte limit", () => {
+  for (const raw of ['{"data":"' + "x".repeat(262145) + '"}', '{"data":"' + "\u00e9".repeat(140000) + '"}']) {
+    const result = spawnSync(process.execPath, [path.join(plugin, "hooks/copilot-durable-files.cjs")], {
+      env: process.env, input: raw, encoding: "utf8", timeout: 5000,
+    })
+    assert.equal(result.status, 0)
+    assert.deepEqual(JSON.parse(result.stdout), {})
+    assert.match(result.stderr, /input_too_large.*262144 bytes/u)
+  }
+})
