@@ -24,7 +24,7 @@
 // a code counts as raised as written or with its hyphens as underscores. Read-only evidence is the kit's `readOnly:
 // true` on the command. A hand-written script declares itself read-only with a comment line that reads exactly
 // `ax: read-only`, alone or followed by a space, `.` or `;` and the reason, in the comments before its first code (a
-// `#!` line aside): for a Node script, its leading `//` or `/* */` comments (a block's lines may start with `*`); for a
+// `#!` line aside): for a Node script, its leading two-slash `//` or `/* */` comments (a block's lines may start with `*`); for a
 // shell or Python script, its leading `#` lines, so in Python the line goes above the docstring. It covers every door
 // the file is, its first words included.
 import { closeSync, openSync, readFileSync, readSync, readdirSync, statSync } from "node:fs";

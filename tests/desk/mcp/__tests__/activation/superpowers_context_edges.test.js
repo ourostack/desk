@@ -24,7 +24,7 @@ for (const [args, expected] of [
     const result = spawnSync(process.execPath, [cli, ...args], { encoding: "utf8" })
     assert.equal(result.status, 1)
     assert.equal(result.stdout, "")
-    const code = expected.startsWith("Remove") ? "superpowers_context_superpowers_context_remove_the_unknown" : "superpowers_context_superpowers_context_pass_a_value"
+    const code = expected.startsWith("Remove") ? "superpowers-context-superpowers-context-remove-the-unknown" : "superpowers-context-superpowers-context-pass-a-value"
     assert.equal(result.stderr, `Superpowers context: ${expected}\ncode: ${code}\n`)
   })
 }

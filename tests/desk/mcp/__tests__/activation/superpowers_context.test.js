@@ -497,7 +497,7 @@ test("CLI unknown option fails with its own diagnostic and no partial output or 
   assert.deepEqual(snapshotTree(), before)
   assert.equal(result.status, 1)
   assert.equal(result.stdout, "")
-  assert.equal(result.stderr.trim(), "Superpowers context: Remove the unknown argument: unknown argument --unexpected\ncode: superpowers_context_superpowers_context_remove_the_unknown")
+  assert.equal(result.stderr.trim(), "Superpowers context: Remove the unknown argument: unknown argument --unexpected\ncode: superpowers-context-superpowers-context-remove-the-unknown")
 })
 
 test("the CLI prints the same explicit plan and provider progress paths as the resolver", async () => {

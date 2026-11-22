@@ -252,8 +252,9 @@ if (isEntrypoint()) {
     }
     process.stdout.write(`${JSON.stringify(await resolveSuperpowersContext(input))}\n`)
   } catch (error) {
-    // The sentence stays the first line; a stable code, when the error has one, follows on its own line.
-    process.stderr.write(`${error.message}\n${typeof error.code === "string" ? `code: ${error.code}\n` : ""}`)
+    // The sentence stays the first line; a stable code, when the error has one, follows on its own line in the kebab-case
+    // spelling its census card uses.
+    process.stderr.write(`${error.message}\n${typeof error.code === "string" ? `code: ${error.code.replaceAll("_", "-")}\n` : ""}`)
     process.exitCode = 1
   }
 }
