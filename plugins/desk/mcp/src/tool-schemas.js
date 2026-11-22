@@ -151,7 +151,7 @@ const TASK_ARCHIVE_OUTCOME = {
 const HAND_WRITTEN_INPUT_SCHEMAS = Object.freeze({
   task_create: schema({ desk: SIBLING_DESK,
     ...TASK_TARGET,
-    slug: text("The task folder name: an outcome name, 2-6 lowercase kebab-case words."),
+    slug: text("The task folder name: an outcome name, 1-6 lowercase kebab-case words, at most 48 characters."),
     title: text("The task title."),
     status: text("Initial status; defaults to drafting. One of drafting, processing, validating, collaborating, paused, blocked, done, cancelled."),
     body: text("Markdown body, without frontmatter."),
@@ -226,7 +226,7 @@ const HAND_WRITTEN_INPUT_SCHEMAS = Object.freeze({
     display_label: DISPLAY_LABEL,
   }),
   track_create: schema({
-    slug: text("The track folder name: an outcome name, 2-6 lowercase kebab-case words."),
+    slug: text("The track folder name: an outcome name, 1-6 lowercase kebab-case words, at most 48 characters."),
     title: text("The track title."),
     scope: text("One line, at most 240 characters: \"<what belongs>; not <what doesn't>\"."),
     status: text("Initial status; defaults to active."),

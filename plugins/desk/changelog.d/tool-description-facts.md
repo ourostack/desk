@@ -1,0 +1,1 @@
+Tool descriptions now give the slug rule the code applies (1 to 6 lowercase kebab-case words, at most 48 characters), and say what `track_create`, `track_update` and `improvement_open` do on a commit failure, another session's edit and a passed `title`.
