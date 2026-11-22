@@ -1,7 +1,8 @@
 name: AX X-ray
 
-# Ouro AX's X-ray against Desk's stdio MCP server, and the action claims over its ouro-actions declarations, on every
-# pull request and on main. Each report is uploaded as an artifact whose name contains "xray", for the adoption ledger.
+# Ouro AX's X-ray against Desk's stdio MCP server, the action claims over its ouro-actions declarations, and the Ouro AX
+# census of every agent door Desk has, on every pull request and on main. Each X-ray report is uploaded as an artifact
+# whose name contains "xray", and the census as `ax-census`, for the adoption ledger.
 
 on:
   push:
@@ -29,11 +30,59 @@ jobs:
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: plugins/desk/mcp/package-lock.json
+          cache-dependency-path: |
+            plugins/desk/mcp/package-lock.json
+            ax/package-lock.json
 
       - name: Install the MCP server's dependencies
         working-directory: plugins/desk/mcp
         run: npm ci --ignore-scripts --no-audit --no-fund
+
+      # The census (vendored from Ouro UI under ax/scripts/ouro-census) and Desk's walkers (ax/walkers) read TypeScript's
+      # syntax tree, so they get their own install of it.
+      - name: Install the census's dependencies
+        working-directory: ax
+        run: npm ci --ignore-scripts --no-audit --no-fund
+
+      - name: Desk's census walker tests
+        working-directory: ax
+        run: |
+          node --test --test-concurrency=3 --experimental-test-coverage \
+            --test-coverage-include='walkers/*.mts' \
+            --test-coverage-lines=95 --test-coverage-functions=95 --test-coverage-branches=85 \
+            '../tests/ax/*.node-test.mts'
+
+      # The census counts every agent door Desk's walkers find (MCP tools, CLI commands and scripts, skills, agent files,
+      # hooks and Hosted Desk's HTTP routes) and fails when one without a valid card isn't on ax/census.baseline.json,
+      # when this pull request adds to the baseline, or when it drops a walker source. It compares with the base commit
+      # the checked-out merge ref was built on, not the base branch's tip, which can have moved since. There is no
+      # override.
+      - name: Ouro AX census
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          set -euo pipefail
+          mkdir -p ax-census
+          base_baseline=none; base_config=absent
+          if [ -n "$BASE_REF" ]; then
+            base_sha=$(node ax/scripts/ouro-census/base.mts)
+            git fetch --depth=1 origin "$base_sha"
+            if git show FETCH_HEAD:ax/census.config.json > "$RUNNER_TEMP/base-config.json" 2>/dev/null; then base_config="$RUNNER_TEMP/base-config.json"; fi
+            if git show FETCH_HEAD:ax/census.baseline.json > "$RUNNER_TEMP/base-baseline.json" 2>/dev/null; then base_baseline="$RUNNER_TEMP/base-baseline.json"; fi
+          fi
+          node ax/scripts/ouro-census/census.mts --config ax/census.config.json --baseline ax/census.baseline.json \
+            --base-baseline "$base_baseline" --base-config "$base_config" \
+            --commit "$GITHUB_SHA" --ref "$GITHUB_REF" --repo "$GITHUB_REPOSITORY" --out ax-census/census.json \
+            --inventory ax-census/inventory.json 2>&1 | tee ax-census/census.txt
+
+      - name: Upload the census
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ax-census
+          path: ax-census/
+          retention-days: 90
+          if-no-files-found: warn
 
       # The committed projections (mcp.json and actions.json) must match the declarations, and only those two are
       # committed: the drift gate for the files Desk serves.

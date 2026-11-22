@@ -1,0 +1,15 @@
+{
+  "errors": [{ "code": "unknown-door", "means": "The server serves no tool by that name.", "fix": "Call tools/list and pick a listed name." }],
+  "doors": [
+    {
+      "id": "mcp:task_create",
+      "group": "desk-tasks",
+      "when": "Start tracking a new piece of work as its own card under a track.",
+      "effect": "write",
+      "errors": [
+        { "code": "slug-invalid", "means": "The slug is not 2 to 6 kebab-case words.", "fix": "Name the outcome in 2 to 6 lowercase kebab-case words." },
+        { "code": "never-raised-here", "means": "A code only a card mentions.", "fix": "Raise it in the handler." }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,1 @@
+{ "doors": [{ "id": "mcp:task_create", "group": "g", "when": "w", "effect": "write", "errors": [] }] }
