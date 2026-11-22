@@ -126,7 +126,20 @@ An intentionally retained alpha/PR-only worktree or an acknowledged transfer sta
 
 ## Lane processes end with their lane
 
-Every process a lane starts (a dev server, a mock daemon, a watcher, a `sleep` polling loop) belongs to that lane and ends with it. Start each one so it dies with its owner: in the lane's own shell session or process group, never detached or under `nohup`, `setsid` or `disown`, and give a polling loop a bounded count or deadline instead of an endless `while` or `sleep`. Record its pid and port in the lane's resource table when it starts. Stop it by exact pid before the lane reports back, and list it in the Resources inventory as stopped; a child that reports with one still running is `cleanup_pending`. A process the lane found already running and did not start is not its to stop. Orphans cost the machine memory and slow every other session, so a coordinator that finds a finished lane's process still running stops it and records the miss as friction.
+Every process a lane starts (a dev server, a mock daemon, a watcher, a load generator, a `sleep` polling loop) belongs to that lane and ends with it. Keep it attached to the lane's shell session or process group, never detached or under `nohup`, `setsid` or `disown`. Record its PID, identity and port in the lane's resource table when it starts. A process the lane found already running and did not start is not its to stop.
+
+**Load generators need their own finite deadline before they start.** A cleanup command or shell exit trap alone is not a deadline: it can fail or never run. Choose the duration from the experiment and verify that the generator exits at that deadline. Use a bounded generator or an available timeout tool. On macOS, which does not ship `timeout`, a leaf command with the default `SIGALRM` action can use Perl's alarm across `exec` (60 seconds is an example, not a required budget):
+
+```sh
+perl -e 'alarm shift; exec @ARGV; die "exec failed: $!\n"' 60 yes > /dev/null &
+pid=$!
+```
+
+This replaces Perl with `yes` under the same PID; it does not bound descendants of a shell or a command that ignores `SIGALRM`. Give each load child its own deadline. Polling loops also need a finite count or deadline, not an endless `while` or `sleep`.
+
+**Keep argument lists as arrays, not space-separated strings.** In Bash and zsh, collect PIDs with `pids=()` and `pids+=("$!")`, then stop each owned process with `for pid in "${pids[@]}"; do ...; done`, using `kill "$pid"` inside the loop. zsh does not split an unquoted scalar: `kill $pids` can pass the entire list as one illegal PID. The same applies to test-file lists: pass `"${files[@]}"` so every selected file reaches the runner.
+
+Stop it by exact pid before the lane reports back: for each still-owned process, wait/reap children and verify that its recorded identity is gone. Recheck identity before signalling a stored PID; a recycled PID is not the lane's process. A successful `kill` only confirms that the signal was sent, not that the process exited. Keep termination failures visible, escalate an unresponsive owned process by exact PID, and recheck exit; never use name-based kills. List resources as stopped only after this readback. A child with a surviving process or unverified cleanup is `cleanup_pending`. A coordinator that finds a finished lane's verified orphan stops it, verifies exit and records the miss as friction.
 
 ## Everything else has an owner
 
