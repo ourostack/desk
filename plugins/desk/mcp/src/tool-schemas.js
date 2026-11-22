@@ -305,7 +305,7 @@ const HAND_WRITTEN_INPUT_SCHEMAS = Object.freeze({
   improvement_open: schema({
     source: { type: "string", enum: ["andon", "friction_candidate", "reconcile_class", "desk_problem", "store_build", "evaluator", "loop_alarm", "flush_health"], description: "Where the card comes from; the card key is <source>:<id>." },
     id: text("The case's id: owner/repo#number for andon and store_build, ourostack/desk#number for desk_problem, 32 hex for friction_candidate, else a code from the source's closed list."),
-    title: text("Never accepted: Desk builds every title (refused as title_not_allowed)."),
+    title: text("Refused as `title_not_allowed`: Desk builds every title."),
     evidence: list("Up to 10 pointers: job:<32 hex>, issue:<owner/repo>#<n>, pr:<owner/repo>#<n>, reconcile:<reason>@<count>, fingerprint:<hex>."),
     plugin: text("The plugin the improvement is in; defaults to \"desk\"."),
     signal: text("The rollups measure the improvement moves, when known."),
