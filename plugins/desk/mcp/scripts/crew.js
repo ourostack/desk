@@ -14,7 +14,7 @@ import { fileURLToPath } from "node:url"
 import { crewStatus, joinWorkspace, startWorkspace } from "../src/crew/workspace.js"
 import { adoptInitiative, checkTracks, newInitiative } from "../src/crew/initiative.js"
 
-import { defineCli, defineCommand } from "../src/lib/ouro-ui/registry/ouro/ax/command.ts"
+import { defineCli, defineCommand } from "../src/lib/ouro-ui/registry/ouro/ax/ax-command.ts"
 import { runCli } from "../src/lib/ouro-ui/registry/ouro/ax/cli.ts"
 
 const str = (description, placeholder) => ({ type: "string", description, ...(placeholder ? { placeholder } : {}) })

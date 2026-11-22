@@ -6,7 +6,7 @@ export type { CliIo, RunOptions };
 
 import { checksText, isChecksReport } from "./checks.ts";
 import { doctorText, isDoctorReport } from "./doctor.ts";
-import { checkOwner, flagsOf, findCommand, invocation, parse, type ArgSpec, type Cli, type CommandDef, type Input, type InputValue, type Parsed, type RunContext } from "./command.ts";
+import { checkOwner, flagsOf, findCommand, invocation, parse, type ArgSpec, type Cli, type CommandDef, type Input, type InputValue, type Parsed, type RunContext } from "./ax-command.ts";
 import { DRY_RUN_FLAG } from "./effects.ts";
 import { AxError, errorJson, errorLine, errorMessage, isAxError, type AxErrorShape } from "./problem.ts";
 import { commandManifest, helpJson, renderCommand, renderOverview, type OverviewOptions } from "./help.ts";
@@ -131,7 +131,10 @@ function printResult(
   const text = own ? (r: unknown) => own.call(cmd, r, input) : isWait(result) ? () => waitText(result) : undefined;
   const exit = isWait(result) ? waitExit(result, cli.exits, cli.waitExits) : dataExit(cli, cmd, result, input);
   io.stdout.write(render(result, { json, ...(text ? { text } : {}) }));
-  if (isWait(result)) return exit;
+  if (isWait(result)) {
+    if (result.state === "satisfied") say("waited");
+    return exit;
+  }
   if (isEmptyResult(result)) say("empty");
   else if (cmd.summarizes) say("summary");
   return exit;

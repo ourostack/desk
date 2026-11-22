@@ -17,7 +17,7 @@ import {
   resolveDeskRootWithSource,
 } from "../src/util/paths.js"
 import { claudeStartupDirection } from "../src/util/startup-direction.js"
-import { defineCli, defineCommand } from "../src/lib/ouro-ui/registry/ouro/ax/command.ts"
+import { defineCli, defineCommand } from "../src/lib/ouro-ui/registry/ouro/ax/ax-command.ts"
 import { runCli } from "../src/lib/ouro-ui/registry/ouro/ax/cli.ts"
 import { readSmallText } from "../src/factory/marker.js"
 

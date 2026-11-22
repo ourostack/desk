@@ -7,7 +7,7 @@ import { fileURLToPath, pathToFileURL } from "node:url"
 import { resolveStartupStateBranch } from "../src/runtime/startup-resolve.js"
 import { redactCredentialLikeText } from "../src/util/redact.js"
 import { TOOL_COMMIT_ENV } from "../src/desk/card-commit-guard.js"
-import { defineCli, defineCommand, parse } from "../src/lib/ouro-ui/registry/ouro/ax/command.ts"
+import { defineCli, defineCommand, parse } from "../src/lib/ouro-ui/registry/ouro/ax/ax-command.ts"
 import { runCli } from "../src/lib/ouro-ui/registry/ouro/ax/cli.ts"
 
 const BOOTSTRAP = fileURLToPath(new URL("../bootstrap.cjs", import.meta.url))

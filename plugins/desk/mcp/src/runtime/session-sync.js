@@ -17,7 +17,7 @@ import { catchUpBehind, classifyPullFailure, undeliveredCommits, upstreamOf } fr
 import { remoteIdentityEnv } from "./remote-identity.js"
 import { applyPublicationMode } from "./publication-mode.js"
 import { commitWaitingLogs } from "./append-lane.js"
-import { defineCli, defineCommand } from "../lib/ouro-ui/registry/ouro/ax/command.ts"
+import { defineCli, defineCommand } from "../lib/ouro-ui/registry/ouro/ax/ax-command.ts"
 import { runCli } from "../lib/ouro-ui/registry/ouro/ax/cli.ts"
 
 const GIT_TIMEOUT_MS = 10_000

@@ -1,5 +1,149 @@
 # desk plugin — changelog
 
+## 3.2.414 — 2026-11-22
+
+Desk's MCP server now vendors Ouro UI v1.3.446, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.413 — 2026-11-22
+
+Desk's MCP server now vendors Ouro UI core v1.10.0 and Ouro UI v1.3.445, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.412 — 2026-11-22
+
+Desk's MCP server now vendors Ouro UI v1.3.444, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.411 — 2026-11-22
+
+Desk's MCP server now vendors Ouro UI v1.3.443, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.410 — 2026-11-22
+
+Desk's MCP server now vendors Ouro UI v1.3.442, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.409 — 2026-11-22
+
+Desk's MCP server now vendors Ouro UI v1.3.441, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.408 — 2026-11-22
+
+Desk's MCP server now vendors Ouro UI v1.3.440, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.407 — 2026-11-22
+
+Desk's MCP server now vendors Ouro UI v1.3.438, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.406 — 2026-11-22
+
+Desk's MCP server now vendors Ouro UI v1.3.437, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.405 — 2026-11-22
+
+Desk's MCP server now vendors Ouro UI v1.3.435, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.404 — 2026-11-22
+
+Desk's MCP server now vendors Ouro UI core v1.9.0, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.403 — 2026-11-22
+
+Desk's MCP server now vendors Ouro UI v1.3.434, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.402 — 2026-11-22
+
+Desk's MCP server now vendors Ouro UI v1.3.432, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.401 — 2026-11-22
+
+Desk's MCP server now vendors Ouro UI v1.3.431, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.400 — 2026-11-22
+
+Desk's MCP server now vendors Ouro UI v1.3.427, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.399 — 2026-11-21
+
+Desk's MCP server now vendors Ouro UI v1.3.425, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.398 — 2026-11-21
+
+Desk's MCP server now vendors Ouro UI v1.3.424, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.397 — 2026-11-21
+
+Desk's MCP server now vendors Ouro UI v1.3.423, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.396 — 2026-11-21
+
+Desk's MCP server now vendors Ouro UI v1.3.421, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.395 — 2026-11-21
+
+Desk's MCP server now vendors Ouro UI v1.3.418, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.394 — 2026-11-21
+
+Desk's MCP server now vendors Ouro UI v1.3.417, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.393 — 2026-11-21
+
+Desk's MCP server now vendors Ouro UI v1.3.416, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.392 — 2026-11-21
+
+Desk's MCP server now vendors Ouro UI v1.3.414, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.391 — 2026-11-21
+
+Desk's MCP server now vendors Ouro UI v1.3.412, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.390 — 2026-11-21
 
 Desk's MCP server now vendors Ouro UI v1.3.408, moved by Ouro Current.
