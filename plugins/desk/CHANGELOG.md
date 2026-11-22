@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.425 — 2026-11-22
+
+Desk's MCP server now vendors Ouro UI core v1.12.0, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.424 — 2026-11-22
 
 Hosted HTTP failures now carry stable error identity without replacing existing guidance or protocol codes: hook JSON includes `code`, gateway HTML/plaintext uses `x-desk-error-code`, and an unavailable MCP gateway adds `error.data.code`.
