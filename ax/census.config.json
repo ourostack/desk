@@ -21,7 +21,16 @@
     {"id": "desk-session-hooks", "when": "Desk commands a host runs as a session starts, takes a prompt or ends, which boot the desk and record its state"},
     {"id": "desk-tool-call-hooks", "when": "Desk commands a host runs around single tool calls, which add notes, adjust arguments or name terminal tabs"},
     {"id": "superpowers-session-hooks", "when": "The Superpowers plugin startup command that injects its skill introduction into Claude Code or Copilot CLI"},
-    {"id": "desk-agents", "when": "Desk's agent files for Claude Code and Copilot CLI: an engineering worker that ships changes and an observer that only reports"}
+    {"id": "desk-agents", "when": "Desk's agent files for Claude Code and Copilot CLI: an engineering worker that ships changes and an observer that only reports"},
+    {"id": "crew-workspace", "when": "Setting up, joining or inspecting a team's shared Crew repository, and filing initiatives under its _shared/tracks folder"},
+    {"id": "desk-sessions", "when": "Finding which agent session runs here, reading another local session's recent messages, or messaging it"},
+    {"id": "desk-runtime-upkeep", "when": "Maintenance of the desk plugin's own machinery: startup migrations and the packed production dependencies its server loads"},
+    {"id": "drains-issues", "when": "Watching configured GitHub repositories for issue changes made by others, and waking each repository's assigned session"},
+    {"id": "drains-schedule", "when": "Timed prompts from schedules.json that a runner hands to a session every so many minutes, optionally gated"},
+    {"id": "drains-stalled", "when": "Nudging sessions that sat idle with a focused task card still unfinished and nothing running"},
+    {"id": "drains-relays", "when": "GitHub relays that fire a dispatch after a green workflow run or merge labelled pull requests once checks pass"},
+    {"id": "drains-hooks", "when": "Webhook events posted by outside services to the receiver, turned into wakes for the routed session"},
+    {"id": "desk-factory", "when": "Desk factory commands that derive session facts, deliver them to a GitHub store, build its reports and run the improvement loop"}
   ],
   "bookletWords": { "allow": [] }
 }

@@ -1,3 +1,535 @@
 {
-  "doors": []
+  "doors": [
+    {
+      "id": "cli:crew status",
+      "group": "crew-workspace",
+      "when": "Before starting or joining a team repository, to learn whether the clone already holds a Crew workspace and which desk a session there binds",
+      "effect": "read",
+      "errors": [
+        { "code": "not-git", "means": "The folder given with --repo, or the current folder, is not inside a Git clone.", "fix": "Pass --repo with the path of the team's clone." },
+        { "code": "not-crew", "means": "The clone is a Git repository but holds no Crew workspace yet.", "fix": "Run crew start in it to set one up, or point --repo at the team's real clone." }
+      ]
+    },
+    {
+      "id": "cli:crew start",
+      "group": "crew-workspace",
+      "when": "Turning a new or existing repository into a team workspace with roster, desks template and config, previewed first and landed with --apply",
+      "effect": "consequential",
+      "confirm": "With --apply this commits, pushes and opens and merges a pull request on the team's GitHub repository; go ahead?",
+      "errors": [
+        { "code": "refused", "means": "A check before any write stopped it, such as a file Crew would add already existing or a bad founder alias.", "fix": "Act on the sentence in the result's message, then run start again." },
+        { "code": "already-crew", "means": "The repository is already a Crew workspace, so there is nothing to start.", "fix": "Have each teammate run crew join in their own clone instead." },
+        { "code": "failed", "means": "The shared write stopped at the stage the result names, such as push or pull_request, and the clone was put back.", "fix": "Fix what the reason names, for example the gh sign-in, then run the same command again." },
+        { "code": "pr-open", "means": "The pull request opened but has not merged yet.", "fix": "Run the same command again to retry the merge, or merge that pull request by hand." }
+      ]
+    },
+    {
+      "id": "cli:crew join",
+      "group": "crew-workspace",
+      "when": "Adding a member's roster row and own desk folder to an existing team workspace, or adopting a reviewed existing desk",
+      "effect": "consequential",
+      "confirm": "With --apply this pushes a desk folder and opens and merges a roster pull request on the team's GitHub repository; go ahead?",
+      "errors": [
+        { "code": "not-crew", "means": "The clone has no Crew workspace to join.", "fix": "Ask the team for the right repository, or run crew start to found one." },
+        { "code": "member", "means": "The identity already has a roster row, so nothing was added.", "fix": "Start a Desk session in this clone signed in to gh as that identity." },
+        { "code": "refused", "means": "A check stopped the join before any write, such as a missing identity, a bad alias or a desk folder that may be someone else's.", "fix": "Act on the result's message, or preview again and pass --adopt-existing with the reviewed commit." },
+        { "code": "failed", "means": "The join stopped at a named stage such as history, alias, desk or verify.", "fix": "Fix what the reason in parentheses names, then run the same join again." },
+        { "code": "pr-open", "means": "The desk is pushed but the roster row waits in an unmerged pull request.", "fix": "Run the same join again to retry the merge, which reuses that pull request." }
+      ]
+    },
+    {
+      "id": "cli:crew initiative new",
+      "group": "crew-workspace",
+      "when": "Opening a fresh team initiative folder with a card template in the working tree, ready to fill in and publish by pull request",
+      "effect": "write",
+      "errors": [
+        { "code": "not-crew", "means": "The clone is not a Crew workspace, so it has no _shared/tracks to write into.", "fix": "Point --repo at the team's Crew clone." },
+        { "code": "slug-missing", "means": "The slug given has no letters or digits to build a folder name from.", "fix": "Pass a short name such as reliability-checks." },
+        { "code": "initiative-exists", "means": "A folder or file with that slug is already under _shared/tracks, and nothing changed.", "fix": "Contribute to the existing card, or pick another slug." }
+      ]
+    },
+    {
+      "id": "cli:crew initiative adopt",
+      "group": "crew-workspace",
+      "when": "Moving a loose plan file or folder into the team's tracks as a proper initiative with a README card",
+      "effect": "write",
+      "errors": [
+        { "code": "source-not-found", "means": "The file or folder named does not exist.", "fix": "Check the path and rerun with the right one." },
+        { "code": "source-too-broad", "means": "The source is the whole tracks folder or the repository itself.", "fix": "Name the one file or folder that holds the initiative." },
+        { "code": "slug-taken", "means": "The target folder or file under _shared/tracks already exists.", "fix": "Pass --slug with another name." },
+        { "code": "source-is-link", "means": "The source is a symbolic link.", "fix": "Pass the file the link points to instead." }
+      ]
+    },
+    {
+      "id": "cli:crew initiative check",
+      "group": "crew-workspace",
+      "when": "Auditing the team's _shared/tracks layout for loose files or folders lacking a README card, with the adopt command that fixes each",
+      "effect": "read",
+      "errors": [
+        { "code": "layout-problems", "means": "Some entries under _shared/tracks are loose files or folders with no README.md card.", "fix": "Run the crew initiative adopt command printed next to each entry." },
+        { "code": "not-git", "means": "The folder checked is not inside a Git clone.", "fix": "Pass --repo with the team clone's path." }
+      ]
+    },
+    {
+      "id": "cli:sessions whoami",
+      "group": "desk-sessions",
+      "when": "Finding this agent's own Copilot session id from its process tree, for example to give as a reply address",
+      "effect": "read",
+      "errors": [
+        { "code": "sessions-whoami-platform", "means": "On Windows the command cannot walk process parents, since it relies on ps.", "fix": "Read the id from the session folder name or the app, and pass it with send --from." }
+      ]
+    },
+    {
+      "id": "cli:sessions tail",
+      "group": "desk-sessions",
+      "when": "Reading the latest user and assistant turns of another local session, by id, prefix or name, before messaging it",
+      "effect": "read",
+      "errors": [
+        { "code": "sessions-tail-count", "means": "The count argument is not a positive whole number.", "fix": "Give a count such as 6, or leave it out." },
+        { "code": "sessions-tail-target", "means": "No single session here matches the reference, or it has no events.jsonl on this machine.", "fix": "Pass the full session id, or run the command on the machine hosting that session." }
+      ]
+    },
+    {
+      "id": "cli:sessions send",
+      "group": "desk-sessions",
+      "when": "Messaging another agent session through the Copilot app, with a sender header, then waiting until the text shows in its history",
+      "effect": "write",
+      "errors": [
+        { "code": "sessions-target", "means": "The reference names no session here, or matches several.", "fix": "Pass the full session id; tail shows which session is which." },
+        { "code": "sessions-app-socket", "means": "The Copilot app's local socket files are missing or their owner process has exited.", "fix": "Open the app, then run the same send again." },
+        { "code": "sessions-send-refused", "means": "The app answered but did not accept the message, perhaps because the session is archived.", "fix": "Pass the id of a session open in the app." }
+      ]
+    },
+    {
+      "id": "cli:migrations run",
+      "group": "desk-runtime-upkeep",
+      "when": "Executing one pending Desk migration that the startup line named, with Detect, Safety check, Migrate and its announcement",
+      "effect": "write",
+      "errors": [
+        { "code": "unknown-migration", "means": "Desk's migrations folder has no migration with that id.", "fix": "Pass the exact id the startup migrations line printed, such as 02-tidy-desk." },
+        { "code": "bash-missing", "means": "No bash was found to run the migration's blocks.", "fix": "Install bash, then run the same migration again." }
+      ]
+    },
+    {
+      "id": "cli:build-runtime-deps-pack",
+      "group": "desk-runtime-upkeep",
+      "when": "Producing the archive of production node modules the desk server loads, for one platform, CPU and Node ABI",
+      "effect": "write",
+      "errors": [
+        { "code": "runtime-deps-lock-entry-must-exist-for", "means": "A production dependency has no entry in package-lock.json.", "fix": "Run npm install in plugins/desk/mcp so the lock lists it, then build again." },
+        { "code": "runtime-deps-add-a-non-marker-runtime", "means": "A dependency's installed folder holds no runtime file to pack.", "fix": "Reinstall node_modules so the package's own files are present." },
+        { "code": "runtime-deps-use-a-shorter-dependency-path", "means": "A dependency file's path is too long for a tar header.", "fix": "Shorten or flatten that dependency's install path, then build again." }
+      ]
+    },
+    {
+      "id": "cli:verify-runtime-deps-pack",
+      "group": "desk-runtime-upkeep",
+      "when": "Confirming a built dependency archive still matches the package lock and the target platform, CPU and Node ABI",
+      "effect": "read",
+      "errors": [
+        { "code": "pack-invalid", "means": "The pack is missing a file, targets an unsupported platform, or its manifest, checksum or archive disagree with the lock.", "fix": "Rebuild it with npm run runtime:deps-pack:build." },
+        { "code": "runtime-deps-lock-entry-must-exist-for", "means": "The lock has no entry for a production dependency, so the expected pack cannot be derived.", "fix": "Run npm install in plugins/desk/mcp, rebuild the pack and verify again." }
+      ]
+    },
+    {
+      "id": "cli:drains poll",
+      "group": "drains-issues",
+      "when": "A runner's periodic cycle reading GitHub for each watched repository and collecting the wakes it should deliver now",
+      "effect": "write",
+      "errors": [
+        { "code": "desk-drains-config-invalid", "means": "The drains config is not valid JSON or an entry is malformed, so nothing was polled", "fix": "Correct the entry named in the message against docs/issue-drains.md and poll again" },
+        { "code": "desk-drains-config-unreadable", "means": "The drains config exists but cannot be read, usually a permissions or owner change", "fix": "Restore read permission on the config file and poll again" },
+        { "code": "desk-drains-busy", "means": "Another live poll or ack holds the drains lock file", "fix": "Wait for that process to finish, then poll again" }
+      ]
+    },
+    {
+      "id": "cli:drains ack",
+      "group": "drains-issues",
+      "when": "After a runner delivers (or fails to deliver) an issue wake, to clear or keep that repository's waiting events",
+      "effect": "write",
+      "errors": [
+        { "code": "desk-drains-busy", "means": "A poll or another ack holds the drains lock, so the delivery was not recorded", "fix": "Run the wake's done command again once that process exits" },
+        { "code": "desk-drains-config-invalid", "means": "With --error, the drains config is read to start a successor session and it is malformed", "fix": "Fix the bad entry in the drains config, then rerun the done command with --error" }
+      ]
+    },
+    {
+      "id": "cli:drains status",
+      "group": "drains-issues",
+      "when": "Checking drain health: last good poll, lag, waiting events, quota, relay lines and stuck desk saves",
+      "effect": "write",
+      "errors": [
+        { "code": "desk-drains-config-invalid", "means": "The drains config has a bad entry, so no status lines could be built", "fix": "Repair the entry the message names, then ask for status again" },
+        { "code": "desk-drains-config-unreadable", "means": "The drains config file is present but its permissions block reading it", "fix": "Give your user read access to the file and rerun status" }
+      ]
+    },
+    {
+      "id": "cli:drains why",
+      "group": "drains-issues",
+      "when": "Explaining why a particular issue woke its session, or what one named relay fired, merged or waits on",
+      "effect": "read",
+      "errors": [
+        { "code": "why-target", "means": "The target is not written as owner/name#number", "fix": "Pass an issue such as owner/name#123, or --relay with a relay name" },
+        { "code": "desk-relays-config-invalid", "means": "relays.json is malformed, and why reads it before answering about issues or relays", "fix": "Correct relays.json against docs/relays.md and ask again" },
+        { "code": "desk-relays-config-unreadable", "means": "relays.json exists but cannot be read by this user", "fix": "Fix the file's permissions, then rerun why" }
+      ]
+    },
+    {
+      "id": "cli:drains schedule poll",
+      "group": "drains-schedule",
+      "when": "A runner cycle collecting the timed prompts now due, running each schedule's when gate first",
+      "effect": "write",
+      "errors": [
+        { "code": "desk-schedules-config-invalid", "means": "schedules.json is not valid JSON or one schedule entry is malformed", "fix": "Correct the schedule the message names against docs/schedules.md and poll again" },
+        { "code": "desk-schedules-config-unreadable", "means": "schedules.json is present but cannot be read, often after an owner or permission change", "fix": "Restore read access to schedules.json and poll again" },
+        { "code": "desk-drains-busy", "means": "Another schedule poll or ack holds schedule.lock", "fix": "Wait for that process to end, then rerun the schedule poll" }
+      ]
+    },
+    {
+      "id": "cli:drains schedule ack",
+      "group": "drains-schedule",
+      "when": "After a runner hands over a scheduled prompt, to move the schedule's next run on or keep it due",
+      "effect": "write",
+      "errors": [
+        { "code": "desk-drains-busy", "means": "schedule.lock is held by a live schedule poll or ack, so nothing was recorded", "fix": "Rerun the wake's done command after the other process finishes" }
+      ]
+    },
+    {
+      "id": "cli:drains schedule status",
+      "group": "drains-schedule",
+      "when": "Seeing each timed prompt's next run, last delivery and gate result without moving anything",
+      "effect": "write",
+      "errors": [
+        { "code": "desk-schedules-config-invalid", "means": "A schedule entry in schedules.json is malformed, so no lines were listed", "fix": "Repair that schedule entry, then list the schedules again" },
+        { "code": "desk-schedules-config-unreadable", "means": "schedules.json cannot be read because of its owner or permissions", "fix": "Make schedules.json readable by your user and rerun schedule status" }
+      ]
+    },
+    {
+      "id": "cli:drains stalled poll",
+      "group": "drains-stalled",
+      "when": "A runner cycle finding idle sessions whose focused card is unfinished and offering each a single nudge",
+      "effect": "write",
+      "errors": [
+        { "code": "desk-stalled-config-invalid", "means": "stalled.json is not valid JSON or has a bad idleMinutes, maxIdleHours or desks value", "fix": "Correct stalled.json against docs/stalled-nudges.md and poll again" },
+        { "code": "desk-stalled-config-unreadable", "means": "stalled.json exists but cannot be read, usually a permissions change", "fix": "Restore read access to stalled.json and poll again" },
+        { "code": "desk-drains-busy", "means": "Another stalled poll or ack holds stalled.lock", "fix": "Let that process finish, then rerun the stalled poll" }
+      ]
+    },
+    {
+      "id": "cli:drains stalled ack",
+      "group": "drains-stalled",
+      "when": "After a runner delivers an idle-session nudge, to end that stretch's nudge or keep it offered on failure",
+      "effect": "write",
+      "errors": [
+        { "code": "desk-drains-busy", "means": "stalled.lock belongs to a live stalled poll or ack, so the outcome was not saved", "fix": "Run the nudge's done command again once the lock holder exits" }
+      ]
+    },
+    {
+      "id": "cli:drains stalled status",
+      "group": "drains-stalled",
+      "when": "A dry run showing which idle sessions would get a nudge and why other focused sessions are left alone",
+      "effect": "write",
+      "errors": [
+        { "code": "desk-stalled-config-invalid", "means": "stalled.json has a malformed setting, so no sessions were checked", "fix": "Fix the setting the message names, then rerun stalled status" },
+        { "code": "desk-stalled-config-unreadable", "means": "stalled.json cannot be read by this user", "fix": "Make stalled.json readable and rerun stalled status" }
+      ]
+    },
+    {
+      "id": "cli:drains relays poll",
+      "group": "drains-relays",
+      "when": "A runner cycle letting each due relay dispatch workflows, comment on and merge green labelled pull requests",
+      "effect": "consequential",
+      "confirm": "This can dispatch workflows, post status comments and merge pull requests on GitHub; run the relays now?",
+      "errors": [
+        { "code": "desk-relays-config-invalid", "means": "relays.json is not valid JSON or a relay entry is malformed, so no relay ran", "fix": "Correct the relay the message names against docs/relays.md and poll again" },
+        { "code": "desk-relays-config-unreadable", "means": "relays.json exists but its permissions block reading it", "fix": "Restore read access to relays.json and poll again" },
+        { "code": "desk-drains-busy", "means": "Another relays poll holds the relays lock file", "fix": "Wait for that poll to end, then run relays poll again" }
+      ]
+    },
+    {
+      "id": "cli:drains relays status",
+      "group": "drains-relays",
+      "when": "Reading each relay's last poll, last fire or merge, spend, and what it waits on, without acting on GitHub",
+      "effect": "write",
+      "errors": [
+        { "code": "desk-relays-config-invalid", "means": "relays.json has a malformed relay, so no lines were listed", "fix": "Repair that relay entry, then list the relays again" },
+        { "code": "desk-relays-config-unreadable", "means": "relays.json cannot be read because of its owner or permissions", "fix": "Make relays.json readable by your user and rerun relays status" }
+      ]
+    },
+    {
+      "id": "cli:drains hooks poll",
+      "group": "drains-hooks",
+      "when": "A runner cycle downloading webhook events from the receiver to local payload files and printing their wakes",
+      "effect": "write",
+      "errors": [
+        { "code": "desk-hooks-config-invalid", "means": "hooks.json is not valid JSON, has a bad entry, or lists hooks without a server", "fix": "Correct hooks.json against docs/webhooks.md and poll again" },
+        { "code": "desk-hooks-config-unreadable", "means": "hooks.json exists but cannot be read, usually a permissions change", "fix": "Restore read access to hooks.json and poll again" },
+        { "code": "desk-drains-busy", "means": "Another hooks poll or ack holds hooks.lock", "fix": "Wait for that process to finish, then rerun hooks poll" }
+      ]
+    },
+    {
+      "id": "cli:drains hooks ack",
+      "group": "drains-hooks",
+      "when": "After a webhook wake lands, to delete exactly its listed events on the receiver, or keep them all on failure",
+      "effect": "consequential",
+      "confirm": "This deletes the listed webhook events from the hooks receiver; acknowledge them?",
+      "errors": [
+        { "code": "desk-hooks-unknown-hook", "means": "hooks.json no longer has a hook by that name, likely removed after the wake was printed", "fix": "Leave the events; the receiver expires them after 7 days" },
+        { "code": "desk-hooks-config-invalid", "means": "hooks.json is malformed, so the hook to acknowledge could not be found", "fix": "Repair hooks.json, then rerun the wake's done command" },
+        { "code": "desk-drains-busy", "means": "hooks.lock is held by a live hooks poll or ack", "fix": "Rerun the done command once that process exits" }
+      ]
+    },
+    {
+      "id": "cli:drains hooks create",
+      "group": "drains-hooks",
+      "when": "Registering a new webhook endpoint on the receiver for a sender such as Stripe, Sentry or GitHub",
+      "effect": "consequential",
+      "confirm": "This creates a hook on the hooks receiver and prints its signing secret once; create it?",
+      "errors": [
+        { "code": "desk-hooks-bad-name", "means": "The name is not 1 to 40 lower-case letters, digits and hyphens", "fix": "Pick a name such as spoonjoy-sentry and run create again" },
+        { "code": "desk-hooks-secret-needed", "means": "The chosen --verify preset checks the sender's signing secret, and none came on stdin", "fix": "Pipe the sender's secret in and add --secret-stdin" },
+        { "code": "desk-hooks-secret-not-taken", "means": "The chosen --verify preset takes no secret, yet --secret-stdin was given", "fix": "Run create again without --secret-stdin" },
+        { "code": "desk-hooks-no-server", "means": "No receiver is named: neither --server nor a server in hooks.json", "fix": "Pass --server https://<receiver> or set \"server\" in hooks.json" },
+        { "code": "desk-hooks-refused", "means": "The receiver answered with an HTTP error, for example 401 for the account's token", "fix": "Check gh auth token for that account, or retry if the receiver was briefly down" },
+        { "code": "desk-hooks-no-github-token", "means": "The GitHub CLI produced no token for the account that signs in", "fix": "Run gh auth login --hostname github.com for that account" }
+      ]
+    },
+    {
+      "id": "cli:drains hooks list",
+      "group": "drains-hooks",
+      "when": "Inspecting every webhook the receiver holds for your account, including unrouted ones and recent rejections",
+      "effect": "read",
+      "errors": [
+        { "code": "desk-hooks-no-server", "means": "Neither --server nor hooks.json names a receiver to ask", "fix": "Add --server https://<receiver>, or put \"server\" in hooks.json" },
+        { "code": "desk-hooks-refused", "means": "The receiver refused the listing with an HTTP error status", "fix": "Confirm the account's gh token works, then list again" },
+        { "code": "desk-hooks-no-github-token", "means": "gh auth token returned nothing for the chosen account", "fix": "Sign the account into the GitHub CLI and list again" },
+        { "code": "desk-hooks-config-invalid", "means": "hooks.json is malformed, so the default account and server could not be read", "fix": "Fix hooks.json, or pass --account and --server after fixing it" }
+      ]
+    },
+    {
+      "id": "cli:drains hooks delete",
+      "group": "drains-hooks",
+      "when": "Removing a webhook endpoint you no longer route, together with its undelivered events, from the receiver",
+      "effect": "consequential",
+      "confirm": "This deletes the hook and its pending events from the hooks receiver for good; delete it?",
+      "errors": [
+        { "code": "desk-hooks-no-server", "means": "No receiver address is known for the delete", "fix": "Supply --server https://<receiver>, or set server in hooks.json" },
+        { "code": "desk-hooks-refused", "means": "The receiver turned the delete down with an HTTP error, such as 404 for an unknown hook", "fix": "Check the hook name with hooks list and the account's token, then retry" },
+        { "code": "desk-hooks-no-github-token", "means": "No GitHub CLI token exists for the account doing the delete", "fix": "Log that account into gh, then rerun the delete" }
+      ]
+    },
+    {
+      "id": "cli:drains hooks status",
+      "group": "drains-hooks",
+      "when": "Checking webhook routing health: per-hook session, pending count, last error, and receiver hooks nobody routes",
+      "effect": "write",
+      "errors": [
+        { "code": "desk-hooks-config-invalid", "means": "hooks.json has a bad entry, so no hook lines were built", "fix": "Repair the entry the message names, then rerun hooks status" },
+        { "code": "desk-hooks-config-unreadable", "means": "hooks.json cannot be read because of its owner or permissions", "fix": "Make hooks.json readable by your user and rerun hooks status" }
+      ]
+    },
+    {
+      "id": "cli:factory account",
+      "group": "desk-factory",
+      "when": "Before recording consent, to learn which gh login has push or fork rights on the intake repo",
+      "effect": "read",
+      "errors": [
+        { "code": "no-account-can-deliver", "means": "No signed-in gh account can see the store with push or fork rights; each listed account carries its reason.", "fix": "Sign in to gh with an account that can push to or fork the store, then run account again." },
+        { "code": "gh-missing", "means": "The gh CLI is not installed or not on PATH, so no account could be asked.", "fix": "Install the GitHub CLI and run account again." },
+        { "code": "usage", "means": "--store is not an owner/repo value.", "fix": "Pass --store as owner/repo, for example ourostack/factory." }
+      ]
+    },
+    {
+      "id": "cli:factory consent",
+      "group": "desk-factory",
+      "when": "After the operator chooses yes or no on sharing session facts with a given store, to save that choice locally",
+      "effect": "write",
+      "errors": [
+        { "code": "os-protect-point-xdg-state-home-at", "means": "The private factory state folder would sit inside a Git checkout, so nothing was written.", "fix": "Point XDG_STATE_HOME at a directory outside any Git checkout and record consent again." },
+        { "code": "error", "means": "A flag failed validation (--store not owner/repo, --account not a login) or another unexpected failure; the message names which.", "fix": "Pass --store as owner/repo and --account as a plain GitHub login." }
+      ]
+    },
+    {
+      "id": "cli:factory derive",
+      "group": "desk-factory",
+      "when": "Started detached by Desk's session hooks to turn one session marker into a facts file in the outbox",
+      "effect": "write",
+      "errors": [
+        { "code": "invalid", "means": "The marker file is gone or its fields do not form a valid marker, so nothing was derived.", "fix": "Let the next session sweep write a fresh marker; a removed marker needs no action." },
+        { "code": "log-missing", "means": "The session log the marker points at no longer exists.", "fix": "Check the marker's log_path; a deleted log cannot be derived again." },
+        { "code": "source-unreadable", "means": "Reading the marker or its session log failed partway, and the step was noted for desk_doctor.", "fix": "Read the factory section of desk_doctor for the failed step, then rerun derive on the marker." },
+        { "code": "held", "means": "The session is held back, with a reason such as no_desk_root, route_unreadable or route_unverified.", "fix": "Read the reason field; a held marker is derived again once its route or desk root is known." }
+      ]
+    },
+    {
+      "id": "cli:factory status",
+      "group": "desk-factory",
+      "when": "Checking the last flush per store, held markers, pending finalize requests and retention before diagnosing delivery",
+      "effect": "write",
+      "errors": [
+        { "code": "os-protect-point-xdg-state-home-at", "means": "The factory state folder resolves inside a Git checkout, so status refuses to read it.", "fix": "Set XDG_STATE_HOME to a folder outside version control and read status again." }
+      ]
+    },
+    {
+      "id": "cli:factory flush",
+      "group": "desk-factory",
+      "when": "Pushing this machine's pending facts, labels and retractions to a consented store as one intake pull request",
+      "effect": "consequential",
+      "confirm": "Open or update an intake pull request on this store with this machine's pending session facts?",
+      "errors": [
+        { "code": "not-opted-in", "means": "This machine has no factory state or has not consented to contribute to the store.", "fix": "Record consent with factory consent --store <owner/repo> --contribute yes first." },
+        { "code": "no-account", "means": "Consent is recorded but names no GitHub account to deliver with.", "fix": "Run factory account, then factory consent again with --account set to the login it names." },
+        { "code": "locked", "means": "Another flush holds the factory lock, so this attempt sent nothing.", "fix": "Wait for the other flush to end and run flush again." },
+        { "code": "store-missing", "means": "The store repository could not be found from the delivering account.", "fix": "Check the store name and that the consented account can see it." },
+        { "code": "account-cannot-deliver", "means": "The consented account can neither push to nor fork the store.", "fix": "Pick a different login with factory account and record it with factory consent." }
+      ]
+    },
+    {
+      "id": "cli:factory context-request",
+      "group": "desk-factory",
+      "when": "When the operator explicitly asks for a written explanation of one delivered job, to run the headless context writer and privacy check",
+      "effect": "write",
+      "errors": [
+        { "code": "usage", "means": "--store is not owner/repo or --job is not a 32-hex public job id.", "fix": "Pass --store <owner/repo> and the job's 32 lowercase hex id." },
+        { "code": "busy", "means": "Another evaluator or context run holds the evaluator lock.", "fix": "Wait for that run to finish and request the context again." },
+        { "code": "no-factory-state", "means": "This machine has no factory state folder, so there is no job to explain.", "fix": "Record consent and let sessions be derived before requesting context." },
+        { "code": "headless-session", "means": "The command ran inside a headless factory session, which starts nothing.", "fix": "Run context-request from an ordinary operator session." },
+        { "code": "budget-exhausted", "means": "The headless run quota or this request's two run slots are used up.", "fix": "Request the context again after the quota window resets." }
+      ]
+    },
+    {
+      "id": "cli:factory finalize",
+      "group": "desk-factory",
+      "when": "Once a task reaches done or cancelled, to re-derive its job's sessions and deliver them before clearing the request",
+      "effect": "consequential",
+      "confirm": "Deliver these finished jobs' pending session facts to their stores as intake pull requests, then start the improvement loop, which may run a headless evaluator and file kaizen issues?",
+      "errors": [
+        { "code": "usage", "means": "More than eight --job values were given, one repeated, or one is not 32 hex characters.", "fix": "Pass up to eight distinct --job ids, each 32 lowercase hex characters." },
+        { "code": "retained", "means": "A session was still unsettled or a store flush did not deliver every file, so the finalize request was kept.", "fix": "Read the flushes map for each store's result; the next finalize or flush retries the request." },
+        { "code": "expired", "means": "The finalize request was older than its time limit and was cleared without delivery.", "fix": "Let an ordinary flush deliver the job's remaining files." }
+      ]
+    },
+    {
+      "id": "cli:factory build",
+      "group": "desk-factory",
+      "when": "In a store's CI, to render job pages, rollups and the index from a checked-out store into an output folder",
+      "effect": "write",
+      "errors": [
+        { "code": "build-factory-build-use-an-outdir", "means": "--out is the store itself or one of its ancestors, which the build would replace.", "fix": "Pass an --out folder outside the store checkout." },
+        { "code": "build-factory-build-use-a-real-2", "means": "--store is not a real directory (a file or a symlink).", "fix": "Pass --store as the path of the checked-out store directory." }
+      ]
+    },
+    {
+      "id": "cli:factory evaluate-accept",
+      "group": "desk-factory",
+      "when": "After the waste evaluator has written its answer files, to validate each session's labels against its brief",
+      "effect": "write",
+      "errors": [
+        { "code": "usage", "means": "--job is not a job id.", "fix": "Pass --job with the job id the evaluate briefs name." },
+        { "code": "rejected", "means": "A session's answer failed a check; its errors list codes such as job_mismatch, schema_outdated or too_large.", "fix": "Rewrite that session's answer from its brief and run evaluate-accept again." },
+        { "code": "missing", "means": "No answer file was written for a session yet.", "fix": "Have the evaluator write the session's answer at the brief's output path." },
+        { "code": "invalid-brief", "means": "A brief on disk does not match its job or file name, so its answer was not read.", "fix": "Prepare the briefs again with factory evaluate." }
+      ]
+    },
+    {
+      "id": "cli:factory evaluate",
+      "group": "desk-factory",
+      "when": "When a desk task finishes, to queue waste labeling for its sessions and write the evaluator's brief files",
+      "effect": "write",
+      "errors": [
+        { "code": "usage", "means": "--desk is not absolute, --task is missing, or --task is not <track>/<slug> or desks/<alias>/<track>/<slug>.", "fix": "Pass an absolute --desk and --task as track/slug, or pass --pending alone." },
+        { "code": "evaluate-desk-unreadable", "means": "The --desk folder could not be resolved, so it is probably misspelled or removed.", "fix": "Check the path with ls and pass the real absolute desk root." },
+        { "code": "not-opted-in", "means": "This machine has no factory state or no consenting store, so no request was recorded.", "fix": "Record consent for a store before asking for evaluation." },
+        { "code": "no-sessions", "means": "The job has no derived sessions to label in any consenting store.", "fix": "Let the job's sessions be derived, then run evaluate again." }
+      ]
+    },
+    {
+      "id": "cli:factory job-link",
+      "group": "desk-factory",
+      "when": "Finding the report URL for a task card's job, or with --this-machine the operator's own keyed report",
+      "effect": "read",
+      "errors": [
+        { "code": "usage", "means": "--desk was given but is not an absolute path.", "fix": "Pass --desk as the absolute desk root the task tools see." },
+        { "code": "job-link-desk-unreadable", "means": "The --desk folder could not be resolved.", "fix": "Check the path with ls and run job-link again with the right root." },
+        { "code": "desk-not-private", "means": "The desk is known not to be private, so its card gets no plain report link.", "fix": "Add --this-machine for the private keyed link to this machine's sessions." },
+        { "code": "visibility-not-known", "means": "The desk's visibility has not been learned yet, so a printed link might not exist.", "fix": "Run a flush so GitHub is asked about the desk's visibility, then retry." },
+        { "code": "no-machine-secret", "means": "This machine has no machine secret yet, so it has published nothing keyed.", "fix": "Let a flush deliver this machine's sessions first; job-link creates no secret." }
+      ]
+    },
+    {
+      "id": "cli:factory kaizen-check",
+      "group": "desk-factory",
+      "when": "In a store's build, to compare each open improvement card's measure before and after its countermeasure version",
+      "effect": "consequential",
+      "confirm": "Create or update the check comment and verdict labels on every open kaizen issue in this store?",
+      "errors": [
+        { "code": "usage", "means": "--repo is not owner/repo or GH_TOKEN is empty.", "fix": "Pass --repo <owner/repo> and set GH_TOKEN to the store's token." },
+        { "code": "unexpected-answer", "means": "GitHub returned an issue or comment shape the client does not read; that card is marked failed.", "fix": "Rerun the check; if it repeats, file it with friction_add including the card number." },
+        { "code": "failed", "means": "A card's GitHub calls failed without a named code, and the other cards were still checked.", "fix": "Read the cards list for the failed number and rerun kaizen-check." }
+      ]
+    },
+    {
+      "id": "cli:factory andon",
+      "group": "desk-factory",
+      "when": "In a store's build, to raise or clear alarm issues when a tracked plugin's latest version worsens a quality measure",
+      "effect": "consequential",
+      "confirm": "Open, update, reopen or close andon issues in this store's GitHub repository?",
+      "errors": [
+        { "code": "andon-store-config-invalid", "means": "The store's factory.json is not valid JSON or not the andon.plugins shape.", "fix": "Correct factory.json in the store checkout and run andon again." },
+        { "code": "usage", "means": "--repo is not owner/repo or GH_TOKEN is empty.", "fix": "Pass --repo <owner/repo> and export GH_TOKEN with the store's token." },
+        { "code": "timeout", "means": "A GitHub issues call ran past its time limit; that alarm is reported as failed.", "fix": "Rerun andon once GitHub responds normally." }
+      ]
+    },
+    {
+      "id": "cli:factory reconcile",
+      "group": "desk-factory",
+      "when": "Auditing a time window for real task work that did not become a factory job, with a reason code per mismatch",
+      "effect": "read",
+      "errors": [
+        { "code": "usage", "means": "--desk is not absolute, --store is empty, or --since and --until are not ordered exact UTC timestamps.", "fix": "Pass an absolute --desk and UTC --since earlier than --until, such as 2026-09-28T00:00:00Z." },
+        { "code": "reconcile-desk-unreadable", "means": "Reading the desk folder raised an exception.", "fix": "Check that the desk folder exists and can be read, then rerun reconcile." },
+        { "code": "reconcile-failed-unexpectedly", "means": "Reconcile hit an unexpected failure and reported nothing.", "fix": "Run reconcile again; if it repeats, file it with friction_add." }
+      ]
+    },
+    {
+      "id": "cli:factory loop",
+      "group": "desk-factory",
+      "when": "Started detached at session start to route findings, run the evaluator, mirror cards and measure, within a time budget",
+      "effect": "consequential",
+      "confirm": "Run the improvement loop now, which may start a headless evaluator run and file kaizen issues in the desk's store?",
+      "errors": [
+        { "code": "usage", "means": "--desk is not absolute or --person-prefix is neither empty nor desks/<alias>.", "fix": "Pass an absolute --desk and, for a crew member, --person-prefix desks/<alias>." },
+        { "code": "busy", "means": "Another loop worker holds the machine's loop lock.", "fix": "Wait for that worker to end; the next session start runs the loop again." },
+        { "code": "disabled", "means": "DESK_FACTORY_LOOP is set to a value other than 1, true, on or yes.", "fix": "Unset DESK_FACTORY_LOOP or set it to 1 to turn the loop on." },
+        { "code": "no-consenting-store", "means": "No store has contribute set to yes, so the loop starts nothing.", "fix": "Record consent for a store with factory consent if the loop should run." },
+        { "code": "stale-release", "means": "A newer Desk release is installed than the one that started this worker, so it claimed nothing.", "fix": "Start a new session so the newest release's hooks run the loop." }
+      ]
+    },
+    {
+      "id": "cli:factory validate-pr",
+      "group": "desk-factory",
+      "when": "In a store's CI, to judge whether a pull request's merged tree holds only valid published facts, labels and capture records",
+      "effect": "read",
+      "errors": [
+        { "code": "unexpected-merge", "means": "The head carries merge commits of its own, which are refused.", "fix": "Rebase the pull request head onto the base so it has no merge commits." },
+        { "code": "merge-conflict", "means": "Merging the head into the base conflicts, so there is no tree to judge.", "fix": "Resolve the conflict on the head branch and push again." },
+        { "code": "git-too-old", "means": "Git is older than 2.38, which git merge-tree --write-tree needs.", "fix": "Install Git 2.38 or later and run validate-pr again." },
+        { "code": "merge-tree-unavailable", "means": "git merge-tree failed for a reason other than a conflict, usually a missing base or head commit.", "fix": "Fetch both the base and head commits, then rerun validate-pr." },
+        { "code": "validate-pr-git-data-unreadable", "means": "Git data could not be read, usually because the working directory is not the PR's checkout.", "fix": "Run validate-pr from the pull request's checkout." },
+        { "code": "path", "means": "A non-maintainer changed a file outside facts, labels, context and capture paths.", "fix": "Limit the pull request to published fact, label or capture files." }
+      ]
+    },
+    {
+      "id": "cli:factory proof",
+      "group": "desk-factory",
+      "when": "Excluding a deliberate test run from measurement by flagging its recorded session marker, given its session id",
+      "effect": "write",
+      "errors": [
+        { "code": "invalid-id", "means": "The session id is not a valid session id.", "fix": "Pass the session's full id as the first argument." },
+        { "code": "unknown", "means": "Nothing on this machine records the session.", "fix": "Run proof on the machine whose desk recorded that session." },
+        { "code": "no-marker", "means": "Only the derivation ledger knows the session; its marker was pruned after 30 days.", "fix": "Mark proof sessions within 30 days, before their marker is pruned." },
+        { "code": "ambiguous", "means": "More than one host records this session id.", "fix": "Check which host's session it is; proof marks only a single-host session." },
+        { "code": "foreign", "means": "No desk recorded the session, its desk folder is gone, or it is not the --desk given.", "fix": "Pass --desk as the absolute root of the desk that recorded the session." }
+      ]
+    }
+  ]
 }

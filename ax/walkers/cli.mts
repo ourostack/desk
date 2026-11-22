@@ -83,12 +83,23 @@ function resolveExpr(expr: ts.Expression, consts: Map<string, ts.Expression>, de
   return expr;
 }
 
-function property(obj: ts.ObjectLiteralExpression, key: string): ts.Expression | null {
+/** An object literal's value for `key`, the last one written winning; a spread of a const object counts as its keys, and a
+ * spread the walker can't resolve may set any key, so it leaves the value unknown. */
+function property(obj: ts.ObjectLiteralExpression, key: string, consts?: Map<string, ts.Expression>, depth = 0): ts.Expression | null {
+  // Without consts (a name lookup), spreads are skipped; with them (a readOnly lookup), they are followed.
+  let found: ts.Expression | null = null;
   for (const p of obj.properties) {
-    if (ts.isPropertyAssignment(p) && keyText(p.name) === key) return p.initializer;
-    if (ts.isShorthandPropertyAssignment(p) && p.name.text === key) return p.name;
+    if (ts.isPropertyAssignment(p) && keyText(p.name) === key) found = p.initializer;
+    else if (ts.isShorthandPropertyAssignment(p) && p.name.text === key) found = p.name;
+    else if (ts.isSpreadAssignment(p) && consts && depth < 10) {
+      const spread = resolveExpr(p.expression, consts);
+      if (ts.isObjectLiteralExpression(spread)) {
+        const inner = property(spread, key, consts, depth + 1);
+        if (inner) found = inner;
+      } else found = null;
+    } else if (ts.isSpreadAssignment(p) && consts) found = null;
   }
-  return null;
+  return found;
 }
 
 const isTrue = (expr: ts.Expression | null): boolean => !!expr && expr.kind === ts.SyntaxKind.TrueKeyword;
@@ -160,7 +171,7 @@ function commandsOf(expr: ts.Expression, f: FileFacts, depth = 0): { commands: C
       const def = resolveExpr(target.arguments[0], f.consts);
       const name = ts.isObjectLiteralExpression(def) ? property(def, "name") : null;
       if (ts.isObjectLiteralExpression(def) && name && isText(name)) {
-        return { commands: [{ name: name.text, line: lineOf(f.sf, name), readOnly: isTrue(property(def, "readOnly")) }], unfollowed: [] };
+        return { commands: [{ name: name.text, line: lineOf(f.sf, name), readOnly: isTrue(property(def, "readOnly", f.consts)) }], unfollowed: [] };
       }
     }
     const helper = callee && ts.isIdentifier(target.expression) ? f.helpers.get(callee) : undefined;
@@ -169,7 +180,7 @@ function commandsOf(expr: ts.Expression, f: FileFacts, depth = 0): { commands: C
       if (isText(name)) {
         const defArg = helper.def === null ? undefined : target.arguments[helper.def];
         const def = defArg ? resolveExpr(defArg, f.consts) : undefined;
-        const readOnly = !!def && ts.isObjectLiteralExpression(def) && isTrue(property(def, "readOnly"));
+        const readOnly = !!def && ts.isObjectLiteralExpression(def) && isTrue(property(def, "readOnly", f.consts));
         return { commands: [{ name: name.text, line: lineOf(f.sf, name), readOnly }], unfollowed: [] };
       }
     }
