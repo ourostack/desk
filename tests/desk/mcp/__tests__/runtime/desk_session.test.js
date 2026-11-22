@@ -750,6 +750,7 @@ test("unknown tools are refused; reads and writes dispatch to the runtime with t
   const { session, runtime } = await makeSession(t)
   const refusal = await session.callTool({ name: "desk_task_create" })
   assert.equal(refusal.isError, true)
+  assert.deepEqual(refusal.structuredContent, { code: "unknown_door" })
   assert.match(refusal.content[0].text, /^unknown tool: desk_task_create\. Desk's tools: task_create, .*improvement_update\. Did you mean task_create\?$/u)
   assert.equal((await session.callTool({ name: "nope" })).isError, true)
   assert.equal(payload(await session.callTool({ name: "desk_search", input: { query: "x" } })).tool, "desk_search")

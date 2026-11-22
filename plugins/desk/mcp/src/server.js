@@ -274,6 +274,7 @@ export async function callTool({ deskRoot, name, input, person = null, statusCon
   if (!TOOL_NAMES.includes(name)) {
     return {
       content: [{ type: "text", text: unknownToolMessage(name, TOOL_NAMES, "Desk's") }],
+      structuredContent: { code: "unknown_door" },
       isError: true,
     }
   }

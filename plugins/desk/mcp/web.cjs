@@ -1024,7 +1024,11 @@ function createController(options) {
           return answer(function () { throw error; });
         });
       }
-      return answer(function () { throw plain(unknownToolMessage(name, BROWSER_TOOL_NAMES, "Desk Browser's")); });
+      return Promise.resolve({
+        content: [{ type: "text", text: unknownToolMessage(name, BROWSER_TOOL_NAMES, "Desk Browser's") }],
+        structuredContent: { code: "unknown_door" },
+        isError: true
+      });
     },
     closeAll: function () {
       return Promise.all(Object.keys(s.contexts).map(function (id) {

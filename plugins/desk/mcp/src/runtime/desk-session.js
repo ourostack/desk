@@ -831,7 +831,7 @@ export function createDeskSession(deps) {
 
   async function callTool({ name, input = {}, signal, requestId }) {
     if (!TOOL_NAMES.includes(name)) {
-      return { content: [{ type: "text", text: unknownToolMessage(name, TOOL_NAMES, "Desk's") }], isError: true }
+      return { content: [{ type: "text", text: unknownToolMessage(name, TOOL_NAMES, "Desk's") }], structuredContent: { code: "unknown_door" }, isError: true }
     }
     // A hosted Desk refuses before anything runs, so a refused repair or tool never reaches an implementation.
     const hostedRefused = hostedRefusal(name, input, env)
