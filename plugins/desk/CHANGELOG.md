@@ -1,5 +1,17 @@
 # desk plugin — changelog
 
+## 3.2.426 — 2026-11-22
+
+Browser tool failures now expose a structured lower_snake error code without changing their guidance or retained cleanup diagnostics.
+
+Factory status no longer creates the factory's opt-in state folder on an uninitialized machine. Existing-state privacy and integrity maintenance remains enabled. Issue, schedule and stalled-session polling and launcher-backed status commands now declare their private writes honestly; status help distinguishes launcher refresh from unchanged drain state.
+
+Desk's MCP server now vendors Ouro UI v1.3.451, moved by Ouro Current.
+
+A Desk tool error now carries its stable `code` beside `status`, `tool` and `message` (for example `track_create_invalid_slug`), so agents and the AX census can identify the failure without parsing the message.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.425 — 2026-11-22
 
 Desk's MCP server now vendors Ouro UI core v1.12.0, moved by Ouro Current.
