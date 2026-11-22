@@ -208,6 +208,9 @@ test("write-tree failure preserves Git stderr or a process diagnostic without mo
   for (const failure of [
     { status: 128, stderr: "fatal: unable to create index.lock", expected: /fatal: unable to create index\.lock/u },
     { status: null, stderr: "", signal: "SIGTERM", error: Object.assign(new Error("spawnSync git ETIMEDOUT"), { code: "ETIMEDOUT" }), expected: /ETIMEDOUT/u },
+    { status: null, stderr: null, error: new Error("Git could not start"), expected: /Git could not start/u },
+    { status: null, error: { code: "EIO" }, expected: /EIO: Git process failed/u },
+    { status: 128, stderr: "fatal: private index refused", error: new Error("less specific failure"), expected: /fatal: private index refused/u },
     { status: null, stderr: "   ", signal: "SIGKILL", expected: /SIGKILL/u },
     { status: 128, stderr: "", expected: /exit.*128/u },
   ]) {
