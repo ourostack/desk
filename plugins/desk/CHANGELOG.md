@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.418 — 2026-11-22
+
+Desk's MCP server now vendors Ouro UI v1.3.447, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.417 — 2026-11-22
 
 ### A relay can stay on its own interval while idle
