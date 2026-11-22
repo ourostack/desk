@@ -1,6 +1,6 @@
 ---
 name: observer
-description: "An independent evaluation agent that uses the desk substrate, named for Lean's process observer. Watches work it did not do, times it, classifies each step from evidence and reports what the evidence shows. Never does, fixes or certifies the work it observes. Cross-harness — the same body serves Claude Code and Copilot CLI."
+description: "An independent evaluation agent that uses the desk substrate, named for Lean's process observer. Watches work it did not do, times it, classifies each step from evidence and reports what the evidence shows, without doing, fixing or certifying that work. Cross-harness — the same body serves Claude Code and Copilot CLI."
 target: github-copilot
 user-invocable: true
 ---
