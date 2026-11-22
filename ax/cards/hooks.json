@@ -1,3 +1,184 @@
 {
-  "doors": []
+  "doors": [
+    {
+      "id": "hook:desk claude SessionEnd session-end.cjs",
+      "group": "desk-session-hooks",
+      "when": "Claude Code closes a session: a detached worker records any unpushed desk commits for the next desk_status, printing nothing",
+      "effect": "write",
+      "errors": [
+        { "code": "unpushed", "means": "The Claude session ended with desk commits not yet pushed; the fact is recorded for desk_status's sync section.", "fix": "In the next session, read desk_status's sync section and push the desk's commits." },
+        { "code": "unavailable", "means": "The worker could not resolve the desk root from CLAUDE_PROJECT_DIR and the payload's cwd, or the check failed, so nothing was recorded.", "fix": "Run desk_doctor in the next session to check which desk this folder binds." },
+        { "code": "invalid", "means": "The payload was not a Claude SessionEnd event with a cwd, so the check did not run.", "fix": "Check hooks.json registers session-end.cjs under SessionEnd with the claude argument." },
+        { "code": "headless", "means": "A headless factory or read-only child session skips the check and writes no sync record.", "fix": "Expected for evaluator children; unset DESK_FACTORY_HEADLESS or DESK_READ_ONLY_CHILD for an operator session." },
+        { "code": "payload-late", "means": "The payload did not arrive within the hook's 150 ms wait, so no worker started and nothing was recorded.", "fix": "Check sync by hand next session with desk_status, and push any desk commits it lists." }
+      ],
+      "uses": []
+    },
+    {
+      "id": "hook:desk claude SessionStart claude-session-start.cjs",
+      "group": "desk-session-hooks",
+      "when": "Claude Code starts, resumes, clears or compacts: hands the agent its startup line, the boot's head, the using-desk foundation and RFC path",
+      "effect": "write",
+      "errors": [
+        { "code": "node-missing", "means": "No usable node is on PATH, so node-missing.sh says Desk's tool servers cannot run and how to fix it.", "fix": "Follow the message: install Node, or restart the app that started the session, then start a new session." },
+        { "code": "node-too-old", "means": "The node on PATH is older than Desk's engines floor and no newer Node is installed, so Desk tools do not work this session.", "fix": "Run the install command the message names, then start a new session so the tool servers load." },
+        { "code": "foundation-unreadable", "means": "The hook could not read skills/using-desk/SKILL.md, so it sends only a short boot notice.", "fix": "Call any Desk tool; its first reply carries the boot, and desk:session-start explains it." },
+        { "code": "root-unresolved", "means": "The hook could not resolve the desk root, so the boot may not have started.", "fix": "Call desk_status; it starts the boot and reports the root Desk actually bound." },
+        { "code": "boot-pending", "means": "The boot was still running when the hook's 7 s wait ended, so the context says so instead of its result.", "fix": "Call desk_status, whose reply waits for the boot and carries its result." },
+        { "code": "windows-boot-deferred", "means": "On Windows the hook starts no boot, because it would hold the host's pipe open.", "fix": "Call desk_status first; the first Desk tool reply starts the boot and carries its result." },
+        { "code": "no-desk-bound", "means": "No desk is bound yet, so the startup line says Desk is in setup mode and no boot ran.", "fix": "Run the onboarding path desk_status names, desk:first-run-bootstrap by default." },
+        { "code": "binding-unavailable", "means": "The bound desk's folder is missing or its root configuration could not be read, so the startup line names the problem.", "fix": "Follow the remedy desk_status reports with root_unavailable: restore the folder, or rebind with desk:first-run-bootstrap." }
+      ],
+      "uses": ["mcp:desk_status", "skill:desk:session-start", "skill:plain-language:plain-language", "skill:desk:first-run-bootstrap"]
+    },
+    {
+      "id": "hook:desk claude PostToolUse orca-session-title.cjs",
+      "group": "desk-tool-call-hooks",
+      "when": "After task_focus or a focusing task_create in Claude Code: renames this Orca terminal tab after the focused task, in the background",
+      "effect": "write",
+      "errors": [
+        { "code": "not-in-orca", "means": "ORCA_TERMINAL_HANDLE is missing or malformed, so there is no Orca tab to name.", "fix": "Expected outside Orca; start the session from an Orca terminal to get tab names." },
+        { "code": "manual-title-kept", "means": "The tab shows a title a person set, so Desk leaves it alone.", "fix": "Clear the tab's custom title in Orca if Desk should name it again." },
+        { "code": "unsafe-label", "means": "The display label or card title failed the session-label safety rules (a path, URL, address or credential), so no rename ran.", "fix": "Pass a plain display_label on the next task_focus or task_create." },
+        { "code": "orca-unavailable", "means": "orca terminal show failed or returned no title, so the tab could not be read.", "fix": "Check the Orca CLI runs (ORCA_CLI_COMMAND or orca on PATH); the log is orca-session-titles.log in Desk's state folder." },
+        { "code": "conditional-rename-refused", "means": "Orca refused the rename because a person changed the tab's title between the read and the write.", "fix": "Nothing to repair: the person's title stands, and Desk keeps it on later focuses." },
+        { "code": "rename-failed", "means": "orca terminal rename exited nonzero for another reason.", "fix": "Read orca-session-titles.log in Desk's state folder and check the Orca CLI version." },
+        { "code": "unsupported-platform", "means": "On Windows the hook renames nothing, because Orca's CLI there is a .cmd shim it will not start through a shell.", "fix": "Expected on Windows; rename the Orca tab by hand if it should show the task." }
+      ],
+      "uses": []
+    },
+    {
+      "id": "hook:desk copilot postToolUse copilot-intake-context.cjs",
+      "group": "desk-tool-call-hooks",
+      "when": "After Copilot's skill tool loads brainstorming in the folder this session recorded at start: adds the start-task intake handoff",
+      "effect": "read",
+      "errors": [
+        { "code": "input-too-large", "means": "The postToolUse payload passed 256 KiB, so the hook adds no handoff and writes an unavailable line to stderr.", "fix": "Load start-task yourself before entering brainstorming for engineering work." },
+        { "code": "intake-context-unavailable", "means": "The payload or activation/desk.activation.json could not be read, so stderr says Desk intake context unavailable with the error code.", "fix": "Run desk_doctor to check the activation file, then apply start-task by hand." },
+        { "code": "not-matched", "means": "The call was not an exact successful brainstorming load, the session record is missing or names another folder, or the worker's method is not Superpowers, so nothing is added.", "fix": "Expected for other skills; if brainstorming loaded, run desk_doctor to check the session record, and apply start-task by hand." }
+      ],
+      "uses": ["skill:desk:start-task", "skill:desk:using-superpowers-with-desk", "mcp:task_create"]
+    },
+    {
+      "id": "hook:desk copilot postToolUse copilot-skill-current.cjs",
+      "group": "desk-tool-call-hooks",
+      "when": "After Copilot's skill tool returns text from an older plugin release: hands over the newer release's skill text and its docs folder",
+      "effect": "read",
+      "errors": [
+        { "code": "newer-release-text", "means": "A newer release of the skill's plugin is on disk with different text, so the skill tool's reply is out of date.", "fix": "Follow the current text the hook adds, and read the skill's docs from the newer release folder it names." },
+        { "code": "too-long-to-repeat", "means": "The newer skill text passes 64 KiB, so the hook names its SKILL.md path instead of repeating it.", "fix": "Read the SKILL.md at the path the hook names before acting on the skill." },
+        { "code": "payload-unreadable", "means": "The payload or its toolArgs were not JSON, so the hook answers {} and the loaded text stands.", "fix": "Nothing to repair in the session; report the payload shape with friction_add if skills look stale." }
+      ],
+      "uses": []
+    },
+    {
+      "id": "hook:desk copilot preToolUse copilot-lane-model.cjs",
+      "group": "desk-tool-call-hooks",
+      "when": "Before Copilot's create_session, open_issue_session or open_pr_session runs: fills in a missing lane model and mode, and keeps cloud lanes local",
+      "effect": "write",
+      "errors": [
+        { "code": "model-defaulted", "means": "The call named no kickoff.model, so the lane starts on DESK_LANE_MODEL, config.json's laneModel, or claude-sonnet-5.5.", "fix": "Name kickoff.model in the call, or set laneModel in Desk's config.json, for a different lane model." },
+        { "code": "mode-defaulted", "means": "The call named no kickoff.mode, so the lane starts in autopilot instead of the app's plan mode.", "fix": "Name kickoff.mode in the call when the lane needs plan mode." },
+        { "code": "cloud-dropped", "means": "execution_location cloud was removed, because the cloud sandbox loads no Desk plugins, so the lane runs locally.", "fix": "Set DESK_ALLOW_CLOUD_SESSIONS=1 for a lane that has to run in the cloud." },
+        { "code": "kickoff-not-object", "means": "kickoff was present but not an object, or toolArgs were unreadable, so the hook left the call unchanged.", "fix": "Pass kickoff as an object with model and mode fields." }
+      ],
+      "uses": []
+    },
+    {
+      "id": "hook:desk copilot preToolUse copilot-durable-files.cjs",
+      "group": "desk-tool-call-hooks",
+      "when": "Before Copilot's create, edit or image tools write a report, image or data file into the session's files/ or images/ folder",
+      "effect": "read",
+      "errors": [
+        { "code": "session-folder-file", "means": "The call writes a durable file under session-state/<id>/files or images, which vanishes with the session; the note names the focused task's folder.", "fix": "Write the file in the task's desk folder the note names if anyone else will read it." },
+        { "code": "no-task-focused", "means": "The durable file goes to the session folder and this session has no focused task to point at.", "fix": "Run start-task (task_create with focus: true), then write the file in that task's desk folder." }
+      ],
+      "uses": ["skill:desk:start-task", "mcp:task_create"]
+    },
+    {
+      "id": "hook:desk copilot sessionEnd session-end.cjs",
+      "group": "desk-session-hooks",
+      "when": "Copilot CLI ends a session: the hook hands an unpushed-commit check to a detached worker and exits inside Copilot's 3 s limit",
+      "effect": "write",
+      "errors": [
+        { "code": "unpushed", "means": "The Copilot session ended with desk commits not yet pushed; the fact is kept for desk_status's sync section.", "fix": "Open desk_status's sync section next session and push the commits it lists." },
+        { "code": "unavailable", "means": "No desk resolved from the payload's cwd, or the check threw, so no sync record was written.", "fix": "Run desk_doctor next session from the same folder to see the desk it binds." },
+        { "code": "invalid", "means": "The payload had no reason field or no cwd, so it did not read as a Copilot sessionEnd event.", "fix": "Check copilot-hooks.json registers session-end.cjs under sessionEnd with the copilot argument." },
+        { "code": "headless", "means": "A headless factory or read-only child session skips the check and writes no sync record.", "fix": "Expected for evaluator children; unset DESK_FACTORY_HEADLESS or DESK_READ_ONLY_CHILD for an operator session." },
+        { "code": "payload-late", "means": "The payload did not arrive within the hook's 150 ms wait, so no worker started and nothing was recorded.", "fix": "Check sync by hand next session with desk_status, and push any desk commits it lists." }
+      ],
+      "uses": []
+    },
+    {
+      "id": "hook:desk copilot sessionStart copilot-session-start.cjs",
+      "group": "desk-session-hooks",
+      "when": "Copilot CLI begins a session: records its folder, sets host settings and git trailer hooks, starts the boot and gives the foundation",
+      "effect": "write",
+      "errors": [
+        { "code": "node-missing", "means": "No node is on PATH (or node.exe exists but is not on this session's PATH), so Desk tools do not work.", "fix": "Follow the message: install Node or restart the app that started the session, then start a new session." },
+        { "code": "node-too-old", "means": "The node on PATH is older than Desk's floor and no newer one is installed.", "fix": "Run the install command the message names and start a new session from a new terminal." },
+        { "code": "foundation-unreadable", "means": "skills/using-desk/SKILL.md could not be read under PLUGIN_ROOT, so only a short boot notice comes.", "fix": "Call a Desk tool to get the boot, and load desk:session-start to read it." },
+        { "code": "root-unresolved", "means": "Desk's startup modules failed in the hook, so it may not have recorded the session or started the boot.", "fix": "Call desk_status; it starts the boot and names the root Desk bound." },
+        { "code": "native-memory-repair", "means": "Desk could not turn off Copilot's native memory in settings.json, so the context says repair native memory now.", "fix": "Set memory to false in Copilot's settings.json, as the context's repair line asks, then continue." },
+        { "code": "boot-pending", "means": "The boot had not finished by the optional lines' deadline, so the context says it is still running.", "fix": "Call desk_status for the boot's result before saying anything about the desk's state." },
+        { "code": "no-desk-bound", "means": "No desk is bound yet, so the startup line says Desk is in setup mode and no boot ran.", "fix": "Run the onboarding path desk_status names, desk:first-run-bootstrap by default." },
+        { "code": "binding-unavailable", "means": "The bound desk's folder is missing or its root configuration could not be read, so the startup line names the problem.", "fix": "Follow the remedy desk_status reports with root_unavailable: restore the folder, or rebind with desk:first-run-bootstrap." }
+      ],
+      "uses": ["mcp:desk_status", "skill:desk:session-start", "skill:plain-language:plain-language", "agent:desk:worker copilot", "skill:desk:first-run-bootstrap"]
+    },
+    {
+      "id": "hook:desk copilot userPromptSubmitted copilot-boot-prompt.cjs",
+      "group": "desk-session-hooks",
+      "when": "Each prompt a person sends in Copilot CLI: starts the desk boot and hands its result beside the message, once per session",
+      "effect": "write",
+      "errors": [
+        { "code": "child-agent", "means": "The prompt came from a subagent (agentId and parentAgentId set), so it gets one line saying to follow its brief and no boot.", "fix": "Follow the brief; load plain-language before writing text a person reads." },
+        { "code": "boot-pending", "means": "The boot was still running when the 8 s wait ended, so the context says so once.", "fix": "Call desk_status, which waits for the boot; the next message also carries it." },
+        { "code": "windows-boot-deferred", "means": "On Windows the hook starts no boot, so the context says the first Desk tool reply carries it.", "fix": "Call desk_status before reporting the desk's state." },
+        { "code": "no-usable-desk", "means": "The session id, folder or auto-boot setting gives no usable desk, or the boot was already delivered, so the hook answers {}.", "fix": "Run desk_doctor if a boot was expected in this folder." }
+      ],
+      "uses": ["mcp:desk_status", "skill:plain-language:plain-language"]
+    },
+    {
+      "id": "hook:superpowers claude SessionStart run-hook.cmd session-start",
+      "group": "superpowers-session-hooks",
+      "when": "Claude Code starts, clears or compacts: injects the using-superpowers skill text, nested under hookSpecificOutput, through bash",
+      "effect": "read",
+      "errors": [
+        { "code": "skill-unreadable", "means": "skills/using-superpowers/SKILL.md could not be read, so the context says Error reading using-superpowers skill.", "fix": "Reinstall or update the superpowers plugin so its using-superpowers skill is present." },
+        { "code": "no-bash", "means": "On Windows, no Git Bash or bash was found, so run-hook.cmd exits 0 with no context; on Unix a missing bash fails with exit 127.", "fix": "Install Git for Windows or bash, then start a new session to get the skill introduction." },
+        { "code": "missing-script-name", "means": "On Windows, run-hook.cmd ran with no script name, so it wrote run-hook.cmd: missing script name and exited 1.", "fix": "Pass session-start after run-hook.cmd in the hooks.json command." }
+      ],
+      "uses": ["skill:superpowers:using-superpowers", "host:Skill"]
+    },
+    {
+      "id": "hook:superpowers copilot sessionStart run-hook.cmd session-start",
+      "group": "superpowers-session-hooks",
+      "when": "Copilot CLI opens a session: injects the using-superpowers skill text as top-level additionalContext through bash",
+      "effect": "read",
+      "errors": [
+        { "code": "skill-unreadable", "means": "The using-superpowers SKILL.md was missing or unreadable, so Copilot gets only an error line in place of it.", "fix": "Update the superpowers plugin and start a new Copilot session." },
+        { "code": "no-bash", "means": "On Windows, no bash was found, so the hook gives Copilot no context and exits 0; on Unix a missing bash fails with exit 127.", "fix": "Install bash (Git for Windows on Windows) and start a new session." },
+        { "code": "wrong-output-shape", "means": "CLAUDE_PLUGIN_ROOT is set without COPILOT_CLI, so the script emits Claude's nested shape, which Copilot does not read.", "fix": "Set COPILOT_CLI=1 in Copilot's environment, or unset CLAUDE_PLUGIN_ROOT there." }
+      ],
+      "uses": ["skill:superpowers:using-superpowers", "host:Skill"]
+    },
+    {
+      "id": "hook:desk copilot-extension onPreMcpToolCall session-label",
+      "group": "desk-tool-call-hooks",
+      "when": "Before each MCP call in Copilot with the optional extension: waits for pending session names, then names the session after the focused task",
+      "effect": "write",
+      "errors": [
+        { "code": "unsupported-runtime", "means": "The Copilot SDK lacks the name or metadata RPCs, or the extension could not join, so automatic labels are off.", "fix": "Update Copilot CLI to a release whose SDK has session name RPCs, then restart." },
+        { "code": "owner-unknown", "means": "SESSION_ID does not match the joined session, so the extension names nothing.", "fix": "Start the session through Copilot so it sets SESSION_ID for the extension." },
+        { "code": "provider-binding-unavailable", "means": "The task tools did not come from Desk's plugin MCP server, so their results are not trusted for labels.", "fix": "Load Desk's MCP server from the plugin, not a hand-added config, then focus the task again." },
+        { "code": "missing-current-safe-proposal", "means": "task_focus, task_create or task_update returned no matching safe session_label proposal, so no label was set.", "fix": "Pass a plain display_label on the next task_focus, task_create or task_update." },
+        { "code": "native-apply-uncertain", "means": "A name write or the ordering wait timed out, so the extension stops naming for this session; tool calls continue.", "fix": "Restart the Copilot session to resume automatic labels." },
+        { "code": "native-owner-refused", "means": "Copilot kept a name the person set, so the label is preserved, not replaced.", "fix": "Clear the session's manual name in Copilot if Desk should name it." },
+        { "code": "native-ordering-unavailable", "means": "The extension could not order its name write after earlier ones, so it stops naming for this session.", "fix": "Restart the Copilot session to resume automatic labels." },
+        { "code": "native-readback-mismatch", "means": "After the name write, Copilot read back a different name, so the extension stops naming for this session.", "fix": "Check the session's name in Copilot, then restart the session to resume labels." }
+      ],
+      "uses": []
+    }
+  ]
 }
