@@ -180,6 +180,7 @@ test("server.callTool rejects unknown tool names", async () => {
     input: {},
   })
   assert.ok(res.isError)
+  assert.deepEqual(res.structuredContent, { code: "unknown_door" })
   assert.match(res.content[0].text, /unknown tool/)
 })
 
