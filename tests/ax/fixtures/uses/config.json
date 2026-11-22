@@ -1,0 +1,12 @@
+{
+  "product": "desk",
+  "walkers": {
+    "desk-mcp": { "module": "ax/walkers/mcp.mts", "kinds": ["mcp"] },
+    "desk-skills": { "module": "ax/walkers/skills.mts", "kinds": ["skill", "agent"] }
+  },
+  "sources": [
+    { "walker": "desk-mcp", "module": "tests/ax/fixtures/mcp/tool-names.js", "source": "tests/ax/fixtures/mcp/tool-names.js" },
+    { "walker": "desk-skills", "module": "", "source": "tests/ax/fixtures/skills", "cards": "tests/ax/fixtures/uses/cards.json" },
+    { "walker": "builtin-elsewhere", "module": "x", "source": "x" }
+  ]
+}

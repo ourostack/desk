@@ -1,0 +1,1 @@
+{ "errors": [{ "code": "unknown-door", "means": "m", "fix": "f" }], "doors": [{ "id": "mcp:task_create", "group": "g", "when": "w", "effect": "write", "errors": [] }] }

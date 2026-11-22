@@ -1,0 +1,22 @@
+{
+  "product": "desk",
+  "walkers": {
+    "desk-mcp": { "module": "ax/walkers/mcp.mts", "kinds": ["mcp"] },
+    "desk-cli": { "module": "ax/walkers/cli.mts", "kinds": ["cli"] },
+    "desk-skills": { "module": "ax/walkers/skills.mts", "kinds": ["skill", "agent"] },
+    "desk-hooks": { "module": "ax/walkers/hooks.mts", "kinds": ["hook"] },
+    "desk-http": { "module": "ax/walkers/http.mts", "kinds": ["http"] }
+  },
+  "sources": [
+    { "walker": "desk-mcp", "module": "plugins/desk/mcp/src/tool-names.js", "source": "plugins/desk/mcp/src/tool-names.js", "cards": "ax/cards/mcp-desk.json", "handlers": ["plugins/desk/mcp/src"] },
+    { "walker": "desk-mcp", "module": "plugins/desk/mcp/web-catalog.json", "source": "plugins/desk/mcp/web-catalog.json", "cards": "ax/cards/mcp-desk-web.json", "handlers": ["plugins/desk/mcp/web.cjs", "plugins/desk/mcp/web-auth.cjs", "plugins/desk/mcp/web-browser-discovery.cjs", "plugins/desk/mcp/web-launch.cjs"] },
+    { "walker": "desk-cli", "module": "", "source": "plugins", "cards": "ax/cards/cli-plugins.json", "handlers": ["plugins/desk/mcp/src"] },
+    { "walker": "desk-cli", "module": "", "source": "hosted", "cards": "ax/cards/cli-hosted.json", "handlers": ["hosted/src"] },
+    { "walker": "desk-skills", "module": "", "source": "plugins", "cards": "ax/cards/skills.json" },
+    { "walker": "desk-hooks", "module": "", "source": "plugins", "cards": "ax/cards/hooks.json" },
+    { "walker": "desk-http", "module": "gateway", "source": "hosted/src/server.js", "cards": "ax/cards/http-gateway.json" },
+    { "walker": "desk-http", "module": "hooks", "source": "hosted/src/hooks/app.js", "cards": "ax/cards/http-hooks.json" }
+  ],
+  "groups": [],
+  "bookletWords": { "allow": [] }
+}
