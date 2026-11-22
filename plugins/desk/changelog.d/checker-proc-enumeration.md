@@ -1,1 +1,0 @@
-Report a disappearing or unreadable process entry during checker namespace enumeration as an incomplete survey, not an uncaught controller error. Incomplete surveys still refuse namespace closure and checker availability; confinement and time limits are unchanged.
