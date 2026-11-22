@@ -16,7 +16,7 @@
         {
           "code": "copy-source-permission",
           "means": "Opening mine, the operating system refused to let Desk read the person's browser profile, so no copy was opened.",
-          "fix": "Open a fresh browser instead; only the person can grant that access in the system's privacy settings."
+          "fix": "Open a fresh browser instead; access to the profile is the operator's or an administrator's to grant."
         },
         {
           "code": "copy-source-policy",
@@ -24,8 +24,18 @@
           "fix": "Open a fresh browser instead; don't work around the refusal by controlling the person's own browser."
         },
         {
+          "code": "auth-logging-refused",
+          "means": "Opening mine, the desk-web process runs with Node options, inspection or debug logging that could leak signed-in output.",
+          "fix": "Open a fresh browser, or have desk-web restarted without NODE_OPTIONS, DEBUG or an inspector."
+        },
+        {
+          "code": "auth-open-failed",
+          "means": "mine could not be opened safely, for example its browser driver didn't install or start; no other way of opening it was tried.",
+          "fix": "Open a fresh browser instead, or try mine again later."
+        },
+        {
           "code": "auth-context-refused",
-          "means": "close named a mine context this server doesn't own, such as one an earlier Desk process opened.",
+          "means": "close named a context this server doesn't own, such as another live session's or one an earlier Desk process left.",
           "fix": "Leave that context alone and open a new one; each server closes only the contexts it opened."
         },
         {
@@ -35,7 +45,7 @@
         },
         {
           "code": "browser-failure",
-          "means": "Any other refusal: no Edge or Chrome installed, the browser driver didn't install, or a bad action or contextId.",
+          "means": "A refusal with no code of its own: no Edge or Chrome installed, a fresh browser's driver didn't install, or a bad action, browser or contextId.",
           "fix": "Read the message, which names the cause and the next step, such as installing a browser or passing open's contextId."
         }
       ]
@@ -57,18 +67,43 @@
           "fix": "Take a new snapshot and use a ref from it."
         },
         {
+          "code": "auth-arguments-refused",
+          "means": "In mine, the arguments don't fit the command: the wrong number, an unknown flag or a wait out of range.",
+          "fix": "Check them against the commands the message lists and run the command again with corrected arguments."
+        },
+        {
           "code": "auth-command-unknown",
           "means": "In mine, args[0] isn't one of the commands mine runs; the message lists them.",
           "fix": "Use a listed command, or eval or run-code for anything the list doesn't cover."
         },
         {
+          "code": "auth-script-failed",
+          "means": "In mine, the eval or run-code script threw an error or didn't finish; the context stays open.",
+          "fix": "Fix the script from the error the message gives, and run it again."
+        },
+        {
+          "code": "auth-action-covered",
+          "means": "In mine, something on the page, such as a tooltip or menu, covers the control, and the action may have applied.",
+          "fix": "Press Escape or click what covers it, then act on a fresh ref from [\"snapshot\"]."
+        },
+        {
+          "code": "auth-action-timeout",
+          "means": "In mine, the control did not respond in time, and the action may have applied.",
+          "fix": "Take a new snapshot to see what happened, then act on a fresh ref; if the page keeps stalling, wait first."
+        },
+        {
+          "code": "auth-context-refused",
+          "means": "In mine, the context or its selected tab is closed, for example after an auth-timeout.",
+          "fix": "Run [\"tab-list\"] and select an open tab, or open a new context with browser_context."
+        },
+        {
           "code": "auth-timeout",
           "means": "In mine, the command ran out of time, and Desk closed the context.",
-          "fix": "Open a new context with browser_context and start again from the page you were on, keeping waits under a minute."
+          "fix": "Close the old contextId, open a new context and start again from the page you were on, keeping waits under a minute."
         },
         {
           "code": "browser-failure",
-          "means": "No open browser has that contextId, args aren't a list of strings or start with no page command, or a fresh command failed or ran too long.",
+          "means": "No open browser has that contextId, or in fresh the args fail its checks or the command failed or ran too long.",
           "fix": "Read the message, which names the cause: open a context first, fix args, or run the command again."
         },
         {

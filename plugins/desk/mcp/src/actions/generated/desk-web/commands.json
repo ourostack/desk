@@ -33,7 +33,7 @@
     },
     {
       "name": "browser-command",
-      "summary": "Use when you drive an owned browser context: run one command with `args`, a list of literal strings passed as arguments with no shell. Start with [\"goto\",\"https://example.com\"] or [\"snapshot\"], then act on current refs; on AUTH_SNAPSHOT_INVALIDATED snapshot again. Every reply says where the tab is and whether the action navigated or changed the page. eval and run-code return what the script returns, unredacted. Open and close only through browser_context.",
+      "summary": "Use when you drive an owned browser context: run one command with `args`, a list of literal strings that no shell parses. Start with [\"goto\",\"https://example.com\"] or [\"snapshot\"], then act on current refs; on AUTH_SNAPSHOT_INVALIDATED snapshot again. Every reply says where the tab is and whether the action navigated or changed the page. eval and run-code return what the script returns, unredacted. Open and close only through browser_context.",
       "effect": "private",
       "flags": {
         "context-id": {
