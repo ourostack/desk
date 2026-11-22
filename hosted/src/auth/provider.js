@@ -312,7 +312,7 @@ export function createProvider({
       const request = unsealed("consent", consent);
       if (!request) {
         log("consent refused: invalid_consent");
-        return page(400, "This sign-in link has expired or is not valid. Start again from Claude.", "Sign-in link expired · Hosted Desk");
+        return page(400, "This sign-in link has expired or is not valid. Start again from Claude.", "Sign-in link expired · Hosted Desk", "signin-link-invalid");
       }
       const { exp: _exp, ...pending } = request;
       if (!withAccounts) return { redirectTo: signIn.authorizeUrl(sealed("pending", pending, TTL.pending)) };
@@ -326,7 +326,7 @@ export function createProvider({
         return signIn.begin(pending, cookies);
       }
       log(`consent refused: invalid_method client ${pending.clientId}`);
-      return page(400, "This sign-in method isn't available. Start again from Claude.", "Sign-in method unavailable · Hosted Desk");
+      return page(400, "This sign-in method isn't available. Start again from Claude.", "Sign-in method unavailable · Hosted Desk", "signin-method-invalid");
     },
 
     async challengeForAuthorizationCode(client, code) {
@@ -388,7 +388,7 @@ export function consentHandler(provider, { issuer }) {
   return (req, res) => {
     if (!fromOwnOrigin(req, issuerOrigin)) {
       provider.log("consent refused: cross_origin");
-      return sendPage(res, page(403, "This approval did not come from the Hosted Desk page. Approve on the Hosted Desk page itself, starting again from Claude.", "Approval refused · Hosted Desk"));
+      return sendPage(res, page(403, "This approval did not come from the Hosted Desk page. Approve on the Hosted Desk page itself, starting again from Claude.", "Approval refused · Hosted Desk", "consent-origin-refused"));
     }
     const text = (value) => (typeof value === "string" ? value : undefined);
     const outcome = provider.approve(text(req.body?.consent), { method: text(req.body?.method), cookies: parseCookies(req.headers.cookie) });

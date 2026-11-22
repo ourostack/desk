@@ -375,13 +375,13 @@ export function createEntraSignIn({
       }
 
       const idToken = await exchange(code, signin.verifier, pending.clientId);
-      if (!idToken) return { ...page(502, "Ouro sign-in did not confirm who signed in. Start again from Claude.", "Ouro sign-in did not confirm · Hosted Desk"), clearCookies };
+      if (!idToken) return { ...page(502, "Ouro sign-in did not confirm who signed in. Start again from Claude.", "Ouro sign-in did not confirm · Hosted Desk", "signin-unconfirmed"), clearCookies };
       let identity;
       try {
         identity = await verifierNow().verify(idToken, { nonce: signin.nonce });
       } catch (refusal) {
         log(`sign-in refused: invalid_id_token (${refusal?.reason ?? "error"}) client ${pending.clientId}`);
-        return { ...page(400, "Ouro sign-in could not be confirmed. Start again from Claude.", "Ouro sign-in could not be confirmed · Hosted Desk"), clearCookies };
+        return { ...page(400, "Ouro sign-in could not be confirmed. Start again from Claude.", "Ouro sign-in could not be confirmed · Hosted Desk", "signin-unconfirmed"), clearCookies };
       }
       const authTime = Math.floor(now() / 1000);
 
@@ -439,7 +439,7 @@ export function entraCallbackHandler(entra, { log = stderrLog } = {}) {
       sendPage(res, outcome);
     } catch (error) {
       log(`sign-in failed: entra_callback_error (${typeof error?.name === "string" && /^\w{1,64}$/.test(error.name) ? error.name : "error"})`);
-      sendPage(res, page(502, "Sign-in failed while talking to Ouro sign-in. Start again from Claude.", "Ouro sign-in failed · Hosted Desk"));
+      sendPage(res, page(502, "Sign-in failed while talking to Ouro sign-in. Start again from Claude.", "Ouro sign-in failed · Hosted Desk", "signin-provider-unavailable"));
     }
   };
 }
