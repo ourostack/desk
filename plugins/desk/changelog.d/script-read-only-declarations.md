@@ -1,1 +1,0 @@
-The Superpowers context mapper (`mcp/src/activation/superpowers-context.js`) declares itself read-only with an `ax: read-only` comment, which the Ouro AX census reads as its read-only evidence. When it fails with a stable code, it now prints `code: <code>` on a second stderr line, after the unchanged sentence, so the codes on its census card reach the agent that runs it.
