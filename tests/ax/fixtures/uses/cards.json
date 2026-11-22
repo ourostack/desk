@@ -1,0 +1,4 @@
+{ "doors": [
+  { "id": "skill:plug:start-task", "uses": ["mcp:task_create", "mcp:task_creat", "skill:other:plain", "host:Bash"] },
+  { "id": "skill:other:plain" }
+] }

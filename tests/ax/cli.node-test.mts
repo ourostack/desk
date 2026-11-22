@@ -10,7 +10,7 @@ const FIX = relative(ROOT, join(dirname(fileURLToPath(import.meta.url)), "fixtur
 const at = (file: string) => `${FIX}/${file}`;
 const options = (source: string, more: Record<string, unknown> = {}) => ({ product: "desk", module: "", source: at(source), root: ROOT, ...more });
 
-test("kit commands, hand-written entry points and their first words, and shell scripts are doors", async () => {
+test("kit commands, hand-written entry points and their first words, and shell and Python scripts are doors", async () => {
   const { doors, errors } = await walk(options("plug"));
   assert.deepEqual(errors, []);
   assert.deepEqual(
@@ -23,6 +23,8 @@ test("kit commands, hand-written entry points and their first words, and shell s
       ["cli:node " + at("plug/scripts/credential.js") + " erase", at("plug/scripts/credential.js"), 6, {}],
       ["cli:node " + at("plug/scripts/credential.js") + " get", at("plug/scripts/credential.js"), 1, {}],
       ["cli:node " + at("plug/scripts/main-check.cjs"), at("plug/scripts/main-check.cjs"), 2, {}],
+      ["cli:node " + at("plug/scripts/run-main.mjs"), at("plug/scripts/run-main.mjs"), 6, {}],
+      ["cli:python3 " + at("plug/skills/helper/audit.py"), at("plug/skills/helper/audit.py"), 8, {}],
       ["cli:" + at("plug/hooks/node-missing.sh"), at("plug/hooks/node-missing.sh"), 1, {}],
       ["cli:" + at("plug/scripts/task-done"), at("plug/scripts/task-done"), 1, {}],
       ["cli:session-boot", at("plug/src/one-cli.js"), 4, { readOnly: true }],
@@ -34,9 +36,10 @@ test("kit commands, hand-written entry points and their first words, and shell s
   );
 });
 
-test("an entry point that runs a kit CLI, one a hooks file registers, a library, vendored kits and tests are not doors of their own", async () => {
+test("an entry point that runs a kit CLI, a script a hooks file registers (directly or through a dispatcher), a library, vendored kits and tests are not doors of their own", async () => {
   const ids = (await walk(options("plug"))).doors.map((d) => d.id);
-  for (const file of ["scripts/tasks.js", "hooks/start.cjs", "src/library.js", "src/lib/ouro-ui/ax-command.ts", "__tests__/x.test.js"]) {
+  const files = ["scripts/tasks.js", "hooks/start.cjs", "hooks/fallback.sh", "hooks/session-start", "src/library.js", "src/lib/ouro-ui/ax-command.ts", "__tests__/x.test.js", "skills/helper/module.py", "skills/helper/test_audit.py"];
+  for (const file of files) {
     assert.ok(!ids.some((id) => id.includes(file)), `${file} is not a door`);
   }
   assert.ok(!ids.includes("cli:xray"));
@@ -70,4 +73,10 @@ test("a door found twice, a card without an id and an unreadable sidecar are cen
   const broken = await walk(options("plug", { cards: at("broken-cards.txt") }));
   assert.equal(broken.errors.length, 1);
   assert.match(broken.errors[0]!, /broken-cards\.txt: can't read the cards: /);
+});
+
+test("a source with no doors at all is a census error, so the walker can't go blind unnoticed", async () => {
+  const { doors, errors } = await walk(options("empty"));
+  assert.deepEqual(doors, []);
+  assert.deepEqual(errors, [`${at("empty")}: no commands or scripts under it, so the walker finds nothing. Fix: point the source at a folder of code.`]);
 });

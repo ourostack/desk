@@ -4,8 +4,11 @@
 // `express()` in that file is a door `http:<label> <METHOD> <path>`, where `<label>` is the source's `module` (which
 // app it is, as Desk deploys it: `gateway`, `hooks`) and `<method>` is get, post, put, patch, delete, all or use. A
 // path list is one door per path. `use` with a function or express's own middleware (`express.json()`) first is
-// middleware, not a door; `use` with a router a call builds (`app.use(mcpAuthRouter(options))`) is one door,
-// `USE <callee>()`, since the routes it adds come from that call. A route whose path isn't a literal is an unwalked gap.
+// middleware, not a door. `use` with a router a known factory builds (`app.use(mcpAuthRouter(options))`) is a door for
+// each route that factory mounts, from ROUTERS; any other router, an `express.Router()` or an `app.route()` is an
+// unwalked gap, since its routes aren't in this file. A route whose path isn't a literal is an unwalked gap too, and a
+// source with no express app, or with an app but no routes, is a census error: the walker would otherwise go blind
+// and the census would ask for the doors to come off the baseline.
 //
 // `cards` is the sidecar of cards, `{ "doors": [DoorCard] }`; a card whose door isn't found is a census error. The
 // file's literals outside error cards are the codes it may raise, as written or with hyphens as underscores.
@@ -14,7 +17,14 @@ import { relative, resolve } from "node:path";
 import ts from "typescript";
 import type { Door, DoorCard, Gap, WalkerOptions, WalkResult } from "../scripts/ouro-census/types.mts";
 
-const METHODS = new Set(["get", "post", "put", "patch", "delete", "all", "use"]);
+const METHODS = new Set(["get", "post", "put", "patch", "delete", "all", "use", "route"]);
+
+// The routes a router factory mounts, as the library builds them. mcpAuthRouter is @modelcontextprotocol/sdk 1.x's
+// (dist/esm/server/auth/router.js): the authorization and token endpoints, the metadata routes, and dynamic client
+// registration and revocation, which it mounts when the provider supports them (counted here either way).
+const ROUTERS: Readonly<Record<string, readonly string[]>> = {
+  mcpAuthRouter: ["/authorize", "/token", "/register", "/revoke", "/.well-known/oauth-authorization-server", "/.well-known/oauth-protected-resource"],
+};
 const isText = (n: ts.Node | undefined): n is ts.StringLiteral | ts.NoSubstitutionTemplateLiteral => !!n && (ts.isStringLiteral(n) || ts.isNoSubstitutionTemplateLiteral(n));
 /** `express.json()` and the other middleware express itself builds. */
 const isExpressMiddleware = (n: ts.Node): boolean => ts.isCallExpression(n) && ts.isPropertyAccessExpression(n.expression) && ts.isIdentifier(n.expression.expression) && n.expression.expression.text === "express";
@@ -47,20 +57,29 @@ export async function walk(opts: WalkerOptions): Promise<WalkResult> {
     if (doors.some((d) => d.name === name)) return;
     doors.push({ id: `http:${name}`, kind: "http", product: opts.product, name, description: "", file, line: lineOf(node), card: null, evidence: {} });
   };
+  const gap = (what: string, n: ts.Node, why: string) => unwalked.push({ id: `http:${label} ${what}`, kind: "http", file, line: lineOf(n), reasons: [`unwalked: ${why}`] });
   const visit = (n: ts.Node): void => {
+    if (ts.isCallExpression(n) && ts.isPropertyAccessExpression(n.expression) && ts.isIdentifier(n.expression.expression) && n.expression.expression.text === "express" && n.expression.name.text === "Router") {
+      gap(`ROUTER ${file}:${lineOf(n)}`, n, "an express.Router(), whose routes the walker doesn't follow");
+    }
     if (ts.isCallExpression(n) && ts.isPropertyAccessExpression(n.expression) && ts.isIdentifier(n.expression.expression) && apps.has(n.expression.expression.text) && METHODS.has(n.expression.name.text)) {
       const method = n.expression.name.text.toUpperCase();
       const first = n.arguments[0];
-      if (isText(first)) add(method, first.text, first);
+      if (method === "ROUTE") gap(`ROUTE ${file}:${lineOf(n)}`, n, "an app.route() chain");
+      else if (isText(first)) add(method, first.text, first);
       else if (first && ts.isArrayLiteralExpression(first) && first.elements.length > 0 && first.elements.every(isText)) for (const el of first.elements) add(method, (el as ts.StringLiteral).text, el);
       else if (method === "USE" && first && (ts.isArrowFunction(first) || ts.isFunctionExpression(first) || isExpressMiddleware(first))) {
         // Middleware: it runs on every request and adds no route.
-      } else if (method === "USE" && first && ts.isCallExpression(first)) add(method, `${first.expression.getText(sf)}()`, first);
-      else unwalked.push({ id: `http:${label} ${method} ${file}:${lineOf(n)}`, kind: "http", file, line: lineOf(n), reasons: ["unwalked: a route whose path isn't a literal"] });
+      } else if (method === "USE" && first && ts.isCallExpression(first) && ts.isIdentifier(first.expression) && Object.hasOwn(ROUTERS, first.expression.text)) {
+        for (const route of ROUTERS[first.expression.text]!) add(method, route, first);
+      } else if (method === "USE" && first && ts.isCallExpression(first)) gap(`USE ${first.expression.getText(sf)}()`, n, "a router whose routes aren't in this file");
+      else gap(`${method} ${file}:${lineOf(n)}`, n, "a route whose path isn't a literal");
     }
     ts.forEachChild(n, visit);
   };
   visit(sf);
+  if (apps.size === 0) errors.push(`${file}: no express() app, so the walker finds no routes. Fix: point the source at the file that builds the app.`);
+  else if (doors.length === 0 && unwalked.length === 0) errors.push(`${file}: an express app with no routes the walker can read.`);
 
   let cards: DoorCard[] = [];
   if (opts.cards) {

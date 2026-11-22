@@ -10,7 +10,7 @@ const FIX = relative(ROOT, join(dirname(fileURLToPath(import.meta.url)), "fixtur
 const at = (file: string) => `${FIX}/${file}`;
 const options = (more: Record<string, unknown> = {}) => ({ product: "desk", module: "", source: FIX, root: ROOT, ...more });
 
-test("each plugin's SKILL.md files and agent files are doors, described by their frontmatter", async () => {
+test("each plugin's SKILL.md files and agent files are doors, described by their frontmatter, each agent file by its host", async () => {
   const { doors, errors } = await walk(options());
   assert.deepEqual(errors, []);
   assert.deepEqual(
@@ -18,9 +18,16 @@ test("each plugin's SKILL.md files and agent files are doors, described by their
     [
       ["skill:other:plain", "skill", "", at("other/skills/plain/SKILL.md"), 1, { readOnly: true }],
       ["skill:plug:start-task", "skill", "Use to start a task and route it.", at("plug/skills/start-task/SKILL.md"), 2, { readOnly: true }],
-      ["agent:plug:worker", "agent", "A worker.", at("plug/agents/worker.md"), 3, {}],
+      ["agent:plug:worker copilot", "agent", "The Copilot worker.", at("plug/agents/worker.agent.md"), 2, {}],
+      ["agent:plug:worker claude", "agent", "A worker.", at("plug/agents/worker.md"), 3, {}],
     ],
   );
+});
+
+test("a skill folder without a SKILL.md is an unwalked gap, and a source with no skills or agents is a census error", async () => {
+  assert.deepEqual((await walk(options())).unwalked.map((g) => [g.id, g.file, g.reasons]), [["skill:plug:no-file", at("plug/skills/no-file"), ["unwalked: a skill folder without a SKILL.md"]]]);
+  const empty = relative(ROOT, join(dirname(fileURLToPath(import.meta.url)), "fixtures", "skills-empty"));
+  assert.deepEqual((await walk({ ...options(), source: empty })).errors, [`${empty}: no skills or agent files under it, so the walker finds nothing. Fix: point the source at the folder of plugins.`]);
 });
 
 test("frontmatter reads plain, quoted and folded values", () => {
@@ -32,7 +39,7 @@ test("a card must list the doors it uses, as ids, naming skills that exist; a ca
   const { doors, errors } = await walk(options({ cards: at("cards.json") }));
   assert.deepEqual(doors.find((d) => d.id === "skill:plug:start-task")!.card?.uses, ["mcp:task_create", "skill:other:plain", "host:Bash"]);
   assert.deepEqual(errors, [
-    `agent:plug:worker: the card names no uses. Fix: list the doors it tells the agent to use, such as "mcp:task_update" or "host:Bash", or [] when it uses none.`,
+    `agent:plug:worker claude: the card names no uses. Fix: list the doors it tells the agent to use, such as "mcp:task_update" or "host:Bash", or [] when it uses none.`,
     `skill:other:plain: uses "nope", which isn't a door id such as "mcp:task_update".`,
     `skill:other:plain: uses skill:plug:missing, which the walker doesn't find. Fix: name a skill or agent file that exists.`,
     `skill:other:plain: uses 3, which isn't a door id such as "mcp:task_update".`,

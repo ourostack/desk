@@ -6,14 +6,18 @@
 //     `defineCommand({ name: "<literal>" })` call, or a call to a local helper that passes its first parameter to
 //     defineCommand as the name (`const command = (name, def, run) => defineCommand({ name, ...def, run })`), followed
 //     through constants and spreads. One the walker can't follow is an unwalked gap, never silently dropped.
-//   - A hand-written entry point: a module with a `#!` line, or one that reads `process.argv` outside any function or
-//     checks `require.main === module`, and neither defines a kit CLI nor imports one directly. It is one door,
-//     `cli:node <path>`, and each word its first argument is compared with (`process.argv[2] === "get"`, or a constant
-//     or first element taken from it) is a door `cli:node <path> <word>`. Words starting with `-` are flags. A shell
-//     script (a `.sh` file, or a file with a `#!` line and no script extension) is one door, `cli:<path>`.
-// An entry point that a hooks file under the source registers (hooks/hooks.json, hooks/copilot-hooks.json) is the
-// hooks walker's door, so it is claimed here. Vendored kits (lib/ouro-ui, lib/ouro-actions), tests and fixtures are
-// not walked.
+//   - A hand-written entry point: a module with a `#!` line, one that reads `process.argv` outside any function or
+//     checks `require.main === module`, or one that calls a function of its own that reads argv (`main()`), and that
+//     neither defines a kit CLI nor imports one directly. It is one door, `cli:node <path>`, and each word its first
+//     argument is compared with (`process.argv[2] === "get"`, or a constant or first element taken from it) is a door
+//     `cli:node <path> <word>`. Words starting with `-` are flags.
+//   - A shell script (a `.sh` file, or a file with a `#!` line and no script extension) is one door, `cli:<path>`, and
+//     a Python script (a `.py` file with a `#!` line or an `if __name__ == "__main__":` guard, not test_*.py) is one
+//     door, `cli:python3 <path>`.
+// A script that a hooks file under the source registers (hooks/hooks.json, hooks/copilot-hooks.json), directly or
+// through a dispatcher such as `run-hook.cmd session-start`, is the hooks walker's door, so it is claimed here.
+// Vendored kits (lib/ouro-ui, lib/ouro-actions), tests and fixtures are not walked. A source with no doors at all
+// is a census error, so the walker can't go blind unnoticed.
 //
 // `cards` is the sidecar of cards, `{ "doors": [DoorCard] }`. A card whose door isn't found is a census error.
 // `handlers` are extra files or folders whose literals count as raised for every door, beside the door's own file;
@@ -61,6 +65,15 @@ function isShellScript(path: string): boolean {
   } finally {
     closeSync(fd);
   }
+}
+
+/** The line of a Python script's `#!` or `if __name__ == "__main__":`, or null for a module (and for test_*.py). */
+function pythonEntry(path: string): number | null {
+  if (/^test_|_test\.py$/.test(basename(path))) return null;
+  const lines = readFileSync(path, "utf8").split(/\r?\n/);
+  if (lines[0]?.startsWith("#!")) return 1;
+  const at = lines.findIndex((l) => /^if\s+__name__\s*==\s*["']__main__["']\s*:/.test(l));
+  return at === -1 ? null : at + 1;
 }
 
 /** The object literal a property holds, through `name` shorthand and same-file constants. */
@@ -209,13 +222,38 @@ const isMainCheck = (n: ts.Node): boolean =>
   [n.left, n.right].some((s) => ts.isPropertyAccessExpression(s) && ts.isIdentifier(s.expression) && s.expression.text === "require" && s.name.text === "main") &&
   [n.left, n.right].some((s) => ts.isIdentifier(s) && s.text === "module");
 
-/** The node of a top-level argv read or main check, outside any function; null when the module isn't an entry point. */
+/** Whether a node reads `process.argv` anywhere inside it. */
+function readsArgv(node: ts.Node): boolean {
+  let found = false;
+  const visit = (n: ts.Node): void => {
+    if (found) return;
+    if (isArgv(n)) found = true;
+    else ts.forEachChild(n, visit);
+  };
+  visit(node);
+  return found;
+}
+
+/**
+ * The node that makes a module an entry point, or null: a `#!` line, a top-level argv read or main check outside any
+ * function, or a top-level call (`main()`, `await main()`, `main().catch(...)`) to a function of the file that reads
+ * argv.
+ */
 function entryNode(sf: ts.SourceFile): ts.Node | null {
   if (sf.text.startsWith("#!")) return sf.statements[0] ?? sf;
+  const argvFns = new Set<string>();
+  for (const st of sf.statements) {
+    if (ts.isFunctionDeclaration(st) && st.name && readsArgv(st)) argvFns.add(st.name.text);
+    if (ts.isVariableStatement(st)) {
+      for (const d of st.declarationList.declarations) {
+        if (ts.isIdentifier(d.name) && d.initializer && (ts.isArrowFunction(d.initializer) || ts.isFunctionExpression(d.initializer)) && readsArgv(d.initializer)) argvFns.add(d.name.text);
+      }
+    }
+  }
   let found: ts.Node | null = null;
   const visit = (n: ts.Node): void => {
     if (found || ts.isFunctionLike(n) || ts.isClassLike(n)) return;
-    if (isArgv(n) || isMainCheck(n)) {
+    if (isArgv(n) || isMainCheck(n) || (ts.isCallExpression(n) && ts.isIdentifier(n.expression) && argvFns.has(n.expression.text))) {
       found = n;
       return;
     }
@@ -282,7 +320,7 @@ function directImports(sf: ts.SourceFile, from: string): string[] {
   return out;
 }
 
-/** The scripts the hooks files under `dir` register: every `hooks/<file>` named in a hook's command. */
+/** The scripts the hooks files register: every `hooks/<file>` named in a hook's command, and a dispatcher's script. */
 function hookScripts(all: readonly string[]): Set<string> {
   const scripts = new Set<string>();
   for (const path of all) {
@@ -290,7 +328,11 @@ function hookScripts(all: readonly string[]): Set<string> {
     const pluginRoot = dirname(dirname(path));
     const visit = (value: unknown): void => {
       if (typeof value === "string") {
-        for (const m of value.matchAll(/hooks[\\/]+([A-Za-z0-9._-]+\.[cm]?js)/g)) scripts.add(join(pluginRoot, "hooks", m[1]!));
+        // Every hooks/<file> a command names, and the script a dispatcher runs (`run-hook.cmd session-start`).
+        for (const m of value.matchAll(/hooks[\\/]+([A-Za-z0-9._-]+)"?(?:\s+([a-z][a-z0-9-]*))?/g)) {
+          scripts.add(join(pluginRoot, "hooks", m[1]!));
+          if (m[1]!.endsWith(".cmd") && m[2]) scripts.add(join(pluginRoot, "hooks", m[2]));
+        }
       } else if (value && typeof value === "object") for (const v of Object.values(value)) visit(v);
     };
     visit(JSON.parse(readFileSync(path, "utf8")));
@@ -352,8 +394,13 @@ export async function walk(opts: WalkerOptions): Promise<WalkResult> {
   const kitFiles = new Set<string>();
   const entries: { path: string; node: ts.Node }[] = [];
   for (const path of all) {
+    if (path.endsWith(".py")) {
+      const line = pythonEntry(path);
+      if (line !== null && !claimedByHooks.has(path)) found.push(door(`python3 ${relative(opts.root, path)}`, path, line, false));
+      continue;
+    }
     if (!SCRIPT.test(path) || NOT_SCRIPT.test(path)) {
-      if (isShellScript(path)) found.push(door(relative(opts.root, path), path, 1, false));
+      if (isShellScript(path) && !claimedByHooks.has(path)) found.push(door(relative(opts.root, path), path, 1, false));
       continue;
     }
     const text = readFileSync(path, "utf8");
@@ -380,6 +427,7 @@ export async function walk(opts: WalkerOptions): Promise<WalkResult> {
     for (const [word, line] of firstWords(sf)) found.push(door(`${name} ${word}`, path, line, false));
   }
 
+  if (found.length === 0 && unwalked.length === 0) errors.push(`${opts.source}: no commands or scripts under it, so the walker finds nothing. Fix: point the source at a folder of code.`);
   const cards = readCards(opts.root, opts.cards, errors);
   const byId = new Map(cards.map((c) => [c.id, c]));
   const handlerLiterals = new Set<string>();

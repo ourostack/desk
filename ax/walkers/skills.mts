@@ -2,8 +2,11 @@
 // never loaded.
 //
 // Under the source folder (one folder per plugin), each `<plugin>/skills/<skill>/SKILL.md` is a door
-// `skill:<plugin>:<skill>`, and each `<plugin>/agents/<file>.md` is a door `agent:<plugin>:<file>`. A door's
-// description is its frontmatter `description`, and its line is that of the frontmatter's `name` (else 1).
+// `skill:<plugin>:<skill>`, and each agent file is a door `agent:<plugin>:<name> <host>`: `<plugin>/agents/<name>.md`
+// is Claude Code's (`claude`) and `<plugin>/agents/<name>.agent.md` is Copilot's (`copilot`). A door's description is
+// its frontmatter `description`, and its line is that of the frontmatter's `name` (else 1). A skill folder without a
+// SKILL.md is an unwalked gap, and a source with no skills or agent files at all is a census error: the walker would
+// otherwise go blind and the census would ask for the doors to come off the baseline.
 //
 // `cards` is the sidecar of cards, `{ "doors": [DoorCard & { uses: string[] }] }`. A skill or agent file declares the
 // doors it tells the agent to use, as `uses`: ids such as `mcp:task_update`, `cli:drains poll` or
@@ -13,7 +16,7 @@
 // starts an agent, so it has none.
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
-import type { Door, DoorCard, WalkerOptions, WalkResult } from "../scripts/ouro-census/types.mts";
+import type { Door, DoorCard, Gap, WalkerOptions, WalkResult } from "../scripts/ouro-census/types.mts";
 
 const ID = /^[a-z][a-z0-9-]*:\S.*$/;
 
@@ -75,6 +78,7 @@ const isFile = (path: string): boolean => {
 export async function walk(opts: WalkerOptions): Promise<WalkResult> {
   const base = resolve(opts.root, opts.source);
   const doors: Door[] = [];
+  const unwalked: Gap[] = [];
   const add = (kind: "skill" | "agent", name: string, path: string) => {
     const { fields, lines } = frontmatter(readFileSync(path, "utf8"));
     doors.push({
@@ -93,11 +97,16 @@ export async function walk(opts: WalkerOptions): Promise<WalkResult> {
     for (const skill of dirs(join(base, plugin, "skills"))) {
       const path = join(base, plugin, "skills", skill, "SKILL.md");
       if (isFile(path)) add("skill", `${plugin}:${skill}`, path);
+      else unwalked.push({ id: `skill:${plugin}:${skill}`, kind: "skill", file: relative(opts.root, join(base, plugin, "skills", skill)), line: null, reasons: ["unwalked: a skill folder without a SKILL.md"] });
     }
-    for (const file of markdown(join(base, plugin, "agents"))) add("agent", `${plugin}:${file.slice(0, -3)}`, join(base, plugin, "agents", file));
+    for (const file of markdown(join(base, plugin, "agents"))) {
+      const copilot = file.endsWith(".agent.md");
+      add("agent", `${plugin}:${file.slice(0, copilot ? -9 : -3)} ${copilot ? "copilot" : "claude"}`, join(base, plugin, "agents", file));
+    }
   }
 
   const errors: string[] = [];
+  if (doors.length === 0 && unwalked.length === 0) errors.push(`${opts.source}: no skills or agent files under it, so the walker finds nothing. Fix: point the source at the folder of plugins.`);
   let cards: (DoorCard & { uses?: unknown })[] = [];
   if (opts.cards) {
     try {
@@ -125,5 +134,5 @@ export async function walk(opts: WalkerOptions): Promise<WalkResult> {
       else if ((use.startsWith("skill:") || use.startsWith("agent:")) && !ids.has(use)) errors.push(`${card.id}: uses ${use}, which the walker doesn't find. Fix: name a skill or agent file that exists.`);
     }
   }
-  return { doors: doors.map((d) => ({ ...d, card: byId.get(d.id) ?? null })), errors };
+  return { doors: doors.map((d) => ({ ...d, card: byId.get(d.id) ?? null })), errors, unwalked };
 }

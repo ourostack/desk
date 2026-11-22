@@ -1,1 +1,4 @@
-{ "hooks": { "SessionStart": [{ "hooks": [{ "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/start.cjs\"" }] }] } }
+{ "hooks": { "SessionStart": [{ "hooks": [
+  { "type": "command", "command": "if command -v node; then node \"${CLAUDE_PLUGIN_ROOT}/hooks/start.cjs\"; else . \"${CLAUDE_PLUGIN_ROOT}/hooks/fallback.sh\"; fi" },
+  { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/run-hook.cmd\" session-start" }
+] }] } }
