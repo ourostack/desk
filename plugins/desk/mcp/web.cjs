@@ -55,9 +55,9 @@ var SKIP = ["Cache", "Code Cache", "GPUCache", "DawnGraphiteCache", "DawnWebGPUC
   "WebAssistDatabase", "Sessions", "Current Session", "Current Tabs", "Last Session", "Last Tabs"];
 var BROWSERS = { msedge: { name: "Microsoft Edge", short: "Edge" }, chrome: { name: "Google Chrome", short: "Chrome" } };
 
-function plain(message) {
+function plain(message, code) {
   var error = Object.assign(new Error(message), { plain: true });
-  safeErrors.set(error, Object.freeze({ message: message }));
+  safeErrors.set(error, Object.freeze({ message: message, code: code || "browser_failure" }));
   return error;
 }
 
@@ -201,7 +201,7 @@ function chooseBrowser(s, mine) {
 }
 
 function copyPolicyError() {
-  return plain("COPY_SOURCE_POLICY: Desk could not qualify a required profile file's identity, single-link ownership or readable bytes. Do not bypass this refusal or control the person's browser or desktop as a fallback. No authenticated copy was opened.");
+  return plain("COPY_SOURCE_POLICY: Desk could not qualify a required profile file's identity, single-link ownership or readable bytes. Do not bypass this refusal or control the person's browser or desktop as a fallback. No authenticated copy was opened.", "COPY_SOURCE_POLICY");
 }
 
 function permissionDenied(error) {
@@ -214,11 +214,11 @@ function copyPermissionError(app) {
     (process.platform === "darwin" ? " The operator or administrator can review the host app's file-access settings in System Settings > Privacy & Security; Full Disk Access may be relevant, but is not a guaranteed fix." :
       " The operator or administrator can review the host process's profile-folder access and system policy.") +
     " Desk cannot grant OS access. Retry only after an authorized repair; do not switch identity or transport, or control the person's browser or desktop as a fallback." +
-    " No authenticated copy was opened.");
+    " No authenticated copy was opened.", "COPY_SOURCE_PERMISSION");
 }
 
 function copyDestinationError() {
-  return plain("COPY_DESTINATION_FAILED: The private profile destination could not be written completely. No authenticated copy was opened.");
+  return plain("COPY_DESTINATION_FAILED: The private profile destination could not be written completely. No authenticated copy was opened.", "COPY_DESTINATION_FAILED");
 }
 
 function singleFile(stat) {
@@ -461,16 +461,16 @@ function contextDir(s, id) {
 
 function checkAuthLogging(s) {
   [s.env, process.env].forEach(function (env) {
-    if (env.DEBUG || env.DEBUG_FILE || env.NODE_OPTIONS) throw plain("AUTH_LOGGING_REFUSED: Unqualified Node options, preloads or raw logging are incompatible with authenticated output protection.");
+    if (env.DEBUG || env.DEBUG_FILE || env.NODE_OPTIONS) throw plain("AUTH_LOGGING_REFUSED: Unqualified Node options, preloads or raw logging are incompatible with authenticated output protection.", "AUTH_LOGGING_REFUSED");
     ["PWDEBUG", "npm_config_pwdebug", "npm_package_config_pwdebug"].forEach(function (key) {
-      if (env[key] && env[key] !== "0" && env[key] !== "false") throw plain("AUTH_LOGGING_REFUSED: Browser inspection mode is incompatible with authenticated output protection.");
+      if (env[key] && env[key] !== "0" && env[key] !== "false") throw plain("AUTH_LOGGING_REFUSED: Browser inspection mode is incompatible with authenticated output protection.", "AUTH_LOGGING_REFUSED");
     });
   });
   var runtime;
-  try { runtime = s.runtimeStateReader(); } catch (error) { throw plain("AUTH_LOGGING_REFUSED: Node runtime inspection state could not be qualified."); }
+  try { runtime = s.runtimeStateReader(); } catch (error) { throw plain("AUTH_LOGGING_REFUSED: Node runtime inspection state could not be qualified.", "AUTH_LOGGING_REFUSED"); }
   if (!runtime || !Array.isArray(runtime.execArgv) || typeof runtime.inspectorActive !== "boolean" ||
     runtime.inspectorActive || require("node:inspector").url()) {
-    throw plain("AUTH_LOGGING_REFUSED: Active or unqualified Node inspection is incompatible with authenticated output protection.");
+    throw plain("AUTH_LOGGING_REFUSED: Active or unqualified Node inspection is incompatible with authenticated output protection.", "AUTH_LOGGING_REFUSED");
   }
   var args = shippedLauncherArgs(s, runtime.execArgv) ? [] : runtime.execArgv;
   var bad = args.filter(function (arg) {
@@ -478,7 +478,7 @@ function checkAuthLogging(s) {
   });
   if (bad.length) {
     throw plain("AUTH_LOGGING_REFUSED: Node runtime flag " + (typeof bad[0] === "string" ? bad[0].split("=")[0] : "(not text)") +
-      " is unqualified for authenticated output protection. Start desk-web without Node flags or preloads; Desk's own launcher is the only inline script allowed.");
+      " is unqualified for authenticated output protection. Start desk-web without Node flags or preloads; Desk's own launcher is the only inline script allowed.", "AUTH_LOGGING_REFUSED");
   }
 }
 
@@ -504,7 +504,7 @@ function loadAuthDriver(s) {
     driver = { version: version, chromium: require(root).chromium };
   }
   if (driver.version !== PLAYWRIGHT_VERSION || !driver.chromium || typeof driver.chromium.launchPersistentContext !== "function") {
-    throw plain("AUTH_DRIVER_REFUSED: The authenticated browser requires the pinned native driver API.");
+    throw plain("AUTH_DRIVER_REFUSED: The authenticated browser requires the pinned native driver API.", "AUTH_DRIVER_REFUSED");
   }
   return driver;
 }
@@ -544,10 +544,11 @@ async function openAuth(s) {
   } catch (error) {
     var safe = safeErrorData(error);
     var primary = safe && /^(?:AUTH_|COPY_SOURCE_POLICY|COPY_SOURCE_PERMISSION|COPY_DESTINATION_FAILED)/.test(safe.message) ? error :
-      plain("AUTH_OPEN_FAILED: The authenticated browser could not be opened safely; no native CLI fallback was attempted.");
+      plain("AUTH_OPEN_FAILED: The authenticated browser could not be opened safely; no native CLI fallback was attempted.", "AUTH_OPEN_FAILED");
     if (s.contexts[id]) {
       try { await close(s, id); } catch (cleanupError) {
-        throw plain(safeErrorData(primary).message + " Retained cleanup uncertainty: AUTH_CLEANUP_FAILED; the failed authenticated context remains owned.");
+        var failure = safeErrorData(primary);
+        throw plain(failure.message + " Retained cleanup uncertainty: AUTH_CLEANUP_FAILED; the failed authenticated context remains owned.", failure.primaryCode || failure.code);
       }
     }
     throw primary;
@@ -801,19 +802,19 @@ function close(s, id) {
       if (owned.adapter) return owned.adapter.close();
       if (owned.context) return owned.context.close();
     }).catch(function () {
-      throw plain("AUTH_CLOSE_FAILED: Owned authenticated cleanup could not be confirmed; its files were retained.");
+      throw plain("AUTH_CLOSE_FAILED: Owned authenticated cleanup could not be confirmed; its files were retained.", "AUTH_CLOSE_FAILED");
     }).then(function () {
-      try { removeDir(dir); } catch (error) { throw plain("AUTH_FILES_RETAINED: The owned browser closed, but its private files could not be removed."); }
+      try { removeDir(dir); } catch (error) { throw plain("AUTH_FILES_RETAINED: The owned browser closed, but its private files could not be removed.", "AUTH_FILES_RETAINED"); }
       delete s.contexts[id];
       return { contextId: id, closed: true };
     });
   }
   var owner = readOwner(dir);
   if (!owned && fs.existsSync(dir) && !(owner.browser === "fresh" && ownerGone(path.join(dir, "owner.json")))) {
-    throw plain("AUTH_CONTEXT_REFUSED: An unowned or older context cannot be closed or migrated through this server.");
+    throw plain("AUTH_CONTEXT_REFUSED: An unowned or older context cannot be closed or migrated through this server.", "AUTH_CONTEXT_REFUSED");
   }
   if (owner.browser === "mine" || owner.transport === "auth-api" || owner.profilePolicy === AUTH_PROFILE_POLICY) {
-    throw plain("AUTH_CONTEXT_REFUSED: No current owned native handle exists for this authenticated context.");
+    throw plain("AUTH_CONTEXT_REFUSED: No current owned native handle exists for this authenticated context.", "AUTH_CONTEXT_REFUSED");
   }
   var recorded = owner.processes;
   // The whole close answers within closeMs: the CLI's own close gets half, and the processes the rest.
@@ -857,7 +858,7 @@ function command(s, id, args) {
   var owner = readOwner(dir);
   if (record && record.kind === "mine") {
     if (owner.browser !== "mine" || owner.transport !== "auth-api" || owner.profilePolicy !== AUTH_PROFILE_POLICY ||
-      owner.pid !== process.pid || !record.adapter) throw plain("AUTH_CONTEXT_POLICY: This context has no current password-store exclusion policy and owned native handle. Open a new context; no profile was migrated.");
+      owner.pid !== process.pid || !record.adapter) throw plain("AUTH_CONTEXT_POLICY: This context has no current password-store exclusion policy and owned native handle. Open a new context; no profile was migrated.", "AUTH_CONTEXT_POLICY");
     // The reply carries the snapshot's text; its JSON tree says the same at twice the size (a saved artifact keeps it).
     return record.adapter.call(args).then(function (result) {
       if (!result || typeof result !== "object" || !("snapshot" in result)) return result;
@@ -946,7 +947,8 @@ function createController(options) {
       return { content: [{ type: "text", text: typeof value === "string" ? value : JSON.stringify(value) }], isError: false };
     }, function (error) {
       var safe = safeErrorData(error);
-      return { content: [{ type: "text", text: safe ? safe.message : "Call the browser tool again: Desk's browser hit an unexpected problem: BROWSER_INTERNAL_FAILURE." }], isError: true };
+      var code = safe ? safe.primaryCode || safe.code : "browser_internal_failure";
+      return { content: [{ type: "text", text: safe ? safe.message : "Call the browser tool again: Desk's browser hit an unexpected problem: BROWSER_INTERNAL_FAILURE." }], structuredContent: { code: code.toLowerCase() }, isError: true };
     });
   }
   function context(input) {
