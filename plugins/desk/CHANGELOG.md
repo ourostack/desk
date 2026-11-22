@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.420 — 2026-11-22
+
+The MCP server's tool registry ([`mcp/src/tool-names.js`](mcp/src/tool-names.js)) now exports `TOOL_ANNOTATIONS`, the annotations `tools/list` sends with each tool, and the server reads them from there. `tools/list` sends the same thing as before. The export lets the Ouro AX census that now runs in Desk's CI read each tool's read-only hint.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.419 — 2026-11-22
 
 Desk's MCP server now vendors Ouro UI v1.3.448, moved by Ouro Current.

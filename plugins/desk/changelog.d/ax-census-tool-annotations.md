@@ -1,1 +1,0 @@
-The MCP server's tool registry ([`mcp/src/tool-names.js`](mcp/src/tool-names.js)) now exports `TOOL_ANNOTATIONS`, the annotations `tools/list` sends with each tool, and the server reads them from there. `tools/list` sends the same thing as before. The export lets the Ouro AX census that now runs in Desk's CI read each tool's read-only hint.
