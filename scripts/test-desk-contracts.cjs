@@ -743,8 +743,8 @@ contract("task_update and track_update document refusing another session's unsta
   assert.match(schemas, /stages those cards and commits the moved directory/u);
   assert.match(description("task_update"), /pass `to_track`, `to_slug`, `unarchive` or `into_task` alone/u);
   assert.match(description("track_update"), /pass `rename_to` alone/u);
-  assert.match(description("track_create"), /On a Git desk it stages and commits the new track\.md; a commit failure never loses the write, reported via a `commit` field\./u);
-  assert.match(description("track_update"), /On a Git desk it stages and commits the track\.md when that file held no unstaged changes before the write, so it never adopts another session's edit; a commit failure never loses the write, reported via a `commit` field\./u);
+  assert.match(description("track_create"), /On a Git desk it stages and commits the new track\.md; a commit failure keeps the written file and is reported in a `commit` field\./u);
+  assert.match(description("track_update"), /On a Git desk it stages and commits the track\.md when that file held no unstaged changes before the write; if it did \(another session's edit, say\), the write lands unstaged and uncommitted and the reply has no `commit` field; a commit failure keeps the written file and is reported in a `commit` field\./u);
   const readme = text("plugins/desk/mcp/README.md");
   assert.match(readme, /`task_update` also moves and renames:[^\n]+refuses a task, or a `track\.md` it would edit, with unstaged changes or untracked files[^\n]+`allow_dirty: true`, and it stages every file it writes/u);
   assert.match(readme, /`track_update` with `rename_to` renames a track instead[^\n]+refuses a track with unstaged changes or untracked files unless `allow_dirty: true`, and stages the task cards it rewrites/u);
