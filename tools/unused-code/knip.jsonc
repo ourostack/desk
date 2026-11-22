@@ -48,6 +48,7 @@
         // Registered in hooks.json and copilot-hooks.json.
         "session-end.cjs",
         "claude-session-start.cjs",
+        "orca-session-title.cjs",
         "copilot-session-start.cjs",
         "copilot-boot-prompt.cjs",
         "copilot-intake-context.cjs",

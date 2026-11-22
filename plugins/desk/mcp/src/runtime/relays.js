@@ -37,7 +37,10 @@ const WAIT_READ_MAX_MS = 60_000
 /** A merge relay with nothing labelled polls less often: its interval stretches by one step per this many empty polls, up to `MAX_IDLE_STRETCH` times. */
 const IDLE_POLLS_PER_STEP = 20
 const MAX_IDLE_STRETCH = 4
-/** An idle relay (nothing labelled, nothing pending) never polls faster than this once it has backed off, however short its `everySeconds`. */
+/**
+ * An idle relay (nothing labelled, nothing pending) never polls faster than this once it has backed off, however short its `everySeconds`.
+ * A relay with `backOffWhenIdle: false` keeps its own interval: its idle polls are free 304s, and what it watches must be heard within seconds.
+ */
 const IDLE_FLOOR_SECONDS = 120
 const SPEND_WINDOW_MS = 60 * 60_000
 const CHECKS_PAGE = 100
@@ -86,7 +89,7 @@ export function parseRelayConfig(raw, file) {
   return list.map((entry, index) => {
     const at = `relays[${index}]`
     if (!isObject(entry)) throw bad(`${at} is not an object`)
-    const { name, type, account, readAccount, everySeconds } = entry
+    const { name, type, account, readAccount, everySeconds, backOffWhenIdle } = entry
     if (typeof name !== "string" || !/^\w[\w .-]*$/u.test(name.trim())) throw bad(`${at}.name is not a name (letters, digits, spaces, "." and "-")`)
     if (names.has(name.trim())) throw bad(`${at} reuses the name ${name.trim()}`)
     names.add(name.trim())
@@ -94,7 +97,8 @@ export function parseRelayConfig(raw, file) {
     if (account !== undefined && !isText(account)) throw bad(`${at}.account is not a GitHub login`)
     if (readAccount !== undefined && !isText(readAccount)) throw bad(`${at}.readAccount is not a GitHub login`)
     if (everySeconds !== undefined && (!Number.isInteger(everySeconds) || everySeconds < MIN_EVERY_SECONDS)) throw bad(`${at}.everySeconds is not a whole number of seconds, ${MIN_EVERY_SECONDS} or more`)
-    const common = { name: name.trim(), type, ...(account === undefined ? {} : { account: account.trim() }), ...(readAccount === undefined ? {} : { readAccount: readAccount.trim() }), everySeconds: everySeconds ?? DEFAULT_EVERY_SECONDS }
+    if (backOffWhenIdle !== undefined && typeof backOffWhenIdle !== "boolean") throw bad(`${at}.backOffWhenIdle is not true or false`)
+    const common = { name: name.trim(), type, ...(account === undefined ? {} : { account: account.trim() }), ...(readAccount === undefined ? {} : { readAccount: readAccount.trim() }), everySeconds: everySeconds ?? DEFAULT_EVERY_SECONDS, ...(backOffWhenIdle === false ? { backOffWhenIdle } : {}) }
     if (type === "dispatch") return { ...common, ...parseDispatch(entry, at, bad) }
     return { ...common, ...parseMerge(entry, at, bad) }
   })
@@ -860,7 +864,7 @@ export async function pollRelays({ paths, drainFiles, connect, now, signedIn = (
   }
   await Promise.all(relays.map(async (relay) => {
     const state = states[relay.name]
-    const stretch = Math.min(MAX_IDLE_STRETCH, 1 + Math.floor((state.idlePolls ?? 0) / IDLE_POLLS_PER_STEP))
+    const stretch = relay.backOffWhenIdle !== false ? Math.min(MAX_IDLE_STRETCH, 1 + Math.floor((state.idlePolls ?? 0) / IDLE_POLLS_PER_STEP)) : 1
     const intervalMs = stretch > 1 ? Math.max(relay.everySeconds * stretch, IDLE_FLOOR_SECONDS) * 1000 : relay.everySeconds * 1000
     if (state.lastPollAt && now - Date.parse(state.lastPollAt) < intervalMs - DUE_SLACK_MS) return
     if (!accountOf(relay, drains, states)) {

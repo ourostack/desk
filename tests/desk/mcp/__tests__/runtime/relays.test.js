@@ -1370,6 +1370,23 @@ test("cost: an idle dispatch relay with a 15 s interval backs off to at least tw
   assert.equal(w.state(IMMEDIATE.name).idlePolls, 0)
 })
 
+test("cost: a dispatch relay with backOffWhenIdle false keeps its 15 s interval however long it is idle, so a new run fires within one poll", async () => {
+  const w = await setup([{ ...IMMEDIATE, everySeconds: 15, backOffWhenIdle: false }])
+  let runs = [run(1)]
+  w.world.on("GET", runsRoute, () => ({ workflow_runs: runs }))
+  w.world.on("GET", /\/repos\/o\/pages$/u, () => ({ default_branch: "main" }))
+  w.world.on("POST", /\/dispatches$/u, () => ({ ok: true, status: 204, body: {} }))
+  for (let n = 0; n < 60; n++) await w.poll(NOW + n * 15 * SECOND)
+  assert.equal(reads(w), 60, "an idle relay that doesn't back off reads on every 15 s poll")
+  runs = [run(2, { head_sha: HEAD_B }), run(1)]
+  await w.poll(NOW + 60 * 15 * SECOND)
+  assert.equal(w.state(IMMEDIATE.name).lastFire?.headSha, HEAD_B)
+})
+
+test("config: backOffWhenIdle is true or false", () => {
+  assert.throws(() => parseRelayConfig(JSON.stringify({ relays: [{ ...IMMEDIATE, backOffWhenIdle: "no" }] }), "relays.json"), /backOffWhenIdle is not true or false/u)
+})
+
 test("a relay reads through its readAccount and writes through its account, and its status shows the last full hour's calls", async () => {
   const w = await setup([{ ...IMMEDIATE, account: "work", readAccount: "personal" }])
   let runs = [run(1)]
