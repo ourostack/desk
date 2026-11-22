@@ -23,6 +23,7 @@ const require = createRequire(import.meta.url)
 const repoRoot = path.resolve(fileURLToPath(new URL("../../../../..", import.meta.url)))
 const webFile = path.join(repoRoot, "plugins", "desk", "mcp", "web.cjs")
 const web = require(webFile)
+const auth = require(path.join(repoRoot, "plugins", "desk", "mcp", "web-auth.cjs"))
 const catalog = require(path.join(repoRoot, "plugins", "desk", "mcp", "web-catalog.json"))
 const sourceOnly = process.env.DESK_BROWSER_SOURCE_ONLY === "1"
 
@@ -774,10 +775,25 @@ test("owned legacy metadata cannot grant authenticated cleanup authority or eras
 
 test("opaque non-object failures are reported without exception coercion", async () => {
   const { options } = await setup()
-  const result = await web.createController({ ...options, exists: () => { throw "fake-native-text" } })
-    .call("browser_context", { action: "open" })
-  assert.match(text(result), /BROWSER_INTERNAL_FAILURE/u)
-  assert.equal(text(result).includes("fake-native-text"), false)
+  for (const error of ["fake-native-text", { message: PASSWORD, code: "AUTH_SNAPSHOT_INVALIDATED", authCode: "AUTH_SNAPSHOT_INVALIDATED", plain: true }]) {
+    const result = await web.createController({ ...options, exists: () => { throw error } })
+      .call("browser_context", { action: "open" })
+    assert.equal(result.isError, true)
+    assert.deepEqual(result.structuredContent, { code: "browser_internal_failure" })
+    assert.equal(text(result), "Call the browser tool again: Desk's browser hit an unexpected problem: BROWSER_INTERNAL_FAILURE.")
+  }
+})
+
+test("owned native failures expose the primary wire code without losing cleanup guidance", async () => {
+  const { options } = await setup()
+  for (const code of ["AUTH_SNAPSHOT_INVALIDATED", "AUTH_SNAPSHOT_INVALIDATED; retained cleanup uncertainty: AUTH_CLOSE_FAILED"]) {
+    const error = auth.fail(code)
+    const result = await web.createController({ ...options, exists: () => { throw error } })
+      .call("browser_context", { action: "open" })
+    assert.equal(result.isError, true)
+    assert.deepEqual(result.structuredContent, { code: "auth_snapshot_invalidated" })
+    assert.equal(text(result), error.message)
+  }
 })
 
 test("process-table commands and parsing are qualified through an owned fake exec callback", async () => {
@@ -1397,6 +1413,7 @@ test("permission refusal retains ownership and a safe primary error when partial
   fs.rmSync = () => { throw new Error(PASSWORD) }
   try {
     const refused = await controller.call("browser_context", { action: "open", browser: "mine" })
+    assert.deepEqual(refused.structuredContent, { code: "copy_source_permission" })
     assert.match(text(refused), /^COPY_SOURCE_PERMISSION:/u)
     assert.match(text(refused), /AUTH_CLEANUP_FAILED/u)
     assert.equal(text(refused).includes(PASSWORD), false)
@@ -1415,10 +1432,12 @@ test("mine gives a plain message when there is no profile, or it cannot be copie
   const controller = web.createController(options)
   const none = await controller.call("browser_context", { action: "open", browser: "mine" })
   assert.equal(none.isError, true)
+  assert.deepEqual(none.structuredContent, { code: "browser_failure" })
   assert.match(text(none), /could not find your own Edge or Chrome profile/u)
   makeProfile(path.join(profiles, "edge"), { withProfile: false })
   const busy = await controller.call("browser_context", { action: "open", browser: "mine" })
   assert.equal(busy.isError, true)
+  assert.deepEqual(busy.structuredContent, { code: "auth_open_failed" })
   assert.match(text(busy), /AUTH_OPEN_FAILED/u)
   assert.deepEqual(fs.readdirSync(tmp), [], "the failed copy left no folder")
 })
@@ -1430,12 +1449,15 @@ test("a missing browser, a failed start and bad input each give a plain message"
   const controller = web.createController(options)
   const failed = await controller.call("browser_context", { action: "open", browser: "fresh" })
   assert.equal(failed.isError, true)
+  assert.deepEqual(failed.structuredContent, { code: "browser_failure" })
   assert.equal(text(failed), "The browser did not start. Try again, or use a fresh browser. Details: Browser failed\nline two")
   assert.deepEqual(fs.readdirSync(tmp), [])
   assert.match(text(await controller.call("browser_context", { action: "open", browser: "other" })), /must be "fresh" or "mine"/u)
   assert.match(text(await controller.call("browser_context", { action: "reopen" })), /action must be "open" or "close"/u)
   assert.match(text(await controller.call("browser_context", { action: "close", contextId: "nope" })), /contextId must be/u)
-  assert.match(text(await controller.call("browser_command", {})), /contextId must be/u)
+  const badCommand = await controller.call("browser_command", {})
+  assert.deepEqual(badCommand.structuredContent, { code: "browser_failure" })
+  assert.match(text(badCommand), /contextId must be/u)
   const unknown = await controller.call("browser_other")
   assert.equal(unknown.isError, true)
   assert.deepEqual(unknown.structuredContent, { code: "unknown_door" })
@@ -1884,6 +1906,29 @@ function server(options) {
   })
   return { stdin, signals, done, request, received, exitCode: () => exitCode }
 }
+
+test("the MCP transport preserves safe error codes and rejects spoofed exception fields", async (t) => {
+  const { options } = await setup()
+  let failure = auth.fail("AUTH_SNAPSHOT_INVALIDATED; retained cleanup uncertainty: AUTH_CLOSE_FAILED")
+  const s = server({ ...options, exists: () => { throw failure } })
+  try {
+    const native = await s.request("tools/call", { name: "browser_context", arguments: { action: "open" } })
+    assert.equal(native.result.isError, true)
+    assert.deepEqual(native.result.structuredContent, { code: "auth_snapshot_invalidated" })
+    assert.equal(native.result.content[0].text, failure.message)
+    const legacy = await s.request("tools/call", { name: "browser_command", arguments: {} })
+    assert.equal(legacy.result.isError, true)
+    assert.deepEqual(legacy.result.structuredContent, { code: "browser_failure" })
+    failure = { message: PASSWORD, code: "AUTH_SNAPSHOT_INVALIDATED", plain: true }
+    const opaque = await s.request("tools/call", { name: "browser_context", arguments: { action: "open" } })
+    assert.deepEqual(opaque.result.structuredContent, { code: "browser_internal_failure" })
+    assert.equal(opaque.result.content[0].text.includes(PASSWORD), false)
+    t.diagnostic("Synthetic-data MCP wire replies: " + JSON.stringify([native, legacy, opaque]))
+  } finally {
+    s.stdin.end()
+    await s.done
+  }
+})
 
 test("the MCP server answers the handshake, lists the tools and runs calls", async () => {
   const { options, tmp } = await setup()

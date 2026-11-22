@@ -201,7 +201,7 @@ function fail(code, applied, detail) {
   var error = new Error(message);
   error.plain = true;
   error.authCode = code;
-  failures.set(error, Object.freeze({ code: code, message: message }));
+  failures.set(error, Object.freeze({ code: code, primaryCode: primary, message: message }));
   return error;
 }
 
