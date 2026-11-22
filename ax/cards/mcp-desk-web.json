@@ -35,8 +35,8 @@
         },
         {
           "code": "auth-context-refused",
-          "means": "close named a context this server doesn't own, such as another live session's or one an earlier Desk process left.",
-          "fix": "Leave that context alone and open a new one; each server closes only the contexts it opened."
+          "means": "close named a context this server doesn't own, such as another live session's or an earlier Desk process's mine context.",
+          "fix": "Leave that context alone and open a new one; a server closes only its own contexts and fresh ones whose owner has gone."
         },
         {
           "code": "auth-close-failed",
@@ -78,7 +78,7 @@
         },
         {
           "code": "auth-script-failed",
-          "means": "In mine, the eval or run-code script threw an error or didn't finish; the context stays open.",
+          "means": "In mine, the eval or run-code script threw an error; the context stays open (a script still running at the time limit gets auth-timeout).",
           "fix": "Fix the script from the error the message gives, and run it again."
         },
         {
@@ -94,7 +94,7 @@
         {
           "code": "auth-context-refused",
           "means": "In mine, the context or its selected tab is closed, for example after an auth-timeout.",
-          "fix": "Run [\"tab-list\"] and select an open tab, or open a new context with browser_context."
+          "fix": "If the tab closed, run [\"tab-list\"] and select an open one; if the context closed, close it and open a new one."
         },
         {
           "code": "auth-timeout",
