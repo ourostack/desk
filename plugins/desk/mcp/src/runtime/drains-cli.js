@@ -94,7 +94,7 @@ function drainsCli({ script, env, now, connect, listProcesses, signedIn, fetchHo
       runtimes: "Copilot server runtimes started without Desk's plugin, whose sessions have no desk-* tools, and how to recover; see docs/schedules.md.",
     },
     commands: [
-      command("poll", { ...READ, summary: "List each configured repository's open issues, record what changed and print the wakes to deliver.", flags: { config: CONFIG, state: STATE }, examples: ["poll"] }, async (input) => {
+      command("poll", { effect: "private", summary: "List each configured repository's open issues, record what changed and print the wakes to deliver.", flags: { config: CONFIG, state: STATE }, examples: ["poll"] }, async (input) => {
         const paths = pathsOf(drainPaths({ env }), input)
         return withDesk(await withDrainLock(paths.lock, () => pollDrains({ paths, connect, now: now(), ackCommand, ackFlags: ackFlags(input, paths), desk: deskLabel(deskInUse({ script, env })) })), { script, env })
       }),
@@ -105,7 +105,7 @@ function drainsCli({ script, env, now, connect, listProcesses, signedIn, fetchHo
           return input.error ? { ...acked, recovery: recoverDrainTarget({ paths, repo: input.repo, now: now() }) } : acked
         })
       }),
-      command("status", { ...READ, summary: "List each drain's state, the relays and any unmerged save, without recording anything.", flags: { config: CONFIG, state: STATE } }, (input) => {
+      command("status", { effect: "private", summary: "List each drain's state, the relays and any unmerged save; refresh the local launcher without updating drain state.", flags: { config: CONFIG, state: STATE } }, (input) => {
         const paths = pathsOf(drainPaths({ env }), input)
         const status = [...drainStatusLines(readDrainConfig(paths.config), readDrainStates(paths.state), now()), ...relayLines(env, now()), ...allStuckSaves({ env, now }).map((save) => `unmerged save: ${stuckLine(save)}`)]
         return withDesk({ status }, { script, env })
@@ -120,7 +120,7 @@ function drainsCli({ script, env, now, connect, listProcesses, signedIn, fetchHo
         const paths = pathsOf(drainPaths({ env }), input)
         return { ...whyOf(readDrainStates(paths.state), target[1], Number(target[2])), relays: relaysOfPull(relays, relayStates, target[1], Number(target[2])) }
       }),
-      command("schedule poll", { ...READ, summary: "Print the prompts due to a session, at most one per schedule.", flags: { config: CONFIG, state: STATE } }, async (input) => {
+      command("schedule poll", { effect: "private", summary: "Record and print the prompts due to a session, at most one per schedule.", flags: { config: CONFIG, state: STATE } }, async (input) => {
         const paths = pathsOf(schedulePaths({ env }), input)
         return withDesk(await withDrainLock(paths.lock, async () => pollSchedules({ paths, now: now(), ackCommand, ackFlags: ackFlags(input, paths) })), { script, env })
       }),
@@ -128,11 +128,11 @@ function drainsCli({ script, env, now, connect, listProcesses, signedIn, fetchHo
         const paths = pathsOf(schedulePaths({ env }), input)
         return withDrainLock(paths.lock, async () => ackSchedule({ paths, name: input.name, wake: input.wake, error: input.error, now: now() }))
       }),
-      command("schedule status", { ...READ, summary: "List the schedules without recording anything.", flags: { config: CONFIG, state: STATE } }, (input) => {
+      command("schedule status", { effect: "private", summary: "List the schedules and refresh the local launcher without updating schedule state.", flags: { config: CONFIG, state: STATE } }, (input) => {
         const paths = pathsOf(schedulePaths({ env }), input)
         return withDesk({ status: scheduleStatusLines(readScheduleConfig(paths.config), readScheduleStates(paths.state), now()) }, { script, env })
       }),
-      command("stalled poll", { ...READ, summary: "Print the nudges due, once per idle stretch.", flags: { config: CONFIG, state: STATE } }, async (input) => {
+      command("stalled poll", { effect: "private", summary: "Record and print the nudges due, once per idle stretch.", flags: { config: CONFIG, state: STATE } }, async (input) => {
         const paths = pathsOf(stalledPaths({ env }), input)
         return withDesk(await withDrainLock(paths.lock, () => pollStalled({ paths, now: now(), ackCommand, ackFlags: ackFlags(input, paths), env, homeDir: os.homedir() })), { script, env })
       }),
@@ -140,7 +140,7 @@ function drainsCli({ script, env, now, connect, listProcesses, signedIn, fetchHo
         const paths = pathsOf(stalledPaths({ env }), input)
         return withDrainLock(paths.lock, async () => ackStalled({ paths, session: input.session, wake: input.wake, error: input.error, now: now() }))
       }),
-      command("stalled status", { ...READ, summary: "List the nudges due without recording anything (a dry run).", flags: { config: CONFIG, state: STATE } }, async (input) => {
+      command("stalled status", { effect: "private", summary: "List the nudges due and refresh the local launcher without updating nudge state.", flags: { config: CONFIG, state: STATE } }, async (input) => {
         const paths = pathsOf(stalledPaths({ env }), input)
         return withDesk(await stalledStatus({ paths, now: now(), env, homeDir: os.homedir() }), { script, env })
       }),
@@ -148,7 +148,7 @@ function drainsCli({ script, env, now, connect, listProcesses, signedIn, fetchHo
         const paths = pathsOf(relayPaths({ env }), input)
         return withDesk(await withDrainLock(paths.lock, () => pollRelays({ paths, drainFiles: drainPaths({ env }), connect, now: now(), signedIn })), { script, env })
       }),
-      command("relays status", { ...READ, summary: "List the relays without acting.", flags: { config: CONFIG, state: STATE } }, (input) => {
+      command("relays status", { effect: "private", summary: "List the relays and refresh the local launcher without acting on relays.", flags: { config: CONFIG, state: STATE } }, (input) => {
         const paths = pathsOf(relayPaths({ env }), input)
         return withDesk({ status: relayStatusLines(readRelayConfig(paths.config), readRelayStates(paths.state), now()) }, { script, env })
       }),
@@ -173,7 +173,7 @@ function drainsCli({ script, env, now, connect, listProcesses, signedIn, fetchHo
         const paths = pathsOf(hookPaths({ env }), input)
         return deleteHook({ name: input.name, paths, account: input.account, server: input.server, env, fetchImpl: fetchHooks, token: hookToken })
       }),
-      command("hooks status", { ...READ, summary: "List each hook's route, pending count and last error, and any hook nobody routes, without saving or acknowledging.", flags: { config: CONFIG, state: STATE } }, async (input) => {
+      command("hooks status", { effect: "private", summary: "List each hook's route, pending count and last error, and any hook nobody routes; refresh the local launcher without saving or acknowledging events.", flags: { config: CONFIG, state: STATE } }, async (input) => {
         const paths = pathsOf(hookPaths({ env }), input)
         return withDesk({ status: await hookStatus({ paths, now: now(), fetchImpl: fetchHooks, token: hookToken, env }) }, { script, env })
       }),

@@ -1,0 +1,1 @@
+Factory status no longer creates the factory's opt-in state folder on an uninitialized machine. Existing-state privacy and integrity maintenance remains enabled. Issue, schedule and stalled-session polling and launcher-backed status commands now declare their private writes honestly; status help distinguishes launcher refresh from unchanged drain state.

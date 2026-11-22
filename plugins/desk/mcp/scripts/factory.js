@@ -64,7 +64,7 @@ import { runRequestedTaskContext } from "../src/factory/context-run.js"
 import { orphanPassLine, ownVersion, publishedJobId } from "../src/factory/local-status.js"
 import { factoryStateDir } from "../src/factory/boot-check.js"
 import { captureCheckLines, retentionLine } from "../src/factory/retention.js"
-import { listFinalizeRequests, listMarkers, readMachineSecret, readStatus, setConsent } from "../src/factory/outbox.js"
+import { factoryStateRoot, listFinalizeRequests, listMarkers, readMachineSecret, readStatus, setConsent } from "../src/factory/outbox.js"
 import { PATTERNS } from "../src/factory/schema.js"
 import { normalizeTimestamp } from "../src/factory/time.js"
 import { reconcile } from "../src/factory/reconcile.js"
@@ -137,8 +137,9 @@ export async function runProofCommand({ session: sessionId, desk = null }, { env
 }
 
 export async function runStatusCommand(_input, { env }) {
-  const status = await readStatus(env)
-  return { ...status, orphan_pass: orphanPassLine(status.orphans, Date.now(), { version: ownVersion() }), retention: retentionLine(status), capture_check: captureCheckLines(status), markers: (await listMarkers(env)).length, finalize: (await listFinalizeRequests(env)).length }
+  const root = await factoryStateRoot(env, { create: false })
+  const status = root === null ? { last_flush: {} } : await readStatus(env)
+  return { ...status, orphan_pass: orphanPassLine(status.orphans, Date.now(), { version: ownVersion() }), retention: retentionLine(status), capture_check: captureCheckLines(status), markers: root === null ? 0 : (await listMarkers(env)).length, finalize: root === null ? 0 : (await listFinalizeRequests(env)).length }
 }
 
 function runGit(args, { cwd, encoding = "utf8", maxBuffer = 32 * 1024 * 1024 }) {
@@ -616,7 +617,7 @@ function factoryCli({ env, cwd, git, runner }) {
       command("account", { summary: "Name the signed-in GitHub account that can open intake pull requests on the store.", readOnly: true, flags: { store: STORE }, exit: (r) => exitFor(r.result === "account_found") }, runAccountCommand),
       command("consent", { summary: "Record whether this machine contributes to the store.", flags: { store: STORE, contribute: { type: "enum", values: ["yes", "no"], required: true, description: "Whether to contribute." }, account: { type: "string", placeholder: "<gh login>", description: "The GitHub account to deliver with." } } }, runConsentCommand),
       command("derive", { summary: "Derive facts from one marker file (the detached worker).", flags: { marker: { type: "string", required: true, placeholder: "<file>", description: "The marker file." }, "wait-quiet": { type: "number", min: 0, max: 30000, placeholder: "<milliseconds>", description: "How long to wait for the session to go quiet first." } } }, runDeriveCommand),
-      command("status", { summary: "Print the factory's local status.", readOnly: true }, runStatusCommand),
+      command("status", { summary: "Print the factory's local status and maintain existing state; do not enable an uninitialized factory." }, runStatusCommand),
       command("flush", { summary: "Make one delivery attempt to the store.", flags: { store: STORE } }, runFlushCommand),
       command("context-request", { summary: "Request the task context of one existing job, as the operator.", flags: { store: STORE, job: { ...JOB_FLAG, placeholder: "<public job id>" } }, exit: (r) => exitFor(r.ok !== false) }, runContextRequestCommand),
       command("finalize", { summary: "Finalize up to eight finished jobs, then start the loop worker when its step is due.", flags: { job: { ...JOB_FLAG, repeat: true } } }, runFinalizeCommand),

@@ -1,16 +1,7 @@
 {
   "census": "census/1",
   "gaps": [
-    "cli:drains hooks status",
-    "cli:drains poll",
-    "cli:drains relays status",
     "cli:drains runtimes status",
-    "cli:drains schedule poll",
-    "cli:drains schedule status",
-    "cli:drains stalled poll",
-    "cli:drains stalled status",
-    "cli:drains status",
-    "cli:factory status",
     "cli:migrations roots",
     "cli:node hosted/bin/git-credential-desk.js",
     "cli:node hosted/bin/git-credential-desk.js get",
