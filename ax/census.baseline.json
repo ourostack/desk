@@ -1,16 +1,7 @@
 {
   "census": "census/1",
   "gaps": [
-    "cli:drains hooks status",
-    "cli:drains poll",
-    "cli:drains relays status",
     "cli:drains runtimes status",
-    "cli:drains schedule poll",
-    "cli:drains schedule status",
-    "cli:drains stalled poll",
-    "cli:drains stalled status",
-    "cli:drains status",
-    "cli:factory status",
     "cli:file-desk-problem",
     "cli:finish-commit",
     "cli:hosted/bin/gh",

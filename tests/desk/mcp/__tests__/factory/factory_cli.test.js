@@ -477,6 +477,17 @@ test("status returns local factory health without exposing marker paths or secre
   assert.equal(result.orphan_pass, "orphan pass: no record yet")
 }))
 
+test("status leaves factory state absent on repeated inspection", () => scratch(async (env) => {
+  const root = path.join(env.XDG_STATE_HOME, "ouroboros-skills", "desk", "factory")
+  for (let inspection = 0; inspection < 2; inspection++) {
+    const result = await runStatusCommand({}, { env })
+    assert.deepEqual(result.last_flush, {})
+    assert.equal(result.markers, 0)
+    assert.equal(result.finalize, 0)
+    assert.equal(existsSync(root), false)
+  }
+}))
+
 test("status prints one line for the orphan pass: what it did, or the class it failed with", () => scratch(async (env) => {
   const { writeStatus } = await import("../../../../../plugins/desk/mcp/src/factory/outbox.js")
   const run = async () => {
