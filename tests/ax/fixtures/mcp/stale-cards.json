@@ -1,0 +1,1 @@
+{ "doors": [{ "id": "mcp:gone", "group": "g", "when": "w", "effect": "read", "errors": [] }, { "nope": 1 }] }

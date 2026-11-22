@@ -485,6 +485,109 @@
           "sha256": "225a4077d811e137122cdd8c62413595bab25f8391e9172ec73f0c18ee6198e3"
         }
       ]
+    },
+    {
+      "id": "ourostack-ouro-ui-census",
+      "repository": "ourostack/ouro-ui",
+      "commit": "878322e616c9c9c0d82aec09151737cb338ef100",
+      "license": "MIT",
+      "files": [
+        {
+          "sourcePath": "LICENSE",
+          "generatedPath": "ax/LICENSE",
+          "sha256": "6515c640c8b25cea05a476e6c5e325a3d9699f16e83a72048b32ecae08fdc4ab"
+        },
+        {
+          "sourcePath": "scripts/ouro-census/base.mts",
+          "generatedPath": "ax/scripts/ouro-census/base.mts",
+          "sha256": "b5ef17d10c1540c3e7007ad252e7bd23131efadcad9ba3380f6afc683845b0c0"
+        },
+        {
+          "sourcePath": "scripts/ouro-census/baseline.mts",
+          "generatedPath": "ax/scripts/ouro-census/baseline.mts",
+          "sha256": "51fdb3ed75db9071566f0207d172344d18a81967cbb87331e346df4fb442071d"
+        },
+        {
+          "sourcePath": "scripts/ouro-census/cards.mts",
+          "generatedPath": "ax/scripts/ouro-census/cards.mts",
+          "sha256": "60e786192d06d4d34874ad62904f68dfd23cac02fa3fb2ee06856ef15a1aabd5"
+        },
+        {
+          "sourcePath": "scripts/ouro-census/census.mts",
+          "generatedPath": "ax/scripts/ouro-census/census.mts",
+          "sha256": "3e602daa098a76be0810412b03919de1e6b8377a2e029c7e28e09dde8de9b161"
+        },
+        {
+          "sourcePath": "scripts/ouro-census/checker.mts",
+          "generatedPath": "ax/scripts/ouro-census/checker.mts",
+          "sha256": "b2ec5853d13a57f26d67e621ff5c5ffed6e9e86c90696a8545dda5bb764c0d8a"
+        },
+        {
+          "sourcePath": "scripts/ouro-census/child.mts",
+          "generatedPath": "ax/scripts/ouro-census/child.mts",
+          "sha256": "4d750174dade6503a7fa97a1c84d9243916db9c92e88c7b59e4cc1398bf99b7f"
+        },
+        {
+          "sourcePath": "scripts/ouro-census/dist-manifest.json",
+          "generatedPath": "ax/scripts/ouro-census/dist-manifest.json",
+          "sha256": "f53b04cbaf3461b013de2af00526a6b4aed0a88c88718eade7834079200c2f74"
+        },
+        {
+          "sourcePath": "scripts/ouro-census/guard.mjs",
+          "generatedPath": "ax/scripts/ouro-census/guard.mjs",
+          "sha256": "dc1f6da80c7168e042f90c3ca5333337351b7177ac476d679f34e818e0b16f0c"
+        },
+        {
+          "sourcePath": "scripts/ouro-census/report.mts",
+          "generatedPath": "ax/scripts/ouro-census/report.mts",
+          "sha256": "8ea2498edd3ff10363ed90a32feee6c58bc0796acb0475da0afad2246e6641f4"
+        },
+        {
+          "sourcePath": "scripts/ouro-census/types.mts",
+          "generatedPath": "ax/scripts/ouro-census/types.mts",
+          "sha256": "d579d5c92d1e25465b46a6cf3453ebea158464079489a4f1ebe9d11269b2f52f"
+        },
+        {
+          "sourcePath": "scripts/ouro-census/walkers/argv-entries.mts",
+          "generatedPath": "ax/scripts/ouro-census/walkers/argv-entries.mts",
+          "sha256": "d73195babaff3036cc4f5d59b227560f6a92d2f4fd54b772b85a060bb8ebdae6"
+        },
+        {
+          "sourcePath": "scripts/ouro-census/walkers/cli-cards.mts",
+          "generatedPath": "ax/scripts/ouro-census/walkers/cli-cards.mts",
+          "sha256": "0bc8b21d7da196a09cf302ebeda14f6ef3631b4e7a396e70cf21ac7f61ec533c"
+        },
+        {
+          "sourcePath": "scripts/ouro-census/walkers/literals.mts",
+          "generatedPath": "ax/scripts/ouro-census/walkers/literals.mts",
+          "sha256": "023ecc7251b016043f6d85948dd363ed7cfb4ab024a3998d24617018870ebd43"
+        },
+        {
+          "sourcePath": "scripts/ouro-census/walkers/mcp-schemas.mts",
+          "generatedPath": "ax/scripts/ouro-census/walkers/mcp-schemas.mts",
+          "sha256": "4ea014694750d9c0e80a85bfcdf2442ce5524904cc9874532720793263f4c991"
+        },
+        {
+          "sourcePath": "scripts/ouro-census/walkers/registry.mts",
+          "generatedPath": "ax/scripts/ouro-census/walkers/registry.mts",
+          "sha256": "70bd619f12394d2b3c15f889fec3e0ea1922ab766b74fc518b29be80635adfe2"
+        },
+        {
+          "sourcePath": "scripts/ouro-census/walkers/tool-schemas.mts",
+          "generatedPath": "ax/scripts/ouro-census/walkers/tool-schemas.mts",
+          "sha256": "0fe572444af16b75b952c158b76f8214194a2d90eb01efe81d82bc6b4c6d1482"
+        },
+        {
+          "sourcePath": "scripts/ouro-census/walkers/ts-argv.mts",
+          "generatedPath": "ax/scripts/ouro-census/walkers/ts-argv.mts",
+          "sha256": "b427cee6802aa2f5d76afdb1511ab24fc62d6b86bdb264aff5495d74ba36915c"
+        },
+        {
+          "sourcePath": "scripts/ouro-census/walkers/ts-parser.mts",
+          "generatedPath": "ax/scripts/ouro-census/walkers/ts-parser.mts",
+          "sha256": "0ce06b5c80a9179f6b6f178ef23bf55be0f4906bdfaa1ce8396ddb2bbd827820"
+        }
+      ]
     }
   ]
 }

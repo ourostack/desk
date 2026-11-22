@@ -1,0 +1,6 @@
+{ "doors": [
+  { "id": "skill:plug:start-task", "uses": ["mcp:task_create", "skill:other:plain", "host:Bash"] },
+  { "id": "agent:plug:worker claude" },
+  { "id": "skill:other:plain", "uses": ["nope", "skill:plug:missing", 3] },
+  { "id": "skill:gone:x", "uses": [] }
+] }

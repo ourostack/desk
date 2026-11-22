@@ -1,0 +1,5 @@
+{ "doors": [
+  { "id": "hook:plug claude SessionStart start.cjs", "uses": ["mcp:desk_status"] },
+  { "id": "hook:plug copilot sessionStart run-hook.cmd session-start" },
+  { "id": "hook:plug claude Stop gone.cjs", "uses": [] }
+] }

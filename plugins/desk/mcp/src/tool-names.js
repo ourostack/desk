@@ -67,3 +67,7 @@ export const TOOL_DESCRIPTIONS = Object.freeze({
   ...HAND_WRITTEN_DESCRIPTIONS,
   ...Object.fromEntries(Object.entries(ACTION_TOOLS).map(([name, tool]) => [name, tool.description])),
 })
+
+// The MCP annotations tools/list serves with each tool (readOnlyHint and the rest), by tool name: today the ones the
+// declarations in actions/ generate. The Ouro AX census reads a tool's read-only evidence here (ax/walkers/mcp.mts).
+export const TOOL_ANNOTATIONS = Object.freeze(Object.fromEntries(Object.entries(ACTION_TOOLS).map(([name, tool]) => [name, tool.annotations])))

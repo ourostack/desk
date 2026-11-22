@@ -1,0 +1,9 @@
+{
+  "name": "desk-ax-census",
+  "private": true,
+  "type": "module",
+  "description": "Runs the Ouro AX census over Desk (ax/census.config.json, vendored from Ouro UI). Kept apart from the repository root so a root package.json does not change how Node loads the evals and tests below it; the census's walkers and Desk's own use this package's typescript.",
+  "devDependencies": {
+    "typescript": "6.0.3"
+  }
+}
