@@ -1,10 +1,6 @@
 {
   "census": "census/1",
   "gaps": [
-    "agent:desk:observer claude",
-    "agent:desk:observer copilot",
-    "agent:desk:worker claude",
-    "agent:desk:worker copilot",
     "cli:build-runtime-deps-pack",
     "cli:crew initiative adopt",
     "cli:crew initiative check",
