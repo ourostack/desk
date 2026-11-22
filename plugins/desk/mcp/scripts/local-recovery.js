@@ -323,10 +323,11 @@ export async function runRecovery({
         : "unknown"
     report.effects.push = status.sync === "no remote configured" ? "not_applicable" : options["publication"] === "deferred" ? "deferred" : "pending"
     const commitExpected = ["updated", "created", "archived", "committed"].includes(result.status)
-    if (report.effects.commit === "failed" || report.effects.push === "pending" ||
+    if (report.effects.commit === "failed" || result.commit?.status === "unknown" || report.effects.push === "pending" ||
         (commitExpected && report.effects.commit !== "observed")) {
       report.status = "partial"
       report.code = report.effects.commit === "failed" ? "commit_failed"
+        : result.commit?.status === "unknown" ? "commit_unknown"
         : report.effects.push === "pending" ? "push_pending" : "commit_not_observed"
       exitCode = 2
     } else {

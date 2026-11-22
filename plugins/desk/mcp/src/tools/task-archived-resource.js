@@ -13,7 +13,7 @@ const ALLOWED = ["identity", "disposition", "details"]
 const FRONT = /^---\r?\n[\s\S]*?\r?\n---[ \t]*(?:\r?\n|$)/u
 
 /**
- * Fills the terminal cell of the archived card's existing row, and returns `{ status: "updated", path, resource }`; refuses, changing nothing, for any other call.
+ * Fills the terminal cell of the archived card's existing row, and returns `{ status: "updated" | "commit_failed" | "commit_unknown", path, resource }`; refuses, changing nothing, for any other call.
  * `helpers` are task.js's own `{ relPath, stagingAllowed, stageAndCommitCard, schedulePush }`.
  */
 export async function recordArchivedDisposition({ deskRoot, file, track, slug, values, resources, search, env, spawnGit, helpers }) {
@@ -49,5 +49,5 @@ export async function recordArchivedDisposition({ deskRoot, file, track, slug, v
   } catch {
     // A state folder that cannot be written never fails the card write.
   }
-  return { status: "updated", path: helpers.relPath(deskRoot, file), resource: rows[0], ...(rows.length > 1 ? { resources: rows } : {}), ...(commit ? { commit } : {}) }
+  return { status: commit ? commit.status === "unknown" ? "commit_unknown" : "commit_failed" : "updated", path: helpers.relPath(deskRoot, file), resource: rows[0], ...(rows.length > 1 ? { resources: rows } : {}), ...(commit ? { commit } : {}) }
 }

@@ -21,7 +21,11 @@ const NO_HOOK_RUN = /'hook' is not a git command/u
 
 function git(spawnGit, root, args, { env, input, timeout = GIT_TIMEOUT_MS } = {}) {
   const answer = (spawnGit === spawnSync || spawnGit.real === spawnSync ? fastGitAnswer(root, args, input) : null) ?? spawnGit("git", ["-C", root, ...args], { windowsHide: true, encoding: "utf8", timeout, env, input })
-  return { ok: !answer.error && answer.status === 0, status: answer.status, cut: Boolean(answer.error || answer.signal), notRun: answer === NOT_RUN, skipped: answer.skipped === true, stdout: String(answer.stdout ?? ""), stderr: String(answer.stderr ?? answer.error?.message ?? "").trim() }
+  const ok = !answer.error && answer.status === 0
+  const stderr = String(answer.stderr ?? "").trim() || (ok ? "" : answer.error
+    ? `${answer.error.code ? `${answer.error.code}: ` : ""}${answer.error.message || "Git process failed"}`
+    : answer.signal ? `Git terminated by signal ${answer.signal}` : `Git exited with status ${answer.status} without stderr`)
+  return { ok, status: answer.status, cut: Boolean(answer.error || answer.signal), notRun: answer === NOT_RUN, skipped: answer.skipped === true, stdout: String(answer.stdout ?? ""), stderr }
 }
 
 // A tree named by its hash never changes, so a save that reads the same tree twice asks Git once.

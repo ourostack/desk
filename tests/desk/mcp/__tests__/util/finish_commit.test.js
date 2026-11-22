@@ -204,6 +204,25 @@ test("a pre-commit hook that changes what would be committed is held: Desk commi
   assert.deepEqual(snapshot(root, ["notes.md"]), before)
 })
 
+test("write-tree failure preserves Git stderr or a process diagnostic without moving the branch", () => {
+  for (const failure of [
+    { status: 128, stderr: "fatal: unable to create index.lock", expected: /fatal: unable to create index\.lock/u },
+    { status: null, stderr: "", signal: "SIGTERM", error: Object.assign(new Error("spawnSync git ETIMEDOUT"), { code: "ETIMEDOUT" }), expected: /ETIMEDOUT/u },
+    { status: null, stderr: "   ", signal: "SIGKILL", expected: /SIGKILL/u },
+    { status: 128, stderr: "", expected: /exit.*128/u },
+  ]) {
+    const root = repo()
+    writeFileSync(path.join(root, "notes.md"), "mine\n")
+    const committed = capturedFailure(root, ["notes.md"], "save notes")
+    const before = snapshot(root, ["notes.md"])
+    const cut = (cmd, args, opts) => args[2] === "write-tree" ? { stdout: "", ...failure } : spawnSync(cmd, args, opts)
+    const answer = finish(root, ["notes.md"], "save notes", committed, { commit: true, spawnGit: cut })
+    assert.equal(answer.state, "held")
+    assert.match(answer.reason, failure.expected)
+    assert.deepEqual(snapshot(root, ["notes.md"]), before)
+  }
+})
+
 test("a hook cut off at the bound is unknown and moves nothing; a cut-off branch update is unknown and names the commit", () => {
   for (const verb of ["hook", "update-ref"]) {
     const root = repo()
@@ -740,7 +759,7 @@ test("a private index that gains an entry outside the captured paths is held bef
 
 test("each commit hook that refuses, silently or with a reason, or that empties the message, is held, and nothing moves", () => {
   const cases = {
-    "pre-commit": ["pre-commit", "exit 1", /pre-commit hook refused the commit: no reason given/u],
+    "pre-commit": ["pre-commit", "exit 1", /pre-commit hook refused the commit: Git exited with status 1 without stderr/u],
     "prepare-commit-msg": ["prepare-commit-msg", "echo no template >&2; exit 1", /prepare-commit-msg hook refused the commit: no template/u],
     "commit-msg": ["commit-msg", "echo bad subject >&2; exit 1", /commit-msg hook refused the commit: bad subject/u],
     "an emptied message": ["commit-msg", ": > \"$1\"", /the commit message is empty after the hooks ran/u],
@@ -768,7 +787,7 @@ test("a commit-tree that fails, with a reason or with none, is held and moves no
   assert.doesNotMatch(signed.reason, /no reason given/u)
   git(root, ["config", "commit.gpgSign", "false"])
   const silent = finish(root, ["notes.md"], "save notes", committed, { commit: true, spawnGit: answered("commit-tree", { status: 1 }) })
-  assert.deepEqual([silent.state, silent.reason], ["held", "nothing was committed: git commit-tree failed: no reason given"])
+  assert.deepEqual([silent.state, silent.reason], ["held", "nothing was committed: git commit-tree failed: Git exited with status 1 without stderr"])
   assert.equal(head(root), before)
 })
 
@@ -796,13 +815,13 @@ test("a compare-and-swap Git refuses without a reason is held: the branch is whe
   const before = head(root)
   const answer = finish(root, ["notes.md"], "save notes", committed, { commit: true, spawnGit: answered("update-ref", { status: 1 }) })
   assert.equal(answer.state, "held", answer.reason)
-  assert.match(answer.reason, /refused to overwrite it \(no reason given\)/u)
+  assert.match(answer.reason, /refused to overwrite it \(Git exited with status 1 without stderr\)/u)
   assert.equal(head(root), before)
 })
 
 test("a post-commit hook that fails silently, deletes the branch or detaches HEAD is unknown, naming the commit made", () => {
   const cases = {
-    silent: ["exit 1", /post-commit hook failed: no reason given/u, true],
+    silent: ["exit 1", /post-commit hook failed: Git exited with status 1 without stderr/u, true],
     deleted: ["git update-ref -d refs/heads/main", /Git could not read HEAD/u, false],
     detached: ["git checkout -q --detach", /on no branch/u, false],
   }

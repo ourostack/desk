@@ -318,7 +318,7 @@ test("the route of a task move that did not land, run by hand, commits the move 
 test("the route of a live card finishes Desk's recorded change: it reads, commits once, publishes, and removes the record", async () => {
   const { root, origin, route, result } = await cardTimedOut()
   assert.deepEqual(Object.keys(result).slice(0, 2), ["next", "status"], "the answer opens with the next step, then its status")
-  assert.equal(result.status, "updated", "the status is unchanged: the note is on disk")
+  assert.equal(result.status, "commit_failed", "the note is on disk but its commit did not land")
   assert.match(result.next, /^The change is on disk but not committed or on the remote yet: run commit\.route_around\.steps now, in order, then read back the remote\.$/u)
   const { code, first, newer } = await followRoute(route, { task_update: () => assert.fail("the route never calls task_update") })
   assert.equal(code, 3, first[0].stdout)

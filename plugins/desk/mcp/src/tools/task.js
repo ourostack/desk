@@ -1017,7 +1017,7 @@ function patchedCardText(raw, existing, fields) {
  * "failed", reason }` on the result, omitted entirely on a normal, silent
  * success or on a non-Git desk.
  *
- * Returns: { status: "updated", path, commit?, next_step?, next_step_note?, report_as?, report_note?, desk_commit?, desk_pushed?, desk_note?, included_uncommitted_changes?, factory_report?, factory_report_unavailable? } (`included_uncommitted_changes` says the card was already changed or untracked before this call and the commit took that along; `factory_report_unavailable` is the reason code a card that reached done has no report link, and `factory_report` the link when this call filled it in on such a card; when Desk committed the card, `desk_note` is the second field, right after `status`: it says no git is needed and not to add, commit or push the card; `desk_commit` is the short sha of that commit, `desk_pushed` false because the push is scheduled, not yet done; `next_step` and
+ * Returns: { status: "updated" | "commit_failed" | "commit_unknown", path, commit?, next_step?, next_step_note?, report_as?, report_note?, desk_commit?, desk_pushed?, desk_note?, included_uncommitted_changes?, factory_report?, factory_report_unavailable? } (`included_uncommitted_changes` says the card was already changed or untracked before this call and the commit took that along; `factory_report_unavailable` is the reason code a card that reached done has no report link, and `factory_report` the link when this call filled it in on such a card; when Desk committed the card, `desk_note` is the second field, right after `status`: it says no git is needed and not to add, commit or push the card; `desk_commit` is the short sha of that commit, `desk_pushed` false because the push is scheduled, not yet done; `next_step` and
  * `next_step_note` when the call added a note or changed the status without passing `next_step`: the card's current next
  * step, or null, and a reminder; `report_as` and `report_note` whenever the status is not terminal: the sentence to
  * report the task with, and a line against calling it done)
@@ -1295,7 +1295,7 @@ export async function task_update({ deskRoot, input, person = null, search, stat
   if (TERMINAL_STATUSES.has(merged.status)) await requestTaskTerminalSync({ deskRoot, person, track, slug, env, status: merged.status })
   // A return asks the factory to re-derive the job's sessions, as a terminal move does; a return to a terminal status was asked for just above.
   else if (returnReason !== undefined) await requestTaskReturnSync({ deskRoot, person, track, slug, env, finalize })
-  const result = { status: "updated", path: relPath(deskRoot, filePath) }
+  const result = { status: commit ? commit.status === "unknown" ? "commit_unknown" : "commit_failed" : "updated", path: relPath(deskRoot, filePath) }
   if (contentAdmission !== null) result.content_admission = contentAdmission
   if (logged !== null) result.log = { path: logged.path, commit: logged.commit }
   const scratch = scratchPathWarning([note, nextStep, body_append, section?.markdown, values.log], "This update")
