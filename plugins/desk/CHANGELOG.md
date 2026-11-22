@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.422 — 2026-11-22
+
+The `observer` agent's description ([Claude](agents/observer.md), [Copilot](agents/observer.agent.md)) now ends its summary with "without doing, fixing or certifying that work" in place of the sentence "Never does, fixes or certifies the work it observes". The meaning is the same. The Ouro AX census in Desk's CI flags words in an agent's description that give the reader a rule, such as "never", and asks the description to say what the agent does.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.421 — 2026-11-22
 
 Both MCP servers now return `structuredContent.code: "unknown_door"` for an unknown tool, keeping the existing message and suggestions so agents and the AX census can identify the refusal.
