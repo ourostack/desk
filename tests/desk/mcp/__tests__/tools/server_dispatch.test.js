@@ -170,6 +170,8 @@ test("server.callTool surfaces tool errors as isError with structured body", asy
   const body = parseResult(res)
   assert.equal(body.status, "error")
   assert.match(body.message, /does not exist/)
+  // The thrown error's stable code reaches the reply, so an agent can branch on it.
+  assert.equal(body.code, "task_update_task_does_not_exist_at")
 })
 
 test("server.callTool rejects unknown tool names", async () => {

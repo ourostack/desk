@@ -332,6 +332,8 @@ export async function callTool({ deskRoot, name, input, person = null, statusCon
             status: "error",
             tool: name,
             message: err?.message ?? String(err),
+            // The error's stable code (see the tools' errors), so an agent can branch on the failure without parsing prose.
+            ...(typeof err?.code === "string" ? { code: err.code } : {}),
           }),
         },
       ],
