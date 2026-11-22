@@ -87,9 +87,9 @@ export async function shelvedLessons({ deskRoot, person, task }) {
  *
  * Input: { track, slug } or { clear: true }
  *
- * Returns: { status: "focused", track, slug, task_status, recent_progress: [string], next_step: string | null, archived?: true,
+ * Returns: { status: "focused", track, slug, task_status, title, recent_progress: [string], next_step: string | null, archived?: true,
  * shelved_lessons?: { path, lessons: [string], not_shown } } or { status: "cleared" }. `shelved_lessons` carries the
- * person's shelved lessons (see `shelvedLessons`) when they have any, those closest to this task first. A card found only under `_archive/` is still focused (a session may be wrapping up or
+ * person's shelved lessons (see `shelvedLessons`) when they have any, those closest to this task first. `title` is the card's title (null when it has none), which names the session's Orca tab (runtime/orca-session-title.js). A card found only under `_archive/` is still focused (a session may be wrapping up or
  * reopening finished work) and the answer says `archived: true`. `log` names the task's `log.md` with its entry count and newest entry when it has one. `recent_progress` is the last PROGRESS_ENTRIES entries
  * of the card's `## Progress log`, each cut to PROGRESS_ENTRY_CHARS characters, and is empty when the card has none.
  * Throws `card not found: <track>/<slug>` for a missing card, leaving the focus as it was.
@@ -134,6 +134,7 @@ export async function taskFocus({ deskRoot, input, person = null, statusContext 
     track,
     slug,
     task_status: typeof card.data.status === "string" ? card.data.status : null,
+    title: typeof card.data.title === "string" ? redactCredentialLikeText(card.data.title) : null,
     recent_progress: recentProgress(card.content, PROGRESS_ENTRIES, PROGRESS_ENTRY_CHARS).map(redactCredentialLikeText),
     next_step: nextStepOf(card.content),
   }

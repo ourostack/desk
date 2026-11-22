@@ -22,6 +22,19 @@
           }
         ]
       }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "^mcp__(plugin_desk_)?desk__task_(focus|create)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/orca-session-title.cjs\"",
+            "timeout": 15,
+            "async": true
+          }
+        ]
+      }
     ]
   }
 }

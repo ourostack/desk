@@ -27,12 +27,12 @@ The successful tool result carries:
 }
 ```
 
-This does **not** rename a native conversation, terminal panel or Hub entry.
-It does not prove a main-agent invocation, ownership, current native activity,
+The task tools themselves do **not** rename a native conversation, terminal panel or Hub entry.
+The proposal does not prove a main-agent invocation, ownership, current native activity,
 delivery or acceptance. A native consumer must independently qualify and
 correlate those facts, preserve manual names, and reject stale or child results
 before applying any automatic name. A shared MCP connection is not ownership.
-No native naming consumer is installed by these task tools.
+The one consumer Desk ships is the [Orca tab namer](#orca-tab-names) below.
 
 Author a short functional description, not a copied card title, path, URL,
 email address or credential. Labels are trimmed and limited to 72 Unicode
@@ -45,13 +45,25 @@ When no label was proposed, `session_label` is left out of the result. Unsafe in
 returns code `unsafe_label`; task CRUD and its existing evidence checks remain
 unchanged. A supplied label on a parked create or nonfocused update returns
 `awaiting_focus` without changing the held focus. An invalid internal task
-identity returns `owner_unknown`. No fallback converts a card title or slug
-into display text.
+identity returns `owner_unknown`. The proposal never converts a card title or slug
+into display text; only the Orca tab namer falls back to the card title, under its own rules.
 
 `task_focus` with `clear:true` remains a standalone operation and cannot also
 supply `display_label`. Clearing does not issue a rename. A task card's status
 never changes the proposal's `unknown` phase into working, delivered or
 accepted.
+
+## Orca tab names
+
+When a Claude Code session runs in an [Orca](https://github.com/stablyai/orca) terminal, Desk names that terminal's tab after the task its main agent focuses, so the phone's session list says what each session is doing ([desk#1478](https://github.com/ourostack/desk/issues/1478); Ari asked for automatic names on 2026-11-22). A `PostToolUse` hook in [`hooks/hooks.json`](../hooks/hooks.json) runs in the background after `task_focus` and `task_create`, and [`mcp/src/runtime/orca-session-title.js`](../mcp/src/runtime/orca-session-title.js) does the work:
+
+- **Which terminal.** Only the caller's own, named by Orca in `ORCA_TERMINAL_HANDLE`. Desk never picks "the active terminal" and never renames another session.
+- **Who may rename.** Only the main agent. A subagent's hook input carries `agent_id`, and a Desk child process runs with `DESK_READ_ONLY_CHILD` or `DESK_FACTORY_HEADLESS`; both are skipped. Clearing focus, a parked `task_create` and a failed call leave the title alone.
+- **The title.** The agent's own `display_label` when it gave one, else the card's title (`task_focus` now answers `title`). Either passes the safety rules above whole or not at all, so no path, URL, address or credential reaches a tab, and is cut at a word to 32 characters with an ellipsis.
+- **A person's name wins.** Orca's CLI has one setter, and it writes the same custom title a person types. So Desk records the last title it set on each terminal in its state folder (`orca-session-titles.json`) and renames only while the tab still shows that title or an Orca default (empty, `Terminal N`, the agent or shell name, or Claude Code's own status title). Any other title is a person's and stays. Where the installed Orca supports `terminal rename --if-title`, Desk passes the title it read, so a rename that races a person's lands only if the title is still unchanged; without it, the moment between reading and writing is the known gap.
+- **Proof.** Desk reads the title back after renaming and records it only when it matches. Every outcome is one line in `orca-session-titles.log` in Desk's state folder (`applied`, `manual_title_kept`, `readback_mismatch`, `not_in_orca`, `child_agent` and the rest). Nothing is shown to the agent, and the tool call never waits on or fails because of naming.
+
+Copilot sessions in Orca are not named yet: the hook is registered for Claude Code only.
 
 ## Parent-loaded Copilot consumer (not shipped)
 
