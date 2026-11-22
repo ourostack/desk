@@ -102,6 +102,14 @@ test("recent_progress is empty for a card with no progress section, and a status
   assert.equal((await taskFocus({ deskRoot: root, input: { track: "tr", slug: "alpha-work" } })).task_status, null)
 })
 
+test("focus answers the card's title, which names the session's Orca tab; a card with no title answers null", async () => {
+  const root = await mkTempDeskRoot()
+  await card(root, "tr", "titled-work", { title: "Name Orca sessions" })
+  assert.equal((await taskFocus({ deskRoot: root, input: { track: "tr", slug: "titled-work" } })).title, "Name Orca sessions")
+  await fs.writeFile(path.join(root, "tr", "titled-work", "task.md"), "---\nstatus: processing\n---\nbody\n")
+  assert.equal((await taskFocus({ deskRoot: root, input: { track: "tr", slug: "titled-work" } })).title, null)
+})
+
 test("each progress entry is capped, and a credential-like entry is redacted", async () => {
   const root = await mkTempDeskRoot()
   await card(root, "tr", "alpha-work")
