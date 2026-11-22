@@ -2,7 +2,7 @@
   "errors": [
     {
       "code": "unknown-door",
-      "means": "The tool name is not one Desk's server serves; the reply lists the served tools and a near match.",
+      "means": "The tool name is not one Desk's server serves; the reply lists the served tools and, when one is close, a near match.",
       "fix": "Call one of the listed tools, such as the near match named in the reply."
     }
   ],
@@ -10,12 +10,12 @@
     {
       "id": "mcp:task_create",
       "group": "desk-mcp-cards",
-      "when": "Starting a fresh unit of work under an existing track folder, optionally focusing this session on it at once",
+      "when": "Starting a fresh unit of work under a track, optionally focusing this session on it at once",
       "effect": "write",
       "errors": [
         {
           "code": "task-create-invalid-slug",
-          "means": "The slug is not an outcome name of 2 to 6 lowercase kebab-case words, or reads like a prompt or credential.",
+          "means": "The slug is not 1 to 6 lowercase kebab-case words of at most 48 characters, or reads like a prompt or a credential.",
           "fix": "Pick a short outcome name such as fix-login-timeout and call again."
         },
         {
@@ -76,8 +76,8 @@
       "errors": [
         {
           "code": "task-archive-task-does-not-exist-at",
-          "means": "No live task folder exists at the given track and slug.",
-          "fix": "Check the track and slug; an already archived task needs no second call."
+          "means": "No task folder exists at that track and slug, live or archived.",
+          "fix": "Check the track and slug with desk_search, then call again."
         },
         {
           "code": "task-archive-cancelled-abandoned-work-not-both",
@@ -91,8 +91,8 @@
         },
         {
           "code": "task-archive-card-changed-after-admission-outside",
-          "means": "The card changed on disk while the archive ran; outside edits were kept and nothing was moved.",
-          "fix": "Call task_archive again."
+          "means": "The card changed on disk during the archive after the folder had moved into _archive; outside edits were kept.",
+          "fix": "Read the reply's archive_phase and actual_path for where it is, then finish publication from there."
         },
         {
           "code": "admitting",
@@ -165,13 +165,13 @@
       "errors": [
         {
           "code": "track-create-invalid-slug",
-          "means": "The slug is not an outcome name of 2 to 6 lowercase kebab-case words.",
+          "means": "The slug is not 1 to 6 lowercase kebab-case words of at most 48 characters, or it is a catch-all or a person's name.",
           "fix": "Pick a short outcome name and call again."
         },
         {
           "code": "track-create-invalid-scope",
-          "means": "The scope is missing, too long or not in the what belongs; not what doesn't form.",
-          "fix": "Rewrite scope as one line under 240 characters in that form."
+          "means": "The scope is missing, spans more than one line, or is longer than 240 characters.",
+          "fix": "Rewrite scope as one line of at most 240 characters, such as what belongs; not what doesn't."
         },
         {
           "code": "track-create-track-already-exists-at",
@@ -198,8 +198,8 @@
         },
         {
           "code": "track-update-invalid-scope",
-          "means": "The new scope fails the same check track_create applies.",
-          "fix": "Rewrite scope as one line under 240 characters, what belongs; not what doesn't."
+          "means": "The new scope is empty, spans more than one line, or is longer than 240 characters, the check track_create applies.",
+          "fix": "Rewrite scope as one line of at most 240 characters."
         },
         {
           "code": "track-update-rename-cannot-be-combined-with-update",
@@ -216,9 +216,9 @@
     {
       "id": "mcp:friction_add",
       "group": "desk-mcp-records",
-      "when": "Logging a snag in setup or in Desk itself; system snags open an improvement card and an issue for the owning repository's drain",
+      "when": "Logging a snag in setup or in Desk itself; system snags about a tool Ouro owns file an issue on its repository, and Desk's own keep an improvement card",
       "effect": "consequential",
-      "confirm": "System friction about a tool owned in ourostack files or counts a GitHub issue on that tool's repository; go ahead?",
+      "confirm": "System friction about a tool Ouro owns files a GitHub issue on its repository or comments on the open one, and file_card opens a kaizen issue; go ahead?",
       "errors": [
         {
           "code": "friction-add-title-is-required-for-system",
@@ -233,7 +233,7 @@
         {
           "code": "friction-add-issue-not-filed",
           "means": "The GitHub issue for system friction could not be filed; the note itself was saved.",
-          "fix": "Act on the reason in the message, such as signing in, then call again."
+          "fix": "Act on the reason in the message, such as signing in, then call again; the retry adds a second friction entry."
         },
         {
           "code": "admitting",
@@ -247,22 +247,22 @@
       "group": "desk-mcp-records",
       "when": "Right after the operator corrects a habit or preference, so future sessions keep that fix without being told again",
       "effect": "consequential",
-      "confirm": "A team lesson opens a pull request on the shared repository's AGENTS.md; go ahead?",
+      "confirm": "A team lesson opens and merges a pull request on the shared repository's AGENTS.md; go ahead?",
       "errors": [
         {
           "code": "lesson-add-scope-is-required-personal-this",
-          "means": "scope was missing.",
+          "means": "scope was missing or not personal, desk or team.",
           "fix": "Pass scope as personal, desk or team."
         },
         {
           "code": "lesson-add-must-be-one-line-a",
-          "means": "The lesson text spans more than one line, and a lesson is one rule.",
+          "means": "topic, body, repo or source spans more than one line; a lesson is one rule.",
           "fix": "Rewrite the lesson as one line and call again."
         },
         {
           "code": "lesson-add-a-team-lesson-needs-repo",
-          "means": "A team lesson came without the shared repository to write it to.",
-          "fix": "Pass the repository the team shares, then call again."
+          "means": "A team lesson came without repo, outside a Crew shared workspace.",
+          "fix": "Pass repo, the path of your local clone of the team's repository."
         },
         {
           "code": "lesson-add-another-session-is-writing-nothing",
@@ -420,7 +420,7 @@
       "errors": [
         {
           "code": "no-desk-root",
-          "means": "No source names a desk, so the answer's state is degraded:no_desk_root with the paths tried.",
+          "means": "No source names a desk, so the answer's state is setup_required with code no_desk_root and the paths tried.",
           "fix": "Follow the answer's fix to bind a desk, then call desk_status again."
         },
         {
@@ -438,13 +438,13 @@
       "errors": [
         {
           "code": "no-state-branch",
-          "means": "switch_state_branch was asked for, but this session has no state branch configured.",
+          "means": "switch_state_branch was asked for, but this session has no desk root or no state branch configured.",
           "fix": "Skip the repair; a host passes --state-branch when a checkout must stay on one branch."
         },
         {
-          "code": "search-starting",
-          "means": "reindex was asked for while the search engine was still starting.",
-          "fix": "Wait a few seconds and call desk_doctor with reindex: true again."
+          "code": "search-unavailable",
+          "means": "reindex was asked for, but the session's search engine could not start, so the call was refused as degraded.",
+          "fix": "Call desk_status to retry starting it, then call desk_doctor with reindex: true again."
         },
         {
           "code": "factory-already-decided",
@@ -532,7 +532,7 @@
       "errors": [
         {
           "code": "not-your-claim",
-          "means": "The key and claim_id do not match a live claim this caller holds.",
+          "means": "The key and claim_id do not match the card's current claim.",
           "fix": "Pass the key and claim_id improvement_next returned."
         },
         {
