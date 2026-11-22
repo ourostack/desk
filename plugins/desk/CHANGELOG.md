@@ -1,5 +1,13 @@
 # desk plugin — changelog
 
+## 3.2.417 — 2026-11-22
+
+### A relay can stay on its own interval while idle
+
+A relay can set `backOffWhenIdle: false` to keep polling on its `everySeconds` when nothing is pending, instead of backing off to at least two minutes. Its idle polls are conditional reads that GitHub answers with a free 304, so it spends no quota, and the event it watches is heard within one poll: the relay that tells Tandem's Ouro update bot of a new ouro-ui release took 67 to 89 seconds after the release on the three latest releases, almost all of it the two-minute idle floor. Relays without the field back off as before.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.416 — 2026-11-22
 
 Desk now names a Claude Code session's Orca tab after the task its main agent focuses, so the phone's session list stays readable ([desk#1478](https://github.com/ourostack/desk/issues/1478)). A background `PostToolUse` hook after `task_focus` and a focused `task_create` renames only the caller's own terminal (`ORCA_TERMINAL_HANDLE`), only for the main agent (never a subagent, a `claude -p` child or a Desk child), and only while the tab shows a title Desk set or an Orca default, so a name a person typed is never replaced. Where Orca supports `terminal rename --if-manual-title`, Desk uses it so the rename cannot land over a name typed a moment earlier. The title is the agent's `display_label` or the card's title, held to the session-label safety rules and cut to 32 characters, and it is read back after renaming. `task_focus` now answers the card's `title`. Outcomes are logged in Desk's state folder. macOS and Linux only. See [session labels](docs/session-labels.md#orca-tab-names).
