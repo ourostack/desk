@@ -73,7 +73,7 @@ Each body is saved as a file only you can read (`.json` when it is JSON, else `.
 
 A body may be up to 512 KB, because each event is stored as one Table Storage entity, which holds at most 1 MB. The receiver keeps no other cap: no rate limit and no ceiling on waiting events. When Table Storage itself is busy, the receiver answers 503 with the `Retry-After` Table Storage gave, if it gave one, and the service sends the event again later. A GitHub rate limit on sign-in is a 503 too, so the poll tries again rather than asking you to sign in.
 
-The [receiver's error replies](../../../hosted/src/hooks/app.js) keep their guidance in `error` and add a stable `code`. A sender can branch on `signature-refused`, `body-too-large` or `storage-unavailable`; management calls distinguish `identity-refused` from the retryable `identity-unavailable`. A missing hook uses `hook-not-found`, and an already-acknowledged or unknown event uses `event-not-found`. Statuses, retry headers and success replies are unchanged.
+The [receiver's error replies](../../../hosted/src/hooks/app.js) keep their guidance in `error` and add a stable `code`. A sender can branch on `signature-refused`, `body-too-large` or `storage-unavailable`; management calls distinguish `identity-refused` from the retryable `identity-unavailable`. A `body-too-large` reply reports the limit that rejected the request: 16 KB (16384 bytes) for creating a hook, or 512 KB (524288 bytes) for receiving an event. A missing hook uses `hook-not-found`, and an already-acknowledged or unknown event uses `event-not-found`. Statuses, retry headers and success replies are unchanged.
 
 ## The receiver
 

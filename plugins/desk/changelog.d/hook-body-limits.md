@@ -1,0 +1,1 @@
+The hosted hooks receiver reports the body limit that actually rejected a request: 16 KB for creating a hook and 512 KB for incoming events. The limits, 413 status and body-too-large code are unchanged.

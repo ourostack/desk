@@ -111,6 +111,23 @@ test("a repeated delivery id answers 200 and stores one copy", async (t) => {
   assert.equal((await call("GET", "/hooks", { headers: OWNER })).body[0].pending, 1);
 });
 
+test("create bodies accept exactly 16 KB and report that limit at 16 KB + 1", async (t) => {
+  const { call } = await serve(t);
+  const bodyAt = (name, bytes) => {
+    const json = JSON.stringify({ name, verify: "none", padding: "\u00e9" });
+    return Buffer.from(json + " ".repeat(bytes - Buffer.byteLength(json)));
+  };
+  const exact = bodyAt("exact", 16384);
+  const over = bodyAt("over", 16385);
+  const headers = { ...OWNER, "content-type": "application/json" };
+  const accepted = await call("POST", "/hooks", { headers, body: exact });
+  assert.equal(accepted.status, 201);
+  const refused = await call("POST", "/hooks", { headers, body: over });
+  assert.deepEqual([refused.status, refused.body], [413, { code: "body-too-large", error: "the body is over 16384 bytes" }]);
+  assert.deepEqual((await call("GET", "/hooks", { headers: OWNER })).body.map((hook) => hook.name), ["exact"]);
+  t.diagnostic(JSON.stringify({ createBytes: over.length, status: refused.status, ...refused.body }));
+});
+
 test("bodies at the edges: empty, exactly 512 KB and binary round-trip; 512 KB + 1 is 413", async (t) => {
   const { call } = await serve(t);
   const created = await call("POST", "/hooks", { headers: OWNER, json: { name: "open", verify: "none" } });

@@ -1,1 +1,0 @@
-Task updates now return commit_failed or commit_unknown when their commit is not verified, while preserving edits and recovery instructions. Git commit failures retain stderr or an explicit process error, signal or exit-status diagnostic instead of an empty reason.
