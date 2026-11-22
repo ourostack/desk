@@ -3,6 +3,7 @@
 // github.com it asks the gateway's token socket (DESK_TOKEN_SOCKET) for a
 // fresh installation token. `store` and `erase` are ignored, since the
 // gateway owns the token's life.
+// ax: read-only. It writes no file and stores nothing; on get it prints the token the gateway gives it.
 import { text } from "node:stream/consumers";
 import { requestToken } from "../src/token-client.js";
 

@@ -22,7 +22,9 @@
 // `cards` is the sidecar of cards, `{ "doors": [DoorCard] }`. A card whose door isn't found is a census error.
 // `handlers` are extra files or folders whose literals count as raised for every door, beside the door's own file;
 // a code counts as raised as written or with its hyphens as underscores. Read-only evidence is the kit's `readOnly:
-// true` on the command.
+// true` on the command. A hand-written entry point, shell script or Python script declares itself read-only with a
+// comment line `ax: read-only` (`// ax: read-only` or `# ax: read-only`, optionally followed by why) in its leading
+// comments, before its first line of code; the declaration covers every door the file is, its first words included.
 import { closeSync, openSync, readFileSync, readSync, readdirSync, statSync } from "node:fs";
 import { basename, dirname, extname, join, relative, resolve } from "node:path";
 import ts from "typescript";
@@ -380,6 +382,18 @@ function literals(sf: ts.SourceFile): Set<string> {
   return found;
 }
 
+/** Whether a script's leading comments, before its first line of code, hold an `ax: read-only` line. */
+function declaresReadOnly(text: string): boolean {
+  for (const line of text.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (trimmed === "" || trimmed.startsWith("#!")) continue;
+    const comment = /^(?:\/\/|#|\/\*+|\*+\/?)\s*(.*)$/.exec(trimmed);
+    if (!comment) return false;
+    if (/^ax:\s*read-only(?![a-z0-9-])/i.test(comment[1]!)) return true;
+  }
+  return false;
+}
+
 const kindOfScript = (file: string): ts.ScriptKind => (/\.[cm]?ts$/.test(file) ? ts.ScriptKind.TS : ts.ScriptKind.JS);
 
 export async function walk(opts: WalkerOptions): Promise<WalkResult> {
@@ -407,11 +421,11 @@ export async function walk(opts: WalkerOptions): Promise<WalkResult> {
   for (const path of all) {
     if (path.endsWith(".py")) {
       const line = pythonEntry(path);
-      if (line !== null && !claimedByHooks.has(path)) found.push(door(`python3 ${relative(opts.root, path)}`, path, line, false));
+      if (line !== null && !claimedByHooks.has(path)) found.push(door(`python3 ${relative(opts.root, path)}`, path, line, declaresReadOnly(readFileSync(path, "utf8"))));
       continue;
     }
     if (!SCRIPT.test(path) || NOT_SCRIPT.test(path)) {
-      if (isShellScript(path) && !claimedByHooks.has(path)) found.push(door(relative(opts.root, path), path, 1, false));
+      if (isShellScript(path) && !claimedByHooks.has(path)) found.push(door(relative(opts.root, path), path, 1, declaresReadOnly(readFileSync(path, "utf8"))));
       continue;
     }
     const text = readFileSync(path, "utf8");
@@ -434,8 +448,9 @@ export async function walk(opts: WalkerOptions): Promise<WalkResult> {
     if (imports.some((i) => kitFiles.has(i))) continue;
     const sf = sourceOf(path);
     const name = `node ${relative(opts.root, path)}`;
-    found.push(door(name, path, lineOf(sf, node), false));
-    for (const [word, line] of firstWords(sf)) found.push(door(`${name} ${word}`, path, line, false));
+    const readOnly = declaresReadOnly(sf.text);
+    found.push(door(name, path, lineOf(sf, node), readOnly));
+    for (const [word, line] of firstWords(sf)) found.push(door(`${name} ${word}`, path, line, readOnly));
   }
 
   if (found.length === 0 && unwalked.length === 0) errors.push(`${opts.source}: no commands or scripts under it, so the walker finds nothing. Fix: point the source at a folder of code.`);

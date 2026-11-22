@@ -1,3 +1,5 @@
+// ax: read-only. Run as a script, it maps a task's Superpowers brief, report and progress paths inside the desk and
+// prints them as JSON; it creates no file or folder.
 import * as path from "node:path"
 import { realpathSync } from "node:fs"
 import { realpath, stat } from "node:fs/promises"

@@ -1,0 +1,1 @@
+The Superpowers context mapper (`mcp/src/activation/superpowers-context.js`) and the pull request reviewer audit (`skills/pr-reviewer-audit/helpers/audit.py`) declare themselves read-only with an `ax: read-only` comment, which the Ouro AX census reads as their read-only evidence. Neither script's behaviour changes.

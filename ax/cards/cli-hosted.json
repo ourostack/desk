@@ -61,6 +61,16 @@
         { "code": "unreleased-mapped", "means": "The serving revision maps GitHub accounts but no release is recorded and DESK_LEGACY_CUTOFF is not set.", "fix": "Record the release and set the legacy cutoff through provision.sh." },
         { "code": "unverified-key", "means": "An Apple key slot doesn't match its recorded Key ID or import fingerprint, so nothing was sent.", "fix": "Reimport that slot's key with provision-identity.mjs --apple-key-file and --apple-key-slot." }
       ]
+    },
+    {
+      "id": "cli:node hosted/infra/check-lockfiles.mjs",
+      "group": "desk-cli-local-checks",
+      "when": "Before pushing a package-lock.json change, to confirm every tracked lockfile installs only from the public npm registry",
+      "effect": "read",
+      "errors": [
+        { "code": "lockfile-outside-registry", "means": "A tracked lockfile has packages that resolve outside registry.npmjs.org; the line names the lockfile and the packages; exit 1.", "fix": "Run node hosted/infra/normalize-lockfile.mjs <path> on that lockfile, then check again." },
+        { "code": "lockfile-weak-integrity", "means": "hosted/package-lock.json has packages without a sha512 integrity hash; the line names them; exit 1.", "fix": "Run node hosted/infra/normalize-lockfile.mjs hosted/package-lock.json, which rewrites their integrity, then check again." }
+      ]
     }
   ]
 }
