@@ -1,1 +1,0 @@
-Hosted HTTP failures now carry stable error identity without replacing existing guidance or protocol codes: hook JSON includes `code`, gateway HTML/plaintext uses `x-desk-error-code`, and an unavailable MCP gateway adds `error.data.code`.
