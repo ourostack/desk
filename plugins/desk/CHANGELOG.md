@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.433 — 2026-11-22
+
+The hosted hooks receiver reports the body limit that actually rejected a request: 16 KB for creating a hook and 512 KB for incoming events. The limits, 413 status and body-too-large code are unchanged.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.432 — 2026-11-22
 
 Desk's MCP server now vendors Ouro UI v1.3.455, moved by Ouro Current.
