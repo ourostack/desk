@@ -1,0 +1,1 @@
+A Desk tool error now carries its stable `code` beside `status`, `tool` and `message` (for example `track_create_invalid_slug`), so agents and the AX census can identify the failure without parsing the message.
