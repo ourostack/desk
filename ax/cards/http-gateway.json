@@ -8,8 +8,8 @@
       "errors": [
         {
           "code": "gateway-unavailable",
-          "means": "The gateway cannot start Desk yet; the JSON-RPC error -32000 carries this in error.data.code with the reason.",
-          "fix": "Retry later; the message says what the gateway is waiting for."
+          "means": "The gateway is not set up (its GitHub App settings are missing), so signed-in requests get JSON-RPC error -32000 with this in error.data.code.",
+          "fix": "Ask the gateway's operator to finish its setup and redeploy; retrying will not help until then."
         },
         {
           "code": "body-too-large",
@@ -27,12 +27,12 @@
       "id": "http:gateway POST /oauth/consent",
       "group": "hosted-gateway",
       "when": "The person's browser submitting the sign-in approval form during an OAuth authorization for a client",
-      "effect": "write",
+      "effect": "read",
       "errors": [
         {
           "code": "gateway-unavailable",
-          "means": "Sign-in is unavailable on this gateway right now; the HTML page says why.",
-          "fix": "Try again later, starting again from the client."
+          "means": "The gateway is not set up, so a 503 page with the x-desk-error-code header answers instead of the form handler.",
+          "fix": "Sign-in works once the gateway's operator finishes its setup; then start again from the client."
         },
         {
           "code": "body-too-large",

@@ -36,6 +36,7 @@
     "http:gateway GET /invite/:token",
     "http:gateway GET /oauth/entra/callback",
     "http:gateway GET /oauth/github/callback",
+    "http:gateway POST /oauth/consent",
     "http:gateway USE /.well-known/oauth-authorization-server",
     "http:gateway USE /.well-known/oauth-protected-resource",
     "http:gateway USE /assets",
