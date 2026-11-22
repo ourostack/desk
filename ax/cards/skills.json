@@ -1,3 +1,56 @@
 {
-  "doors": []
+  "doors": [
+    {
+      "id": "agent:desk:worker claude",
+      "group": "desk-agents",
+      "when": "Starting a Claude Code agent that owns engineering work on the desk end to end, from plan through review to a merged pull request",
+      "effect": "consequential",
+      "confirm": "The operator gave go on the outcome, as the using-desk foundation's alignment step asks before work starts.",
+      "errors": [
+        { "code": "no-desk-bound", "means": "No desk is bound, so the startup line reports setup mode and no boot ran.", "fix": "Run the onboarding path desk_status names, desk:first-run-bootstrap by default." },
+        { "code": "foundation-missing", "means": "The SessionStart hook injected no using-desk foundation, so the worker runs on its own short text without Desk's working rules.", "fix": "Load desk:using-desk before other work, then run desk:session-start." },
+        { "code": "boot-late", "means": "The boot was still running when the session began, so its result arrives with the first Desk tool reply.", "fix": "Call desk_status, which waits for the boot, before saying anything about the desk's state." }
+      ],
+      "uses": ["skill:desk:session-start", "skill:desk:using-desk", "mcp:desk_status"]
+    },
+    {
+      "id": "agent:desk:worker copilot",
+      "group": "desk-agents",
+      "when": "Choosing Desk's engineering worker in Copilot CLI, which plans, builds, reviews and merges changes and keeps its tasks on the desk",
+      "effect": "consequential",
+      "confirm": "The operator gave go on the outcome, as the using-desk foundation's alignment step asks before work starts.",
+      "errors": [
+        { "code": "no-desk-bound", "means": "No desk is bound, so the startup line reports setup mode and no boot ran.", "fix": "Run the onboarding path desk_status names, desk:first-run-bootstrap by default." },
+        { "code": "foundation-missing", "means": "Copilot's sessionStart hook injected no using-desk foundation, so the worker has only its own short text.", "fix": "Load desk:using-desk with the skill tool, then run desk:session-start." },
+        { "code": "boot-late", "means": "The boot was still running when the session began, so its result arrives with the first Desk tool reply.", "fix": "Call desk_status, which waits for the boot, before saying anything about the desk's state." }
+      ],
+      "uses": ["skill:desk:session-start", "skill:desk:using-desk", "mcp:desk_status"]
+    },
+    {
+      "id": "agent:desk:observer claude",
+      "group": "desk-agents",
+      "when": "Starting a Claude Code agent to watch, time and classify work someone else did, reporting only what the evidence shows",
+      "effect": "consequential",
+      "confirm": "The evaluator approved the exact text of each issue before it is filed from their account.",
+      "errors": [
+        { "code": "own-work", "means": "The work to observe is work this observer did or helped with, so it declines to judge it.", "fix": "Start a fresh observer session that took no part in the work." },
+        { "code": "evidence-unavailable", "means": "Some step left no output, log, run or screenshot, so the report marks it unavailable rather than zero or fine.", "fix": "Supply the missing records, or accept the gap as stated in the report." },
+        { "code": "no-target", "means": "No work, host, packet or briefs were named, so the observer has nothing to watch.", "fix": "Name the work and the host, or hand over the evaluation packet or the evaluator briefs." }
+      ],
+      "uses": ["skill:desk:evaluate-release", "skill:desk:factory-evaluator", "skill:desk:using-desk", "mcp:desk_status"]
+    },
+    {
+      "id": "agent:desk:observer copilot",
+      "group": "desk-agents",
+      "when": "Choosing Desk's observer in Copilot CLI to time and label the steps of work it took no part in, from the records the work left",
+      "effect": "consequential",
+      "confirm": "The evaluator approved the exact text of each issue before it is filed from their account.",
+      "errors": [
+        { "code": "own-work", "means": "The work to observe is work this observer did or helped with, so it declines to judge it.", "fix": "Start a fresh observer session that took no part in the work." },
+        { "code": "evidence-unavailable", "means": "Some step left no output, log, run or screenshot, so the report marks it unavailable rather than zero or fine.", "fix": "Supply the missing records, or accept the gap as stated in the report." },
+        { "code": "no-target", "means": "No work, host, packet or briefs were named, so the observer has nothing to watch.", "fix": "Name the work and the host, or hand over the evaluation packet or the evaluator briefs." }
+      ],
+      "uses": ["skill:desk:evaluate-release", "skill:desk:factory-evaluator", "skill:desk:using-desk", "mcp:desk_status"]
+    }
+  ]
 }

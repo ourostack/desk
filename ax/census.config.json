@@ -20,7 +20,8 @@
   "groups": [
     {"id": "desk-session-hooks", "when": "Desk commands a host runs as a session starts, takes a prompt or ends, which boot the desk and record its state"},
     {"id": "desk-tool-call-hooks", "when": "Desk commands a host runs around single tool calls, which add notes, adjust arguments or name terminal tabs"},
-    {"id": "superpowers-session-hooks", "when": "The Superpowers plugin startup command that injects its skill introduction into Claude Code or Copilot CLI"}
+    {"id": "superpowers-session-hooks", "when": "The Superpowers plugin startup command that injects its skill introduction into Claude Code or Copilot CLI"},
+    {"id": "desk-agents", "when": "Desk's agent files for Claude Code and Copilot CLI: an engineering worker that ships changes and an observer that only reports"}
   ],
   "bookletWords": { "allow": [] }
 }
