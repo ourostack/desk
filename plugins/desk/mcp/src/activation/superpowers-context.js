@@ -1,3 +1,5 @@
+// ax: read-only. Run as a script, it maps a task's Superpowers brief, report and progress paths inside the desk and
+// prints them as JSON; it creates no file or folder.
 import * as path from "node:path"
 import { realpathSync } from "node:fs"
 import { realpath, stat } from "node:fs/promises"
@@ -251,6 +253,8 @@ if (isEntrypoint()) {
     process.stdout.write(`${JSON.stringify(await resolveSuperpowersContext(input))}\n`)
   } catch (error) {
     process.stderr.write(`${error.message}\n`)
+    // A stable code, when the error has one, follows on its own line in the kebab-case spelling its census card uses.
+    if (typeof error.code === "string") process.stderr.write(["code:", error.code.replaceAll("_", "-")].join(" ") + "\n")
     process.exitCode = 1
   }
 }

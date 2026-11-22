@@ -107,6 +107,7 @@ test("the CI guard checks every tracked lockfile, including new nested paths", (
     const external = run();
     assert.equal(external.status, 1);
     assert.match(external.stderr, /tools\/new tool\/package-lock\.json.*outside registry\.npmjs\.org/);
+    assert.match(external.stderr, /^lockfile-outside-registry: tools\/new tool\/package-lock\.json: /m, "the line leads with its stable code");
     assert.match(external.stderr, /normalize-lockfile\.mjs/);
 
     write("tools/new tool/package-lock.json", publicLock);
@@ -114,6 +115,7 @@ test("the CI guard checks every tracked lockfile, including new nested paths", (
     const weak = run();
     assert.equal(weak.status, 1);
     assert.match(weak.stderr, /hosted\/package-lock\.json.*lack sha512/);
+    assert.match(weak.stderr, /^lockfile-weak-integrity: hosted\/package-lock\.json: /m, "the line leads with its stable code");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

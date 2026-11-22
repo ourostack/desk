@@ -1,5 +1,19 @@
 # desk plugin — changelog
 
+## 3.2.433 — 2026-11-22
+
+The hosted hooks receiver reports the body limit that actually rejected a request: 16 KB for creating a hook and 512 KB for incoming events. The limits, 413 status and body-too-large code are unchanged.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.432 — 2026-11-22
+
+Desk's MCP server now vendors Ouro UI v1.3.455, moved by Ouro Current.
+
+The Superpowers context mapper (`mcp/src/activation/superpowers-context.js`) declares itself read-only with an `ax: read-only` comment, which the Ouro AX census reads as its read-only evidence. When it fails with a stable code, it now prints `code: <code>` on a second stderr line, after the unchanged sentence, so the codes on its census card reach the agent that runs it.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.431 — 2026-11-22
 
 Task updates now return commit_failed or commit_unknown when their commit is not verified, while preserving edits and recovery instructions. Git commit failures retain stderr or an explicit process error, signal or exit-status diagnostic instead of an empty reason.
