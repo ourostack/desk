@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.416 — 2026-11-22
+
+Desk now names a Claude Code session's Orca tab after the task its main agent focuses, so the phone's session list stays readable ([desk#1478](https://github.com/ourostack/desk/issues/1478)). A background `PostToolUse` hook after `task_focus` and a focused `task_create` renames only the caller's own terminal (`ORCA_TERMINAL_HANDLE`), only for the main agent (never a subagent, a `claude -p` child or a Desk child), and only while the tab shows a title Desk set or an Orca default, so a name a person typed is never replaced. Where Orca supports `terminal rename --if-manual-title`, Desk uses it so the rename cannot land over a name typed a moment earlier. The title is the agent's `display_label` or the card's title, held to the session-label safety rules and cut to 32 characters, and it is read back after renaming. `task_focus` now answers the card's `title`. Outcomes are logged in Desk's state folder. macOS and Linux only. See [session labels](docs/session-labels.md#orca-tab-names).
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.415 — 2026-11-22
 
 The [lane-process guidance](../skills/using-superpowers-with-desk/SKILL.md#lane-processes-end-with-their-lane) now requires load generators to have independent finite deadlines, keeps PID and test-file arguments in shell arrays, and requires verified exit before reporting cleanup. It includes a macOS leaf-process deadline example and preserves process-identity checks before signalling stored PIDs.
