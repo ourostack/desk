@@ -47,8 +47,6 @@
     "http:hooks GET /healthz",
     "http:hooks GET /hooks",
     "http:hooks GET /hooks/:name/events",
-    "mcp:browser_command",
-    "mcp:browser_context",
     "mcp:task_focus",
     "skill:superpowers:brainstorming",
     "skill:superpowers:verification-before-completion"
