@@ -140,11 +140,11 @@ export function createHooksApp({ store, identity, key, publicUrl, now = Date.now
 
   app.use((_req, res) => res.status(404).json(NOT_FOUND));
 
-  // A body over 512 KB, malformed JSON on a management call, the store down or throttling (503, with the Retry-After
+  // A body over its reader's limit, malformed JSON on a management call, the store down or throttling (503, with the Retry-After
   // Table Storage gave, so the sender retries), or anything else (500). Never the error's own text, which may hold keys.
   // eslint-disable-next-line no-unused-vars
   app.use((error, _req, res, _next) => {
-    if (error?.type === "entity.too.large") return res.status(413).json({ code: "body-too-large", error: `the body is over ${MAX_BODY_BYTES} bytes` });
+    if (error?.type === "entity.too.large") return res.status(413).json({ code: "body-too-large", error: `the body is over ${error.limit} bytes` });
     if (error?.type === "entity.parse.failed") return res.status(400).json({ code: "body-not-json", error: "the body is not valid JSON" });
     // Any other refusal from reading the body, such as an unsupported Content-Encoding (415).
     if (Number.isInteger(error?.status) && error.status >= 400 && error.status < 500) return res.status(error.status).json({ code: "body-unreadable", error: "the request body could not be read" });
