@@ -14,6 +14,12 @@ The gateway adds only what a remote host needs:
 
 Some Desk tools, doctor repairs and skills need a shell, the host machine or a coding harness. Desk refuses them when hosted, each with its reason, from one checked-in list in Desk: `plugins/desk/mcp/src/runtime/hosted.js` (the hosted list). Desk's MCP `instructions` name the same list for the agent. Change that list in Desk, not here.
 
+## HTTP error identity
+
+The [hooks receiver](src/hooks/app.js) returns `{ "code": "<stable kebab-case code>", "error": "<existing guidance>" }` on failures. For example, an unavailable store returns `storage-unavailable` with HTTP 503 and its existing `Retry-After`; a refused signature returns `signature-refused` with HTTP 401. Branch on `code`, not the English sentence. Successful replies and status codes are unchanged.
+
+The gateway's [sign-in pages](src/auth/pages.js), [deep health failure and default HTTP errors](src/server.js) carry `x-desk-error-code` without changing their HTML or text bodies. Examples are `signin-link-invalid`, `invite-invalid`, `health-check-failed`, `body-too-large` and `route-not-found`. An unavailable `/mcp` keeps JSON-RPC's numeric `error.code: -32000` and adds `error.data.code: "gateway-unavailable"`. SDK-owned OAuth errors and relayed Desk replies retain their existing protocol error codes; the gateway does not rewrite them.
+
 ## Connect from claude.ai
 
 1. In claude.ai, install the Desk plugin and its dependencies (superpowers, plain-language) from the ourostack marketplace.

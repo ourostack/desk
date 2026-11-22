@@ -14,9 +14,9 @@ const OTHER = { authorization: "Bearer other" };
 const identity = async (header) =>
   header === "Bearer owner" ? { accountId: "acct-owner" } : header === "Bearer other" ? { accountId: "acct-other" } : { status: 401, error: "send Authorization: Bearer <GitHub token>" };
 
-async function serve(t, { store = createHooksMemoryStore(), now = () => Date.now() } = {}) {
+async function serve(t, { store = createHooksMemoryStore(), now = () => Date.now(), identify = identity } = {}) {
   const logs = [];
-  const app = createHooksApp({ store, identity, key: KEY, publicUrl: "https://hooks.example/", now, log: (line) => logs.push(line) });
+  const app = createHooksApp({ store, identity: identify, key: KEY, publicUrl: "https://hooks.example/", now, log: (line) => logs.push(line) });
   const server = app.listen(0, "127.0.0.1");
   await once(server, "listening");
   t.after(() => server.close());
@@ -51,7 +51,7 @@ test("healthz answers ok and an unknown route or id gets the same 404", async (t
   const route = await call("GET", "/nope");
   const id = await call("POST", `/hooks/${randomBytes(16).toString("base64url")}`, { body: "{}" });
   const shape = await call("POST", "/hooks/short", { body: "{}" });
-  for (const answer of [route, id, shape]) assert.deepEqual([answer.status, answer.body], [404, { error: "not found" }]);
+  for (const answer of [route, id, shape]) assert.deepEqual([answer.status, answer.body], [404, { code: "hook-not-found", error: "not found" }]);
 });
 
 test("create, receive, read, acknowledge and read empty, end to end", async (t) => {
@@ -93,7 +93,7 @@ test("a bad signature is 401 and shows as the hook's last rejection; a stale tim
   const raw = Buffer.from("{}");
   const wrong = { ...standardHeaders(hook.secret, raw), "webhook-signature": "v1,AAAA" };
   const refused = await call("POST", hook.path, { headers: wrong, body: raw });
-  assert.deepEqual([refused.status, refused.body], [401, { error: "refused: signature does not match" }]);
+  assert.deepEqual([refused.status, refused.body], [401, { code: "signature-refused", error: "refused: signature does not match" }]);
   assert.equal((await call("GET", "/hooks", { headers: OWNER })).body[0].lastRejection.reason, "signature does not match");
   const stale = await call("POST", hook.path, { headers: standardHeaders(hook.secret, raw, { timestamp: Math.floor(Date.now() / 1000) - 301 }), body: raw });
   assert.equal(stale.status, 401);
@@ -122,7 +122,7 @@ test("bodies at the edges: empty, exactly 512 KB and binary round-trip; 512 KB +
   assert.equal((await call("POST", path, { body: exact, headers: { "content-type": "application/octet-stream" } })).status, 202);
   assert.equal((await call("POST", path, { body: binary, headers: { "content-type": "application/octet-stream" } })).status, 202);
   const over = await call("POST", path, { body: randomBytes(MAX_BODY_BYTES + 1) });
-  assert.deepEqual([over.status, over.body], [413, { error: `the body is over ${MAX_BODY_BYTES} bytes` }]);
+  assert.deepEqual([over.status, over.body], [413, { code: "body-too-large", error: `the body is over ${MAX_BODY_BYTES} bytes` }]);
   const bodies = (await call("GET", "/hooks/open/events", { headers: OWNER })).body.events.map((event) => Buffer.from(event.body, "base64"));
   assert.equal(bodies.length, 3);
   assert.equal(bodies[0].length, 0);
@@ -134,13 +134,13 @@ test("an unsupported content encoding is refused with its own status", async (t)
   const { call } = await serve(t);
   const created = await call("POST", "/hooks", { headers: OWNER, json: { name: "open", verify: "none" } });
   const answer = await call("POST", new URL(created.body.url).pathname, { body: "x", headers: { "content-encoding": "br-nonsense" } });
-  assert.deepEqual([answer.status, answer.body], [415, { error: "the request body could not be read" }]);
+  assert.deepEqual([answer.status, answer.body], [415, { code: "body-unreadable", error: "the request body could not be read" }]);
 });
 
 test("management needs a mapped GitHub token, and each account sees only its own hooks", async (t) => {
   const { call } = await serve(t);
   await makeStandard(call);
-  assert.deepEqual(await call("GET", "/hooks").then((r) => [r.status, r.body]), [401, { error: "send Authorization: Bearer <GitHub token>" }]);
+  assert.deepEqual(await call("GET", "/hooks").then((r) => [r.status, r.body]), [401, { code: "identity-refused", error: "send Authorization: Bearer <GitHub token>" }]);
   assert.deepEqual((await call("GET", "/hooks", { headers: OTHER })).body, []);
   assert.equal((await call("GET", "/hooks/smoke/events", { headers: OTHER })).status, 404);
   assert.equal((await call("DELETE", "/hooks/smoke", { headers: OTHER })).status, 404);
@@ -148,26 +148,36 @@ test("management needs a mapped GitHub token, and each account sees only its own
   assert.equal((await call("POST", "/hooks", { headers: OTHER, json: { name: "smoke", verify: "standard" } })).status, 201);
 });
 
+test("unavailable identity verification stays retryable rather than becoming a sign-in refusal", async (t) => {
+  const { call } = await serve(t, { identify: async () => ({ status: 503, error: "try again shortly" }) });
+  const unavailable = await call("GET", "/hooks", { headers: OWNER });
+  assert.deepEqual([unavailable.status, unavailable.body], [503, { code: "identity-unavailable", error: "try again shortly" }]);
+  assert.equal(unavailable.headers.get("cache-control"), "no-store");
+});
+
 test("creating checks the name, preset and who makes the secret", async (t) => {
   const { call } = await serve(t);
   const cases = [
-    [{ name: "Bad_Name" }, 400, /name must be/],
-    [{ name: "x".repeat(41) }, 400, /name must be/],
-    [{ name: "a", verify: "md5" }, 400, /unknown verify preset md5; use standard/],
-    [{ name: "a", verify: "standard", secret: "mine" }, 400, /makes its own secret/],
-    [{ name: "a", verify: "stripe" }, 400, /needs the signing secret/],
-    [{ name: "a", verify: "stripe", secret: "has space" }, 400, /needs the signing secret/],
-    [{ name: "a", verify: "none", secret: "x" }, 400, /has no secret/],
+    [{ name: "Bad_Name" }, 400, /name must be/, "hook-name-invalid"],
+    [{ name: "x".repeat(41) }, 400, /name must be/, "hook-name-invalid"],
+    [{ name: "a", verify: "md5" }, 400, /unknown verify preset md5; use standard/, "verification-invalid"],
+    [{ name: "a", verify: "standard", secret: "mine" }, 400, /makes its own secret/, "secret-unexpected"],
+    [{ name: "a", verify: "stripe" }, 400, /needs the signing secret/, "secret-required"],
+    [{ name: "a", verify: "stripe", secret: "has space" }, 400, /needs the signing secret/, "secret-required"],
+    [{ name: "a", verify: "none", secret: "x" }, 400, /has no secret/, "secret-unexpected"],
   ];
-  for (const [json, status, error] of cases) {
+  for (const [json, status, error, code] of cases) {
     const answer = await call("POST", "/hooks", { headers: OWNER, json });
     assert.equal(answer.status, status, JSON.stringify(json));
     assert.match(answer.body.error, error);
+    assert.equal(answer.body.code, code);
   }
-  assert.deepEqual(await call("POST", "/hooks", { headers: { ...OWNER, "content-type": "application/json" }, body: "{" }).then((r) => [r.status, r.body]), [400, { error: "the body is not valid JSON" }]);
+  assert.deepEqual(await call("POST", "/hooks", { headers: { ...OWNER, "content-type": "application/json" }, body: "{" }).then((r) => [r.status, r.body]), [400, { code: "body-not-json", error: "the body is not valid JSON" }]);
   // The default preset is standard.
   assert.equal((await call("POST", "/hooks", { headers: OWNER, json: { name: "plain" } })).body.verify, "standard");
-  assert.equal((await call("POST", "/hooks", { headers: OWNER, json: { name: "plain" } })).status, 409);
+  const duplicate = await call("POST", "/hooks", { headers: OWNER, json: { name: "plain" } });
+  assert.equal(duplicate.status, 409);
+  assert.equal(duplicate.body.code, "hook-conflict");
   // A sender's secret is kept, never echoed, and verifies its events.
   const sentry = await call("POST", "/hooks", { headers: OWNER, json: { name: "sentry", verify: "sentry", secret: "sentry-secret" } });
   assert.equal(sentry.status, 201);
@@ -183,10 +193,16 @@ test("creating checks the name, preset and who makes the secret", async (t) => {
 test("reading events checks the limit, and deleting a hook removes it", async (t) => {
   const { call } = await serve(t);
   await makeStandard(call);
-  for (const limit of ["0", "101", "abc"]) assert.equal((await call("GET", `/hooks/smoke/events?limit=${limit}`, { headers: OWNER })).status, 400);
+  for (const limit of ["0", "101", "abc"]) {
+    const invalid = await call("GET", `/hooks/smoke/events?limit=${limit}`, { headers: OWNER });
+    assert.equal(invalid.status, 400);
+    assert.equal(invalid.body.code, "event-limit-invalid");
+  }
   assert.equal((await call("GET", "/hooks/smoke/events?limit=100", { headers: OWNER })).status, 200);
-  assert.equal((await call("DELETE", "/hooks/smoke/events/not-an-id", { headers: OWNER })).status, 404);
-  assert.equal((await call("GET", "/hooks/NOPE/events", { headers: OWNER })).status, 404);
+  const missingEvent = await call("DELETE", "/hooks/smoke/events/not-an-id", { headers: OWNER });
+  assert.deepEqual([missingEvent.status, missingEvent.body.code], [404, "event-not-found"]);
+  const missingHook = await call("GET", "/hooks/NOPE/events", { headers: OWNER });
+  assert.deepEqual([missingHook.status, missingHook.body.code], [404, "hook-not-found"]);
   assert.equal((await call("DELETE", "/hooks/smoke", { headers: OWNER })).status, 204);
   assert.deepEqual((await call("GET", "/hooks", { headers: OWNER })).body, []);
 });
@@ -199,7 +215,7 @@ test("Table Storage throttling answers 503 with its Retry-After, so the sender r
     throw new HooksStoreError("create", "hookevents", { statusCode: 503, code: "ServerBusy", retryAfter: 9 });
   };
   const busy = await call("POST", new URL(created.body.url).pathname, { body: "x" });
-  assert.deepEqual([busy.status, busy.body, busy.headers.get("retry-after")], [503, { error: "storage is unavailable; try again shortly" }, "9"]);
+  assert.deepEqual([busy.status, busy.body, busy.headers.get("retry-after")], [503, { code: "storage-unavailable", error: "storage is unavailable; try again shortly" }, "9"]);
   store.addEvent = async () => {
     throw new HooksStoreError("create", "hookevents", { code: "timed out" });
   };
@@ -209,7 +225,7 @@ test("Table Storage throttling answers 503 with its Retry-After, so the sender r
     throw new TypeError("boom with a secret in it");
   };
   const broken = await call("POST", new URL(created.body.url).pathname, { body: "x" });
-  assert.deepEqual([broken.status, broken.body], [500, { error: "internal error" }]);
+  assert.deepEqual([broken.status, broken.body], [500, { code: "internal-error", error: "internal error" }]);
   assert.ok(!logs.join("\n").includes("secret in it"));
 });
 

@@ -8,7 +8,7 @@ const document = (title, body) =>
   `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${escapeHtml(title)}</title><link rel="icon" type="image/svg+xml" href="/favicon.svg"><link rel="stylesheet" href="/assets/desk.css"></head><body><header class="brand"><img src="/assets/desk-logo.png" width="80" height="80" alt=""><h1>Hosted Desk</h1></header><main>${body}</main></body></html>`;
 
 // A page holding one message, under its own `title`.
-export const page = (status, message, title) => ({ status, html: document(title, `<p>${escapeHtml(message)}</p>`) });
+export const page = (status, message, title, code) => ({ status, html: document(title, `<p>${escapeHtml(message)}</p>`), ...(code === undefined ? {} : { code }) });
 
 // Asks the person whether this client may sign in. Approve posts the sealed
 // request back to the gateway, which only then sends the browser on to sign in.
@@ -50,20 +50,20 @@ export function consentPage({ clientName, clientHost, redirectUri, consent, sign
 }
 
 // Pages for sign-in through the Ouro tenant and for invites.
-export const startingUpPage = () => page(503, "Sign-in is starting up. Please try again shortly.", "Sign-in is starting up · Hosted Desk");
+export const startingUpPage = () => page(503, "Sign-in is starting up. Please try again shortly.", "Sign-in is starting up · Hosted Desk", "signin-starting-up");
 export const signInUnavailablePage = () =>
-  page(503, "Sign-in can't be completed right now. Please try again shortly, starting again from Claude.", "Sign-in unavailable · Hosted Desk");
+  page(503, "Sign-in can't be completed right now. Please try again shortly, starting again from Claude.", "Sign-in unavailable · Hosted Desk", "signin-unavailable");
 export const startAgainPage = () =>
-  page(400, "This sign-in link has expired, or it was started in another browser. Start again from Claude.", "Sign-in link expired · Hosted Desk");
+  page(400, "This sign-in link has expired, or it was started in another browser. Start again from Claude.", "Sign-in link expired · Hosted Desk", "signin-link-invalid");
 export const inviteOnlyPage = () =>
-  page(403, "Hosted Desk is invite-only. Open your invite link in this browser first, then start again from Claude.", "Invite required · Hosted Desk");
+  page(403, "Hosted Desk is invite-only. Open your invite link in this browser first, then start again from Claude.", "Invite required · Hosted Desk", "invite-required");
 export const inviteRefusedPage = () =>
-  page(403, "This invite has already been used or has expired. Ask for a new invite.", "Invite already used or expired · Hosted Desk");
-export const accessOffPage = () => page(403, "Desk access is turned off for this account.", "Desk access is off · Hosted Desk");
+  page(403, "This invite has already been used or has expired. Ask for a new invite.", "Invite already used or expired · Hosted Desk", "invite-refused");
+export const accessOffPage = () => page(403, "Desk access is turned off for this account.", "Desk access is off · Hosted Desk", "access-off");
 export const noDeskPage = () =>
-  page(403, "There is no desk for this account yet on this Hosted Desk.", "No desk yet · Hosted Desk");
+  page(403, "There is no desk for this account yet on this Hosted Desk.", "No desk yet · Hosted Desk", "desk-not-found");
 export const inviteInvalidPage = () =>
-  page(404, "This invite link isn't valid: it may have expired or already been used. Ask for a new invite.", "Invite link not valid · Hosted Desk");
+  page(404, "This invite link isn't valid: it may have expired or already been used. Ask for a new invite.", "Invite link not valid · Hosted Desk", "invite-invalid");
 export const invitePage = ({ issuer } = {}) => ({
   status: 200,
   html: document(
@@ -75,11 +75,12 @@ export const invitePage = ({ issuer } = {}) => ({
 
 // Sends a page with headers that keep it out of frames and caches, plus any
 // `headers` the page carries.
-export function sendPage(res, { status, html, headers = {} }) {
+export function sendPage(res, { status, html, code, headers = {} }) {
   res
     .status(status)
     .set({
       ...headers,
+      ...(code === undefined ? {} : { "x-desk-error-code": code }),
       "cache-control": "no-store",
       "x-frame-options": "DENY",
       "content-security-policy": "default-src 'none'; img-src 'self'; style-src 'self'; frame-ancestors 'none'",

@@ -112,11 +112,12 @@ export function createApp({ provider, relay, githubCallback, issuer, resource, u
   app.get("/healthz/deep", async (_req, res) => {
     res.setHeader("cache-control", "no-store");
     const { ok, failing } = deepHealth ? await deepHealth.check() : { ok: true, failing: [] };
+    if (!ok) res.setHeader("x-desk-error-code", "health-check-failed");
     res.status(ok ? 200 : 503).type("text").send(ok ? "ok" : `failing: ${failing.join(", ")}`);
   });
 
   if (unavailable) {
-    app.all(["/authorize", "/oauth/consent"], (_req, res) => sendPage(res, page(503, unavailable)));
+    app.all(["/authorize", "/oauth/consent"], (_req, res) => sendPage(res, page(503, unavailable, undefined, "gateway-unavailable")));
   }
 
   const routerOptions = {
@@ -155,11 +156,26 @@ export function createApp({ provider, relay, githubCallback, issuer, resource, u
     express.json({ limit: "4mb" }),
     (req, res) => {
       if (unavailable) {
-        return res.status(503).json({ jsonrpc: "2.0", error: { code: -32000, message: unavailable }, id: null });
+        return res.status(503).json({ jsonrpc: "2.0", error: { code: -32000, message: unavailable, data: { code: "gateway-unavailable" } }, id: null });
       }
       return relay.handle(req, res, req.auth);
     },
   );
+
+  app.use((error, _req, res, next) => {
+    if (!res.headersSent) {
+      const code = error?.type === "entity.too.large" ? "body-too-large"
+        : error?.type === "entity.parse.failed" ? "body-not-json"
+        : Number.isInteger(error?.status) && error.status >= 400 && error.status < 500 ? "body-unreadable"
+        : "gateway-error";
+      res.setHeader("x-desk-error-code", code);
+    }
+    next(error);
+  });
+  app.use((_req, res, next) => {
+    res.setHeader("x-desk-error-code", "route-not-found");
+    next();
+  });
 
   return app;
 }

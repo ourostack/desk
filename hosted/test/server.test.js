@@ -65,7 +65,9 @@ test("approved branding assets are public even while sign-in is unavailable", as
   assert.equal(css.status, 200);
   assert.match(css.headers.get("content-type"), /^text\/css/);
   for (const path of ["/assets/missing.png", "/assets/%2e%2e%2fsrc%2fserver.js"]) {
-    assert.equal((await fetch(`${base}${path}`)).status, 404, "never serve source files or a success-shaped asset fallback");
+    const missing = await fetch(`${base}${path}`);
+    assert.equal(missing.status, 404, "never serve source files or a success-shaped asset fallback");
+    assert.equal(missing.headers.get("x-desk-error-code"), "route-not-found");
   }
 });
 
@@ -85,6 +87,7 @@ test("branded sign-in pages permit their own image and style without allowing sc
   const { base } = await start(t, { unavailable: NOT_SET_UP });
   const response = await fetch(`${base}/authorize`);
   assert.equal(response.status, 503);
+  assert.equal(response.headers.get("x-desk-error-code"), "gateway-unavailable");
   assert.equal(response.headers.get("cache-control"), "no-store");
   assert.equal(response.headers.get("x-frame-options"), "DENY");
   const policy = response.headers.get("content-security-policy");
@@ -110,6 +113,19 @@ const mcpPost = (base, body, token) =>
     },
     body: JSON.stringify(body),
   });
+
+test("malformed MCP JSON keeps its existing HTML error response and carries a body-not-json header", async (t) => {
+  const { base, reached } = await start(t);
+  const response = await fetch(`${base}/mcp`, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${accessToken()}` },
+    body: "{",
+  });
+  assert.equal(response.status, 400);
+  assert.match(response.headers.get("content-type"), /^text\/html/);
+  assert.equal(response.headers.get("x-desk-error-code"), "body-not-json");
+  assert.equal(reached.length, 0);
+});
 
 test("POST /mcp without a token is 401 and names the protected-resource metadata", async (t) => {
   const { base, reached } = await start(t);
@@ -183,6 +199,7 @@ test("a large Desk call body up to the 4 MB limit reaches the relay", async (t) 
   assert.ok(reached[0].bodySize > text.length);
   const tooLarge = await mcpPost(base, { ...call, params: { arguments: { text: "x".repeat(5 * 1024 * 1024) } } }, accessToken());
   assert.equal(tooLarge.status, 413);
+  assert.equal(tooLarge.headers.get("x-desk-error-code"), "body-too-large");
   assert.equal(reached.length, 1);
 });
 
@@ -198,6 +215,7 @@ test("the GitHub callback route is mounted", async (t) => {
   const { base } = await start(t);
   const response = await fetch(`${base}/oauth/github/callback?code=x&state=forged`, { redirect: "manual" });
   assert.equal(response.status, 400);
+  assert.equal(response.headers.get("x-desk-error-code"), "signin-link-invalid");
   assert.match(await response.text(), /expired or is not valid/);
 });
 
@@ -210,6 +228,7 @@ test("the consent route is mounted and refuses an invalid consent", async (t) =>
     redirect: "manual",
   });
   assert.equal(response.status, 400);
+  assert.equal(response.headers.get("x-desk-error-code"), "signin-link-invalid");
   assert.match(await response.text(), /expired or is not valid/);
 });
 
@@ -222,6 +241,7 @@ test("the consent route checks the POST came from the gateway's own origin", asy
     redirect: "manual",
   });
   assert.equal(response.status, 403);
+  assert.equal(response.headers.get("x-desk-error-code"), "consent-origin-refused");
 });
 
 test("when the GitHub App is not set up, /healthz still answers and /authorize and /mcp answer 503", async (t) => {
@@ -234,7 +254,10 @@ test("when the GitHub App is not set up, /healthz still answers and /authorize a
   assert.equal(consent.status, 503);
   const mcp = await mcpPost(base, { jsonrpc: "2.0", id: 1, method: "initialize", params: {} }, accessToken());
   assert.equal(mcp.status, 503);
-  assert.match((await mcp.json()).error.message, new RegExp(NOT_SET_UP));
+  const failure = (await mcp.json()).error;
+  assert.equal(failure.code, -32000);
+  assert.equal(failure.data.code, "gateway-unavailable");
+  assert.match(failure.message, new RegExp(NOT_SET_UP));
   assert.equal(reached.length, 0);
 });
 
@@ -276,12 +299,12 @@ test("/healthz/deep answers 503 with only the check name when the store, discove
   const deep = async () => {
     parts.advance(10_001);
     const response = await fetch(`${base}/healthz/deep`);
-    return { status: response.status, text: await response.text(), cache: response.headers.get("cache-control") };
+    return { status: response.status, text: await response.text(), cache: response.headers.get("cache-control"), code: response.headers.get("x-desk-error-code") };
   };
-  assert.deepEqual(await deep(), { status: 200, text: "ok", cache: "no-store" });
+  assert.deepEqual(await deep(), { status: 200, text: "ok", cache: "no-store", code: null });
 
   parts.state.storeDown = true;
-  assert.deepEqual(await deep(), { status: 503, text: "failing: store", cache: "no-store" });
+  assert.deepEqual(await deep(), { status: 503, text: "failing: store", cache: "no-store", code: "health-check-failed" });
   parts.state.storeDown = false;
 
   parts.state.ready = false;
