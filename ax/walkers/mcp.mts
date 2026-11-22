@@ -11,8 +11,9 @@
 // `cards` is the sidecar holding the server's cards: `{ "errors": [ErrorCard], "doors": [DoorCard] }`, where `errors`
 // are the server's own (an `unknown-door` card, the answer to a tool name it doesn't serve). A card whose door the
 // server doesn't list is a census error, so a card can't outlive its tool. `handlers` are the files or folders that
-// raise the tools' error codes: a card's code counts as raised when one of them holds it as a string literal, as written
-// or with its hyphens as underscores (Desk's codes are snake_case on the wire, a card's are kebab-case).
+// raise the tools' error codes: a card's code counts as raised when one of them holds it as a string literal, as written,
+// with its hyphens as underscores (Desk's codes are snake_case on the wire, a card's are kebab-case), or in upper snake
+// case (desk-web writes its codes as AUTH_TIMEOUT and serves them lowercased in structuredContent.code).
 //
 // Read-only evidence is the served `readOnlyHint`. Nothing here calls a tool.
 import { readFileSync, readdirSync, statSync } from "node:fs";
@@ -140,7 +141,8 @@ function raisedLiterals(root: string, handlers: readonly string[]): Set<string> 
   return found;
 }
 
-const raised = (literals: ReadonlySet<string>, code: unknown): boolean => typeof code === "string" && (literals.has(code) || literals.has(code.replaceAll("-", "_")));
+const raised = (literals: ReadonlySet<string>, code: unknown): boolean =>
+  typeof code === "string" && (literals.has(code) || literals.has(code.replaceAll("-", "_")) || literals.has(code.replaceAll("-", "_").toUpperCase()));
 
 export async function walk(opts: WalkerOptions): Promise<WalkResult> {
   const registry = resolve(opts.root, opts.module);

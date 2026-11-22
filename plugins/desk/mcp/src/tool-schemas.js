@@ -151,7 +151,7 @@ const TASK_ARCHIVE_OUTCOME = {
 const HAND_WRITTEN_INPUT_SCHEMAS = Object.freeze({
   task_create: schema({ desk: SIBLING_DESK,
     ...TASK_TARGET,
-    slug: text("The task folder name: an outcome name, 2-6 lowercase kebab-case words."),
+    slug: text("The task folder name: an outcome name, 1-6 lowercase kebab-case words, at most 48 characters."),
     title: text("The task title."),
     status: text("Initial status; defaults to drafting. One of drafting, processing, validating, collaborating, paused, blocked, done, cancelled."),
     body: text("Markdown body, without frontmatter."),
@@ -226,7 +226,7 @@ const HAND_WRITTEN_INPUT_SCHEMAS = Object.freeze({
     display_label: DISPLAY_LABEL,
   }),
   track_create: schema({
-    slug: text("The track folder name: an outcome name, 2-6 lowercase kebab-case words."),
+    slug: text("The track folder name: an outcome name, 1-6 lowercase kebab-case words, at most 48 characters."),
     title: text("The track title."),
     scope: text("One line, at most 240 characters: \"<what belongs>; not <what doesn't>\"."),
     status: text("Initial status; defaults to active."),
@@ -305,7 +305,7 @@ const HAND_WRITTEN_INPUT_SCHEMAS = Object.freeze({
   improvement_open: schema({
     source: { type: "string", enum: ["andon", "friction_candidate", "reconcile_class", "desk_problem", "store_build", "evaluator", "loop_alarm", "flush_health"], description: "Where the card comes from; the card key is <source>:<id>." },
     id: text("The case's id: owner/repo#number for andon and store_build, ourostack/desk#number for desk_problem, 32 hex for friction_candidate, else a code from the source's closed list."),
-    title: text("Never accepted: Desk builds every title (refused as title_not_allowed)."),
+    title: text("Refused as `title_not_allowed`: Desk builds every title."),
     evidence: list("Up to 10 pointers: job:<32 hex>, issue:<owner/repo>#<n>, pr:<owner/repo>#<n>, reconcile:<reason>@<count>, fingerprint:<hex>."),
     plugin: text("The plugin the improvement is in; defaults to \"desk\"."),
     signal: text("The rollups measure the improvement moves, when known."),

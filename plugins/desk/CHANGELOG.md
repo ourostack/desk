@@ -1,5 +1,29 @@
 # desk plugin — changelog
 
+## 3.2.431 — 2026-11-22
+
+Task updates now return commit_failed or commit_unknown when their commit is not verified, while preserving edits and recovery instructions. Git commit failures retain stderr or an explicit process error, signal or exit-status diagnostic instead of an empty reason.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.430 — 2026-11-22
+
+The desk-web browser tools' descriptions say what they do instead of what they never do: a failed `mine` open of `browser_context` grants no permission to control the computer, attach to the person's browser, sign in interactively, or switch identity or transport, and `browser_command` takes its `args` as literal strings that no shell parses. Both tools now have Ouro AX census cards listing the main codes their error replies carry in `structuredContent.code`, which #1540 exposed.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.429 — 2026-11-22
+
+Desk's MCP server now vendors Ouro UI v1.3.454, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.428 — 2026-11-22
+
+Tool descriptions now give the slug rule the code applies (1 to 6 lowercase kebab-case words, at most 48 characters), and say what `track_create`, `track_update`, `improvement_open`, `task_signoff` and `note` do instead of what they never do.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.427 — 2026-11-22
 
 Desk's MCP server now vendors Ouro UI v1.3.452, moved by Ouro Current.
