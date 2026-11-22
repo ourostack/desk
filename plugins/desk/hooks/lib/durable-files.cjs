@@ -83,7 +83,11 @@ function main(stdin = process.stdin, stdout = process.stdout, stderr = process.s
     if (bytes > MAX_STDIN) {
       oversized = true;
       input = "";
-      stderr.write(`Send a smaller hook payload: Desk durable files input_too_large; limit ${MAX_STDIN} bytes. The call was left unchanged.\n`);
+      const failure = {
+        code: "input_too_large",
+        message: `Send a smaller hook payload: Desk durable files limit ${MAX_STDIN} bytes. The call was left unchanged.`,
+      };
+      stderr.write(`${failure.code}: ${failure.message}\n`);
     } else input += chunk;
   });
   stdin.on("end", async () => {

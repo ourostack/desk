@@ -23,7 +23,7 @@ function matching(input) {
       Object.keys(args).join(",") !== "skill" ||
       Object.keys(result).sort().join(",") !== "resultType,textResultForLlm" ||
       result.textResultForLlm !== SUCCESS)
-    throw Object.assign(new Error("unrecognized brainstorming payload"), { code: "input_schema_changed" });
+    throw Object.assign(new Error("Send a recognized brainstorming success payload."), { code: "input_schema_changed" });
   return true;
 }
 
