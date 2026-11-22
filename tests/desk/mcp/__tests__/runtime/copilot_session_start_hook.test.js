@@ -81,7 +81,65 @@ test("every Desk session disables explicitly enabled native memory and injects t
     assert.deepEqual(JSON.parse(readFileSync(settings, "utf8")), { memory: false, model: "x", includeCoAuthoredBy: false, askUser: false })
     assert.match(context, /Disable host memory \(`store_memory`\/`vote_memory`\)/u)
     assert.match(context, /native memory/u)
+    assert.ok(context.includes(`set \`memory: false\` in ${settings}`), "the startup notice identifies the changed setting and file")
   }
+})
+
+test("a headless start leaves Copilot settings unchanged and emits nothing", () => {
+  const home = path.join(ROOT, "headless-settings")
+  mkdirSync(path.join(home, ".copilot"), { recursive: true })
+  const settings = path.join(home, ".copilot", "settings.json")
+  const original = '{"memory":true,"model":"fixture"}\n'
+  writeFileSync(settings, original)
+  const result = spawnSync(process.execPath, [path.join(plugin, "hooks", "copilot-session-start.cjs")], {
+    input: JSON.stringify({ sessionId: "headless", cwd: ROOT }),
+    env: { HOME: home, XDG_STATE_HOME: path.join(home, "state"), PATH: process.env.PATH, DESK_FACTORY_HEADLESS: "1" },
+    encoding: "utf8",
+  })
+
+  assert.equal(result.status, 0, result.stderr)
+  assert.equal(result.stdout, "")
+  assert.equal(result.stderr, "")
+  assert.equal(readFileSync(settings, "utf8"), original)
+})
+
+test("a slow optional check cannot hide settings changes from startup", () => {
+  const home = path.join(ROOT, "slow-check-settings")
+  mkdirSync(path.join(home, ".copilot"), { recursive: true })
+  const settings = path.join(home, ".copilot", "settings.json")
+  writeFileSync(settings, '{"memory":false}\n')
+  const code = `
+    require(${JSON.stringify(path.join(plugin, "hooks/lib/boot-checks.cjs"))}).runBootChecks = () => new Promise(() => {});
+    require(${JSON.stringify(path.join(plugin, "hooks/copilot-session-start.cjs"))});
+  `
+  const result = spawnSync(process.execPath, ["-e", code], {
+    input: JSON.stringify({ sessionId: "slow-check", cwd: ROOT }),
+    env: { HOME: home, XDG_STATE_HOME: path.join(home, "state"), PATH: process.env.PATH, DESK_AUTO_BOOT: "0" },
+    encoding: "utf8", timeout: 10000,
+  })
+  assert.equal(result.status, 0, result.stderr)
+  assert.deepEqual(JSON.parse(readFileSync(settings, "utf8")), { memory: false, includeCoAuthoredBy: false, askUser: false })
+  assert.match(JSON.parse(result.stdout).additionalContext, /set `includeCoAuthoredBy: false` and `askUser: false`/u)
+})
+
+test("a Node install warning leaves Copilot settings untouched", () => {
+  const home = path.join(ROOT, "node-warning-settings")
+  mkdirSync(path.join(home, ".copilot"), { recursive: true })
+  const settings = path.join(home, ".copilot", "settings.json")
+  const original = '{"memory":true}\n'
+  writeFileSync(settings, original)
+  const code = `
+    require(${JSON.stringify(path.join(plugin, "hooks/lib/node-required.cjs"))}).nodeRequiredLine = () => "Install the supported Node first.";
+    require(${JSON.stringify(path.join(plugin, "hooks/copilot-session-start.cjs"))});
+  `
+  const result = spawnSync(process.execPath, ["-e", code], {
+    input: JSON.stringify({ sessionId: "node-warning", cwd: ROOT }),
+    env: { HOME: home, XDG_STATE_HOME: path.join(home, "state"), PATH: process.env.PATH },
+    encoding: "utf8", timeout: 10000,
+  })
+  assert.equal(result.status, 0, result.stderr)
+  assert.equal(JSON.parse(result.stdout).additionalContext, "Install the supported Node first.")
+  assert.equal(readFileSync(settings, "utf8"), original)
 })
 
 test("the plugin registers only Desk's own boundary hooks for Copilot", () => {

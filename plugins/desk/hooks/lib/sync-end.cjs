@@ -17,7 +17,7 @@
 // no marker file, no derive/finalize job — just resolve this session's desk
 // root and run one local, no-network check against it.
 //
-// Session end runs it from `session-end.cjs`, in the same detached worker as the factory capture.
+// Session end runs it from `session-end.cjs` in its detached sync worker.
 
 const headless = (env) => { try { return require("../../mcp/src/factory/headless-flag.cjs").startupChangesNothing(env); } catch { return [env?.DESK_FACTORY_HEADLESS, env?.DESK_READ_ONLY_CHILD].some((v) => String(v ?? "") !== "" && String(v ?? "") !== "0"); } };
 const MAX_INPUT = 1024 * 1024;
@@ -53,8 +53,8 @@ async function readInput(stream, timeoutMs = 150) {
 }
 
 /**
- * `{ host, payload, env? }` -> `"checked" | "clean" | "unpushed" | "invalid" |
- * "unavailable"`. Never throws, never blocks the session-end event: any
+ * `{ host, payload, env? }` -> `"clean" | "unpushed" | "invalid" |
+ * "unavailable" | "headless"`. Never throws, never blocks the session-end event: any
  * failure to even resolve the desk root or run the check degrades to
  * `"unavailable"`, the same fail-open shape every other hook in this plugin
  * uses (see `factory-end.cjs`'s own `runHook`).

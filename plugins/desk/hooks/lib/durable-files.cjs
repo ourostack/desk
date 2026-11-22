@@ -72,13 +72,29 @@ async function decide(payload, options = {}) {
   }
 }
 
-function main(stdin = process.stdin, stdout = process.stdout) {
+function main(stdin = process.stdin, stdout = process.stdout, stderr = process.stderr) {
   let input = "";
+  let bytes = 0;
+  let oversized = false;
   stdin.setEncoding("utf8");
-  stdin.on("data", (chunk) => { if (input.length <= MAX_STDIN) input += chunk; });
+  stdin.on("data", (chunk) => {
+    if (oversized) return;
+    bytes += Buffer.byteLength(chunk);
+    if (bytes > MAX_STDIN) {
+      oversized = true;
+      input = "";
+      const failure = {
+        code: "input_too_large",
+        message: `Send a smaller hook payload: Desk durable files limit ${MAX_STDIN} bytes. The call was left unchanged.`,
+      };
+      stderr.write(`${failure.code}: ${failure.message}\n`);
+    } else input += chunk;
+  });
   stdin.on("end", async () => {
     let payload = null;
-    try { payload = JSON.parse(input); } catch { /* not a payload: leave the call alone */ }
+    if (!oversized) {
+      try { payload = JSON.parse(input); } catch { /* not a payload: leave the call alone */ }
+    }
     stdout.write(`${JSON.stringify(await decide(payload))}\n`);
   });
 }

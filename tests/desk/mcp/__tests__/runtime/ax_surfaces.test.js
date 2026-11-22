@@ -18,8 +18,8 @@ const repoRoot = path.resolve(here, "../../../../..")
 // scripts, but are not held to "lead with the fix". A carrier wraps a message whose call sites are checked themselves.
 const NOT_ERRORS_AT_MOST = 159
 const NOT_ERRORS = {
-  "plugins/desk/hooks/copilot-session-start.cjs#desk-memory-use-the-supported": "a hook's stderr line",
-  "plugins/desk/hooks/lib/copilot-intake-context.cjs#check-desk-s-intake-context": "a hook's stderr line",
+  "plugins/desk/hooks/copilot-session-start.cjs#desk-memory-set-memory-false": "a hook's stderr line",
+  "plugins/desk/hooks/lib/copilot-intake-context.cjs#desk-intake-context-unavailable-check": "a hook's stderr line",
   "plugins/desk/mcp/src/crew/workspace.js#install-the-team-s-tooling": "a next-step note, not a failure",
   "plugins/desk/mcp/src/crew/workspace.js#install-the-team-s-tooling~2": "a next-step note, not a failure",
   "plugins/desk/mcp/src/crew/workspace.js#fix-what-the-parentheses-name": "a result whose `state` and `reason` are its stable status; the message is its guidance",

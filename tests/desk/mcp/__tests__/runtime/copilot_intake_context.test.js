@@ -46,20 +46,36 @@ test("children, unknown scopes, failures and unrelated skills receive no context
   const env = { ...process.env, XDG_STATE_HOME: path.join(cwd, "state") }
   assert.equal(recordCopilotSession({ sessionId, folder: cwd, env }), true)
   const cases = [
-    null, [], {}, { ...good, unknown: true }, { ...good, sessionId: "unknown" }, { ...good, sessionId: [sessionId] },
+    null, [], {}, { ...good, sessionId: "unknown" }, { ...good, sessionId: [sessionId] },
     { ...good, timestamp: null }, { ...good, cwd: "relative" }, { ...good, toolName: "task" },
     { ...good, toolArgs: [] }, { ...good, toolArgs: "{" },
-    { ...good, toolArgs: { skill: "brainstorming", extra: true } },
     { ...good, toolArgs: { skill: "superpowers:brainstorming" } },
     { ...good, toolArgs: { skill: "writing-plans" } },
     { ...good, toolResult: null }, { ...good, toolResult: [] },
     { ...good, toolResult: { resultType: "failure", textResultForLlm: "failed" } },
-    { ...good, toolResult: { resultType: "success", textResultForLlm: "unknown result" } },
-    { ...good, toolResult: { ...good.toolResult, extra: true } },
   ]
   for (const key of ["agentId", "agentType", "parentAgentId"])
     for (const value of [null, "", "child"]) cases.push({ ...good, [key]: value })
   for (const candidate of cases) assert.deepEqual(invoke(cwd, env, candidate), {})
+})
+
+test("an unrecognized root brainstorming payload reports incompatibility without adding context", async () => {
+  const cwd = await mkTempRoot("copilot-intake-drift-")
+  const good = input(cwd), env = { ...process.env, XDG_STATE_HOME: path.join(cwd, "state") }
+  assert.equal(recordCopilotSession({ sessionId, folder: cwd, env }), true)
+  for (const value of [
+    { ...good, unknown: true },
+    { ...good, toolArgs: { skill: "brainstorming", extra: true } },
+    { ...good, toolResult: { ...good.toolResult, extra: true } },
+    { ...good, toolResult: { resultType: "success", textResultForLlm: "unknown result" } },
+  ]) {
+    const result = spawnSync(process.execPath, [path.join(plugin, "hooks/copilot-intake-context.cjs")], {
+      cwd, env, input: JSON.stringify(value), encoding: "utf8", timeout: 5000,
+    })
+    assert.equal(result.status, 0)
+    assert.deepEqual(JSON.parse(result.stdout), {})
+    assert.match(result.stderr, /input_schema_changed/u)
+  }
 })
 
 test("intake and its adapter put canonical task identity ahead of method selection", () => {
@@ -96,7 +112,7 @@ test("the actual hook reads only its started-session binding and emits the same 
     const refused = execute(raw)
     assert.equal(refused.status, 0)
     assert.deepEqual(JSON.parse(refused.stdout), {})
-    assert.match(refused.stderr, /^Check Desk's intake context, then try again: Desk intake context unavailable: (SyntaxError|input_too_large)\n$/u)
+    assert.match(refused.stderr, /^Desk intake context unavailable \((SyntaxError|input_too_large)\): check the hook payload and Desk install, then try again\.\n$/u)
   }
   for (const activation_targets of [[], [{ id: "desk:worker" }], [{ id: "desk:worker", depends_on: ["work-suite"] }]]) {
     const code = `
