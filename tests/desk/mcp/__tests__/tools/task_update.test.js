@@ -590,11 +590,39 @@ test("task_update reports a commit failure without losing the write", async () =
     schedulePush: (opts) => calls.push(opts),
   })
 
-  assert.equal(result.status, "updated", "the write itself is never lost to a commit failure")
+  assert.equal(result.status, "commit_failed", "an on-disk write is not a saved commit")
   const { data } = await readFront(path.join(root, "t", "book-flights", "task.md"))
   assert.equal(data.status, "processing")
   assert.deepEqual(notCommitted(result.commit), { status: "failed", reason: "commit boom" })
   assert.equal(calls.length, 0, "schedulePush is never called when the commit fails")
+})
+
+test("task_update reports an unknown commit when dispatch times out and readback fails", async () => {
+  const root = await mkTempDeskRoot()
+  initGit(root)
+  await task_create({ deskRoot: root, input: { track: "t", slug: "book-flights", title: "T" }, schedulePush: () => {} })
+  let cut = false
+  const spawnGit = (cmd, args, opts) => {
+    if (args.includes("commit")) {
+      cut = true
+      return { status: null, signal: "SIGTERM", stdout: "", stderr: "", error: Object.assign(new Error("spawnSync git ETIMEDOUT"), { code: "ETIMEDOUT" }) }
+    }
+    if (cut) return { status: 128, stdout: "", stderr: "fatal: cannot read ref" }
+    return spawnSync(cmd, args, opts)
+  }
+  const result = await task_update({
+    deskRoot: root,
+    input: { track: "t", slug: "book-flights", note: "kept on disk" },
+    spawnGit,
+    schedulePush: () => assert.fail("an unknown commit must not schedule a push"),
+  })
+  assert.equal(result.status, "commit_unknown")
+  assert.equal(result.commit.status, "unknown")
+  assert.match(result.commit.reason, /timeout/)
+  assert.ok(result.commit.route_around)
+  assert.equal("desk_commit" in result, false)
+  assert.equal("desk_note" in result, false)
+  assert.match(await fs.readFile(path.join(root, "t", "book-flights", "task.md"), "utf8"), /kept on disk/)
 })
 
 // A card can only be committed through Desk's tools (the desk's pre-commit hook refuses a hand commit of one), so a card that
@@ -665,7 +693,7 @@ test("task_update does not commit a card that Git holds as a conflict, and says 
   const calls = []
   const result = await task_update({ deskRoot: root, input: { track: "t", slug: "book-flights", note: "carried on" }, schedulePush: (opts) => calls.push(opts) })
 
-  assert.equal(result.status, "updated")
+  assert.equal(result.status, "commit_failed")
   assert.deepEqual(notCommitted(result.commit), { status: "failed", reason: "Git holds this card as a conflict (unmerged): the write is on disk and nothing was committed. Resolve the conflict markers in the card, run `git add` on it, then call task_update again." })
   assert.equal("desk_commit" in result, false)
   assert.equal("included_uncommitted_changes" in result, false)
@@ -715,7 +743,7 @@ test("task_update reports a real staging failure without losing the write, when 
       input: { track: "t", slug: "book-flights", frontmatter: { status: "processing" } },
     })
 
-    assert.equal(result.status, "updated", "the write itself is never lost to a genuinely held lock")
+    assert.equal(result.status, "commit_failed", "a held lock must not report a saved update")
     const { data } = await readFront(path.join(root, "t", "book-flights", "task.md"))
     assert.equal(data.status, "processing", "the frontmatter merge is on disk despite the lock")
     assert.equal(result.commit.status, "failed", "a real `git add` failure is reported, not swallowed as a silent success")

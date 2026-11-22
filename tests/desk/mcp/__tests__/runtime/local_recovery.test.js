@@ -137,13 +137,16 @@ test("actual-root mismatch refuses before dispatch", async () => {
   assert.equal(git(actual, "rev-parse", "HEAD"), before)
 })
 
-test("commit failure remains partial and retains the real applied write", async () => {
+test("commit failure remains partial and retains the real applied write", async (t) => {
   const root = fixture()
   const head = git(root, "rev-parse", "HEAD")
   writeFileSync(path.join(root, ".git", "index.lock"), "fixture lock")
   const result = await recover(root)
   assert.equal(result.exitCode, 2, JSON.stringify(result.report))
   assert.equal(result.report.effects.commit, "failed")
+  assert.equal(result.report.result.status, "commit_failed")
+  assert.match(result.report.result.commit.reason, /index\.lock/u)
+  t.diagnostic(JSON.stringify({ exitCode: result.exitCode, status: result.report.result.status, commit: result.report.effects.commit }))
   assert.match(readFileSync(path.join(root, "work/one/task.md"), "utf8"), /status: processing/u)
   assert.equal(git(root, "rev-parse", "HEAD"), head)
 })

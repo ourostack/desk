@@ -406,6 +406,17 @@ test("a commit the tool could not read back stays unknown, never read as not obs
   assert.equal(result.exitCode, 2)
 })
 
+test("commit_unknown stays partial with no remote or deferred publication", async () => {
+  for (const publication of [[], ["--publication", "deferred"]]) {
+    const fixture = mockTransport(() => ({ status: "commit_unknown", commit: { status: "unknown", reason: "timeout" } }))
+    const result = await recovery({ argv: [...base, ...publication], launch: fixture.launch })
+    assert.equal(result.report.effects.commit, "unknown")
+    assert.equal(result.report.status, "partial")
+    assert.equal(result.report.code, "commit_unknown")
+    assert.equal(result.exitCode, 2)
+  }
+})
+
 test("non-string input values are not echoed or reinterpreted", async () => {
   const fixture = mockTransport(() => ({ status: "nothing_to_commit", nested: [null, 1, false, { note: "" }] }))
   const result = await recovery({ input: stream('{"nested":[null,1,false,{"note":""}]}'), launch: fixture.launch })

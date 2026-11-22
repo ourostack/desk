@@ -21,7 +21,11 @@ const NO_HOOK_RUN = /'hook' is not a git command/u
 
 function git(spawnGit, root, args, { env, input, timeout = GIT_TIMEOUT_MS } = {}) {
   const answer = (spawnGit === spawnSync || spawnGit.real === spawnSync ? fastGitAnswer(root, args, input) : null) ?? spawnGit("git", ["-C", root, ...args], { windowsHide: true, encoding: "utf8", timeout, env, input })
-  return { ok: !answer.error && answer.status === 0, status: answer.status, cut: Boolean(answer.error || answer.signal), notRun: answer === NOT_RUN, skipped: answer.skipped === true, stdout: String(answer.stdout ?? ""), stderr: String(answer.stderr ?? answer.error?.message ?? "").trim() }
+  const ok = !answer.error && answer.status === 0
+  const stderr = String(answer.stderr ?? "").trim() || (ok ? "" : answer.error
+    ? `${answer.error.code ? `${answer.error.code}: ` : ""}${answer.error.message || "Git process failed"}`
+    : answer.signal ? `Git terminated by signal ${answer.signal}` : `Git exited with status ${answer.status} without stderr`)
+  return { ok, status: answer.status, cut: Boolean(answer.error || answer.signal), notRun: answer === NOT_RUN, skipped: answer.skipped === true, stdout: String(answer.stdout ?? ""), stderr }
 }
 
 // A tree named by its hash never changes, so a save that reads the same tree twice asks Git once.
@@ -146,7 +150,7 @@ function commitCaptured({ root, paths, wanted, head, branch, message, spawnGit: 
       ? { state: "unknown", reason: `the ${name} hook was cut off at the ${COMMIT_TIMEOUT_MS / 1000} s bound and may still be running; the branch was not moved, but read back before anything else` }
       : NO_HOOK_RUN.test(answer.stderr)
         ? held("nothing was committed: this Git has no `git hook run` (it needs Git 2.36 or later), so Desk cannot run the repository's hooks; update Git")
-        : held(`nothing was committed: the repository's ${name} hook refused the commit: ${answer.stderr || "no reason given"}`)
+        : held(`nothing was committed: the repository's ${name} hook refused the commit: ${answer.stderr}`)
     const pre = hook("pre-commit")
     if (!pre.ok) return stopped("pre-commit", pre)
     const treeAfter = pre.skipped ? tree : git(spawnGit, root, ["write-tree"], { env: own })
@@ -163,7 +167,7 @@ function commitCaptured({ root, paths, wanted, head, branch, message, spawnGit: 
     writeFileSync(messageFile, cleaned.stdout)
     const sign = git(spawnGit, root, ["config", "--type=bool", "--get", "commit.gpgSign"]).stdout.trim() === "true"
     const made = git(spawnGit, root, ["commit-tree", tree.stdout.trim(), ...(head === "" ? [] : ["-p", head]), "-F", messageFile, ...(sign ? ["-S"] : [])], { env: refEnv, timeout: COMMIT_TIMEOUT_MS })
-    if (!made.ok) return held(`nothing was committed: git commit-tree failed: ${made.stderr || "no reason given"}`)
+    if (!made.ok) return held(`nothing was committed: git commit-tree failed: ${made.stderr}`)
     const commitId = made.stdout.trim()
     if (deadline !== null && Date.now() >= deadline.at) return held("nothing was committed: the commit's time budget ran out before the branch was moved")
     const branchLast = git(spawnGit, root, ["symbolic-ref", "--short", "-q", "HEAD"])
@@ -193,7 +197,7 @@ function commitCaptured({ root, paths, wanted, head, branch, message, spawnGit: 
           : `does not hold ${commitId.slice(0, 12)}`
       return { state: "unknown", reason: `the branch update ${update} and ${ref} ${branchSays}; read back before anything else`, commit: commitId }
     }
-    return held(`nothing was committed: ${branch} moved after it was qualified, so the compare-and-swap refused to overwrite it (${moved.stderr || "no reason given"}); the other writer's commit stands`, { moved: true })
+    return held(`nothing was committed: ${branch} moved after it was qualified, so the compare-and-swap refused to overwrite it (${moved.stderr}); the other writer's commit stands`, { moved: true })
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
@@ -219,7 +223,7 @@ function startPostCommit(root, env) {
 // apart (0972 #3 on ae1395e4). Only all three as wanted is `finished`; anything else is `unknown`, naming the commit, and is
 // never replayed: the commit stands, and only a read-back says what is in effect.
 function afterPostCommit({ spawnGit, root, branch, commitId, post, bound }) {
-  const post_commit = post.ok ? "ran" : post.cut ? `cut off at ${bound} and may still be running` : `failed: ${post.stderr || "no reason given"}`
+  const post_commit = post.ok ? "ran" : post.cut ? `cut off at ${bound} and may still be running` : `failed: ${post.stderr}`
   const branchAfter = git(spawnGit, root, ["symbolic-ref", "--short", "-q", "HEAD"])
   const headAfter = git(spawnGit, root, ["rev-parse", "--verify", "-q", "HEAD"])
   const at = headAfter.ok ? headAfter.stdout.trim() : null

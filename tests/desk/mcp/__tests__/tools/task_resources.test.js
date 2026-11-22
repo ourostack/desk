@@ -432,7 +432,24 @@ test("an archived card without frontmatter or without the row is handled, a stat
   await archive("tracked2", `---\nstatus: done\n---\n\n## Resources\n\n${HEADER}\n${SEP}\n${row}\n`)
   git("add", "-A")
   git("commit", "-qm", "seed2")
-  assert.equal((await call("tracked2", { spawnGit: failing })).commit.status, "failed")
+  const failed = await call("tracked2", { spawnGit: failing, schedulePush: () => assert.fail("no push for a failed commit") })
+  assert.equal(failed.status, "commit_failed")
+  assert.equal(failed.commit.status, "failed")
+  await archive("tracked3", `---\nstatus: done\n---\n\n## Resources\n\n${HEADER}\n${SEP}\n${row}\n`)
+  git("add", "-A")
+  git("commit", "-qm", "seed3")
+  let cut = false
+  const unknown = (command, args, options) => {
+    if (args.includes("commit")) {
+      cut = true
+      return { status: null, stdout: "", stderr: "", error: Object.assign(new Error("timeout"), { code: "ETIMEDOUT" }) }
+    }
+    return cut ? { status: 128, stdout: "", stderr: "cannot read HEAD" } : spawnSync(command, args, options)
+  }
+  const uncertain = await call("tracked3", { spawnGit: unknown, schedulePush: () => assert.fail("no push for an unknown commit") })
+  assert.equal(uncertain.status, "commit_unknown")
+  assert.equal(uncertain.commit.status, "unknown")
+  assert.match(await text(path.join(root, "t", "_archive", "tracked3", "task.md")), /retained-with-trigger: ari; PR 9/u)
 })
 
 test("a step Desk derives as delivered from its PR on a later call makes its rows due, announced once, like one a caller settled", async () => {
