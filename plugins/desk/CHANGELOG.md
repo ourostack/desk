@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.429 — 2026-11-22
+
+Desk's MCP server now vendors Ouro UI v1.3.454, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.428 — 2026-11-22
 
 Tool descriptions now give the slug rule the code applies (1 to 6 lowercase kebab-case words, at most 48 characters), and say what `track_create`, `track_update`, `improvement_open`, `task_signoff` and `note` do instead of what they never do.
