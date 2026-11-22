@@ -1,3 +1,561 @@
 {
-  "doors": []
+  "errors": [
+    {
+      "code": "unknown-door",
+      "means": "The tool name is not one Desk's server serves; the reply lists the served tools and a near match.",
+      "fix": "Call one of the listed tools, such as the near match named in the reply."
+    }
+  ],
+  "doors": [
+    {
+      "id": "mcp:task_create",
+      "group": "desk-mcp-cards",
+      "when": "Starting a fresh unit of work under an existing track folder, optionally focusing this session on it at once",
+      "effect": "write",
+      "errors": [
+        {
+          "code": "task-create-invalid-slug",
+          "means": "The slug is not an outcome name of 2 to 6 lowercase kebab-case words, or reads like a prompt or credential.",
+          "fix": "Pick a short outcome name such as fix-login-timeout and call again."
+        },
+        {
+          "code": "task-create-task-already-exists-at",
+          "means": "A live task with that track and slug already exists, so nothing was created.",
+          "fix": "Update the existing card with task_update, or choose another slug."
+        },
+        {
+          "code": "task-create-true-to-bring-it-back",
+          "means": "A task with that track and slug sits in the track's archive.",
+          "fix": "Bring it back with task_update and unarchive: true, or choose another slug."
+        },
+        {
+          "code": "admitting",
+          "means": "Desk was still admitting or verifying this session's desk, so the call was refused before anything ran.",
+          "fix": "Call desk_status, then repeat the call once it reports ready."
+        }
+      ]
+    },
+    {
+      "id": "mcp:task_update",
+      "group": "desk-mcp-cards",
+      "when": "Recording progress, a status change, resources, a log entry or a rename on a card that already exists",
+      "effect": "write",
+      "errors": [
+        {
+          "code": "task-update-task-does-not-exist-at",
+          "means": "No task card exists at the given track and slug.",
+          "fix": "Check the track and slug with desk_search, then call again."
+        },
+        {
+          "code": "task-update-unknown-field-unknown-map-key",
+          "means": "The call named a field task_update does not take, so nothing was changed.",
+          "fix": "Remove the field; the message lists the accepted ones."
+        },
+        {
+          "code": "task-update-moving-this-task-from-back",
+          "means": "Moving the task to an earlier status is a return, and the call gave no return_reason.",
+          "fix": "Repeat the call with return_reason set to one of the listed values."
+        },
+        {
+          "code": "task-pass-evidence-kind-ref-moving",
+          "means": "Moving a task to done needs evidence, and the call gave none.",
+          "fix": "Pass evidence with a kind and ref, such as a merged pull request URL."
+        },
+        {
+          "code": "admitting",
+          "means": "Desk was still admitting or verifying this session's desk, so the call was refused before anything ran.",
+          "fix": "Call desk_status, then repeat the call once it reports ready."
+        }
+      ]
+    },
+    {
+      "id": "mcp:task_archive",
+      "group": "desk-mcp-cards",
+      "when": "Once work reaches done or cancelled, filing its folder away under the track's back drawer with its links kept",
+      "effect": "write",
+      "errors": [
+        {
+          "code": "task-archive-task-does-not-exist-at",
+          "means": "No live task folder exists at the given track and slug.",
+          "fix": "Check the track and slug; an already archived task needs no second call."
+        },
+        {
+          "code": "task-archive-cancelled-abandoned-work-not-both",
+          "means": "The call passed both evidence and outcome cancelled.",
+          "fix": "Pass evidence for finished work or outcome cancelled for abandoned work, not both."
+        },
+        {
+          "code": "task-archive-archive-destination-already-exists-at",
+          "means": "The archive already holds a folder with that slug while the live one also exists.",
+          "fix": "Rename one of the two folders with task_update, then archive again."
+        },
+        {
+          "code": "task-archive-card-changed-after-admission-outside",
+          "means": "The card changed on disk while the archive ran; outside edits were kept and nothing was moved.",
+          "fix": "Call task_archive again."
+        },
+        {
+          "code": "admitting",
+          "means": "Desk was still admitting or verifying this session's desk, so the call was refused before anything ran.",
+          "fix": "Call desk_status, then repeat the call once it reports ready."
+        }
+      ]
+    },
+    {
+      "id": "mcp:task_focus",
+      "group": "desk-mcp-cards",
+      "when": "Telling Desk which card this session's time belongs to, or clearing that for a side conversation",
+      "effect": "read",
+      "errors": [
+        {
+          "code": "task-focus-check-the-track-and-slug",
+          "means": "No live or archived card exists at that track and slug.",
+          "fix": "Check the track and slug with desk_search, then call again."
+        },
+        {
+          "code": "task-focus-track-and-slug-are-both",
+          "means": "Only one of track and slug was given.",
+          "fix": "Pass both track and slug, or clear: true."
+        },
+        {
+          "code": "task-focus-clear-cannot-be-combined-with",
+          "means": "clear: true was combined with display_label.",
+          "fix": "Send clear: true alone."
+        },
+        {
+          "code": "admitting",
+          "means": "Desk was still admitting or verifying this session's desk, so the call was refused before anything ran.",
+          "fix": "Call desk_status, then repeat the call once it reports ready."
+        }
+      ]
+    },
+    {
+      "id": "mcp:task_signoff",
+      "group": "desk-mcp-cards",
+      "when": "After the operator answers a delivery, logging their acceptance or refusal against the delivered card",
+      "effect": "write",
+      "errors": [
+        {
+          "code": "task-signoff-only-a-delivered-task-can",
+          "means": "The task is not at done, so there is nothing delivered to sign off; nothing was recorded.",
+          "fix": "Finish the task and move it to done with task_update first."
+        },
+        {
+          "code": "task-signoff-a-refusal-needs-reason-the",
+          "means": "A refusal came without the operator's reason.",
+          "fix": "Pass reason as one of the listed values."
+        },
+        {
+          "code": "task-signoff-there-is-no-task-in",
+          "means": "No task with that track and slug exists in this desk.",
+          "fix": "Check the track and slug, then call again."
+        },
+        {
+          "code": "admitting",
+          "means": "Desk was still admitting or verifying this session's desk, so the call was refused before anything ran.",
+          "fix": "Call desk_status, then repeat the call once it reports ready."
+        }
+      ]
+    },
+    {
+      "id": "mcp:track_create",
+      "group": "desk-mcp-cards",
+      "when": "Opening a new drawer for a stream of related work, with a one-line scope saying what belongs there",
+      "effect": "write",
+      "errors": [
+        {
+          "code": "track-create-invalid-slug",
+          "means": "The slug is not an outcome name of 2 to 6 lowercase kebab-case words.",
+          "fix": "Pick a short outcome name and call again."
+        },
+        {
+          "code": "track-create-invalid-scope",
+          "means": "The scope is missing, too long or not in the what belongs; not what doesn't form.",
+          "fix": "Rewrite scope as one line under 240 characters in that form."
+        },
+        {
+          "code": "track-create-track-already-exists-at",
+          "means": "A track with that slug already exists.",
+          "fix": "Use track_update on it, or choose another slug."
+        },
+        {
+          "code": "admitting",
+          "means": "Desk was still admitting or verifying this session's desk, so the call was refused before anything ran.",
+          "fix": "Call desk_status, then repeat the call once it reports ready."
+        }
+      ]
+    },
+    {
+      "id": "mcp:track_update",
+      "group": "desk-mcp-cards",
+      "when": "Changing an existing drawer's scope or other header fields, appending to its body, or renaming it",
+      "effect": "write",
+      "errors": [
+        {
+          "code": "track-update-track-does-not-exist-at",
+          "means": "No track exists at that slug.",
+          "fix": "Check the slug, then call again."
+        },
+        {
+          "code": "track-update-invalid-scope",
+          "means": "The new scope fails the same check track_create applies.",
+          "fix": "Rewrite scope as one line under 240 characters, what belongs; not what doesn't."
+        },
+        {
+          "code": "track-update-rename-cannot-be-combined-with-update",
+          "means": "A rename was sent together with other changes.",
+          "fix": "Send the rename alone, then send the update."
+        },
+        {
+          "code": "admitting",
+          "means": "Desk was still admitting or verifying this session's desk, so the call was refused before anything ran.",
+          "fix": "Call desk_status, then repeat the call once it reports ready."
+        }
+      ]
+    },
+    {
+      "id": "mcp:friction_add",
+      "group": "desk-mcp-records",
+      "when": "Logging a snag in setup or in Desk itself; system snags open an improvement card and an issue for the owning repository's drain",
+      "effect": "consequential",
+      "confirm": "System friction about a tool owned in ourostack files or counts a GitHub issue on that tool's repository; go ahead?",
+      "errors": [
+        {
+          "code": "friction-add-title-is-required-for-system",
+          "means": "System friction came without a one-line title.",
+          "fix": "Pass title on one line and call again."
+        },
+        {
+          "code": "friction-add-about-must-be-setup-or",
+          "means": "about was neither setup nor system.",
+          "fix": "Pass about as setup or system."
+        },
+        {
+          "code": "friction-add-issue-not-filed",
+          "means": "The GitHub issue for system friction could not be filed; the note itself was saved.",
+          "fix": "Act on the reason in the message, such as signing in, then call again."
+        },
+        {
+          "code": "admitting",
+          "means": "Desk was still admitting or verifying this session's desk, so the call was refused before anything ran.",
+          "fix": "Call desk_status, then repeat the call once it reports ready."
+        }
+      ]
+    },
+    {
+      "id": "mcp:lesson_add",
+      "group": "desk-mcp-records",
+      "when": "Right after the operator corrects a habit or preference, so future sessions keep that fix without being told again",
+      "effect": "consequential",
+      "confirm": "A team lesson opens a pull request on the shared repository's AGENTS.md; go ahead?",
+      "errors": [
+        {
+          "code": "lesson-add-scope-is-required-personal-this",
+          "means": "scope was missing.",
+          "fix": "Pass scope as personal, desk or team."
+        },
+        {
+          "code": "lesson-add-must-be-one-line-a",
+          "means": "The lesson text spans more than one line, and a lesson is one rule.",
+          "fix": "Rewrite the lesson as one line and call again."
+        },
+        {
+          "code": "lesson-add-a-team-lesson-needs-repo",
+          "means": "A team lesson came without the shared repository to write it to.",
+          "fix": "Pass the repository the team shares, then call again."
+        },
+        {
+          "code": "lesson-add-another-session-is-writing-nothing",
+          "means": "Another session is writing the same file; nothing was written.",
+          "fix": "Call again after the other session finishes."
+        },
+        {
+          "code": "admitting",
+          "means": "Desk was still admitting or verifying this session's desk, so the call was refused before anything ran.",
+          "fix": "Call desk_status, then repeat the call once it reports ready."
+        }
+      ]
+    },
+    {
+      "id": "mcp:desk_save",
+      "group": "desk-mcp-records",
+      "when": "Committing a plan, spec or report file written by hand inside the desk, or sending its text from a client without a filesystem",
+      "effect": "write",
+      "errors": [
+        {
+          "code": "desk-save-message-is-required-string",
+          "means": "message was missing or not a string.",
+          "fix": "Pass a commit message string."
+        },
+        {
+          "code": "desk-save-path-outside-prefix",
+          "means": "A path in files is outside this session's write prefix.",
+          "fix": "Pass paths inside the write prefix, such as desks/<alias>/ in a shared workspace."
+        },
+        {
+          "code": "desk-save-true",
+          "means": "paths included a task card, which only the task tools commit.",
+          "fix": "Remove the card from paths and change it with task_update, task_create or task_archive."
+        },
+        {
+          "code": "desk-save-content-too-large",
+          "means": "A file's content in files is over 1 MiB.",
+          "fix": "Split or shrink the file, or write it to disk and pass its path in paths."
+        },
+        {
+          "code": "admitting",
+          "means": "Desk was still admitting or verifying this session's desk, so the call was refused before anything ran.",
+          "fix": "Call desk_status, then repeat the call once it reports ready."
+        }
+      ]
+    },
+    {
+      "id": "mcp:note",
+      "group": "desk-mcp-records",
+      "when": "Leaving a teammate in a Crew workspace a dated message for their next session start, or acknowledging one left for you",
+      "effect": "consequential",
+      "confirm": "This opens and merges a pull request on the team's GitHub repository with the note; go ahead?",
+      "errors": [
+        {
+          "code": "note-use-a-crew-shared-workspace",
+          "means": "This desk is not a Crew shared workspace, so notes have nowhere to go.",
+          "fix": "Save the message on your own desk instead, with a task or desk_save."
+        },
+        {
+          "code": "note-has-not-joined-this-workspace",
+          "means": "The alias in to has no row in _meta/desks.md, so no session of theirs would see the note.",
+          "fix": "Pass the alias of a member who has joined."
+        },
+        {
+          "code": "note-a-note-is-delivered-through",
+          "means": "The workspace's origin is not on GitHub, and a note is delivered through a pull request.",
+          "fix": "Give the workspace a GitHub origin, then call again."
+        },
+        {
+          "code": "note-there-is-no-note",
+          "means": "The ack path names no note.",
+          "fix": "Pass the path session start listed."
+        },
+        {
+          "code": "admitting",
+          "means": "Desk was still admitting or verifying this session's desk, so the call was refused before anything ran.",
+          "fix": "Call desk_status, then repeat the call once it reports ready."
+        }
+      ]
+    },
+    {
+      "id": "mcp:desk_search",
+      "group": "desk-mcp-reads",
+      "when": "Finding cards, logs and documents by exact words or listing the newest ones in a date window, filtered by track or status",
+      "effect": "read",
+      "errors": [
+        {
+          "code": "object-input-pass-as-a-json-object",
+          "means": "filters was not an object or a JSON string holding one, so nothing was searched.",
+          "fix": "Pass filters as a JSON object, for example track and status."
+        },
+        {
+          "code": "admitting",
+          "means": "Desk was still admitting or verifying this session's desk, so the call was refused before anything ran.",
+          "fix": "Call desk_status, then repeat the call once it reports ready."
+        },
+        {
+          "code": "no-desk-root",
+          "means": "No source names a desk for this session, so there is no desk to act on.",
+          "fix": "Call desk_status and follow its fix to bind a desk, then call again."
+        }
+      ]
+    },
+    {
+      "id": "mcp:desk_recall",
+      "group": "desk-mcp-reads",
+      "when": "Asking the desk about a topic by meaning, to find earlier decisions and evidence whose wording you can't guess",
+      "effect": "read",
+      "errors": [
+        {
+          "code": "admitting",
+          "means": "Desk was still admitting or verifying this session's desk, so the call was refused before anything ran.",
+          "fix": "Call desk_status, then repeat the call once it reports ready."
+        },
+        {
+          "code": "no-desk-root",
+          "means": "No source names a desk for this session, so there is no desk to act on.",
+          "fix": "Call desk_status and follow its fix to bind a desk, then call again."
+        },
+        {
+          "code": "root-unavailable",
+          "means": "The bound desk root cannot be read, and Desk does not fall back to another desk.",
+          "fix": "Call desk_status and follow its fix, such as restoring the folder."
+        }
+      ]
+    },
+    {
+      "id": "mcp:desk_skill",
+      "group": "desk-mcp-reads",
+      "when": "From a client that can't load plugin skills, listing Desk's skills or reading one skill's full text",
+      "effect": "read",
+      "errors": [
+        {
+          "code": "unknown-skill",
+          "means": "No skill by that name is installed.",
+          "fix": "Call desk_skill with no name for the list."
+        },
+        {
+          "code": "invalid-name",
+          "means": "The name is not lowercase letters, digits and hyphens.",
+          "fix": "Pass a skill name from desk_skill's list."
+        },
+        {
+          "code": "hosted-unavailable",
+          "means": "The skill needs a shell, which hosted Desk does not have.",
+          "fix": "Do that step on a machine running Desk locally, or skip that skill."
+        }
+      ]
+    },
+    {
+      "id": "mcp:desk_status",
+      "group": "desk-mcp-health",
+      "when": "First call of a session, or whenever Desk seems off, to learn readiness, the bound location, sync and active work",
+      "effect": "write",
+      "errors": [
+        {
+          "code": "no-desk-root",
+          "means": "No source names a desk, so the answer's state is degraded:no_desk_root with the paths tried.",
+          "fix": "Follow the answer's fix to bind a desk, then call desk_status again."
+        },
+        {
+          "code": "root-unavailable",
+          "means": "A binding names a desk root that cannot be read, so the state is degraded:root_unavailable; Desk does not fall back.",
+          "fix": "Follow the answer's fix, such as restoring the folder, then call desk_status again."
+        }
+      ]
+    },
+    {
+      "id": "mcp:desk_doctor",
+      "group": "desk-mcp-health",
+      "when": "When the runtime misbehaves: diagnosing startup, switching the checkout back to its state branch, reindexing search or recording factory consent",
+      "effect": "write",
+      "errors": [
+        {
+          "code": "no-state-branch",
+          "means": "switch_state_branch was asked for, but this session has no state branch configured.",
+          "fix": "Skip the repair; a host passes --state-branch when a checkout must stay on one branch."
+        },
+        {
+          "code": "search-starting",
+          "means": "reindex was asked for while the search engine was still starting.",
+          "fix": "Wait a few seconds and call desk_doctor with reindex: true again."
+        },
+        {
+          "code": "factory-already-decided",
+          "means": "factory_consent was given, but this store's decision is already recorded.",
+          "fix": "Leave it; the operator has already answered."
+        },
+        {
+          "code": "factory-no-store",
+          "means": "factory_consent was given, but this session resolves no factory store.",
+          "fix": "Leave it; there is no question to answer."
+        }
+      ]
+    },
+    {
+      "id": "mcp:improvement_open",
+      "group": "desk-mcp-improvement",
+      "when": "Raising a case for fixing Desk or a plugin as a card on the desk, or finding or reopening the card already kept for it",
+      "effect": "write",
+      "errors": [
+        {
+          "code": "invalid-source",
+          "means": "source and id do not make a valid card key.",
+          "fix": "Pass a known source and an id; the key is source:id."
+        },
+        {
+          "code": "title-not-allowed",
+          "means": "A title was passed, and Desk builds every card title itself.",
+          "fix": "Drop title and call again."
+        },
+        {
+          "code": "invalid-evidence",
+          "means": "evidence is not a list of evidence pointers.",
+          "fix": "Pass evidence as a list of links or desk paths."
+        },
+        {
+          "code": "lock-busy",
+          "means": "Another writer held the card folder's lock past the wait.",
+          "fix": "Call again in a moment."
+        },
+        {
+          "code": "admitting",
+          "means": "Desk was still admitting or verifying this session's desk, so the call was refused before anything ran.",
+          "fix": "Call desk_status, then repeat the call once it reports ready."
+        }
+      ]
+    },
+    {
+      "id": "mcp:improvement_next",
+      "group": "desk-mcp-improvement",
+      "when": "Taking on improvement work: claiming the longest-waiting open card for a limited time with its claim id",
+      "effect": "write",
+      "errors": [
+        {
+          "code": "claim-held",
+          "means": "This machine already holds a live claim, named by key.",
+          "fix": "Ship, release or close that card with improvement_update first."
+        },
+        {
+          "code": "none-open",
+          "means": "No improvement card is open.",
+          "fix": "Nothing to take; carry on with other work."
+        },
+        {
+          "code": "machine-key-unavailable",
+          "means": "This machine has no factory state, so it cannot take cards.",
+          "fix": "Take cards from a machine with factory state."
+        },
+        {
+          "code": "noninteractive",
+          "means": "Cards are taken only in a session with an operator present.",
+          "fix": "Take cards from an interactive session."
+        },
+        {
+          "code": "admitting",
+          "means": "Desk was still admitting or verifying this session's desk, so the call was refused before anything ran.",
+          "fix": "Call desk_status, then repeat the call once it reports ready."
+        }
+      ]
+    },
+    {
+      "id": "mcp:improvement_update",
+      "group": "desk-mcp-improvement",
+      "when": "Finishing with a claimed card: shipping it with its pull request link, releasing it, or closing it with a reason",
+      "effect": "write",
+      "errors": [
+        {
+          "code": "not-your-claim",
+          "means": "The key and claim_id do not match a live claim this caller holds.",
+          "fix": "Pass the key and claim_id improvement_next returned."
+        },
+        {
+          "code": "invalid-patch",
+          "means": "The fields do not form a ship, release or close.",
+          "fix": "Send countermeasure to ship, state open to release, or state closed_unverified with close_reason."
+        },
+        {
+          "code": "not-found",
+          "means": "No card has that key.",
+          "fix": "Check the key improvement_next returned."
+        },
+        {
+          "code": "unreadable-folder",
+          "means": "The card folder could not be read.",
+          "fix": "Check the desk's _meta/improvement folder, then call again."
+        },
+        {
+          "code": "admitting",
+          "means": "Desk was still admitting or verifying this session's desk, so the call was refused before anything ran.",
+          "fix": "Call desk_status, then repeat the call once it reports ready."
+        }
+      ]
+    }
+  ]
 }
