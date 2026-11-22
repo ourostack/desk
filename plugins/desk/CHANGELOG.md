@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.427 — 2026-11-22
+
+Desk's MCP server now vendors Ouro UI v1.3.452, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.426 — 2026-11-22
 
 Browser tool failures now expose a structured lower_snake error code without changing their guidance or retained cleanup diagnostics.
