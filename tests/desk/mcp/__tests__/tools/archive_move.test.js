@@ -404,8 +404,9 @@ test("actual Windows occupied destination refuses and preserves both exact paylo
   await fs.writeFile(path.join(src, "payload"), "source")
   await fs.writeFile(path.join(dst, "payload"), "destination")
   await assert.rejects(moveArchive(src, dst, async () => {}), error => {
-    assert.equal(error.archiveMove.movement, "refused")
-    assert.equal(error.archiveMove.retirement, "confirmed")
+    const diagnostic = JSON.stringify({ message: error.message, receipt: error.handleReceipt })
+    assert.equal(error.archiveMove.movement, "refused", diagnostic)
+    assert.equal(error.archiveMove.retirement, "confirmed", diagnostic)
     return true
   })
   assert.equal(await fs.readFile(path.join(src, "payload"), "utf8"), "source")
