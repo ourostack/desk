@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.415 — 2026-11-22
+
+The [lane-process guidance](../skills/using-superpowers-with-desk/SKILL.md#lane-processes-end-with-their-lane) now requires load generators to have independent finite deadlines, keeps PID and test-file arguments in shell arrays, and requires verified exit before reporting cleanup. It includes a macOS leaf-process deadline example and preserves process-identity checks before signalling stored PIDs.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.414 — 2026-11-22
 
 Desk's MCP server now vendors Ouro UI v1.3.446, moved by Ouro Current.
