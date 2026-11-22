@@ -67,5 +67,8 @@
     {"id": "desk-mcp-health", "when": "Desk's MCP tools that report whether the session's desk is ready and diagnose or repair the runtime"},
     {"id": "desk-mcp-improvement", "when": "Desk's MCP tools that open, claim and finish improvement cards kept in the desk's _meta/improvement folder"}
   ],
-  "bookletWords": { "allow": [] }
+  "bookletWords": { "allow": [
+    {"door": "mcp:task_signoff", "field": "description", "word": "never", "reason": "A subagent shares the session's server but never heard the operator's answer, and the tool can't tell its call from the main agent's, so the description carries the rule."},
+    {"door": "mcp:note", "field": "description", "word": "never", "reason": "The rule is about how the sender writes the body, which the tool cannot check: a note relays someone else's view as the sender's understanding, not in their words."}
+  ] }
 }

@@ -49,12 +49,7 @@
     "http:hooks GET /hooks/:name/events",
     "mcp:browser_command",
     "mcp:browser_context",
-    "mcp:improvement_open",
-    "mcp:note",
     "mcp:task_focus",
-    "mcp:task_signoff",
-    "mcp:track_create",
-    "mcp:track_update",
     "skill:superpowers:brainstorming",
     "skill:superpowers:verification-before-completion"
   ]
