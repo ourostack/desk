@@ -1,5 +1,13 @@
 # desk plugin — changelog
 
+## 3.2.424 — 2026-11-22
+
+Hosted HTTP failures now carry stable error identity without replacing existing guidance or protocol codes: hook JSON includes `code`, gateway HTML/plaintext uses `x-desk-error-code`, and an unavailable MCP gateway adds `error.data.code`.
+
+Desk's MCP server now vendors Ouro UI v1.3.450, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.423 — 2026-11-22
 
 Headless Copilot startup and Node-install warnings leave settings untouched. Ordinary startup reports settings changes even when optional checks are late. Oversized durable-file input reports its byte limit while leaving the call unchanged, and unrecognized successful intake payloads report incompatibility without granting context. Hook diagnostics and sync-end comments are clearer.
