@@ -60,6 +60,13 @@ test("a card from the sidecar is the door's card, and its codes count as raised 
   assert.equal(doors.find((d) => d.id === "mcp:desk_search")!.card, null);
 });
 
+test("a code written in upper snake case counts as raised, as desk-web writes its codes and serves them lowercased", async () => {
+  const { doors, errors } = await walk(options("catalog.json", { cards: at("web-cards.json"), handlers: [at("web-handlers")] }));
+  assert.deepEqual(errors, []);
+  // auth-timeout is only an object key (an identifier), never a string literal, so it isn't raised.
+  assert.deepEqual(doors.find((d) => d.id === "mcp:browser_context")!.evidence, { raises: ["copy-source-policy", "browser-failure"] });
+});
+
 test("without handlers the walker can't tell what is raised, so it claims nothing either way", async () => {
   const { doors } = await walk(options("tool-names.js", { cards: at("cards.json") }));
   assert.deepEqual(doors.find((d) => d.id === "mcp:task_create")!.evidence, {});

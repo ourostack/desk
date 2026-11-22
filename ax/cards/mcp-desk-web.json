@@ -1,3 +1,82 @@
 {
-  "doors": []
+  "errors": [
+    {
+      "code": "unknown-door",
+      "means": "desk-web serves only browser_context and browser_command, and the name called is neither.",
+      "fix": "Call tools/list on desk-web and use one of the two names it lists."
+    }
+  ],
+  "doors": [
+    {
+      "id": "mcp:browser_context",
+      "group": "desk-web-browser",
+      "when": "Before any page work, to get a contextId for a headless Edge or Chrome, or to end one and remove its temporary folder",
+      "effect": "write",
+      "errors": [
+        {
+          "code": "copy-source-permission",
+          "means": "Opening mine, the operating system refused to let Desk read the person's browser profile, so no copy was opened.",
+          "fix": "Open a fresh browser instead; only the person can grant that access in the system's privacy settings."
+        },
+        {
+          "code": "copy-source-policy",
+          "means": "Opening mine, a required profile file could not be qualified (identity, single link or readable bytes), so no copy was opened.",
+          "fix": "Open a fresh browser instead; don't work around the refusal by controlling the person's own browser."
+        },
+        {
+          "code": "auth-context-refused",
+          "means": "close named a mine context this server doesn't own, such as one an earlier Desk process opened.",
+          "fix": "Leave that context alone and open a new one; each server closes only the contexts it opened."
+        },
+        {
+          "code": "auth-close-failed",
+          "means": "Closing a mine context, its cleanup couldn't be confirmed, so its private files were kept.",
+          "fix": "Call desk_doctor to see Desk's runtime state, and report it if the close fails again."
+        },
+        {
+          "code": "browser-failure",
+          "means": "Any other refusal: no Edge or Chrome installed, the browser driver didn't install, or a bad action or contextId.",
+          "fix": "Read the message, which names the cause and the next step, such as installing a browser or passing open's contextId."
+        }
+      ]
+    },
+    {
+      "id": "mcp:browser_command",
+      "group": "desk-web-browser",
+      "when": "After browser_context opens a context, for each page step: navigating, reading the accessibility tree, clicking, typing, taking pictures",
+      "effect": "write",
+      "errors": [
+        {
+          "code": "auth-snapshot-invalidated",
+          "means": "In mine, the page replaced or navigated away from the element since its ref was read.",
+          "fix": "Run [\"snapshot\"] again and act on a fresh ref; while a page loads, run [\"wait\",\"<text you expect>\"] first."
+        },
+        {
+          "code": "auth-target-refused",
+          "means": "In mine, the ref isn't from one of the tab's recent reads, or its element has gone.",
+          "fix": "Take a new snapshot and use a ref from it."
+        },
+        {
+          "code": "auth-command-unknown",
+          "means": "In mine, args[0] isn't one of the commands mine runs; the message lists them.",
+          "fix": "Use a listed command, or eval or run-code for anything the list doesn't cover."
+        },
+        {
+          "code": "auth-timeout",
+          "means": "In mine, the command ran out of time, and Desk closed the context.",
+          "fix": "Open a new context with browser_context and start again from the page you were on, keeping waits under a minute."
+        },
+        {
+          "code": "browser-failure",
+          "means": "No open browser has that contextId, args aren't a list of strings or start with no page command, or a fresh command failed or ran too long.",
+          "fix": "Read the message, which names the cause: open a context first, fix args, or run the command again."
+        },
+        {
+          "code": "browser-internal-failure",
+          "means": "Desk's browser hit an unexpected problem with no safer message to give.",
+          "fix": "Call the tool again; if it repeats, call friction_add with the code."
+        }
+      ]
+    }
+  ]
 }

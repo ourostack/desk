@@ -65,6 +65,7 @@
     {"id": "desk-mcp-records", "when": "Desk's MCP tools that log friction and lessons, commit hand-written desk files, and leave Crew teammates notes"},
     {"id": "desk-mcp-reads", "when": "Desk's MCP tools that search the desk by words or meaning and read its skills, changing nothing"},
     {"id": "desk-mcp-health", "when": "Desk's MCP tools that report whether the session's desk is ready and diagnose or repair the runtime"},
+    {"id": "desk-web-browser", "when": "Desk's headless browser tools: open a throwaway or profile-copy Edge or Chrome for one agent and drive its pages"},
     {"id": "desk-mcp-improvement", "when": "Desk's MCP tools that open, claim and finish improvement cards kept in the desk's _meta/improvement folder"}
   ],
   "bookletWords": { "allow": [] }
