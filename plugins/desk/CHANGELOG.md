@@ -1,5 +1,13 @@
 # desk plugin — changelog
 
+## 3.2.423 — 2026-11-22
+
+Headless Copilot startup and Node-install warnings leave settings untouched. Ordinary startup reports settings changes even when optional checks are late. Oversized durable-file input reports its byte limit while leaving the call unchanged, and unrecognized successful intake payloads report incompatibility without granting context. Hook diagnostics and sync-end comments are clearer.
+
+Desk's MCP server now vendors Ouro UI core v1.11.0 and Ouro UI v1.3.449, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.422 — 2026-11-22
 
 The `observer` agent's description ([Claude](agents/observer.md), [Copilot](agents/observer.agent.md)) now ends its summary with "without doing, fixing or certifying that work" in place of the sentence "Never does, fixes or certifies the work it observes". The meaning is the same. The Ouro AX census in Desk's CI flags words in an agent's description that give the reader a rule, such as "never", and asks the description to say what the agent does.
