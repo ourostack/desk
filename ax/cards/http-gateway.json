@@ -1,3 +1,45 @@
 {
-  "doors": []
+  "doors": [
+    {
+      "id": "http:gateway ALL /mcp",
+      "group": "hosted-gateway",
+      "when": "A remote MCP client such as Claude or ChatGPT calling Desk's tools for its signed-in account over streamable HTTP",
+      "effect": "write",
+      "errors": [
+        {
+          "code": "gateway-unavailable",
+          "means": "The gateway cannot start Desk yet; the JSON-RPC error -32000 carries this in error.data.code with the reason.",
+          "fix": "Retry later; the message says what the gateway is waiting for."
+        },
+        {
+          "code": "body-too-large",
+          "means": "The JSON-RPC request body is over 4 MB; the x-desk-error-code header carries this.",
+          "fix": "Send a smaller request, such as fewer files in one desk_save."
+        },
+        {
+          "code": "body-not-json",
+          "means": "The request body is not valid JSON; the x-desk-error-code header carries this.",
+          "fix": "Send a well-formed JSON-RPC request."
+        }
+      ]
+    },
+    {
+      "id": "http:gateway POST /oauth/consent",
+      "group": "hosted-gateway",
+      "when": "The person's browser submitting the sign-in approval form during an OAuth authorization for a client",
+      "effect": "write",
+      "errors": [
+        {
+          "code": "gateway-unavailable",
+          "means": "Sign-in is unavailable on this gateway right now; the HTML page says why.",
+          "fix": "Try again later, starting again from the client."
+        },
+        {
+          "code": "body-too-large",
+          "means": "The form body is over 16 KB; the x-desk-error-code header carries this.",
+          "fix": "Start the sign-in again from the client."
+        }
+      ]
+    }
+  ]
 }

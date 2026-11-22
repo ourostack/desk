@@ -1,3 +1,114 @@
 {
-  "doors": []
+  "doors": [
+    {
+      "id": "http:hooks POST /hooks/:id",
+      "group": "hosted-hooks-receiver",
+      "when": "An outside sender such as Stripe, Sentry or GitHub delivering a signed event to a hook's public address for later wakes",
+      "effect": "write",
+      "errors": [
+        {
+          "code": "hook-not-found",
+          "means": "No hook has that address id; the reply says only not found.",
+          "fix": "Check the hook's url with GET /hooks, and point the sender at it."
+        },
+        {
+          "code": "signature-refused",
+          "means": "The event's signature did not verify against the hook's secret and scheme; it was not stored.",
+          "fix": "Fix the sender's signing secret or the hook's verify preset, then resend."
+        },
+        {
+          "code": "body-too-large",
+          "means": "The event body is over the receiver's size limit.",
+          "fix": "Send a smaller event, or trim the sender's payload."
+        },
+        {
+          "code": "storage-unavailable",
+          "means": "The event store was down or throttling; Retry-After says when to try again.",
+          "fix": "Resend after the Retry-After delay; most senders retry on their own."
+        }
+      ]
+    },
+    {
+      "id": "http:hooks POST /hooks",
+      "group": "hosted-hooks-receiver",
+      "when": "Registering a webhook endpoint for the signed-in account, which answers with its address and, for some presets, its new secret once",
+      "effect": "consequential",
+      "confirm": "This creates a hook on the hosted receiver and may print its signing secret once; create it?",
+      "errors": [
+        {
+          "code": "identity-refused",
+          "means": "The Authorization header held no GitHub token mapped to a Desk account, so the call was refused.",
+          "fix": "Send a GitHub token for a Desk account as a Bearer token, as drains hooks does."
+        },
+        {
+          "code": "hook-name-invalid",
+          "means": "name is not 1 to 40 lower-case letters, digits and hyphens starting with a letter or digit.",
+          "fix": "Pick a name such as spoonjoy-sentry and send again."
+        },
+        {
+          "code": "verification-invalid",
+          "means": "verify names no preset the receiver knows.",
+          "fix": "Use standard, svix, resend, clerk, stripe, github, sentry, linear or none."
+        },
+        {
+          "code": "secret-required",
+          "means": "The preset checks the sender's own signing secret, and none valid was sent.",
+          "fix": "Pass the secret the sender shows, 1 to 1024 characters with no spaces."
+        },
+        {
+          "code": "hook-conflict",
+          "means": "This account already has a hook by that name.",
+          "fix": "Delete the old hook first, or pick another name."
+        }
+      ]
+    },
+    {
+      "id": "http:hooks DELETE /hooks/:name",
+      "group": "hosted-hooks-receiver",
+      "when": "Removing one of the signed-in account's endpoints together with its undelivered events, once nothing routes to it",
+      "effect": "consequential",
+      "confirm": "This deletes the hook and its pending events from the hosted receiver for good; delete it?",
+      "errors": [
+        {
+          "code": "identity-refused",
+          "means": "The Authorization header held no GitHub token mapped to a Desk account, so the call was refused.",
+          "fix": "Send a GitHub token for a Desk account as a Bearer token, as drains hooks does."
+        },
+        {
+          "code": "identity-unavailable",
+          "means": "The receiver could not check the token with GitHub or its account map, answering 503.",
+          "fix": "Retry shortly."
+        },
+        {
+          "code": "hook-not-found",
+          "means": "The signed-in account has no hook by that name.",
+          "fix": "List the account's hooks with GET /hooks and use a name from it."
+        }
+      ]
+    },
+    {
+      "id": "http:hooks DELETE /hooks/:name/events/:eventId",
+      "group": "hosted-hooks-receiver",
+      "when": "After a wake has handled a stored event, acknowledging it so the receiver drops that single pending delivery",
+      "effect": "consequential",
+      "confirm": "This deletes the pending event from the hosted receiver; acknowledge it?",
+      "errors": [
+        {
+          "code": "identity-refused",
+          "means": "The Authorization header held no GitHub token mapped to a Desk account, so the call was refused.",
+          "fix": "Send a GitHub token for a Desk account as a Bearer token, as drains hooks does."
+        },
+        {
+          "code": "hook-not-found",
+          "means": "The signed-in account has no hook by that name.",
+          "fix": "Use a hook name from GET /hooks."
+        },
+        {
+          "code": "event-not-found",
+          "means": "No pending event has that id on the hook; it may already be acknowledged.",
+          "fix": "Treat it as done, or list pending events with GET /hooks/:name/events."
+        }
+      ]
+    }
+  ]
 }
