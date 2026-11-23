@@ -197,7 +197,7 @@ export function publishCardCommit({ root, relPaths, message, defaultBranch, spaw
         return fail(relPaths, "the built tree differs from the captured files", "Git did not build the requested paths", `git -C ${root} status`, "nothing was published; preserve the staged files and retry the write")
       // The commit may change only what was asked for: a change anywhere else means the private index was lost or clobbered.
       const changed = git(["diff-tree", "-r", "--name-only", "--no-renames", "-z", onto, tree])
-      if (changed.status !== 0) return fail(relPaths, "Desk could not compare the built tree with the remote", "git diff-tree failed", `git -C ${root} diff-tree -r ${onto} ${tree}`, "nothing was published; retry the write")
+      if (changed.status !== 0) return fail(relPaths, "git diff-tree failed while comparing the built tree with the remote's", "git diff-tree did not return a readable list of changed paths for the fetched commit and the built tree", `git -C ${root} diff-tree -r ${onto} ${tree}`, "nothing was published; retry the write")
       const stray = changed.stdout.split("\0").filter(Boolean).filter((file) => !full.some((card) => file === card || file.startsWith(`${card}/`)))
       if (stray.length > 0) return fail(relPaths, `the built tree would also change ${stray.length} path(s) outside the card, such as ${stray[0]}`, "the private index lost the remote's files while it was being built", `git -C ${root} diff-tree -r ${onto} ${tree}`, "nothing was published; the card stays staged, so retry the write")
       if (tree === git(["rev-parse", `${onto}^{tree}`]).stdout.trim()) {
