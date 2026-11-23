@@ -313,7 +313,20 @@
         { "code": "no-caption", "means": "A picture has no caption saying what to notice.", "fix": "Caption where to look and what it proves." },
         { "code": "unsafe-capture", "means": "A real screenshot would expose private messages, identities, customer data or secrets.", "fix": "Render the surface with made-up data and label it 'Synthetic-data capture' with what it proves." }
       ],
-      "uses": ["skill:desk:pr-surface-hygiene", "skill:desk:evidence-discipline"]
+      "uses": ["skill:desk:pr-surface-hygiene", "skill:desk:evidence-discipline", "skill:desk:live-ui-iteration"]
+    },
+    {
+      "id": "skill:desk:live-ui-iteration",
+      "group": "desk-skills-evidence-and-review",
+      "when": "Iterating on a UI with a person: they ask for feedback on a screen, you polish one with them or show them a design",
+      "effect": "read",
+      "errors": [
+        { "code": "screenshots-for-feedback", "means": "A UI is about to go to a person for feedback as screenshots instead of a live page they can watch.", "fix": "Run a hot-reload mock on made-up data with a URL parameter per state, and hand its URL to whoever holds the person's view." },
+        { "code": "window-on-their-screen", "means": "A window is about to open on the person's screen, or a script is about to drive the view they are watching.", "fix": "Run checks headless on a second server with its own ports and home." },
+        { "code": "batched-notes", "means": "Several notes are about to land as one edit.", "fix": "One note, one small edit, the check suite, then a one-line reply." },
+        { "code": "decision-not-a-check", "means": "A decision the person made is held only in the conversation or checked by eye.", "fix": "Write it as a deterministic check that runs on every edit." }
+      ],
+      "uses": ["skill:desk:visual-proof"]
     },
     {
       "id": "skill:desk:factory-evaluator",

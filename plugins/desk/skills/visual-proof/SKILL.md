@@ -9,6 +9,10 @@ description: Use before you send, show, attach or caption any screenshot, captur
 
 Never check by eye what code can measure: alignment, spacing, clipping and overflow, contrast, colours against the design tokens, counts, and text against its source. Write the check as code (a script, a test, a lint, a layout assertion in the renderer), run it, and report its output; agents are unreliable at this by eye, and a script gives the same answer every run. Keep the check where the next change will run it, such as the repository's tests or CI. Look by eye only for what no check can judge: whether the screen makes sense, feels right and matches the intent. The same goes for briefing another agent: never ask it to eyeball what a check can measure.
 
+## Iterating with a person? Don't send pictures
+
+When the person is giving feedback on a UI, run it live with them instead of sending captures: load `live-ui-iteration`. Screenshots stay for proof in a pull request, a report or a handoff.
+
 ## Look before you show
 
 Look at what you show before you show it. Before handing a person a capture, mockup, screenshot or rendered page, open it at full size and inspect it as they will: content cut off or covered, an alarming or wrong status colour, demo-only or placeholder text, a stale label, shortcut or number, anything that contradicts your claim. Run the measurable checks above first. Then write down what is wrong before you write the caption; "nothing" is a finding you reach after those checks and a full look, not before them. Fix what they would catch, capture again, and only then show it. When there is a reference (an approved mockup, a canonical image, the previous capture), compare against it side by side yourself. A capture you have not looked at is not proof, and passing one on unexamined hands the person your review.
