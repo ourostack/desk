@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.476 — 2026-11-23
+
+Desk's MCP server now vendors Ouro UI v1.3.492, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.475 — 2026-11-23
 
 Coverage shards now preserve per-file timings and the running file before interruption. Stuck-shard diagnostics retain full process commands without changing the watchdog or coverage gate.
