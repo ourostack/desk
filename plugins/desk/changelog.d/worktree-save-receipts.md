@@ -1,0 +1,1 @@
+Desk saves from a branch-bound desk name their published commit and commit a local copy when earlier history prevents catching up, so archiving recognizes saved companions without losing local work. A failed local commit is reported separately from successful publication.
