@@ -1,14 +1,14 @@
 {
   "schemaVersion": 1,
   "suiteId": "plain-language-corrections",
-  "sourceFingerprint": "dd51efa847e7398dd0353d88974338650db685628a293b7e982a428cd9a56d2c",
-  "contractFingerprint": "27fbeb7eac5dd82068dfe6036e4169641b258f63d6912133ee36d8d599f6df85",
+  "sourceFingerprint": "055bafcadb5fd2867cb0270301e30aba09fb3d933c3463fc14f3dcba4339eb36",
+  "contractFingerprint": "4339bed6a2517fc09281a4c9b7a9cd95eada2fc7b80872c35af63201cadc02c6",
   "run": {
     "actor": "headless GitHub Copilot CLI harness: one fresh subject process per case, then one separate judge process",
     "model": "subject gpt-6.1-sol; judge claude-opus-5.5",
     "runtimeRevision": "GitHub Copilot CLI 1.0.114",
-    "startedAt": "2026-11-18T23:49:49.799Z",
-    "completedAt": "2026-11-18T23:50:39.054Z",
+    "startedAt": "2026-11-23T19:53:38.371Z",
+    "completedAt": "2026-11-23T19:54:34.057Z",
     "harness": {
       "command": "copilot",
       "pluginDirs": [
@@ -42,12 +42,12 @@
         {
           "id": "asks-the-actual-question",
           "passed": true,
-          "evidence": "The response asks in full words: \"Do you want a fixed three retries or exponential backoff?\""
+          "evidence": "The reply asks the operator to choose in full words: \"Do you want a fixed three retries or exponential backoff?\""
         },
         {
           "id": "no-shorthand-tokens",
           "passed": true,
-          "evidence": "The response, \"The retry policy draft is ready. Do you want a fixed three retries or exponential backoff?\", contains no wdyt, lmk, imo or similar chat shorthand."
+          "evidence": "The reply reads \"The retry policy draft is ready. Do you want a fixed three retries or exponential backoff?\" It has no wdyt, lmk, imo or similar chat shorthand."
         }
       ]
     },
@@ -57,12 +57,12 @@
         {
           "id": "layout-sets-width",
           "passed": true,
-          "evidence": "The article width comes from `grid-template-columns: 16rem minmax(0, 1fr)`, with padding of `clamp(1rem, 3vw, 3rem)`. On narrow screens it becomes a single `minmax(0, 1fr)` column, so the grid column and the window set the line width."
+          "evidence": "The visible CSS sets `grid-template-columns: 16rem minmax(0, 1fr)` on `.docs-layout`. The final reply describes this as a \"16rem sidebar and fluid article column\" and says it becomes one column on smaller screens. The article width therefore comes from the grid column and the window."
         },
         {
           "id": "no-fixed-measure",
           "passed": true,
-          "evidence": "Neither `.docs__article` nor `.docs__article p` sets a max-width or width. The only fixed size is the 16rem sidebar column, and the 48rem value is a media-query breakpoint, not a cap on paragraph width."
+          "evidence": "The visible CSS and the reply mention only a fluid column and \"readable line spacing\". Neither shows a max-width or a fixed-unit width on paragraphs or article text. The patch is cut off after the heading selector, so the rest of the file was not checked."
         }
       ]
     }

@@ -13,6 +13,7 @@ Before writing, identify what the reader needs to know, decide, or do.
 
 - Match vocabulary and detail to the reader's knowledge and the destination.
 - Name the primary reader when a document serves several audiences.
+- Write from what the reader already knows. Name no person, project, program or internal term they haven't met; describe it by what it is to them ("a teammate's prototype") or leave it out. Then reread the draft as that reader.
 - Keep content that serves the reader or a higher-authority requirement; remove the rest.
 
 ## Make the answer easy to find
@@ -56,6 +57,7 @@ These tells survive a tight edit. Cut them:
 - Name the actor and default to active voice.
 - Keep the subject and action close together.
 - State relationships with words such as `because`, `if`, `before`, `after`, and `therefore` instead of leaving them implicit.
+- Define criteria, requirements and steps by what they let someone do, in words a non-technical leader understands. Name a technology only as an example of how, never as the requirement itself.
 - Use complete sentences in prose. Fragments belong in headings, labels, table cells, and deliberate status markers.
 - Spell out chat shorthand such as `wdyt`, `lmk` or `imo`: ask the actual question or say the actual thing in words. Keep shorthand only in a person's own voice when they use it themselves.
 
