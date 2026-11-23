@@ -71,6 +71,8 @@ function context(overrides = {}) {
 test("Superpowers context prints exact paths without introducing a second progress or ruling store", async () => {
   const input = context()
   const output = await resolve(input)
+  const expectedScratch = output.scratchFolderName
+  assert.match(expectedScratch, /^outcome-[0-9a-f]{8}-step-1-attempt-1$/u)
   const artifactDirectory = path.join(input.evidenceRoot, path.relative(input.deskRoot, input.iterationPath), "superpowers", "step-1", "attempt-1")
   assert.deepEqual(output, {
     taskCardPath: path.join(input.taskPath, "task.md"),
@@ -84,15 +86,15 @@ test("Superpowers context prints exact paths without introducing a second progre
     reviewPackagePath: path.join(artifactDirectory, "review.patch"),
     reviewReportPath: path.join(artifactDirectory, "review-report.md"),
     reportWrittenBy: "coordinator",
-    scratchFolderName: "step-1-attempt-1",
-    prBodyFileName: "pr-body-step-1-attempt-1.md",
+    scratchFolderName: expectedScratch,
+    prBodyFileName: `pr-body-${expectedScratch}.md`,
     briefRules: [
       "Desk-Task: track/outcome",
       "Never call task_focus; your work is credited through the Desk-Task line.",
       "Never call task_signoff.",
       authorityRule(null, null),
       reportRule(path.join(artifactDirectory, "implementation-report.md"), path.join(artifactDirectory, "review-report.md")),
-      scratchRule("step-1-attempt-1"),
+      scratchRule(expectedScratch),
       "verify or validate in your own worktree; never in a checkout your task does not own",
       "Write down the exact path of everything you create when you create it. Delete only those paths, each by that exact path written out in full in the delete command, never through a shell variable or a command substitution; leave anything else in place and list it in your return.",
       "on return list every created worktree and branch, its exact repository/path/ref, current state, owner and verified disposition in the mapped Resources record; close out only exact-owned safe resources through desk:git-hygiene",
@@ -603,6 +605,30 @@ test("two concurrent children never share a scratch folder or a pull-request bod
   const rule = first.briefRules.find((line) => line.startsWith("Write scratch and pull-request bodies only under"))
   assert.ok(rule.includes("--body-file") && rule.includes(`${first.scratchFolderName}/${first.prBodyFileName}`))
   assert.ok(!second.briefRules.includes(rule))
+})
+
+test("different tasks at the same step and attempt never overwrite each other's pull-request body in one scratchpad", async () => {
+  const taskFor = (track) => {
+    const taskPath = path.join(fixtureRoot, "desk", "desks", "member", track, "outcome")
+    const iterationPath = path.join(taskPath, "repository", "2026-09-09-initial-impl")
+    const input = context({ taskPath, iterationPath, planPath: path.join(iterationPath, "planning.md") })
+    seedCanonicalFiles(input)
+    return input
+  }
+  const inputs = [taskFor("track-a"), taskFor("track-b")]
+  const one = await resolve(inputs[0])
+  const two = await resolve(inputs[1])
+  const retry = await resolve(inputs[0])
+  assert.deepEqual(retry, one)
+  const scratchpad = path.join(fixtureRoot, "scratchpad")
+  for (const [output, body] of [[one, "body one"], [two, "body two"]]) {
+    mkdirSync(path.join(scratchpad, output.scratchFolderName), { recursive: true })
+    writeFileSync(path.join(scratchpad, output.scratchFolderName, output.prBodyFileName), body)
+  }
+  const read = (output) => readFileSync(path.join(scratchpad, output.scratchFolderName, output.prBodyFileName), "utf8")
+  assert.equal(read(one), "body one")
+  assert.equal(read(two), "body two")
+  assert.match(one.scratchFolderName, /^[A-Za-z0-9._-]+$/u)
 })
 
 test("a write brief quotes the operator's go with its scope, as relayed, and keeps managed safeguards", async () => {

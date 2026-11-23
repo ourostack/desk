@@ -1,6 +1,7 @@
 // ax: read-only. Run as a script, it maps a task's Superpowers brief, report and progress paths inside the desk and
 // prints them as JSON; it creates no file or folder.
 import * as path from "node:path"
+import { createHash } from "node:crypto"
 import { realpathSync } from "node:fs"
 import { realpath, stat } from "node:fs/promises"
 import { fileURLToPath } from "node:url"
@@ -75,7 +76,7 @@ export function reportRule(implementationReportPath, reviewReportPath) {
 
 // Two children sharing one scratchpad both wrote pr-body.md and one published the other's text as a live pull request body.
 export function scratchRule(name) {
-  return `Write scratch and pull-request bodies only under a folder named for your node and attempt (\`${name}\`, made under the session scratchpad or with mktemp), never at the scratchpad's root, and use a uniquely named body file there (\`${name}/pr-body-${name}.md\`); pass that exact path to \`gh pr create\` or \`gh pr edit\` with --body-file.`
+  return `Write scratch and pull-request bodies only under a folder named for your task, node and attempt (\`${name}\`, made under the session scratchpad or with mktemp), never at the scratchpad's root, and use a uniquely named body file there (\`${name}/pr-body-${name}.md\`); pass that exact path to \`gh pr create\` or \`gh pr edit\` with --body-file.`
 }
 
 // A relayed go satisfies a project's confirm-first rule for its scope; it never satisfies a managed tool safeguard, and it is never the operator's own message.
@@ -180,7 +181,11 @@ export async function resolveSuperpowersContext(input) {
   const canonicalPlan = planPath === null ? null : await canonicalFile(deskRoot, null, planPath, "plan")
   const artifactBase = evidenceRoot === null ? iterationPath : path.join(evidenceRoot, path.relative(deskRoot, iterationPath))
   const artifactDirectory = path.join(artifactBase, "superpowers", `step-${input.step}`, `attempt-${input.attempt}`)
-  const scratchName = `step-${input.step}-attempt-${input.attempt}`
+  // Scratchpads are shared across tasks in a session, so the name carries the task: its slug for reading, plus a hash of
+  // its desk-relative path (which includes the person scope and track) so equal slugs under different tracks still differ.
+  const taskId = path.relative(deskRoot, taskPath).split(path.sep).join("/")
+  const taskSlug = path.basename(taskPath).replace(/[^A-Za-z0-9._-]+/gu, "-").slice(0, 40)
+  const scratchName = `${taskSlug}-${createHash("sha256").update(taskId).digest("hex").slice(0, 8)}-step-${input.step}-attempt-${input.attempt}`
   return {
     taskCardPath,
     iterationPath,
