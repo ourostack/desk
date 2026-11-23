@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.437 — 2026-11-23
+
+Desk's MCP server now vendors Ouro UI v1.3.458, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.436 — 2026-11-23
 
 Superpowers context scratch names are now qualified by task. `scratchFolderName`, `prBodyFileName` and the scratch rule in `briefRules` carry the task's slug and a short hash of its desk-relative path, so two tasks mapped at the same step and attempt no longer share a scratch folder or overwrite each other's pull-request body in a shared session scratchpad. The same task still maps to the same names each time, and the progress and report paths are unchanged.
