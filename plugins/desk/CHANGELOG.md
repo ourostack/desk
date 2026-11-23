@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.482 — 2026-11-23
+
+[`prior-art`](skills/prior-art/SKILL.md) now also fires when an agent is about to create a component, module, helper or file that resembles one the codebase already has. It says to extend the existing one (a prop, slot, variant or option) instead of duplicating it, because copies drift, quotes the owner's words, and asks the pull request to say what was searched and why nothing fit.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.481 — 2026-11-23
 
 A new skill, [`live-ui-iteration`](skills/live-ui-iteration/SKILL.md), is how an agent iterates on a UI with a person: asked for feedback on a screen, polishing one with someone, showing a design. Instead of sending screenshots, the agent keeps a hot-reload mock on made-up data open where the person already looks, turns each note into one small edit with a one-line reply, turns every decision the person makes into a deterministic check that runs on every edit, runs critics for taste only and never blocks an edit on them, never opens windows on the person's screen, and veils states that aren't designed yet. It holds the general practice; Ouro apps follow the Ouro design-craft guide for the engine. [`visual-proof`](skills/visual-proof/SKILL.md) now points to it, so an agent about to send a capture for feedback finds it.
