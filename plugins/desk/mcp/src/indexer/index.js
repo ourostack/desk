@@ -48,7 +48,7 @@ export async function rebuildIndex(deskRoot, opts = {}) {
     const discoveredByPath = new Map(discovered.map((d) => [d.path, d]))
 
     db.transaction(() => {
-      const existing = db.prepare("SELECT id, path, hash FROM docs").all()
+      const existing = db.prepare("SELECT id, path, hash, kind FROM docs").all()
       const existingByPath = new Map(existing.map((row) => [row.path, row]))
       const delStmt = db.prepare("DELETE FROM docs WHERE path = ?")
       for (const row of existing) {
@@ -60,7 +60,8 @@ export async function rebuildIndex(deskRoot, opts = {}) {
       }
       for (const doc of discovered) {
         throwIfAborted(opts.signal)
-        if (existingByPath.get(doc.path)?.hash === doc.hash) {
+        const stored = existingByPath.get(doc.path)
+        if (stored?.hash === doc.hash && stored.kind === doc.kind) {
           summary.docs_skipped += 1
           continue
         }

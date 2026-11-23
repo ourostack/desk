@@ -1,7 +1,7 @@
 // discover.js — walk a desk root and enumerate the .md files that get indexed.
 //
 // Per planning Unit 4 + desk-search-design §2 + 1.1 archive-search amendment:
-//   In scope: task.md, planning.md, doing.md, feedback.md, friction notes
+//   In scope: track.md, task.md, planning.md, doing.md, feedback.md, friction notes
 //             (cross-cutting at _meta/friction.md + track-local under
 //             _friction/*.md), lesson notes at _meta/tips/*.md, and the
 //             AGENTS.md session start prints (the desk's and a person's
@@ -241,6 +241,7 @@ export function isIndexable(relPath) {
   const segments = stripPersonPrefix(relPath).split("/")
   const base = segments[segments.length - 1]
   if (TASK_DOC_BASENAMES.has(base)) return true
+  if (trackCardTrack(segments) !== null) return true
 
   // The AGENTS.md session start prints: lesson_add writes lessons there, so search must find them.
   if (segments.length === 1 && (base === AGENTS_MD || base === LESSONS_MD)) return true
@@ -299,6 +300,8 @@ export function classify(relPath) {
   // "desks". OFF-mode top-level paths pass through unchanged.
   const segments = stripPersonPrefix(relPath).split("/")
   const base = segments[segments.length - 1]
+  const cardTrack = trackCardTrack(segments)
+  if (cardTrack !== null) return { kind: "track", track: cardTrack, task_slug: null }
 
   if (TASK_DOC_BASENAMES.has(base)) {
     // task docs always live at <track>/<slug>/<base>.
@@ -351,6 +354,11 @@ export function classify(relPath) {
 // `<track>/<folder>/…/<file>`: below a track's own folder, outside the desk's reserved `_` and `.` folders.
 const inTrack = (segments) => segments.length >= 3 && !/^[_.]/u.test(segments[0])
 
+function trackCardTrack(segments) {
+  const parts = segments[0] === "_archive" ? segments.slice(1) : segments
+  return parts.length === 2 && parts[1] === "track.md" && !/^[_.]/u.test(parts[0]) ? parts[0] : null
+}
+
 async function describeDoc(deskRoot, abs, rel, signal, strict = false) {
   throwIfAborted(signal)
   let raw
@@ -373,9 +381,16 @@ async function describeDoc(deskRoot, abs, rel, signal, strict = false) {
     parsed = { data: {}, content: raw }
   }
   const fm = parsed.data
-  const body = parsed.content
   const hash = createHash("sha256").update(raw).digest("hex")
   const { kind, track, task_slug } = classify(rel)
+  // track_create may write no body: its title and scope still belong in search.
+  const body = kind === "track"
+    ? [
+      typeof fm.title === "string" ? fm.title : "",
+      typeof fm.scope === "string" ? `Scope: ${fm.scope}` : "",
+      parsed.content,
+    ].filter(Boolean).join("\n\n")
+    : parsed.content
   // is_archived: any ancestor directory in the path is named `_archive`
   // (or starts with `_archive`). Matches the v1.0 skip predicate but
   // now stored as a flag instead of an exclusion.

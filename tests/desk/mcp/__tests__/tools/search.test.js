@@ -7,6 +7,7 @@ import * as path from "node:path"
 
 import { __searchInternalsForTests, desk_search as routedSearch, newestDocuments as routedTimeline, indexedSearch, indexedTimeline as indexedTimelineOn } from "../../../../../plugins/desk/mcp/src/tools/search.js"
 import { createSearchEngine, SEARCH_WORDING } from "../../../../../plugins/desk/mcp/src/search/engine.js"
+import { track_create } from "../../../../../plugins/desk/mcp/src/tools/track.js"
 import {
   buildFixtureIndex,
   fixtureDb,
@@ -17,6 +18,35 @@ import {
 // The indexed backends read the fixture desk's in-memory index.
 const desk_search = (args) => indexedSearch({ ...args, db: fixtureDb(args.deskRoot) })
 const indexedTimeline = (args) => indexedTimelineOn({ ...args, db: fixtureDb(args.deskRoot) })
+
+test("bodyless tracks are searchable by title and scope and listable without tasks", async (t) => {
+  const root = await mkTempDeskRoot()
+  await track_create({ deskRoot: root, input: { slug: "errands", title: "Errands", scope: "Household appointments and shopping; not engineering projects." } })
+  for (const indexed of [false, true]) {
+    const search = indexed ? engineFor(t, root) : undefined
+    for (const query of ["Errands", "appointments", undefined]) {
+      const result = await routedSearch({ deskRoot: root, search, input: { query, filters: { kind: "track" } } })
+      assert.deepEqual(result.results.map(({ path, kind, track, task_slug }) => ({ path, kind, track, task_slug })), [
+        { path: "errands/track.md", kind: "track", track: "errands", task_slug: null },
+      ])
+      if (query === "appointments") assert.match(result.results[0].snippet, /Household appointments/u)
+    }
+  }
+})
+
+test("reindex reclassifies unchanged archived track cards and preserves archive filtering", async () => {
+  const root = await mkTempDeskRoot()
+  await writeFile(root, "_archive/errands/track.md", "---\ntitle: Retired errands\nscope: Retired appointments\n---\n")
+  await buildFixtureIndex(root)
+  fixtureDb(root).prepare("UPDATE docs SET kind = 'archive', track = NULL").run()
+  await buildFixtureIndex(root)
+  const input = { query: "appointments", filters: { kind: "track" } }
+  assert.deepEqual((await desk_search({ deskRoot: root, input })).results, [])
+  const result = await desk_search({ deskRoot: root, input: { ...input, scope: "archived" } })
+  assert.deepEqual(result.results.map(({ path, kind, track, task_slug }) => ({ path, kind, track, task_slug })), [
+    { path: "_archive/errands/track.md", kind: "track", track: "errands", task_slug: null },
+  ])
+})
 
 function engineFor(t, deskRoot, options = {}) {
   const engine = createSearchEngine({ deskRoot, semantic: "unsupported", watch: () => ({ close() {} }), cleanup: () => ({ removed: false, bytes: 0 }), ...options })

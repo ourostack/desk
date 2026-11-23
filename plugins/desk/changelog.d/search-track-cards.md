@@ -1,0 +1,1 @@
+Track cards are discoverable through `desk_search` by title, scope and `kind: "track"`, including tracks with no tasks and archived tracks. Reindexing refreshes older archive classifications even when the card's bytes have not changed.

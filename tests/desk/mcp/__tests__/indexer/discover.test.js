@@ -11,6 +11,19 @@ import matter from "gray-matter"
 import { discover, classify, isIndexable, normalizeDate } from "../../../../../plugins/desk/mcp/src/indexer/discover.js"
 import { mkTempRoot } from "../_temp_roots.js"
 
+test("track cards are distinguished from nested task files and reserved paths", () => {
+  for (const rel of ["errands/track.md", "desks/alice/errands/track.md", "_archive/errands/track.md", "desks/alice/_archive/errands/track.md"]) {
+    assert.equal(isIndexable(rel), true, rel)
+    assert.deepEqual(classify(rel), { kind: "track", track: "errands", task_slug: null }, rel)
+  }
+  assert.equal(isIndexable("track.md"), false)
+  assert.equal(isIndexable("_meta/track.md"), false)
+  assert.equal(isIndexable(".hidden/track.md"), false)
+  assert.deepEqual(classify("errands/work/track.md"), { kind: "task-file", track: "errands", task_slug: "work" })
+  assert.deepEqual(classify("_shared/errands/track.md"), { kind: "shared", track: null, task_slug: null })
+  assert.deepEqual(classify("_archive/_meta/track.md"), { kind: "archive", track: null, task_slug: null })
+})
+
 async function buildFixture() {
   const root = await mkTempRoot("desk-discover-")
 

@@ -106,7 +106,7 @@ After `task_archive` returns `archive_pending`, keep the archived folder and ind
 - `desk_skill` — reads Desk's skills through the server, for a client that cannot load them as plugin skills (claude.ai, ChatGPT); no name lists them, a name returns that skill's text. A hosted Desk refuses the skills that need a shell.
 
 **Search:**
-- `desk_search` — exact-word search; with no query, or `newest: true`, it lists documents by update time, newest first, inside the since/until window
+- `desk_search` — exact-word search; with no query, or `newest: true`, it lists documents by update time, newest first, inside the since/until window. Use `{"filters":{"kind":"track"}}` to list tracks, including those with no tasks; a query matches their title, scope and body. Add `"scope":"archived"` to find archived tracks.
 - `desk_recall` — meaning-based recall; until the model and vectors are ready it answers with exact-word matches and says so
 
 `task_update` also moves and renames: `to_track` and `to_slug` move or rename a task (live or archived), refusing a taken target or an invalid new name and best-effort keeping both `track.md` "## Tasks" tables in sync; `unarchive: true` reopens an archived task into a live folder and restores its row, and `into_task: "<kept task>"` merges a duplicate task into the task that keeps the job as an iteration folder (never hiding a live task inside a done one); `handle` replaces `track` and `slug`. A move is sent alone, with no other field. On a Git desk it refuses a task, or a `track.md` it would edit, with unstaged changes or untracked files (another session may be working there) unless `allow_dirty: true`, and it stages every file it writes, so staged changes read as the current tidy's own work
