@@ -160,15 +160,7 @@ export function publishPullRequest({ git, spawnGit, root, upstream, head, onto, 
   }
   if (pr === undefined) throw Object.assign(new Error("Run it again: The created publication PR could not be read back"), { code: "pr_publication_run_it_again_the_created" })
   const receipt = { url: pr.url, head, branch, base }
-  // Merging must not depend on one repository setting: the relay's label goes on every publication PR, and auto-merge is asked for where the repository allows it. Both are best effort; the checks below still gate Desk's own merge.
-  if (pr.state !== "MERGED") {
-    const label = MERGE_LABEL
-    const attempt = (args) => { try { gh(args, false); return true } catch { return false } }
-    attempt(["label", "create", label, "--repo", repo.full, "--force", "--description", "Merge when the required checks are green"])
-    receipt.labelled = attempt(["pr", "edit", String(pr.number), "--repo", repo.full, "--add-label", label])
-    receipt.auto_merge = attempt(["pr", "merge", String(pr.number), "--repo", repo.full, "--auto", "--merge", "--match-head-commit", head]) ? "enabled" : "refused"
-    track?.record(receipt)
-  }
+  if (pr.state !== "MERGED") track?.record(receipt)
   const view = () => gh(["pr", "view", String(pr.number), "--repo", repo.full, "--json", FIELDS])
   const verify = (current) => {
     if (current.headRefOid !== head || current.baseRefName !== base || current.isDraft || !["OPEN", "MERGED"].includes(current.state)) {
@@ -189,6 +181,10 @@ export function publishPullRequest({ git, spawnGit, root, upstream, head, onto, 
       const reported = loadChecks()
       const waiting = checkState(reported, policy.required_checks, observed, ruled)
       if (waiting.length === 0) {
+        // A relay label can trigger a merge too. Arm it only after policy qualification; gh --auto can merge immediately.
+        const attempt = (args) => { try { gh(args, false); return true } catch { return false } }
+        attempt(["label", "create", MERGE_LABEL, "--repo", repo.full, "--force", "--description", "Merge when the required checks are green"])
+        receipt.labelled = attempt(["pr", "edit", String(pr.number), "--repo", repo.full, "--add-label", MERGE_LABEL])
         const merged = gh(["api", "--hostname", repo.host, "--method", "PUT", `repos/${repo.name}/pulls/${pr.number}/merge`,
           "-f", `sha=${head}`, "-f", "merge_method=merge"])
         if (merged.merged !== true || typeof merged.sha !== "string") throw Object.assign(new Error("Check the pull request's merge requirements, then run it again: GitHub refused the exact-head merge"), { code: "pr_publication_check_the_pull_request_s" })

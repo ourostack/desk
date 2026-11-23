@@ -1,0 +1,1 @@
+Workspace publication waits for the published policy's required checks before requesting any merge, including in repositories without branch protection. It no longer calls `gh pr merge --auto`, which can merge immediately, and attaches the merge relay's label only after the checks pass.

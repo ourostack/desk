@@ -1,5 +1,5 @@
 // A Desk save always reaches the desk's main by itself, and when it cannot, everyone hears: every publication PR carries the
-// merge-when-green label whether or not auto-merge is allowed, a conflicting save is rebuilt on the newest main, a save that is
+// merge-when-green label after policy qualification, a conflicting save is rebuilt on the newest main, a save that is
 // already on main is closed as superseded with the evidence, and a save still unmerged after ten minutes is named in tool
 // replies, boot and `drains status`. Real Git repositories; `gh` is a fake that merges into the bare origin.
 
@@ -164,7 +164,7 @@ test("independent publication roots preserve unmatched card candidates and settl
   assert.notEqual(spawnSync("git", ["--git-dir", origin, "show-ref", "--verify", `refs/heads/${first.branch}`]).status, 0)
 })
 
-test("a repository that refuses auto-merge still gets the relay's label and merges", async () => {
+test("publication qualifies its checks and merges without asking gh for auto-merge", async () => {
   const { origin, desk, env } = await world("refused")
   const onto = git(desk, ["rev-parse", "HEAD"])
   const head = await appendTo(desk, "- second", "save")
@@ -173,8 +173,7 @@ test("a repository that refuses auto-merge still gets the relay's label and merg
   assert.equal(git(origin, ["rev-parse", "refs/heads/main"]), head)
   assert.deepEqual(gh.prs.get(1).labels, ["merge-when-green"])
   assert.equal(done.receipt.labelled, true)
-  assert.equal(done.receipt.auto_merge, "refused")
-  assert.ok(gh.calls.some((args) => args[0] === "pr" && args[1] === "merge" && args.includes("--auto")), "auto-merge is still asked for")
+  assert.ok(!gh.calls.some((args) => args[0] === "pr" && args[1] === "merge"), "only the qualified exact-head merge is requested")
   assert.deepEqual(stuckSaves({ root: desk, env, now: () => Date.now() + 60 * MINUTE }), [], "a merged save is no longer waiting")
 })
 
