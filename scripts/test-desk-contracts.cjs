@@ -1684,6 +1684,19 @@ contract("every general operator rule is stated in the skill that owns its topic
     ["work-orchestration", /Spend less per piece of work, never by slowing the work\. Pick the cheapest model that does the job well, keep each context small[\s\S]+Never cap pace, parallelism or the number of active lanes to save money/u, "Waiting for children"],
     ["work-orchestration", /Finished work merges\. Never leave a finished pull request sitting unmerged, in any repository/u, "Merging and the terminal state"],
     ["content-routing", /## A move is finished when everyone can see it\n\nWhen you move, split or rename a repository, package or folder that other agents work in, the old home says what moved, where it went and the rule for new work, in its README and AGENTS\.md, in the same change[\s\S]+open an issue labelled `moved` in each old repository/u],
+    ["evidence-discipline", /## Prior art: steal, don't copy\n\nBefore building a method, benchmark, explainer or tool, find existing published work and cite it[\s\S]+Don't reproduce its surface[\s\S]+Every element you keep earns its place in your design or goes\. Name what you took and why/u],
+    ["evidence-discipline", /Look at what you show before you show it\. Before handing a person a capture, mockup, screenshot or rendered page, open it at full size and inspect it as they will[\s\S]+Fix what they would catch, capture again, and only then show it/u, "Visual proof"],
+    ["interaction-style", /A question is not a request to act\. When the operator asks how something works, why it is the way it is, or whether something is true, answer that question\. Don't start work to change what they asked about/u],
+    ["work-orchestration", /Defer work that waits on outside approval\. Don't start, propose or ask about work that needs approval from people outside the operator's own authority[\s\S]+mark the work deferred and carry on with what needs nobody else/u],
+    ["work-orchestration", /\*\*A coordinator delegates; it doesn't do the work\.\*\* A lead or coordinator session[\s\S]+It doesn't investigate or fix inline, not even something small/u, "Parallelize and fast-follow"],
+    ["work-orchestration", /Think it through before you ask for go\. Read the actual source material, write the whole plan, and have an independent reviewer[\s\S]+Never drip-feed half-plans/u, "Align new work before go"],
+    ["work-orchestration", /\*\*Every loop has an owner\.\*\* A loop, watcher or script that enqueues, re-queues or merges pull requests runs under a named owning session/u, "Where agents live"],
+    ["work-orchestration", /Merge on the final head's own checks\.[\s\S]+required checks ran on the exact commit you are merging and finished green/u, "Merging and the terminal state"],
+    ["work-orchestration", /Never hold a merge for a nit\.[\s\S]+only correctness, data-loss and security problems block a merge/u, "Merging and the terminal state"],
+    ["git-hygiene", /\*\*Spend disk like money\.\*\* Reuse one clone per repository and a worktree per unit of work/u],
+    ["git-hygiene", /Never run `git stash` in a shared checkout or a checkout another session might use[\s\S]+use a detached worktree instead/u, "Never leave state behind"],
+    ["git-hygiene", /Never put a credential where it can be seen[\s\S]+redact anything token-shaped/u, "Commit identity and secrets"],
+    ["evidence-discipline", /\*\*Start where they start\.\*\* Run the scenario from the state a real person is usually in[\s\S]+\*\*Isolate test copies by construction\.\*\*/u, "Offline evals on synthetic data, online evals from counts"],
   ];
   const failures = [];
   if (/Near a usage limit, run fewer children/u.test(text(skill("work-orchestration")))) {

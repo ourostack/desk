@@ -1,6 +1,6 @@
 ---
 name: evidence-discipline
-description: Use before a recommendation or claim that depends on external, mutable or unverified facts, before quoting an estimate, when the answer you have arrived at is complex, when writing factual claims into a PR, card, handoff or brief, before poll loops, ending processes, copying sign-in state, claiming a precedent or durability, writing tests or choosing what to test on, and when desk records disagree with a live source. Not needed for a routine status read from its source.
+description: Use before a recommendation or claim that depends on external, mutable or unverified facts, before quoting an estimate, when the answer you have arrived at is complex, when writing factual claims into a PR, card, handoff or brief, before poll loops, ending processes, copying sign-in state, claiming a precedent or durability, writing tests or choosing what to test on, when work draws on prior art (another app, a prototype, a design file, a competitor or a screenshot someone shares), before showing a person a capture, mockup or screenshot, and when desk records disagree with a live source. Not needed for a routine status read from its source.
 ---
 
 # Evidence discipline
@@ -83,6 +83,8 @@ This section is the one statement of the rule; `operator-voice-comments` ("No fa
 Never test, reproduce or measure on the human's real data or account: not read-only, not through a copy of their local store, not through a probe signed in as them, not by asking their permission and not through a script you hand them to run. Access on their machine is not permission, and a deadline does not change this. If the human themselves, unprompted, directs a specific check on their own account, that is their decision: do exactly that check and nothing broader.
 
 - **Offline:** evaluate on synthetic data shaped like theirs: their sizes, kinds and edge cases, generated rather than copied. When real use shows a problem the synthetic data missed, add that shape to the generator, reproduce it offline, then fix it.
+- **Start where they start.** Run the scenario from the state a real person is usually in, not a fresh install or a clean snapshot: hours stale after a night away, on data the size of theirs, through launch, wake, update and a dropped network. Fail on any stale view, stall or silent action.
+- **Isolate test copies by construction.** A test copy of an app gets its own app identity, data folder and settings built into the copy, never only through environment variables: the operating system can relaunch a copy without them, and it then runs on the person's real data.
 - **Online:** judge real use from counts-only telemetry of their normal use: counts and timings, no content and no identifiers beyond what the product already records. A change that should move something they feel ships with the telemetry that will show whether it did.
 
 A repository rule or gate that requires a check against the human's real account is a conflict: raise it with the repository's owner and propose an offline case; do not run it on their account, and do not remove or bypass the gate yourself.
@@ -90,6 +92,10 @@ A repository rule or gate that requires a check against the human's real account
 ## Discover before invent
 
 Before building a wrapper, orchestrator, helper, config knob or script around an existing system, find and read its entry-point documentation (`RUN_PATH.md`, `scripts/README.md`, an agent manifest, a README's automation section, a `Makefile` or `justfile`). If it already exposes what you are about to build, call it; your code stays a thin wrapper and the owners keep the logic. If not, build yours and consider asking the owners to extend theirs. Read a new tool's README before drafting any install or invocation command. Checking costs minutes; duplicating and migrating costs hours.
+
+## Prior art: steal, don't copy
+
+Before building a method, benchmark, explainer or tool, find existing published work and cite it; adopt what fits, build only the gap and say how yours differs. Then, for any prior art the work draws on (another app, a prototype, a design file, a competitor, a screenshot someone shares), steal, don't copy. Don't reproduce its surface: its layout, wording or feature list. Work out why it works for the people who use it and make that reason yours, so thoroughly that the result is no longer theirs. Every element you keep earns its place in your design or goes. Name what you took and why, in the design note or pull request, so a reviewer can judge the borrowing.
 
 ## Sniff before transferring auth state
 
@@ -130,6 +136,8 @@ Name tests `{Given}_{When}_{Method}_{Assertion}`, for example `GivenValidPayload
 Capture visual proof by default whenever work touches something a person sees: a screen, a setting before and after a change, an agent's reply, a refusal, an error, a result. The rule follows what the work touches, not what it is called ("spike", "look into", "review"), and a brief's silence never waives it. Capture as you go, at each stage, including working or doing logs and intermediate milestones such as pull request opened, reviewed, or merged states. When a milestone claims a rendered, installed, merged, rollout or other consumer-visible state, capture that real result, not a terminal success line. It supplements rather than replaces tests, logs and system-of-record readback. Capture only the relevant bounded view, never secrets or sensitive/private content; if capture is impossible, record why and use the strongest safe alternative. Nonvisual work gets no artificial screenshots. Put the proof inline where the reader looks (the pull request body, milestone report or delivery message), not only as a link to an artifact; for an agent-side change, the agent's actual reply or the command output showing the changed behaviour is the proof. Run the scenario on synthetic data, never on the human's own real data or account ("Offline evals on synthetic data, online evals from counts") and never on real data that would expose colleagues or customers.
 
 Every picture says what to notice. Give each one a short caption: where to look, and what changed or what it proves, in plain words. For example: "Bottom card: a reply in the thread now notifies you; before, only @mentions did." Mark the spot with a box or an arrow when that's easy, and crop to what matters. A picture without a "what to notice" caption isn't proof.
+
+Look at what you show before you show it. Before handing a person a capture, mockup, screenshot or rendered page, open it at full size and inspect it as they will: content cut off or covered, an alarming or wrong status colour, demo-only or placeholder text, a stale label, shortcut or number, anything that contradicts your claim. Fix what they would catch, capture again, and only then show it. When there is a reference (an approved mockup, a canonical image, the previous capture), compare against it side by side yourself. A capture you have not looked at is not proof, and passing one on unexamined hands the person your review.
 
 ### Privacy-safe rendered proof
 
