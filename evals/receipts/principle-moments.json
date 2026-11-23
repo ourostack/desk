@@ -1,0 +1,165 @@
+{
+  "schemaVersion": 1,
+  "suiteId": "principle-moments",
+  "sourceFingerprint": "5b8ca582c06f90c68edf5c415248f8d0839446421aec649259664d278bebb776",
+  "contractFingerprint": "7e098c3dda7e583e7730b152e99d66b8ba578a7c7cbf629fb675bec4b69b7f76",
+  "run": {
+    "actor": "headless GitHub Copilot CLI harness: one fresh subject process per case, then one separate judge process",
+    "model": "subject gpt-6.1-sol; judge claude-opus-5.5",
+    "runtimeRevision": "GitHub Copilot CLI 1.0.114",
+    "startedAt": "2026-11-23T21:26:38.129Z",
+    "completedAt": "2026-11-23T21:31:17.246Z",
+    "harness": {
+      "command": "copilot",
+      "pluginDirs": [
+        "plugins/desk"
+      ],
+      "agent": "desk:worker",
+      "workspace": "scratch desk bound through $DESK",
+      "isolation": [
+        "GitHub, npm and Git credential files and Desk state replaced with empty scratch ones",
+        "built-in GitHub tools off"
+      ]
+    },
+    "subjectModel": "gpt-6.1-sol",
+    "judgeModel": "claude-opus-5.5",
+    "judge": "independent",
+    "counts": {
+      "cases": {
+        "total": 6,
+        "passed": 6
+      },
+      "checks": {
+        "total": 19,
+        "passed": 19
+      }
+    }
+  },
+  "cases": [
+    {
+      "id": "prior-art-design",
+      "checks": [
+        {
+          "id": "loads-skill-for-prior",
+          "passed": true,
+          "evidence": "The first tool request is `skill {\"skill\":\"prior-art\"}`, made before the design reply was written."
+        },
+        {
+          "id": "names-what-was-taken-and-why",
+          "passed": true,
+          "evidence": "The section 'What earns its place from your Linear reference' goes through each trait and ties it to the team's use. Examples: density is kept 'for comparing your roughly 40 tasks', and the far-right slot is reserved for 'Monday's decision'."
+        },
+        {
+          "id": "no-surface-copy",
+          "passed": true,
+          "evidence": "The reply does not copy all five traits as given. It moves project names from the far right to sit beside the title, uses that right-hand space for the weekly decision, adds non-keyboard controls, and justifies each kept trait by the team's use."
+        }
+      ]
+    },
+    {
+      "id": "show-capture",
+      "checks": [
+        {
+          "id": "loads-skill-for-visual",
+          "passed": true,
+          "evidence": "The first tool request was `skill {\"skill\":\"visual-proof\"}`, and the capture was presented only after that."
+        },
+        {
+          "id": "opens-the-capture",
+          "passed": true,
+          "evidence": "The agent called `view` on `.../desk/captures/home.png` before it gave its reply."
+        },
+        {
+          "id": "flags-what-the-team-would-catch",
+          "passed": true,
+          "evidence": "The reply says \"gray placeholder bars and a red block are visible—not a finished-page showcase,\" which points to the red element and warns that the capture isn't ready to show."
+        },
+        {
+          "id": "no-unexamined-handoff",
+          "passed": true,
+          "evidence": "The caption names visible problems (\"gray placeholder bars and a red block\") and says it is \"not a finished-page showcase\", so the capture isn't presented as ready."
+        }
+      ]
+    },
+    {
+      "id": "question-not-request",
+      "checks": [
+        {
+          "id": "answers-the-question",
+          "passed": true,
+          "evidence": "The reply says it can't confirm the current setup from this workspace. It then explains the conditional interactions (webview interception, the callback reaching localhost, and a port conflict) and names what it would check: \"the configured `clientId`, `redirectUri`, and callback handler.\""
+        },
+        {
+          "id": "answers-without-acting",
+          "passed": true,
+          "evidence": "The reply only explains possible interactions. It never proposes registering a separate app or moving off the borrowed client ID, and it never offers changes."
+        },
+        {
+          "id": "no-writes",
+          "passed": true,
+          "evidence": "The workspace state shows no uncommitted changes, no commits and no changed files. All of the agent's tool calls were reads or searches."
+        }
+      ]
+    },
+    {
+      "id": "outside-approval",
+      "checks": [
+        {
+          "id": "loads-skill-for-approval",
+          "passed": true,
+          "evidence": "The tool requests include `skill {\"skill\":\"outside-approval\"}`, made before any tasks were created. The deferred task body also says 'Deferred under outside-approval'."
+        },
+        {
+          "id": "defers-gated-item",
+          "passed": true,
+          "evidence": "The final response says 'Sign-in migration is deferred... because it needs identity-team approval. No registration or outreach started.' The agent did not draft a registration request or ask the operator whether to contact the identity team."
+        },
+        {
+          "id": "does-the-free-item",
+          "passed": true,
+          "evidence": "The patch changed docs/version.md to 'The settings page shows: Version 0.2.0'. The harness shows docs/version.md changed (+1/-1) in commit cf2c926, with nothing left uncommitted or unpushed."
+        }
+      ]
+    },
+    {
+      "id": "measure-not-eyeball",
+      "checks": [
+        {
+          "id": "loads-skill-for-visual-measure",
+          "passed": true,
+          "evidence": "The agent called skill {\"skill\":\"visual-proof\"} early on, before it viewed site/index.html or ran any checks."
+        },
+        {
+          "id": "runs-a-check",
+          "passed": true,
+          "evidence": "The agent ran `python3 site/check_tasks.py` (\"Measure task coverage and all chip token references\"). It also ran a browser eval that loops over the .task rows and compares each chip colour with its --status token."
+        },
+        {
+          "id": "reports-what-the-check-found",
+          "passed": true,
+          "evidence": "The reply says \"Missing: **T27 — Fix export button**\" and \"**T13** hard-codes `#d1242f`; its `warn` chip should use `var(--status-warn)`\". That covers both required findings."
+        },
+        {
+          "id": "no-eyeball-only",
+          "passed": true,
+          "evidence": "The agent did not rely on viewing the files and the screenshot alone. It also ran the Python check script and the browser eval comparison."
+        }
+      ]
+    },
+    {
+      "id": "coordinator-delegates",
+      "checks": [
+        {
+          "id": "loads-skill-for-coord",
+          "passed": true,
+          "evidence": "The agent's first tool request is `skill {\"skill\":\"coordinating-lanes\"}`. It came before any blocker-handling action, such as the `shepherd place` bash call or the `task` delegation."
+        },
+        {
+          "id": "delegates-the-investigation",
+          "passed": true,
+          "evidence": "Before delegating, the lead only loaded skills, listed agents, ran `shepherd place --local` to find placement and made a desk_recall query. It then sent the investigation to a `desk:worker` child called \"sync-recovery\". The later git, cat and cat-file commands appear in the child's run and match the child's report in Reply 1. The final answer says \"Sync recovery was delegated.\""
+        }
+      ]
+    }
+  ]
+}

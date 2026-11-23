@@ -77,7 +77,7 @@ Use `--visual-change no` only after confirming the full diff is nonvisual. A non
 
 After authorized creation or a body update, read the saved body back from the PR, rerun the same check and inspect its rendering. Repeat against the current diff and saved body immediately before a ready transition or review announcement; earlier success does not cover later edits. If published proof is missing or invalid, block the readiness claim, report the gap and correct it only within existing authority. This gate never grants permission to create, edit or change a PR's state.
 
-For private captures, use [`evidence-discipline`, "Privacy-safe rendered proof"](../evidence-discipline/SKILL.md#privacy-safe-rendered-proof). If safe proof cannot be produced, keep readiness blocked and state what remains unverified.
+For private captures, use [`visual-proof`, "Privacy-safe rendered proof"](../visual-proof/SKILL.md#privacy-safe-rendered-proof). If safe proof cannot be produced, keep readiness blocked and state what remains unverified.
 
 ## PSH-011 — offer repository enforcement; do not install it by default
 

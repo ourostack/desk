@@ -287,10 +287,33 @@
         { "code": "no-fixture", "means": "An estimate has no stage definition, past run record or telemetry behind it.", "fix": "Strip the number and offer to measure it, or proceed without an estimate." },
         { "code": "real-account-check", "means": "A test, reproduction or measurement would run on the human's real data or account.", "fix": "Use synthetic data shaped like theirs, and raise any gate that demands it with the repository owner." },
         { "code": "record-conflict", "means": "A current source contradicts a curated desk record.", "fix": "Record both and take the conflict to the decision's owner instead of overwriting it." },
-        { "code": "precedent-not-in-head", "means": "A claimed precedent is not in HEAD.", "fix": "Narrow the claim, pick another precedent or drop it." },
-        { "code": "unsafe-capture", "means": "A real screenshot would expose private messages, identities, customer data or secrets.", "fix": "Render the surface with made-up data and label it 'Synthetic-data capture' with what it proves." }
+        { "code": "precedent-not-in-head", "means": "A claimed precedent is not in HEAD.", "fix": "Narrow the claim, pick another precedent or drop it." }
       ],
       "uses": ["skill:desk:session-resumption", "skill:desk:interaction-style", "skill:desk:runtime-symptom-investigation", "skill:desk:operator-voice-comments", "skill:desk:preflight-actions", "skill:desk:pr-surface-hygiene", "skill:desk:using-desk", "host:Bash"]
+    },
+    {
+      "id": "skill:desk:prior-art",
+      "group": "desk-skills-evidence-and-review",
+      "when": "Turning a reference someone likes into your own design: working out why each trait helps its users, keeping only what helps yours, and naming the borrowing in the note",
+      "effect": "read",
+      "errors": [
+        { "code": "surface-copy", "means": "The work reproduces prior art's layout, wording or feature list as given.", "fix": "Keep only what does the same job for your people, drop the rest, and name what you took and why." },
+        { "code": "prior-art-unchecked", "means": "A method, benchmark or tool is about to be built without looking for published work.", "fix": "Find and cite existing work first, then build only the gap." }
+      ],
+      "uses": ["skill:desk:evidence-discipline"]
+    },
+    {
+      "id": "skill:desk:visual-proof",
+      "group": "desk-skills-evidence-and-review",
+      "when": "Taking, attaching or showing a screenshot, capture, mockup or rendered page, and whenever work changes something a person sees",
+      "effect": "read",
+      "errors": [
+        { "code": "eyeballed-measurement", "means": "Alignment, spacing, clipping, contrast, colours or counts are about to be checked by eye.", "fix": "Write the check as code, run it and report its output; look by eye only for what no check can judge." },
+        { "code": "unexamined-capture", "means": "A capture is about to reach a person without the agent having looked at it at full size.", "fix": "Open it, fix what they would catch, capture again, then show it." },
+        { "code": "no-caption", "means": "A picture has no caption saying what to notice.", "fix": "Caption where to look and what it proves." },
+        { "code": "unsafe-capture", "means": "A real screenshot would expose private messages, identities, customer data or secrets.", "fix": "Render the surface with made-up data and label it 'Synthetic-data capture' with what it proves." }
+      ],
+      "uses": ["skill:desk:pr-surface-hygiene", "skill:desk:evidence-discipline"]
     },
     {
       "id": "skill:desk:factory-evaluator",
@@ -556,6 +579,16 @@
       "uses": ["skill:desk:operator-voice-comments", "skill:desk:interaction-style", "skill:desk:using-desk", "skill:desk:using-superpowers-with-desk"]
     },
     {
+      "id": "skill:desk:outside-approval",
+      "group": "desk-skills-conduct",
+      "when": "Deferring a queue item that waits on another team's gate, recording the researched options for its owner and moving straight to the next free item",
+      "effect": "read",
+      "errors": [
+        { "code": "outside-approval-needed", "means": "The next item needs another team, an admin or a policy owner to approve it, and the operator didn't ask for it.", "fix": "Record the researched options where the work's owner will find them, mark it deferred and start the next item that needs nobody else." }
+      ],
+      "uses": ["skill:desk:work-orchestration", "skill:desk:operator-voice-comments"]
+    },
+    {
       "id": "skill:desk:preview-feedback",
       "group": "desk-skills-learning",
       "when": "Writing a participant's own words about the installed build into _meta/preview-feedback.md under a stable pf- entry id",
@@ -756,6 +789,18 @@
         { "code": "host-quota-hit", "means": "A host quota or rate limit would fail requests.", "fix": "Switch to another account already authorized for the same work, or run fewer children near that limit." }
       ],
       "uses": ["mcp:task_focus", "skill:desk:using-superpowers-with-desk", "skill:desk:using-desk", "skill:desk:start-task", "skill:desk:task-lifecycle", "skill:desk:task-card-format", "skill:desk:git-hygiene", "skill:desk:session-resumption", "skill:desk:interaction-style", "skill:desk:fast-honest-ci", "skill:desk:factory-work", "skill:desk:evidence-discipline", "skill:superpowers:brainstorming", "skill:superpowers:writing-plans", "skill:superpowers:executing-plans", "skill:superpowers:subagent-driven-development", "skill:superpowers:requesting-code-review", "skill:superpowers:using-git-worktrees", "skill:superpowers:dispatching-parallel-agents", "skill:superpowers:verification-before-completion", "host:Agent"]
+    },
+    {
+      "id": "skill:desk:coordinating-lanes",
+      "group": "desk-skills-foundation",
+      "when": "Keeping parallel work moving from the lead seat: handing investigations off, checking lane claims before telling the human, and refilling idle capacity",
+      "effect": "read",
+      "errors": [
+        { "code": "coordinator-working-inline", "means": "The coordinator is about to investigate or fix something itself.", "fix": "Hand it to a lane or subagent, then verify what comes back." },
+        { "code": "unverified-lane-claim", "means": "A lane's 'blocked' or 'needs you' claim is about to be relayed to the human unchecked.", "fix": "Check the claim against a primary source first." },
+        { "code": "coordinator-parked", "means": "Lanes finished or the next milestone waits on someone else, and nothing new started.", "fix": "Start the next most valuable item: red main, the human's open asks, the plan's next ready item, then polish." }
+      ],
+      "uses": ["skill:desk:work-orchestration", "skill:desk:visual-proof", "skill:desk:lesson-capture"]
     },
     {
       "id": "skill:plain-language:plain-language",

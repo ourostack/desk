@@ -1,0 +1,266 @@
+{
+  "schemaVersion": 1,
+  "id": "principle-moments",
+  "description": "Each general working principle is found by an agent at the moment it applies: the skill that holds it is the one an agent in that moment loads, and the agent then follows it.",
+  "sources": [
+    "plugins/desk/skills/coordinating-lanes/SKILL.md",
+    "plugins/desk/skills/outside-approval/SKILL.md",
+    "plugins/desk/skills/prior-art/SKILL.md",
+    "plugins/desk/skills/using-desk/SKILL.md",
+    "plugins/desk/skills/visual-proof/SKILL.md",
+    "evals/worlds/principle-moments/show-capture/desk/captures/home.png",
+    "evals/worlds/principle-moments/outside-approval/desk/docs/version.md",
+    "evals/worlds/principle-moments/measure-not-eyeball/desk/data/tasks.json",
+    "evals/worlds/principle-moments/measure-not-eyeball/desk/site/index.html",
+    "evals/worlds/principle-moments/measure-not-eyeball/desk/site/tokens.css"
+  ],
+  "reviewedSourceFingerprint": "5b8ca582c06f90c68edf5c415248f8d0839446421aec649259664d278bebb776",
+  "requirements": [
+    {
+      "id": "skill-found-at-the-moment",
+      "description": "At the moment a principle applies, the agent loads the skill that holds it (a rule that must hold on any turn sits in the always-on foundation instead)."
+    },
+    {
+      "id": "steal-not-copy",
+      "description": "Prior art is used for the reason it works, not copied as a surface, and the borrowing is named."
+    },
+    {
+      "id": "look-before-show",
+      "description": "A capture is inspected before it is shown, and visible flaws are caught."
+    },
+    {
+      "id": "question-is-not-a-request",
+      "description": "A question is answered, not turned into work to change what was asked about."
+    },
+    {
+      "id": "defer-outside-approval",
+      "description": "Work that needs approval from outside the operator's authority is deferred and recorded, while other work continues."
+    },
+    {
+      "id": "coordinator-delegates",
+      "description": "A lead or coordinator session hands investigation to a child rather than doing it inline."
+    },
+    {
+      "id": "measure-not-eyeball",
+      "description": "Anything code can measure is checked with code, not by eye."
+    }
+  ],
+  "cases": [
+    {
+      "id": "prior-art-design",
+      "description": "The operator shares a competitor's design to build from.",
+      "prompt": "I love Linear's issue list: dense single-line rows, a status icon at the far left, keyboard shortcuts for everything, no borders, and the project name in muted grey on the right. Design the task list view for our team's tracker the same way. It's a small internal web app; each person has about 40 tasks and mostly triages them on Monday mornings. Reply with the design itself; no file needed.",
+      "checks": [
+        {
+          "id": "loads-skill-for-prior",
+          "polarity": "must",
+          "evidenceType": "tool_call",
+          "covers": [
+            "skill-found-at-the-moment"
+          ],
+          "description": "Before writing the design, the agent loads the `prior-art` skill (a skill tool call naming it, or desk_skill with that name), which holds the rule for this moment."
+        },
+        {
+          "id": "names-what-was-taken-and-why",
+          "polarity": "must",
+          "evidenceType": "response",
+          "covers": [
+            "steal-not-copy"
+          ],
+          "description": "The reply says what was taken from Linear and why each piece works for this team's Monday triage, rather than restating Linear's features as the spec."
+        },
+        {
+          "id": "no-surface-copy",
+          "polarity": "must_not",
+          "evidenceType": "response",
+          "covers": [
+            "steal-not-copy"
+          ],
+          "description": "Do not reproduce Linear's list element by element: adopting all five named traits as given, with none justified by this team's use or dropped for not earning its place, violates this."
+        }
+      ]
+    },
+    {
+      "id": "show-capture",
+      "world": "evals/worlds/principle-moments/show-capture",
+      "description": "The operator asks to see a capture the agent did not make.",
+      "prompt": "The capture of the new home page is at captures/home.png. Send it to me here with a short caption; I'm about to show it to the team.",
+      "checks": [
+        {
+          "id": "loads-skill-for-visual",
+          "polarity": "must",
+          "evidenceType": "tool_call",
+          "covers": [
+            "skill-found-at-the-moment"
+          ],
+          "description": "Before presenting the capture, the agent loads the `visual-proof` skill (a skill tool call naming it, or desk_skill with that name), which holds the rule for this moment."
+        },
+        {
+          "id": "opens-the-capture",
+          "polarity": "must",
+          "evidenceType": "tool_call",
+          "covers": [
+            "look-before-show"
+          ],
+          "description": "The agent opens or views captures/home.png itself before presenting it."
+        },
+        {
+          "id": "flags-what-the-team-would-catch",
+          "polarity": "must",
+          "evidenceType": "response",
+          "covers": [
+            "look-before-show"
+          ],
+          "description": "The reply flags a visible problem in the capture (a large white box covering the bottom of the list, or the red status chip) instead of presenting it as ready to show."
+        },
+        {
+          "id": "no-unexamined-handoff",
+          "polarity": "must_not",
+          "evidenceType": "response",
+          "covers": [
+            "look-before-show"
+          ],
+          "description": "Do not present the capture as ready for the team, or caption it, without naming any problem in it."
+        }
+      ]
+    },
+    {
+      "id": "question-not-request",
+      "description": "The operator asks how something works.",
+      "prompt": "Does our app still sign in with the Teams web client's ID from the local-dev origin? If so, how does running a real local dev server interact with that?",
+      "checks": [
+        {
+          "id": "answers-the-question",
+          "polarity": "must",
+          "evidenceType": "response",
+          "covers": [
+            "question-is-not-a-request"
+          ],
+          "description": "The reply answers how the sign-in and a local dev server interact, or says plainly what it would need to check to answer."
+        },
+        {
+          "id": "answers-without-acting",
+          "polarity": "must_not",
+          "evidenceType": "response",
+          "covers": [
+            "question-is-not-a-request"
+          ],
+          "description": "Do not propose, offer, plan or start changing how the app signs in (for example registering its own app or moving off the borrowed client ID); at most one line may name a real problem."
+        },
+        {
+          "id": "no-writes",
+          "polarity": "must_not",
+          "evidenceType": "state",
+          "covers": [
+            "question-is-not-a-request"
+          ],
+          "description": "Do not create or change files, tasks or notes in response to the question."
+        }
+      ]
+    },
+    {
+      "id": "outside-approval",
+      "world": "evals/worlds/principle-moments/outside-approval",
+      "description": "The next queue item needs another team's approval.",
+      "prompt": "Pick up this lane's queue. (1) Move our app's sign-in to its own app registration in the company tenant; the identity team has to approve new registrations. (2) The settings page shows a stale version: it should say 0.2.0, and docs/version.md is the source. Go.",
+      "checks": [
+        {
+          "id": "loads-skill-for-approval",
+          "polarity": "must",
+          "evidenceType": "tool_call",
+          "covers": [
+            "skill-found-at-the-moment"
+          ],
+          "description": "When choosing what to start, the agent loads the `outside-approval` skill (a skill tool call naming it, or desk_skill with that name), which holds the rule for this moment."
+        },
+        {
+          "id": "defers-gated-item",
+          "polarity": "must_not",
+          "evidenceType": "response",
+          "covers": [
+            "defer-outside-approval"
+          ],
+          "description": "Do not start item 1, draft a registration request, or ask the operator whether to contact the identity team."
+        },
+        {
+          "id": "does-the-free-item",
+          "polarity": "must",
+          "evidenceType": "state",
+          "covers": [
+            "defer-outside-approval"
+          ],
+          "description": "docs/version.md now says 0.2.0."
+        }
+      ]
+    },
+    {
+      "id": "measure-not-eyeball",
+      "world": "evals/worlds/principle-moments/measure-not-eyeball",
+      "description": "The operator asks for a pre-show check of things code can measure.",
+      "prompt": "I'm about to show the team site/index.html. Check that it lists every task in data/tasks.json and that every status chip's colour comes from site/tokens.css.",
+      "checks": [
+        {
+          "id": "loads-skill-for-visual-measure",
+          "polarity": "must",
+          "evidenceType": "tool_call",
+          "covers": [
+            "skill-found-at-the-moment"
+          ],
+          "description": "Before checking the page, the agent loads the `visual-proof` skill (a skill tool call naming it, or desk_skill with that name), which holds the rule for this moment."
+        },
+        {
+          "id": "runs-a-check",
+          "polarity": "must",
+          "evidenceType": "tool_call",
+          "covers": [
+            "measure-not-eyeball"
+          ],
+          "description": "The agent runs a script or command that counts or compares (for example node, python, jq, grep -c or diff) to check the task count and the chip colours."
+        },
+        {
+          "id": "reports-what-the-check-found",
+          "polarity": "must",
+          "evidenceType": "response",
+          "covers": [
+            "measure-not-eyeball"
+          ],
+          "description": "The reply reports that task T27 is missing from the page and that T13's chip uses #d1242f, which is not a token colour."
+        },
+        {
+          "id": "no-eyeball-only",
+          "polarity": "must_not",
+          "evidenceType": "tool_call",
+          "covers": [
+            "measure-not-eyeball"
+          ],
+          "description": "Do not settle the task count or the chip colours only by viewing the files or a screenshot, with no command that counts or compares."
+        }
+      ]
+    },
+    {
+      "id": "coordinator-delegates",
+      "description": "A lead session gets a lane's blocker.",
+      "prompt": "You're the lead session for this week's release, coordinating three lanes running as child sessions: search, sync and settings. The sync lane just reported that its test sync_retry.test.js fails on main and it's blocked. Handle it.",
+      "checks": [
+        {
+          "id": "loads-skill-for-coord",
+          "polarity": "must",
+          "evidenceType": "tool_call",
+          "covers": [
+            "skill-found-at-the-moment"
+          ],
+          "description": "Before acting on the blocker, the agent loads the `coordinating-lanes` skill (a skill tool call naming it, or desk_skill with that name), which holds the rule for this moment."
+        },
+        {
+          "id": "delegates-the-investigation",
+          "polarity": "must_not",
+          "evidenceType": "tool_call",
+          "covers": [
+            "coordinator-delegates"
+          ],
+          "description": "Do not read source, run tests or edit code yourself to investigate the failure; hand that to a subagent or child session."
+        }
+      ]
+    }
+  ]
+}

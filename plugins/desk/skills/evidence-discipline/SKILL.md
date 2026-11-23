@@ -1,6 +1,6 @@
 ---
 name: evidence-discipline
-description: Use before a recommendation or claim that depends on external, mutable or unverified facts, before quoting an estimate, when the answer you have arrived at is complex, when writing factual claims into a PR, card, handoff or brief, before poll loops, ending processes, copying sign-in state, claiming a precedent or durability, writing tests or choosing what to test on, when work draws on prior art (another app, a prototype, a design file, a competitor or a screenshot someone shares), before showing a person a capture, mockup or screenshot, and when desk records disagree with a live source. Not needed for a routine status read from its source.
+description: Use before a recommendation or claim that depends on external, mutable or unverified facts, before quoting an estimate, when the answer you have arrived at is complex, when writing factual claims into a PR, card, handoff or brief, before poll loops, ending processes, copying sign-in state, claiming a precedent or durability, writing tests or choosing what to test on, and when desk records disagree with a live source. Not needed for a routine status read from its source.
 ---
 
 # Evidence discipline
@@ -93,10 +93,6 @@ A repository rule or gate that requires a check against the human's real account
 
 Before building a wrapper, orchestrator, helper, config knob or script around an existing system, find and read its entry-point documentation (`RUN_PATH.md`, `scripts/README.md`, an agent manifest, a README's automation section, a `Makefile` or `justfile`). If it already exposes what you are about to build, call it; your code stays a thin wrapper and the owners keep the logic. If not, build yours and consider asking the owners to extend theirs. Read a new tool's README before drafting any install or invocation command. Checking costs minutes; duplicating and migrating costs hours.
 
-## Prior art: steal, don't copy
-
-Before building a method, benchmark, explainer or tool, find existing published work and cite it; adopt what fits, build only the gap and say how yours differs. Then, for any prior art the work draws on (another app, a prototype, a design file, a competitor, a screenshot someone shares), steal, don't copy. Don't reproduce its surface: its layout, wording or feature list. Work out why it works for the people who use it and make that reason yours, so thoroughly that the result is no longer theirs. Every element you keep earns its place in your design or goes. Name what you took and why, in the design note or pull request, so a reviewer can judge the borrowing.
-
 ## Sniff before transferring auth state
 
 Before believing a plan that copies a token cache, session or credential file between users or machines, read the file's first 20 bytes (`head -c 20 | xxd`, or `Get-Content -Encoding Byte -TotalCount 20`):
@@ -133,19 +129,7 @@ Name tests `{Given}_{When}_{Method}_{Assertion}`, for example `GivenValidPayload
 
 ## Visual proof
 
-Capture visual proof by default whenever work touches something a person sees: a screen, a setting before and after a change, an agent's reply, a refusal, an error, a result. The rule follows what the work touches, not what it is called ("spike", "look into", "review"), and a brief's silence never waives it. Capture as you go, at each stage, including working or doing logs and intermediate milestones such as pull request opened, reviewed, or merged states. When a milestone claims a rendered, installed, merged, rollout or other consumer-visible state, capture that real result, not a terminal success line. It supplements rather than replaces tests, logs and system-of-record readback. Capture only the relevant bounded view, never secrets or sensitive/private content; if capture is impossible, record why and use the strongest safe alternative. Nonvisual work gets no artificial screenshots. Put the proof inline where the reader looks (the pull request body, milestone report or delivery message), not only as a link to an artifact; for an agent-side change, the agent's actual reply or the command output showing the changed behaviour is the proof. Run the scenario on synthetic data, never on the human's own real data or account ("Offline evals on synthetic data, online evals from counts") and never on real data that would expose colleagues or customers.
-
-Every picture says what to notice. Give each one a short caption: where to look, and what changed or what it proves, in plain words. For example: "Bottom card: a reply in the thread now notifies you; before, only @mentions did." Mark the spot with a box or an arrow when that's easy, and crop to what matters. A picture without a "what to notice" caption isn't proof.
-
-Look at what you show before you show it. Before handing a person a capture, mockup, screenshot or rendered page, open it at full size and inspect it as they will: content cut off or covered, an alarming or wrong status colour, demo-only or placeholder text, a stale label, shortcut or number, anything that contradicts your claim. Fix what they would catch, capture again, and only then show it. When there is a reference (an approved mockup, a canonical image, the previous capture), compare against it side by side yourself. A capture you have not looked at is not proof, and passing one on unexamined hands the person your review.
-
-### Privacy-safe rendered proof
-
-If a real capture would expose private messages, identities, customer data or secrets, do not upload it. Reproduce the changed surface through the actual product renderer with safe, owned, made-up data in an isolated fixture or test account already authorized for this work, then capture that real render. Prefer a bounded crop that excludes private content when it still proves the claim. Check the pixels and metadata before sharing; do not copy private content into fixtures.
-
-Label the inline capture `Synthetic-data capture` and state what it demonstrates and what it does not: for example, “Synthetic-data capture: the changed renderer with made-up entries; does not verify private account integration.” Keep test/log evidence for behavior outside that scope. A drawing, AI-generated mock, reconstructed screenshot or screenshot of a different implementation is not proof of the running product. A synthetic render cannot prove a private live run, installed state, merge or rollout.
-
-If neither a safe bounded capture nor a real synthetic-data render is possible, record the reason and the strongest safe alternative, but do not call the visual claim verified. PR creation and readiness remain subject to [`pr-surface-hygiene` PSH-010](../pr-surface-hygiene/SKILL.md#psh-010--visual-proof-blocks-creation-and-readiness); a visible change stays blocked rather than acquiring a false `No visual change` reason.
+Visual proof, including looking at a capture before you show it, is the `visual-proof` skill.
 
 ## Delivery receipt
 
