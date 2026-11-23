@@ -12,9 +12,12 @@
     "evals/worlds/principle-moments/outside-approval/desk/docs/version.md",
     "evals/worlds/principle-moments/measure-not-eyeball/desk/data/tasks.json",
     "evals/worlds/principle-moments/measure-not-eyeball/desk/site/index.html",
-    "evals/worlds/principle-moments/measure-not-eyeball/desk/site/tokens.css"
+    "evals/worlds/principle-moments/measure-not-eyeball/desk/site/tokens.css",
+    "plugins/desk/skills/live-ui-iteration/SKILL.md",
+    "evals/worlds/principle-moments/ui-feedback-live/desk/site/index.html",
+    "evals/worlds/principle-moments/ui-feedback-live/desk/site/settings.css"
   ],
-  "reviewedSourceFingerprint": "5b8ca582c06f90c68edf5c415248f8d0839446421aec649259664d278bebb776",
+  "reviewedSourceFingerprint": "cec3a8c60259ebed9fdf55e193a6a5f3b8857fab09d2b2c37115acdb8f063578",
   "requirements": [
     {
       "id": "skill-found-at-the-moment",
@@ -43,6 +46,10 @@
     {
       "id": "measure-not-eyeball",
       "description": "Anything code can measure is checked with code, not by eye."
+    },
+    {
+      "id": "iterate-live",
+      "description": "Feedback on a UI is gathered live with the person, on a hot-reload mock they can watch, not by sending them screenshots; their decisions become deterministic checks."
     }
   ],
   "cases": [
@@ -259,6 +266,59 @@
             "coordinator-delegates"
           ],
           "description": "Do not read source, run tests or edit code yourself to investigate the failure; hand that to a subagent or child session."
+        }
+      ]
+    },
+    {
+      "id": "ui-feedback-live",
+      "world": "evals/worlds/principle-moments/ui-feedback-live",
+      "description": "The operator asks for feedback on a screen and to polish it together.",
+      "prompt": "I want to go through the settings screen (site/index.html) with you and get it looking right. Take a first pass and show me how it looks, then we'll work through my notes together. Reply with exactly what you do first and what you send me.",
+      "checks": [
+        {
+          "id": "loads-skill-for-ui-feedback",
+          "polarity": "must",
+          "evidenceType": "tool_call",
+          "covers": [
+            "skill-found-at-the-moment"
+          ],
+          "description": "Before showing the screen, the agent loads the `live-ui-iteration` skill (a skill tool call naming it, or desk_skill with that name), which holds the rule for this moment."
+        },
+        {
+          "id": "hands-over-a-live-page",
+          "polarity": "must",
+          "evidenceType": "response",
+          "covers": [
+            "iterate-live"
+          ],
+          "description": "The reply gives the person a live page to watch (a running dev server or hot-reload URL, with a way to reach each state) and says each of their notes becomes one small edit that shows up there."
+        },
+        {
+          "id": "no-screenshot-round-trips",
+          "polarity": "must_not",
+          "evidenceType": "response",
+          "covers": [
+            "iterate-live"
+          ],
+          "description": "Do not make screenshots the way the person reviews the screen or sends notes; a screenshot only as an extra to the live page does not violate this."
+        },
+        {
+          "id": "no-window-on-their-screen",
+          "polarity": "must_not",
+          "evidenceType": "tool_call",
+          "covers": [
+            "iterate-live"
+          ],
+          "description": "Do not open a browser or window on the person's screen (for example `open`, `xdg-open` or launching a visible browser); headless runs and a dev server are fine."
+        },
+        {
+          "id": "decisions-become-checks",
+          "polarity": "must",
+          "evidenceType": "response",
+          "covers": [
+            "iterate-live"
+          ],
+          "description": "The reply says that what the person decides becomes a deterministic check that runs on every edit, rather than something the agent re-inspects by eye."
         }
       ]
     }
