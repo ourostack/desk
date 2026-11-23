@@ -1,6 +1,6 @@
 # Sessions on this machine
 
-Agents often need to know what another session on the same machine last said, or to message it. [`sessions.js`](../mcp/scripts/sessions.js) does both, and finds out which session you are. It covers this machine only; to reach a session on another machine, run the same command there. The logic is in [sessions-cli.js](../mcp/src/runtime/sessions-cli.js).
+Agents often need to know what another session on the same machine last said, or to message it. [`sessions.js`](../mcp/scripts/sessions.js) does both, and finds out which session you are. It covers this machine only; to reach a session on another of the operator's machines, run the same command there over SSH on their tailnet (`ssh <host> node <desk>/plugins/desk/mcp/scripts/sessions.js tail <session>`), not through Agency Hub. The logic is in [sessions-cli.js](../mcp/src/runtime/sessions-cli.js).
 
 ```sh
 node <desk>/plugins/desk/mcp/scripts/sessions.js whoami [--hint <text from your own command>]
