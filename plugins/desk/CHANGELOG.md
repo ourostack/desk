@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.441 — 2026-11-23
+
+Desk saves from a branch-bound desk name their published commit and commit a local copy when earlier history prevents catching up, so archiving recognizes saved companions without losing local work. A failed local commit is reported separately from successful publication.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.440 — 2026-11-23
 
 Desk's MCP server now vendors Ouro UI v1.3.462, moved by Ouro Current.
