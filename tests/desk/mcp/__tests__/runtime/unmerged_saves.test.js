@@ -11,6 +11,7 @@ import { spawnSync } from "node:child_process"
 import { mkTempRoot } from "../_temp_roots.js"
 import { runner } from "../../../../../plugins/desk/mcp/src/runtime/deliver.js"
 import { publishPullRequest } from "../../../../../plugins/desk/mcp/src/runtime/pr-publication.js"
+import { readSyncStatus, runPushWorker } from "../../../../../plugins/desk/mcp/src/runtime/sync-worker.js"
 import { abandonedComment, allStuckSaves, savesFor, settleSaves, stuckLine, stuckSaves, withStuckSaves } from "../../../../../plugins/desk/mcp/src/runtime/unmerged-saves.js"
 import { resolveDeskStateDir } from "../../../../../plugins/desk/mcp/src/runtime/last-start.js"
 import { formatBootText } from "../../../../../plugins/desk/mcp/src/runtime/boot-text.js"
@@ -68,6 +69,7 @@ function fakeGh(origin, options = {}) {
       return spawnSync(command, args, spawnOptions)
     }
     assert.equal(command, "gh")
+    if (options.authFailed) return { status: 1, stdout: "", stderr: "" }
     calls.push(args)
     const ok = (value) => ({ status: 0, stdout: typeof value === "string" ? value : JSON.stringify(value) })
     const main = () => git(origin, ["rev-parse", "refs/heads/main"])
@@ -97,7 +99,7 @@ function fakeGh(origin, options = {}) {
     if (args[0] === "api" && args.some((arg) => arg.includes("/rules/branches/"))) return ok([[]])
     if (args[0] === "api" && args.some((arg) => /\/branches\/[^/]+$/u.test(arg))) return ok({ protected: false })
     if (args[0] === "api" && args.some((arg) => arg.includes("/status?"))) return ok([{ statuses: [] }])
-    if (args[0] === "api" && args.some((arg) => arg.includes("/check-runs"))) return ok([{ check_runs: [{ id: 7, name: "workspace-policy", status: options.pending ? "in_progress" : "completed", conclusion: options.pending ? null : "success" }] }])
+    if (args[0] === "api" && args.some((arg) => arg.includes("/check-runs"))) return ok([{ check_runs: [{ id: 7, name: "workspace-policy", status: options.pending ? "in_progress" : "completed", conclusion: options.pending ? null : options.failed ? "failure" : "success" }] }])
     if (args[0] === "api" && args.includes("PUT")) {
       const pr = byRef(args[args.findIndex((arg) => /\/pulls\/\d+\/merge$/u.test(arg))].match(/pulls\/(\d+)/u)[1])
       git(origin, ["update-ref", "refs/heads/main", pr.head, main()])
@@ -175,6 +177,71 @@ test("publication qualifies its checks and merges without asking gh for auto-mer
   assert.equal(done.receipt.labelled, true)
   assert.ok(!gh.calls.some((args) => args[0] === "pr" && args[1] === "merge"), "only the qualified exact-head merge is requested")
   assert.deepEqual(stuckSaves({ root: desk, env, now: () => Date.now() + 60 * MINUTE }), [], "a merged save is no longer waiting")
+})
+
+test("settlement requalifies a recorded nonconflicting save after its checks finish", async () => {
+  const { origin, desk, env } = await world("eventual")
+  const onto = git(desk, ["rev-parse", "HEAD"])
+  const head = await appendTo(desk, "- delayed check", "save")
+  const options = { pending: true }
+  const gh = fakeGh(origin, options)
+  assert.throws(() => publish({ desk, env, gh, head, onto }), /checks still missing or pending/u)
+  assert.deepEqual(gh.prs.get(1).labels, [])
+  const waiting = settleSaves({ root: desk, env, spawnGit: gh, clock: clockOf() })
+  assert.deepEqual(waiting.waiting, [gh.prs.get(1).url])
+  assert.equal(git(origin, ["rev-parse", "refs/heads/main"]), onto)
+  options.pending = false
+  const settled = settleSaves({ root: desk, env, spawnGit: gh, clock: clockOf() })
+  assert.deepEqual(settled.waiting, [])
+  assert.equal(git(origin, ["rev-parse", "refs/heads/main"]), head)
+  assert.equal(gh.prs.get(1).state, "MERGED")
+  assert.deepEqual(stuckSaves({ root: desk, env, now: () => Date.now() + 60 * MINUTE }), [])
+})
+
+test("the background worker keeps qualifying pending checks beyond its network retry budget", async () => {
+  for (const retryDelaysMs of [[1], []]) {
+    const { origin, desk, env } = await world("worker-eventual")
+    const head = await appendTo(desk, "- delayed check", "save")
+    const options = { pending: true }
+    const gh = fakeGh(origin, options)
+    let retries = 0
+    const result = await runPushWorker({
+      root: desk, env, spawnGit: gh, debounceMs: 0, retryDelaysMs,
+      publicationClock: clockOf(),
+      clock: { now: Date.now, sleep: async (ms) => { if (ms === (retryDelaysMs[0] ?? 60_000) && ++retries === 3) options.pending = false } },
+      fileProblem: () => assert.fail("pending checks are not a Desk defect"),
+    })
+
+    assert.equal(result.result, "ok")
+    assert.equal(retries, 3)
+    assert.equal(git(origin, ["rev-parse", "refs/heads/main"]), head)
+    assert.equal(gh.prs.get(1).state, "MERGED")
+  }
+})
+
+test("a pending-check worker stops with a visible failure when checks fail or authentication is refused", async () => {
+  for (const failure of ["failed", "authFailed"]) {
+    const { origin, desk, env } = await world("worker-failed")
+    await appendTo(desk, "- cannot qualify", "save")
+    const options = { pending: true }
+    const gh = fakeGh(origin, options)
+    let retries = 0
+    const result = await runPushWorker({
+      root: desk, env, spawnGit: gh, debounceMs: 0, retryDelaysMs: [1],
+      publicationClock: clockOf(),
+      clock: { now: Date.now, sleep: async (ms) => {
+        if (ms === 1) { retries++; options.pending = false; options[failure] = true }
+      } },
+      fileProblem: () => assert.fail("failed qualification is not a Desk defect"),
+    })
+    assert.equal(result.result, "blocked")
+    assert.equal(retries, 1, "a permanent refusal must not inherit pending-check retries")
+    const status = readSyncStatus({ root: desk, env })
+    assert.match(status.error, failure === "failed" ? /failed \(FAILURE\)/u : /gh auth status/u)
+    assert.notEqual(status.publication?.pending_checks, true)
+    assert.equal(gh.prs.get(1).state, "OPEN")
+    assert.deepEqual(gh.prs.get(1).labels, [])
+  }
 })
 
 test("a conflicting append is rebuilt on the newest main and merged, and the old pull request is closed", async () => {
@@ -354,24 +421,27 @@ test("a conflicting save that cannot be rebuilt waits, and one whose new PR is s
   assert.ok(stuckSaves({ root: desk, env, now: () => Date.now() + 60 * MINUTE }).length > 0)
 })
 
-test("a policy-less or unreadable-policy repository leaves a conflicting save waiting", async () => {
-  const { origin, seed, desk, env } = await world("nopolicy")
-  const onto = git(desk, ["rev-parse", "HEAD"])
-  const gh = fakeGh(origin, { pending: true, conflicting: true })
-  const head = await appendTo(desk, "- mine", "save")
-  assert.throws(() => publish({ desk, env, gh, head, onto }), /checks still missing or pending/u)
-  git(seed, ["pull", "-q", "origin", "main"])
-  git(seed, ["rm", "-q", "-r", ".desk"])
-  await appendTo(seed, "- theirs", "another save and no policy")
-  git(seed, ["push", "-q", "origin", "HEAD:main"])
-  assert.equal(settleSaves({ root: desk, env, spawnGit: gh, clock: clockOf() }).waiting.length, 1)
-  await fs.writeFile(path.join(seed, ".desk-x"), "")
-  await fs.mkdir(path.join(seed, ".desk"))
-  await fs.writeFile(path.join(seed, ".desk", "publication.json"), "{")
-  git(seed, ["add", "."])
-  git(seed, ["commit", "-q", "-m", "broken policy"])
-  git(seed, ["push", "-q", "origin", "HEAD:main"])
-  assert.equal(settleSaves({ root: desk, env, spawnGit: gh, clock: clockOf() }).waiting.length, 1)
+test("a policy-less or unreadable-policy repository leaves any save waiting without merge triggers", async () => {
+  for (const conflicting of [true, false]) {
+    const { origin, seed, desk, env } = await world("nopolicy")
+    const onto = git(desk, ["rev-parse", "HEAD"])
+    const gh = fakeGh(origin, { pending: true, conflicting })
+    const head = await appendTo(desk, "- mine", "save")
+    assert.throws(() => publish({ desk, env, gh, head, onto }), /checks still missing or pending/u)
+    git(seed, ["pull", "-q", "origin", "main"])
+    git(seed, ["rm", "-q", "-r", ".desk"])
+    await appendTo(seed, "- theirs", "another save and no policy")
+    git(seed, ["push", "-q", "origin", "HEAD:main"])
+    assert.equal(settleSaves({ root: desk, env, spawnGit: gh, clock: clockOf() }).waiting.length, 1)
+    await fs.writeFile(path.join(seed, ".desk-x"), "")
+    await fs.mkdir(path.join(seed, ".desk"))
+    await fs.writeFile(path.join(seed, ".desk", "publication.json"), "{")
+    git(seed, ["add", "."])
+    git(seed, ["commit", "-q", "-m", "broken policy"])
+    git(seed, ["push", "-q", "origin", "HEAD:main"])
+    assert.equal(settleSaves({ root: desk, env, spawnGit: gh, clock: clockOf() }).waiting.length, 1)
+    assert.deepEqual(gh.prs.get(1).labels, [])
+  }
 })
 
 test("a PR a rebuild replaced is closed as superseded or as rebuilt", () => {

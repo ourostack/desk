@@ -216,7 +216,19 @@ function settle({ root, env, spawnGit, clock }) {
       else outcome.waiting.push(save.url)
       continue
     }
-    if (view.mergeable !== "CONFLICTING") { outcome.waiting.push(save.url); continue }
+    if (view.mergeable !== "CONFLICTING") {
+      try {
+        const policy = publicationPolicy(git, main)
+        if (policy !== null) {
+          publishPullRequest({ git, spawnGit, root, upstream, head: save.head, onto: main, policy, clock, track: savesFor({ root, env, now: Date.now }) })
+          continue
+        }
+      } catch {
+        // Qualification still pending or refused: retain the receipt for the next settlement and status reply.
+      }
+      outcome.waiting.push(save.url)
+      continue
+    }
     const rebased = rebaseSave({ git, spawnGit, root, env, upstream, save, main, clock })
     if (rebased === "rebased") outcome.rebased.push(save.url)
     else outcome.waiting.push(save.url)

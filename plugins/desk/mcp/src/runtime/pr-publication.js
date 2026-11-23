@@ -185,14 +185,21 @@ export function publishPullRequest({ git, spawnGit, root, upstream, head, onto, 
         const attempt = (args) => { try { gh(args, false); return true } catch { return false } }
         attempt(["label", "create", MERGE_LABEL, "--repo", repo.full, "--force", "--description", "Merge when the required checks are green"])
         receipt.labelled = attempt(["pr", "edit", String(pr.number), "--repo", repo.full, "--add-label", MERGE_LABEL])
-        const merged = gh(["api", "--hostname", repo.host, "--method", "PUT", `repos/${repo.name}/pulls/${pr.number}/merge`,
-          "-f", `sha=${head}`, "-f", "merge_method=merge"])
-        if (merged.merged !== true || typeof merged.sha !== "string") throw Object.assign(new Error("Check the pull request's merge requirements, then run it again: GitHub refused the exact-head merge"), { code: "pr_publication_check_the_pull_request_s" })
-        receipt.merge = merged.sha
+        try {
+          const merged = gh(["api", "--hostname", repo.host, "--method", "PUT", `repos/${repo.name}/pulls/${pr.number}/merge`,
+            "-f", `sha=${head}`, "-f", "merge_method=merge"])
+          if (merged.merged !== true || typeof merged.sha !== "string") throw Object.assign(new Error("Check the pull request's merge requirements, then run it again: GitHub refused the exact-head merge"), { code: "pr_publication_check_the_pull_request_s" })
+          receipt.merge = merged.sha
+        } catch (error) {
+          pr = view()
+          verify(pr)
+          if (pr.state !== "MERGED") throw error
+        }
         break
       }
       if (clock.now() >= deadline) {
         const unreported = policy.required_checks.filter((name) => !reported.some((check) => check.name === name))
+        receipt.pending_checks = true
         throw Object.assign(new Error(`Wait for the checks to finish, then run it again: PR checks still missing or pending: ${waiting.join(", ")}${unreported.length === 0 ? "" : `. Never reported on ${head}: ${unreported.join(", ")}. GitHub Actions will not supply a check that is only posted by running it against this exact commit (for example CIT's cit-check, which runs on a writer's machine); run it on branch ${branch}`}`), { code: "pr_publication_wait_for_the_checks_to" })
       }
       clock.sleep(Math.min(5000, deadline - clock.now()))

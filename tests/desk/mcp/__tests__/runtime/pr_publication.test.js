@@ -355,6 +355,17 @@ test("successful policy checks authorize one exact-head merge without gh auto-me
   assert.ok(merges[0].includes(`sha=${head}`))
 })
 
+test("a qualified relay merge is verified when the concurrent exact-head merge is refused", () => {
+  for (const options of [{ fail: "merge" }, { mergeResult: { merged: false } }]) {
+    const f = fixture({ earlyMerge: "label", ...options })
+    const cleared = []
+    f.request.track = { record: () => {}, clear: (receipt) => cleared.push(receipt) }
+    assert.equal(publishPullRequest(f.request).receipt.merge, merged)
+    assert.equal(cleared.length, 1)
+    assert.ok(f.calls.some((call) => call[0] === "git" && call[1] === "merge-base"))
+  }
+})
+
 test("a check the base branch's rules or protection require blocks the merge until it is reported", () => {
   for (const options of [{ rules: ruleset("ci-gate") }, { branch: protectedBranch("ci-gate") }]) {
     const f = fixture(options)
