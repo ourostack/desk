@@ -5,7 +5,7 @@ import * as os from "node:os"
 import * as path from "node:path"
 import { spawnSync } from "node:child_process"
 import { commitWaitingLogs } from "../../../../../plugins/desk/mcp/src/runtime/append-lane.js"
-import { commitPaths } from "../../../../../plugins/desk/mcp/src/util/git-stage.js"
+import { commitPaths, indexLooksLost } from "../../../../../plugins/desk/mcp/src/util/git-stage.js"
 import { publishCardCommit } from "../../../../../plugins/desk/mcp/src/util/main-publish.js"
 import { removeTree } from "../_remove_tree.js"
 
@@ -102,4 +102,25 @@ test("a checkout whose index lost most of HEAD's files commits nothing", async (
   assert.equal(git(origin, ["rev-parse", "main"]), before)
   assert.equal(commitWaitingLogs(lane), "commit_failed")
   assert.equal(git(origin, ["rev-parse", "main"]), before)
+})
+
+test("a build Git cannot compare with the remote is refused", async (t) => {
+  const { lane, origin } = await fixture(t)
+  const before = git(origin, ["rev-parse", "main"])
+  await fs.writeFile(path.join(lane, "t/card/log.md"), "new\n")
+  git(lane, ["add", "t/card/log.md"])
+  const failing = (command, args, options) => (args.includes("diff-tree") ? { status: 1, stdout: "", stderr: "boom" } : spawnSync(command, args, options))
+  const result = publishCardCommit({ root: lane, relPaths: ["t/card/log.md"], message: "log", defaultBranch: "main", spawnGit: failing })
+  assert.equal(result.ok, false)
+  assert.match(result.stderr, /diff-tree/u)
+  assert.equal(git(origin, ["rev-parse", "main"]), before)
+})
+
+test("an index file Desk cannot read as an index is not treated as lost", async (t) => {
+  const { lane } = await fixture(t)
+  const index = git(lane, ["rev-parse", "--absolute-git-dir"]) + "/index"
+  await fs.writeFile(index, "not an index at all")
+  assert.equal(indexLooksLost(lane, spawnSync), false)
+  await fs.writeFile(index, "DIR")
+  assert.equal(indexLooksLost(lane, spawnSync), false)
 })
