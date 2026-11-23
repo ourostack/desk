@@ -114,7 +114,7 @@ function parseTranscript(stdout) {
       response = event.data.content;
       messages.push(response);
     }
-    for (const request of event.data.toolRequests ?? []) tools.push(`${request.name} ${JSON.stringify(request.arguments ?? {})}`.slice(0, 400));
+    for (const request of event.data.toolRequests ?? []) tools.push(`${request.name} ${JSON.stringify(request.arguments ?? {})}`);
   }
   return { response, messages, tools };
 }

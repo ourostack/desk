@@ -34,6 +34,8 @@ The receipt's `run` records the harness command and version, the plugins loaded,
 
 The judge evaluates each requirement as written, including prohibitions such as "Do not ask for a new go"; it must not negate them again. It writes the evidence before the pass/fail field and makes that field agree with its evidence. Verdicts are still model judgments: retain the outputs with `--keep` when investigating variation rather than rerunning until a passing receipt replaces the failure.
 
+Tool requests retain their complete arguments in the transcript and judge evidence, including paths at the end of long shell commands. A passing rerun does not repair missing evidence; fix the evidence loss and cover it with a deterministic regression before refreshing the evaluation.
+
 Add scenarios from observed regressions, not to inflate counts.
 
 ## Core meeting capture
