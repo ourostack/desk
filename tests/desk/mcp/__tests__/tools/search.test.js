@@ -39,6 +39,7 @@ test("reindex reclassifies unchanged archived track cards and preserves archive 
   await writeFile(root, "_archive/errands/track.md", "---\ntitle: Retired errands\nscope: Retired appointments\n---\n")
   await buildFixtureIndex(root)
   fixtureDb(root).prepare("UPDATE docs SET kind = 'archive', track = NULL").run()
+  fixtureDb(root).prepare("DELETE FROM chunks").run()
   await buildFixtureIndex(root)
   const input = { query: "appointments", filters: { kind: "track" } }
   assert.deepEqual((await desk_search({ deskRoot: root, input })).results, [])
@@ -46,6 +47,18 @@ test("reindex reclassifies unchanged archived track cards and preserves archive 
   assert.deepEqual(result.results.map(({ path, kind, track, task_slug }) => ({ path, kind, track, task_slug })), [
     { path: "_archive/errands/track.md", kind: "track", track: "errands", task_slug: null },
   ])
+})
+
+test("legacy track cards keep their body searchable without string title or scope metadata", async () => {
+  const root = await mkTempDeskRoot()
+  await writeFile(root, "legacy/track.md", "---\ntitle: false\nscope: 42\n---\nlegacyquartz\n")
+  await buildFixtureIndex(root)
+  for (const search of [routedSearch, desk_search]) {
+    const result = await search({ deskRoot: root, input: { query: "legacyquartz", filters: { kind: "track" } } })
+    assert.deepEqual(result.results.map(({ path, kind }) => ({ path, kind })), [{ path: "legacy/track.md", kind: "track" }])
+    assert.match(result.results[0].snippet, /legacyquartz/u)
+    assert.doesNotMatch(result.results[0].snippet, /false|42/u)
+  }
 })
 
 function engineFor(t, deskRoot, options = {}) {

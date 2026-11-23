@@ -28,7 +28,7 @@ async function fixture(t) {
   const prepare = Database.prototype.prepare
   t.mock.method(Database.prototype, "prepare", function (sql, ...args) {
     // This statement belongs to the engine's index transaction, not the direct corpus.
-    if (fault && sql === "SELECT id, path, hash FROM docs") {
+    if (fault && sql === "SELECT id, path, hash, kind FROM docs") {
       beforeFault()
       throw fault
     }
