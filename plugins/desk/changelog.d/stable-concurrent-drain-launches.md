@@ -1,0 +1,1 @@
+Concurrent drain launchers run immutable release copies, so another runner's checkout cannot hide or replace their selected script. Old copies remain while runners use them and are reclaimed by a later refresh.

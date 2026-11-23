@@ -1,11 +1,12 @@
 // The launcher a wake runner calls: it fetches the release branch into its own clone, and without one resolves the released Desk through Agency's plugin cache, falls back to the last good path and says so.
 import assert from "node:assert/strict"
 import { spawn as spawnAsync, spawnSync } from "node:child_process"
-import { existsSync, mkdirSync, readFileSync, utimesSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, unlinkSync, utimesSync, writeFileSync } from "node:fs"
 import path from "node:path"
 import { test } from "node:test"
 import { fileURLToPath } from "node:url"
 import { mkTempRoot } from "../_temp_roots.js"
+import { removeTree } from "../_remove_tree.js"
 import { installLauncher } from "../../../../../plugins/desk/mcp/src/runtime/drains.js"
 import { launch, makeGit } from "../../../../../plugins/desk/mcp/scripts/drains-launcher.mjs"
 
@@ -40,7 +41,7 @@ function run(root, cache, extra = {}) {
     spawn: (...args) => { calls.push(args); return { status: extra.status === undefined ? 0 : extra.status } },
     stderr: { write: (text) => err.push(text) },
     execPath: "/node",
-    now: () => new Date("2026-11-13T22:00:00Z"),
+    now: extra.now ?? (() => new Date("2026-11-13T22:00:00Z")),
   })
   const dir = path.join(root, "state", "ouroboros-skills", "desk", "drains")
   return { status, calls, err, lastGood: path.join(dir, "last-good-script"), log: path.join(dir, "resolve.log") }
@@ -192,7 +193,7 @@ test("fetches the release branch into its own clone, runs it, and refreshes only
   const first = commit("3.2.122")
   const cache = path.join(root, "no-cache")
   const dir = path.join(root, "state", "ouroboros-skills", "desk", "drains")
-  const script = path.join(dir, "desk-release", "plugins", "desk", "mcp", "scripts", "drains.js")
+  const script = path.join(dir, "releases", first, "plugins", "desk", "mcp", "scripts", "drains.js")
   const seen = []
   const go = (extra = {}) => {
     const r = run(root, cache, { env: { DESK_DRAINS_RELEASE_URL: repo }, git: extra.git, status: 0 })
@@ -210,10 +211,11 @@ test("fetches the release branch into its own clone, runs it, and refreshes only
   const counting = (args, ms) => { verbs.push(args.find((arg) => ["ls-remote", "rev-parse", "fetch", "clone"].includes(arg))); return spawnSync("git", args, { encoding: "utf8", timeout: ms }) }
   r = go({ git: counting })
   assert.deepEqual(verbs, ["ls-remote", "rev-parse"])
-  // A new release replaces the files in the same clone.
+  // A new release updates the Git cache but runs from a separate immutable copy.
   const second = commit("3.2.123")
   r = go()
-  assert.equal(readFileSync(script, "utf8"), "// 3.2.123\n")
+  assert.equal(readFileSync(r.calls[0][1][0], "utf8"), "// 3.2.123\n")
+  assert.equal(existsSync(script), false, "the unused previous release is reclaimed")
   assert.deepEqual(seen, [first, first, second])
   assert.equal(existsSync(r.lastGood), false, "the Agency cache is never consulted while the own copy works")
 })
@@ -357,4 +359,265 @@ test("runners started together share one clone without a shallow.lock error or a
   assert.equal(existsSync(path.join(dir, "fetch.lock")), false)
   assert.equal(readFileSync(path.join(dir, "desk-release", "plugins", "desk", "mcp", "scripts", "drains.js"), "utf8"), "// 3.2.123\n")
   assert.equal(existsSync(path.join(dir, "resolve.log")), false)
+})
+
+test("a sibling resolves the previous release while checkout has removed the shared script", async () => {
+  const root = await mkTempRoot("desk-launcher-")
+  const { repo, commit } = releaseRepo(root)
+  commit("3.2.122")
+  const cache = path.join(root, "none")
+  const env = { DESK_DRAINS_RELEASE_URL: repo }
+  const first = run(root, cache, { env, git: undefined, now: () => new Date() })
+  const dir = path.dirname(first.log)
+  const mutable = path.join(dir, "desk-release", "plugins", "desk", "mcp", "scripts", "drains.js")
+  const old = new Date(Date.now() - 120_000)
+  utimesSync(path.join(dir, "last-fetch"), old, old)
+  commit("3.2.123")
+  let sibling
+  let probes = 0
+  const git = (args, ms) => {
+    if (args.includes("checkout")) {
+      renameSync(mutable, `${mutable}.held`)
+      try {
+        probes++
+        sibling = run(root, cache, { env, git: undefined, now: () => new Date() })
+      } finally {
+        renameSync(`${mutable}.held`, mutable)
+      }
+    }
+    return spawnSync("git", args, { encoding: "utf8", timeout: ms })
+  }
+  const updated = run(root, cache, { env, git, now: () => new Date() })
+  assert.equal(probes, 1)
+  assert.equal(sibling.status, 0, sibling.err.join(""))
+  assert.deepEqual(sibling.err, [])
+  assert.equal(updated.status, 0)
+  assert.equal(readFileSync(updated.calls[0][1][0], "utf8"), "// 3.2.123\n")
+})
+
+test("a selected release stays intact until its runner exits, then the next refresh reclaims it", async () => {
+  const root = await mkTempRoot("desk-launcher-")
+  const { repo, commit } = releaseRepo(root)
+  const first = commit("3.2.122")
+  const cache = path.join(root, "none")
+  const env = { XDG_STATE_HOME: path.join(root, "state"), DESK_DRAINS_RELEASE_URL: repo, AGENCY_PLUGIN_CACHE: cache }
+  const seeded = run(root, cache, { env, git: undefined, now: () => new Date() })
+  const dir = path.dirname(seeded.log)
+  const old = new Date(Date.now() - 120_000)
+  let selected
+  let second
+  const status = launch({
+    argv: ["poll"], env, home: root,
+    spawn: (_node, [script], options) => {
+      selected = script
+      assert.equal(options.env.DESK_DRAINS_RELEASE, first)
+      second = commit("3.2.123")
+      utimesSync(path.join(dir, "last-fetch"), old, old)
+      const updated = run(root, cache, { env, git: undefined, now: () => new Date() })
+      assert.equal(updated.status, 0, updated.err.join(""))
+      assert.equal(updated.calls[0][2].env.DESK_DRAINS_RELEASE, second)
+      assert.equal(readFileSync(script, "utf8"), "// 3.2.122\n", "a pending spawn must not see its sibling's checkout")
+      return { status: 0 }
+    },
+  })
+  assert.equal(status, 0)
+  utimesSync(path.join(dir, "last-fetch"), old, old)
+  assert.equal(run(root, cache, { env, git: undefined, now: () => new Date() }).status, 0)
+  assert.equal(existsSync(selected), false, "an idle refresh reclaims the unused release")
+})
+
+test("an existing pre-snapshot clone migrates offline without claiming a successful fetch", async () => {
+  const root = await mkTempRoot("desk-launcher-")
+  const { repo, commit } = releaseRepo(root)
+  const sha = commit("3.2.122")
+  const env = { DESK_DRAINS_RELEASE_URL: repo }
+  const seeded = run(root, path.join(root, "none"), { env, git: undefined })
+  const dir = path.dirname(seeded.log)
+  await removeTree(path.join(dir, "releases"))
+  writeFileSync(path.join(dir, "last-fetch"), "")
+  const migrated = run(root, path.join(root, "none"), {
+    env,
+    git: (args, ms) => args.includes("ls-remote") ? offline() : spawnSync("git", args, { encoding: "utf8", timeout: ms }),
+  })
+  assert.equal(migrated.status, 0)
+  assert.equal(migrated.calls[0][2].env.DESK_DRAINS_RELEASE, sha)
+  assert.equal(readFileSync(migrated.calls[0][1][0], "utf8"), "// 3.2.122\n")
+  assert.match(migrated.err[0], /could not fetch the released Desk \(offline\); using the copy/u)
+})
+
+test("a failed snapshot publication preserves the previous complete release and reports the failure", async () => {
+  const root = await mkTempRoot("desk-launcher-")
+  const { repo, commit } = releaseRepo(root)
+  const first = commit("3.2.122")
+  const env = { DESK_DRAINS_RELEASE_URL: repo }
+  const seeded = run(root, path.join(root, "none"), { env, git: undefined })
+  const dir = path.dirname(seeded.log)
+  const plugin = path.join(dir, "desk-release", "plugins", "desk")
+  const second = commit("3.2.123")
+  let probes = 0
+  const git = (args, ms) => {
+    const result = spawnSync("git", args, { encoding: "utf8", timeout: ms })
+    if (args.includes("checkout")) {
+      renameSync(plugin, `${plugin}.held`)
+      probes++
+    }
+    return result
+  }
+  let failed
+  try {
+    failed = run(root, path.join(root, "none"), { env, git })
+  } finally {
+    renameSync(`${plugin}.held`, plugin)
+  }
+  assert.equal(probes, 1)
+  assert.equal(failed.status, 0, failed.err.join(""))
+  assert.equal(failed.calls[0][2].env.DESK_DRAINS_RELEASE, first)
+  assert.equal(readFileSync(failed.calls[0][1][0], "utf8"), "// 3.2.122\n")
+  assert.match(failed.err[0], /could not fetch the released Desk \(ENOENT/u)
+  assert.equal(readFileSync(path.join(dir, "last-fetch"), "utf8"), first)
+  assert.equal(existsSync(path.join(dir, "releases", `${second}.${process.pid}.tmp`)), false)
+  const recovered = run(root, path.join(root, "none"), { env, git: undefined })
+  assert.equal(recovered.calls[0][2].env.DESK_DRAINS_RELEASE, second)
+  assert.deepEqual(recovered.err, [])
+})
+
+test("a busy fetch resolves the published copy without reading Git, and a failed spawn releases its lease", async () => {
+  const root = await mkTempRoot("desk-launcher-")
+  const { repo, commit } = releaseRepo(root)
+  commit("3.2.122")
+  const env = { XDG_STATE_HOME: path.join(root, "state"), DESK_DRAINS_RELEASE_URL: repo, AGENCY_PLUGIN_CACHE: path.join(root, "none") }
+  const seeded = run(root, path.join(root, "none"), { env, git: undefined })
+  const dir = path.dirname(seeded.log)
+  const old = new Date(Date.now() - 120_000)
+  utimesSync(path.join(dir, "last-fetch"), old, old)
+  mkdirSync(path.join(dir, "fetch.lock"))
+  writeFileSync(path.join(dir, "fetch.lock", "pid"), String(process.pid))
+  const git = () => { throw new Error("a busy reader must not read the mutable Git cache") }
+  const busy = run(root, path.join(root, "none"), { env, git, now: () => new Date() })
+  assert.equal(busy.status, 0, busy.err.join(""))
+  assert.deepEqual(busy.err, [])
+  assert.throws(() => launch({ argv: ["poll"], env, home: root, git, spawn: () => { throw new Error("spawn refused") } }), /spawn refused/u)
+  assert.deepEqual(readdirSync(path.join(dir, "runners")), [])
+})
+
+test("refresh prunes dead runner leases but preserves unknown entries", async () => {
+  const root = await mkTempRoot("desk-launcher-")
+  const { repo, commit } = releaseRepo(root)
+  commit("3.2.122")
+  const env = { DESK_DRAINS_RELEASE_URL: repo }
+  const seeded = run(root, path.join(root, "none"), { env, git: undefined })
+  const dir = path.dirname(seeded.log)
+  const stale = path.join(dir, "runners", "2147483646-00000000-0000-0000-0000-000000000000")
+  const unknown = path.join(dir, "runners", "unrecognised")
+  writeFileSync(stale, "")
+  writeFileSync(unknown, "")
+  commit("3.2.123")
+  assert.equal(run(root, path.join(root, "none"), { env, git: undefined }).status, 0)
+  assert.equal(existsSync(stale), false)
+  assert.equal(existsSync(unknown), true)
+  assert.equal(existsSync(seeded.calls[0][1][0]), true, "unknown ownership retains old copies")
+  unlinkSync(unknown)
+  assert.equal(run(root, path.join(root, "none"), { env, git: undefined }).status, 0)
+  assert.equal(existsSync(seeded.calls[0][1][0]), false)
+})
+
+test("release advances between probe and fetch publish the checked-out commit, not the probe", async () => {
+  for (const existing of [false, true]) {
+    const root = await mkTempRoot("desk-launcher-")
+    const { repo, commit } = releaseRepo(root)
+    commit("3.2.122")
+    const env = { DESK_DRAINS_RELEASE_URL: repo }
+    if (existing) run(root, path.join(root, "none"), { env, git: undefined })
+    commit("3.2.123")
+    let fetched
+    const git = (args, ms) => {
+      const result = spawnSync("git", args, { encoding: "utf8", timeout: ms })
+      if (args.includes("ls-remote")) fetched = commit("3.2.124")
+      return result
+    }
+    const selected = run(root, path.join(root, "none"), { env, git })
+    assert.equal(selected.status, 0, selected.err.join(""))
+    assert.equal(readFileSync(selected.calls[0][1][0], "utf8"), "// 3.2.124\n")
+    assert.equal(selected.calls[0][2].env.DESK_DRAINS_RELEASE, fetched)
+    assert.equal(readFileSync(path.join(path.dirname(selected.log), "last-fetch"), "utf8"), fetched)
+  }
+})
+
+test("a stale-lock reaper cannot remove the replacement owner's lock", async () => {
+  const root = await mkTempRoot("desk-launcher-")
+  const { repo, commit } = releaseRepo(root)
+  commit("3.2.122")
+  const env = { DESK_DRAINS_RELEASE_URL: repo }
+  const seeded = run(root, path.join(root, "none"), { env, git: undefined })
+  const dir = path.dirname(seeded.log)
+  const lock = path.join(dir, "fetch.lock")
+  const old = new Date(Date.now() - 20 * 60_000)
+  utimesSync(path.join(dir, "last-fetch"), old, old)
+  mkdirSync(lock)
+  writeFileSync(path.join(lock, "pid"), "2147483646")
+  const recent = new Date(Date.now() - 10_000)
+  utimesSync(lock, recent, recent)
+  const owner = `owner-${process.pid}-00000000-0000-0000-0000-000000000000`
+  const kill = process.kill
+  let observed = 0
+  let selected
+  try {
+    process.kill = (pid, signal) => {
+      if (pid !== 2147483646) return kill(pid, signal)
+      renameSync(lock, `${lock}.observed-stale`)
+      mkdirSync(lock)
+      writeFileSync(path.join(lock, owner), "")
+      writeFileSync(path.join(lock, "pid"), String(process.pid))
+      observed++
+      throw Object.assign(new Error("observed owner is gone"), { code: "ESRCH" })
+    }
+    selected = run(root, path.join(root, "none"), {
+      env, now: () => new Date(),
+      git: () => { throw new Error("a reaper entered the replacement owner's checkout") },
+    })
+  } finally {
+    process.kill = kill
+  }
+  assert.equal(observed, 1)
+  assert.equal(selected.status, 0, selected.err.join(""))
+  assert.deepEqual(selected.err, [])
+  assert.equal(existsSync(path.join(lock, owner)), true)
+  assert.equal(readFileSync(path.join(lock, "pid"), "utf8"), String(process.pid))
+})
+
+test("lock reclamation preserves live or unknown ownership and recovers abandoned owners", async (t) => {
+  for (const kind of ["live", "unknown", "starting", "dead", "empty"]) {
+    await t.test(kind, async () => {
+      const root = await mkTempRoot("desk-launcher-")
+      const { repo, commit } = releaseRepo(root)
+      commit("3.2.122")
+      const env = { DESK_DRAINS_RELEASE_URL: repo }
+      const seeded = run(root, path.join(root, "none"), { env, git: undefined })
+      const dir = path.dirname(seeded.log)
+      const lock = path.join(dir, "fetch.lock")
+      const old = new Date(Date.now() - 20 * 60_000)
+      utimesSync(path.join(dir, "last-fetch"), old, old)
+      mkdirSync(lock)
+      if (kind === "live" || kind === "dead") {
+        const pid = kind === "live" ? process.pid : 2147483646
+        writeFileSync(path.join(lock, `owner-${pid}-00000000-0000-0000-0000-000000000000`), "")
+        writeFileSync(path.join(lock, "pid"), String(pid))
+      }
+      if (kind === "unknown") writeFileSync(path.join(lock, "unexpected-owner"), "")
+      if (kind !== "starting") utimesSync(lock, old, old)
+      let probes = 0
+      const selected = run(root, path.join(root, "none"), {
+        env, now: () => new Date(),
+        git: (args, ms) => {
+          if (args.includes("ls-remote")) probes++
+          return spawnSync("git", args, { encoding: "utf8", timeout: ms })
+        },
+      })
+      const abandoned = kind === "dead" || kind === "empty"
+      assert.equal(selected.status, 0, selected.err.join(""))
+      assert.deepEqual(selected.err, [])
+      assert.equal(probes, abandoned ? 1 : 0)
+      assert.equal(existsSync(lock), !abandoned)
+    })
+  }
 })
