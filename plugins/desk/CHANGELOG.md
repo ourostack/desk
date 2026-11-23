@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.467 — 2026-11-23
+
+Desk's MCP server now vendors Ouro UI v1.3.483, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.466 — 2026-11-23
 
 Workspace publication waits for the published policy's required checks before requesting any merge, including in repositories without branch protection. It no longer calls `gh pr merge --auto`, which can merge immediately, and attaches the merge relay's label only after the checks pass.
