@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.456 — 2026-11-23
+
+Concurrent drain launchers run immutable release copies, so another runner's checkout cannot hide or replace their selected script. Old copies remain while runners use them and are reclaimed by a later refresh.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.455 — 2026-11-23
 
 Desk's MCP server now vendors Ouro UI v1.3.474, moved by Ouro Current.
