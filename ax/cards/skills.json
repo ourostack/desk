@@ -298,7 +298,8 @@
       "effect": "read",
       "errors": [
         { "code": "surface-copy", "means": "The work reproduces prior art's layout, wording or feature list as given.", "fix": "Keep only what does the same job for your people, drop the rest, and name what you took and why." },
-        { "code": "prior-art-unchecked", "means": "A method, benchmark or tool is about to be built without looking for published work.", "fix": "Find and cite existing work first, then build only the gap." }
+        { "code": "prior-art-unchecked", "means": "A method, benchmark or tool is about to be built without looking for published work.", "fix": "Find and cite existing work first, then build only the gap." },
+        { "code": "duplicate-component", "means": "A component, module, helper or file is about to be created beside one that does the same job or nearly so.", "fix": "Extend the existing one with a prop, slot, variant or option, and say in the pull request what you searched if nothing fit." }
       ],
       "uses": ["skill:desk:evidence-discipline"]
     },
