@@ -1,7 +1,7 @@
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import * as path from "node:path"
-import { promises as fs } from "node:fs"
+import { promises as fs, writeFileSync } from "node:fs"
 import { spawnSync } from "node:child_process"
 import { desk_save } from "../../../../../plugins/desk/mcp/src/tools/desk-save.js"
 import { task_archive } from "../../../../../plugins/desk/mcp/src/tools/task.js"
@@ -26,6 +26,8 @@ async function fixture({ diverged = false } = {}) {
   await fs.mkdir(path.join(root, "track/outcome"), { recursive: true })
   await fs.writeFile(path.join(root, "track/outcome/task.md"), "---\nschema_version: 1\ntitle: Outcome\nstatus: cancelled\ncreated: 2026-01-01\nupdated: 2026-01-01\n---\n\n# Outcome\n")
   await fs.writeFile(path.join(root, "unrelated.md"), "original\n")
+  await fs.mkdir(path.join(root, "notes"))
+  await fs.writeFile(path.join(root, "notes/old.md"), "old\n")
   git(root, ["add", "."])
   git(root, ["commit", "-qm", "Seed"])
   git(root, ["remote", "add", "origin", origin])
@@ -119,4 +121,46 @@ test("a refused local commit reports publication separately and keeps the captur
   assert.match(result.checkout.local_commit.reason, /local index write refused/)
   assert.equal(git(worktree, ["show", `${result.desk_commit}:track/outcome/proof.md`]), "proof")
   assert.equal(git(worktree, ["show", ":track/outcome/proof.md"]), "proof")
+})
+
+test("a folder save publishes its captured children and removes deleted children", async () => {
+  const { root, worktree } = await fixture({ diverged: true })
+  await fs.unlink(path.join(worktree, "notes/old.md"))
+  await fs.writeFile(path.join(worktree, "notes/proof.md"), "folder proof\n")
+  const result = await desk_save({
+    deskRoot: worktree,
+    input: { paths: ["notes/"], message: "Save folder" },
+    schedulePush() {},
+  })
+  assert.equal(result.status, "committed")
+  assert.equal(git(root, ["show", "origin/main:notes/proof.md"]), "folder proof")
+  assert.equal(git(root, ["ls-tree", "-r", "--name-only", "origin/main", "--", "notes/"]), "notes/proof.md")
+  assert.equal(git(worktree, ["show", `${result.desk_commit}:notes/proof.md`]), "folder proof")
+  assert.equal(result.checkout.state, "saved_locally", JSON.stringify(result.checkout))
+  assert.equal(git(worktree, ["status", "--porcelain"]), "")
+})
+
+test("a timed-out push names the save commit even when a later remote commit replaces its bytes", async () => {
+  const { root, worktree } = await fixture({ diverged: true })
+  let replaced = false
+  const cutAfterPush = (command, args, options) => {
+    const result = spawnSync(command, args, options)
+    if (!replaced && args.includes("push") && result.status === 0) {
+      replaced = true
+      git(root, ["fetch", "-q", "origin", "main"])
+      git(root, ["merge", "--ff-only", "-q", "origin/main"])
+      writeFileSync(path.join(root, "track/outcome/proof.md"), "later writer\n")
+      git(root, ["add", "track/outcome/proof.md"])
+      git(root, ["commit", "-qm", "Later writer"])
+      git(root, ["push", "-q", "origin", "main"])
+      return { status: null, stdout: "", stderr: "" }
+    }
+    return result
+  }
+  const result = await save(worktree, "proof", { spawnGit: cutAfterPush, schedulePush() {} })
+  assert.equal(result.status, "committed")
+  assert.equal(result.desk_pushed, true)
+  assert.equal(git(root, ["show", "origin/main:track/outcome/proof.md"]), "later writer")
+  assert.equal(git(worktree, ["show", `${result.desk_commit}:track/outcome/proof.md`]), "proof")
+  git(worktree, ["merge-base", "--is-ancestor", result.desk_commit, "origin/main"])
 })

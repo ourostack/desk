@@ -23,6 +23,7 @@ import { fastGitAnswer } from "../runtime/fast-refs.js"
 import { publicationPolicy, publishPullRequest } from "../runtime/pr-publication.js"
 import { savesFor, settleSaves } from "../runtime/unmerged-saves.js"
 import { commitIndexPaths } from "./git-stage.js"
+import { treeLines } from "./cas-commit.js"
 
 const GIT_TIMEOUT_MS = 10_000
 const NETWORK_TIMEOUT_MS = 60_000
@@ -96,7 +97,9 @@ function catchUp(git, target) {
     : { state: "behind", reason: "local_changes" }
 }
 
-function publishedAnswer(git, target, { root, relPaths, entries, message, spawnGit }) {
+function publishedAnswer(git, target, { root, relPaths, entries, message, spawnGit, wanted }, receipt = target) {
+  if (JSON.stringify(treeLines(spawnGit, root, receipt, relPaths)) !== JSON.stringify(wanted))
+    return fail(relPaths, "the published receipt does not hold the captured files", "the published target changed or Git could not read it", `git -C ${root} show ${receipt}`, "the save may already be published; read it back before retrying", "unknown")
   const checkout = catchUp(git, target)
   if (checkout.state === "behind") {
     // A divergent branch cannot fast-forward without losing its earlier work. Commit only the already published capture
@@ -106,14 +109,14 @@ function publishedAnswer(git, target, { root, relPaths, entries, message, spawnG
       ? commitIndexPaths(root, relPaths, entries, message, spawnGit, branch.stdout.trim())
       : { ok: false, stderr: "The checkout branch could not be read" }
     if (local.ok) return {
-      ok: true, stderr: "", published: true, commit: target,
+      ok: true, stderr: "", published: true, commit: receipt,
       checkout: { state: "saved_locally", reason: checkout.reason },
       checkout_note: "The save is published and also committed on this checkout's branch. Earlier local work was preserved; this branch has not been replaced with the remote's history.",
     }
     checkout.local_commit = { status: local.readback === "unknown" ? "unknown" : "failed", reason: local.stderr }
   }
   return {
-    ok: true, stderr: "", published: true, commit: target,
+    ok: true, stderr: "", published: true, commit: receipt,
     ...(checkout.state === "behind" ? {
       checkout,
       checkout_note: "The save is published, but this checkout could not follow the remote. Its saved entries remain staged; preserve local changes and reconcile the branch before expecting HEAD to contain them.",
@@ -138,7 +141,7 @@ export function publishCardCommit({ root, relPaths, message, defaultBranch, spaw
   const top = probe(["rev-parse", "--show-toplevel"]).stdout.trim()
   const prefix = probe(["rev-parse", "--show-prefix"]).stdout.trim()
   const gitDir = probe(["rev-parse", "--absolute-git-dir"]).stdout.trim()
-  const full = relPaths.map((rel) => path.posix.join(prefix, rel.split(path.sep).join("/")))
+  const full = relPaths.map((rel) => path.posix.join(prefix, rel.split(path.sep).join("/"), "."))
   // A failed read must stop here: an empty entry list would publish the removal of every path.
   const listed = probe(["ls-files", "-s", "-z", "--full-name", "--", ...relPaths])
   if (listed.status !== 0) return fail(relPaths, "Git could not read the staged entries", "git ls-files failed", `git -C ${root} ls-files -s -- ${relPaths.join(" ")}`, "the card is unchanged on disk; retry the write")
@@ -152,7 +155,8 @@ export function publishCardCommit({ root, relPaths, message, defaultBranch, spaw
   const indexFile = path.join(gitDir, PRIVATE_INDEX)
   const indexGit = runner(spawnGit, top, { ...env, GIT_INDEX_FILE: indexFile })
   const git = runner(spawnGit, top, env)
-  const localCapture = { root: top, relPaths: full, entries: [...entries].map(([file, entry]) => ({ ...entry, path: file, stage: "0" })), message, spawnGit }
+  const wanted = [...entries].map(([file, entry]) => `${entry.mode} ${entry.sha}\t${file}`).sort()
+  const localCapture = { root: top, relPaths: full, entries: [...entries].map(([file, entry]) => ({ ...entry, path: file, stage: "0" })), wanted, message, spawnGit }
   const remoteRef = `refs/remotes/${REMOTE}/${defaultBranch}`
   try {
     // Saves still waiting from earlier writes are settled first: closed when superseded, rebuilt when they conflict with main.
@@ -164,7 +168,9 @@ export function publishCardCommit({ root, relPaths, message, defaultBranch, spaw
       }
       const onto = git(["rev-parse", "--verify", "--quiet", `${remoteRef}^{commit}`]).stdout.trim()
       if (indexGit(["read-tree", onto]).status !== 0) return fail(relPaths, `Desk could not read ${REMOTE}/${defaultBranch} into a private index`, "git read-tree failed", `git -C ${root} log -1 ${remoteRef}`, "nothing was written; retry the write")
-      for (const file of full) {
+      const previous = indexGit(["ls-files", "-z", "--", ...full])
+      if (previous.status !== 0) return fail(relPaths, "Git could not read the remote's captured paths", "git ls-files failed", `git -C ${root} status`, "nothing was published; retry the write")
+      for (const file of new Set([...full, ...previous.stdout.split("\0").filter(Boolean), ...entries.keys()])) {
         const entry = entries.get(file)
         const step = entry === undefined
           ? indexGit(["update-index", "--force-remove", "--", file])
@@ -173,6 +179,8 @@ export function publishCardCommit({ root, relPaths, message, defaultBranch, spaw
       }
       const tree = indexGit(["write-tree"]).stdout.trim()
       if (tree === "") return fail(relPaths, "Desk could not write the tree", "git write-tree failed", `git -C ${root} status`, "nothing was written; retry the write")
+      if (JSON.stringify(treeLines(spawnGit, top, tree, full)) !== JSON.stringify(wanted))
+        return fail(relPaths, "the built tree differs from the captured files", "Git did not build the requested paths", `git -C ${root} status`, "nothing was published; preserve the staged files and retry the write")
       if (tree === git(["rev-parse", `${onto}^{tree}`]).stdout.trim()) {
         return publishedAnswer(git, onto, localCapture)
       }
@@ -204,7 +212,7 @@ export function publishCardCommit({ root, relPaths, message, defaultBranch, spaw
         } else target = commit
       }
       git(["update-ref", remoteRef, target])
-      return publishedAnswer(git, target, localCapture)
+      return publishedAnswer(git, target, localCapture, policy === null ? commit : target)
     }
     return fail(relPaths, `the remote kept rejecting the push to ${defaultBranch} after ${PUSH_ATTEMPTS} tries`, "other writers pushed to the default branch at the same time, or a hook declined the commit", `git -C ${root} fetch ${REMOTE} ${defaultBranch}`, "the card is still staged; retry the write")
   } finally {
