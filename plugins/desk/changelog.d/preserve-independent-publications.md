@@ -1,1 +1,0 @@
-Keep independent workspace publication pull requests open when another Desk root publishes unrelated changes. Remove the unconditional branch-prefix supersession sweep; existing evidence-based settlement remains responsible for closing genuinely landed duplicates and clearing their waiting records.
