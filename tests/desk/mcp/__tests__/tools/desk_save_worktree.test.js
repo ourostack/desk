@@ -5,6 +5,7 @@ import { promises as fs, writeFileSync } from "node:fs"
 import { spawnSync } from "node:child_process"
 import { desk_save } from "../../../../../plugins/desk/mcp/src/tools/desk-save.js"
 import { task_archive } from "../../../../../plugins/desk/mcp/src/tools/task.js"
+import { publishCardCommit } from "../../../../../plugins/desk/mcp/src/util/main-publish.js"
 import { mkTempDeskRoot } from "./_helpers.js"
 
 function git(root, args) {
@@ -201,3 +202,74 @@ for (const cutOff of [false, true]) {
     assert.equal(git(worktree, ["status", "--porcelain"]), "")
   })
 }
+
+for (const [treeRead, unread, published] of [[1, true, false], [2, false, false], [3, true, true]]) {
+  test(`publication refuses ${["", "an unreadable remote capture", "a built tree missing saved bytes", "an unreadable published receipt"][treeRead]} without inventing success`, async () => {
+    const { root, worktree } = await fixture()
+    await fs.writeFile(path.join(worktree, "track/outcome/proof.md"), "proof\n")
+    git(worktree, ["add", "track/outcome/proof.md"])
+    let reads = 0
+    const refuseTree = (command, args, options) => args.includes("ls-tree") && args.includes("-r") && ++reads === treeRead
+      ? { status: unread ? 1 : 0, stdout: "", stderr: "tree unreadable" }
+      : spawnSync(command, args, options)
+    const result = publishCardCommit({ root: worktree, relPaths: ["track/outcome/proof.md"], message: "Save proof", defaultBranch: "main", spawnGit: refuseTree })
+    assert.equal(result.ok, false)
+    assert.equal(result.readback, published ? "unknown" : "absent")
+    const remote = spawnSync("git", ["-C", root, "show", "origin/main:track/outcome/proof.md"], { encoding: "utf8" })
+    assert.equal(remote.status === 0, published)
+    assert.equal(git(worktree, ["show", ":track/outcome/proof.md"]), "proof")
+  })
+}
+
+for (const reason of ["head_unread", "ancestry_unread"]) {
+  test(`a published save with ${reason} preserves local history through a scoped capture commit`, async () => {
+    const { worktree } = await fixture({ diverged: true })
+    const earlier = git(worktree, ["rev-parse", "HEAD"])
+    const unreadCheckout = (command, args, options) => (reason === "head_unread" && args.includes("HEAD^{commit}")) || (reason === "ancestry_unread" && args.includes("merge-base"))
+      ? { status: 2, stdout: "", stderr: "checkout read refused" }
+      : spawnSync(command, args, options)
+    const result = await save(worktree, "proof", { spawnGit: unreadCheckout, schedulePush() {} })
+    assert.equal(result.status, "committed")
+    assert.equal(result.desk_pushed, true)
+    assert.deepEqual(result.checkout, { state: "saved_locally", reason })
+    git(worktree, ["merge-base", "--is-ancestor", earlier, "HEAD"])
+    assert.equal(git(worktree, ["show", "HEAD:track/outcome/proof.md"]), "proof")
+  })
+}
+
+for (const status of [1, 0]) {
+  test(`an unreadable local branch (exit ${status}) leaves a published save staged and reports the separate checkout failure`, async () => {
+    const { worktree } = await fixture({ diverged: true })
+    let published = false
+    const unreadBranch = (command, args, options) => {
+      if (published && args.includes("symbolic-ref")) return { status, stdout: "", stderr: "branch unreadable" }
+      const result = spawnSync(command, args, options)
+      if (args.includes("push") && result.status === 0) published = true
+      return result
+    }
+    const result = await save(worktree, "proof", { spawnGit: unreadBranch, schedulePush() {} })
+    assert.equal(result.status, "committed")
+    assert.equal(result.desk_pushed, true)
+    assert.equal(result.checkout.local_commit.status, "failed")
+    assert.match(result.checkout.local_commit.reason, /branch could not be read/)
+    assert.equal(git(worktree, ["show", `${result.desk_commit}:track/outcome/proof.md`]), "proof")
+    assert.equal(git(worktree, ["show", ":track/outcome/proof.md"]), "proof")
+  })
+}
+
+test("a cut-off local branch update with unreadable readback reports unknown local state without losing the published receipt", async () => {
+  const { worktree } = await fixture({ diverged: true })
+  let cut = false
+  const cutLocalUpdate = (command, args, options) => {
+    if (args.includes("update-ref") && args.includes("refs/heads/save-lane")) cut = true
+    return cut && (args.includes("update-ref") || (args.includes("rev-parse") && (args.includes("HEAD") || args.includes("refs/heads/save-lane"))))
+      ? { status: null, stdout: "", stderr: "" }
+      : spawnSync(command, args, options)
+  }
+  const result = await save(worktree, "proof", { spawnGit: cutLocalUpdate, schedulePush() {} })
+  assert.equal(result.status, "committed")
+  assert.equal(result.desk_pushed, true)
+  assert.equal(result.checkout.local_commit.status, "unknown")
+  assert.equal(git(worktree, ["show", `${result.desk_commit}:track/outcome/proof.md`]), "proof")
+  assert.equal(git(worktree, ["show", ":track/outcome/proof.md"]), "proof")
+})
