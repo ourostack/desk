@@ -5,7 +5,7 @@
 
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
-import { promises as fs } from "node:fs"
+import { existsSync, promises as fs } from "node:fs"
 import * as path from "node:path"
 import { spawnSync } from "node:child_process"
 import { mkTempRoot } from "../_temp_roots.js"
@@ -21,7 +21,8 @@ const upstream = { remote: "origin", merge: "refs/heads/main", tracking: "refs/r
 const policy = { schema_version: 1, mode: "pull-request", required_checks: ["workspace-policy"] }
 
 function git(root, args) {
-  const result = spawnSync("git", ["-C", root, ...args], { encoding: "utf8" })
+  const location = existsSync(path.join(root, "HEAD")) ? ["--git-dir", root] : ["-C", root]
+  const result = spawnSync("git", [...location, ...args], { encoding: "utf8" })
   assert.equal(result.status, 0, `git ${args.join(" ")} failed: ${result.stderr}`)
   return result.stdout.trim()
 }
@@ -86,7 +87,13 @@ function fakeGh(origin, options = {}) {
     if (args[0] === "pr" && args[1] === "edit") { byRef(args[2]).labels.push(args[args.indexOf("--add-label") + 1]); return ok("") }
     if (args[0] === "pr" && args[1] === "merge") return options.autoMergeRefused ? { status: 1, stderr: "Auto merge is not allowed for this repository" } : ok("")
     if (args[0] === "pr" && args[1] === "view") return ok(view(byRef(args[2])))
-    if (args[0] === "pr" && args[1] === "close") { const pr = byRef(args[2]); pr.state = "CLOSED"; pr.closedWith = args[args.indexOf("--comment") + 1]; return ok("") }
+    if (args[0] === "pr" && args[1] === "close") {
+      const pr = byRef(args[2])
+      pr.state = "CLOSED"
+      pr.closedWith = args[args.indexOf("--comment") + 1]
+      if (args.includes("--delete-branch")) git(origin, ["update-ref", "-d", `refs/heads/${pr.branch}`])
+      return ok("")
+    }
     if (args[0] === "api" && args.some((arg) => arg.includes("/rules/branches/"))) return ok([[]])
     if (args[0] === "api" && args.some((arg) => /\/branches\/[^/]+$/u.test(arg))) return ok({ protected: false })
     if (args[0] === "api" && args.some((arg) => arg.includes("/status?"))) return ok([{ statuses: [] }])
@@ -116,6 +123,46 @@ const clockOf = () => { let now = 0; return { now: () => (now += 100_000), sleep
 function publish({ desk, env, gh, head, onto, track = true, clock = clockOf() }) {
   return publishPullRequest({ git: runner(gh, desk), spawnGit: gh, root: desk, upstream, head, onto, policy, clock, ...(track ? { track: savesFor({ root: desk, env, now: Date.now }) } : {}) })
 }
+
+test("independent publication roots preserve unmatched card candidates and settle landed duplicates with evidence", async () => {
+  const { origin, seed, desk, env } = await world("independent-roots")
+  const onto = git(desk, ["rev-parse", "HEAD"])
+  const card = "work/saved/task.md"
+  const text = "---\ntitle: saved\nstatus: processing\n---\n\nA card write that friction does not contain.\n"
+  await fs.mkdir(path.dirname(path.join(desk, card)), { recursive: true })
+  await fs.writeFile(path.join(desk, card), text)
+  git(desk, ["add", card])
+  git(desk, ["commit", "-q", "-m", "save card"])
+  const head = git(desk, ["rev-parse", "HEAD"])
+  const options = { pending: true }
+  const gh = fakeGh(origin, options)
+  assert.throws(() => publish({ desk, env, gh, head, onto }), /checks still missing or pending/u)
+  const first = gh.prs.get(1)
+
+  await fs.mkdir(path.join(seed, "_meta"))
+  await fs.writeFile(path.join(seed, "_meta", "friction.md"), "Unrelated friction.\n")
+  git(seed, ["add", "_meta/friction.md"])
+  git(seed, ["commit", "-q", "-m", "save friction"])
+  const secondHead = git(seed, ["rev-parse", "HEAD"])
+  options.pending = false
+  publish({ desk: seed, env, gh, head: secondHead, onto })
+  assert.equal(first.state, "OPEN", "root B must not close root A's unmatched candidate")
+  assert.equal(git(origin, ["rev-parse", `refs/heads/${first.branch}`]), head)
+  assert.equal(gh.prs.get(2).state, "MERGED")
+  assert.notEqual(spawnSync("git", ["--git-dir", origin, "cat-file", "-e", `refs/heads/main:${card}`]).status, 0)
+  assert.equal(stuckSaves({ root: desk, env, now: () => Date.now() + 60 * MINUTE })[0].url, first.url)
+
+  await fs.mkdir(path.dirname(path.join(seed, card)), { recursive: true })
+  await fs.writeFile(path.join(seed, card), text)
+  git(seed, ["add", card])
+  git(seed, ["commit", "-q", "-m", "land identical card"])
+  git(seed, ["push", "-q", "origin", "HEAD:main"])
+  const settled = settleSaves({ root: desk, env, spawnGit: gh, clock: clockOf() })
+  assert.deepEqual(settled.closed, [first.url])
+  assert.match(first.closedWith, /Superseded: .*already on main.*work\/saved\/task\.md is identical on main/u)
+  assert.deepEqual(stuckSaves({ root: desk, env, now: () => Date.now() + 60 * MINUTE }), [])
+  assert.notEqual(spawnSync("git", ["--git-dir", origin, "show-ref", "--verify", `refs/heads/${first.branch}`]).status, 0)
+})
 
 test("a repository that refuses auto-merge still gets the relay's label and merges", async () => {
   const { origin, desk, env } = await world("refused")

@@ -414,7 +414,7 @@ test("a branch push cut off twice says it was cut off and shows no remote line",
   })
 })
 
-test("a newer publication closes the earlier publication PRs it supersedes and leaves other PRs alone", () => {
+test("publishing a candidate does not enumerate or close other publication PRs by branch prefix", () => {
   const open = [
     { number: 7, headRefName: `desk/publish/${"d".repeat(40)}` },
     { number: 8, headRefName: "feature/x" },
@@ -423,18 +423,6 @@ test("a newer publication closes the earlier publication PRs it supersedes and l
   const f = fixture({ create: true, open })
   publishPullRequest(f.request)
   const closed = f.calls.filter((call) => call[2] === "close").map((call) => call[3])
-  assert.deepEqual(closed, ["7"])
-  const close = f.calls.find((call) => call[2] === "close")
-  assert.ok(close.includes("--delete-branch") && close.some((arg) => /Superseded by .*\/pull\/42/u.test(arg)))
-})
-
-test("a failure while closing superseded PRs does not stop publishing", () => {
-  const f = fixture({ create: true, open: [{ number: 7, headRefName: `desk/publish/${"d".repeat(40)}` }], fail: "close" })
-  assert.equal(publishPullRequest(f.request).receipt.merge, merged)
-})
-
-test("a list of open PRs that is not a list does not stop publishing", () => {
-  const f = fixture({ create: true, open: {} })
-  assert.equal(publishPullRequest(f.request).receipt.merge, merged)
-  assert.ok(!f.calls.some((call) => call[2] === "close"))
+  assert.deepEqual(closed, [])
+  assert.ok(!f.calls.some((call) => call[1] === "pr" && call[2] === "list" && !call.includes("--head")))
 })
