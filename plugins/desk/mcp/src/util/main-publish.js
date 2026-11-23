@@ -17,6 +17,7 @@
 
 import { spawnSync } from "node:child_process"
 import { rmSync } from "node:fs"
+import { randomBytes } from "node:crypto"
 import * as path from "node:path"
 
 import { gitEnv } from "../runtime/deliver.js"
@@ -151,6 +152,9 @@ export function publishCardCommit({ root, relPaths, message, defaultBranch, spaw
   const prefix = probe(["rev-parse", "--show-prefix"]).stdout.trim()
   const gitDir = probe(["rev-parse", "--absolute-git-dir"]).stdout.trim()
   const full = relPaths.map((rel) => path.posix.join(prefix, rel.split(path.sep).join("/"), "."))
+  // A requested path that is the repository root would let the build remove every file on the remote.
+  const wide = relPaths.find((rel, i) => full[i] === "." || full[i] === "" || full[i].startsWith("../"))
+  if (wide !== undefined) return fail(relPaths, `${JSON.stringify(wide)} is the repository root or outside it, not a card`, "a caller passed an empty, root or escaping path", `git -C ${root} status`, "nothing was published; name the card files to publish")
   // A failed read must stop here: an empty entry list would publish the removal of every path.
   const listed = probe(["ls-files", "-s", "-z", "--full-name", "--", ...relPaths])
   if (listed.status !== 0) return fail(relPaths, "Git could not read the staged entries", "git ls-files failed", `git -C ${root} ls-files -s -- ${relPaths.join(" ")}`, "the card is unchanged on disk; retry the write")
@@ -161,7 +165,8 @@ export function publishCardCommit({ root, relPaths, message, defaultBranch, spaw
     if (stage !== "0") return fail(relPaths, `${file} has a merge conflict in the index`, "an earlier merge left the file unresolved", `git -C ${root} status`, "resolve the conflict in the checkout, then retry the write")
     entries.set(file, { mode, sha })
   }
-  const indexFile = path.join(gitDir, PRIVATE_INDEX)
+  // Each call builds in its own index file: two publishers sharing one name deleted each other's index mid-build.
+  const indexFile = path.join(gitDir, `${PRIVATE_INDEX}-${process.pid}-${randomBytes(6).toString("hex")}`)
   const indexGit = runner(spawnGit, top, { ...env, GIT_INDEX_FILE: indexFile })
   const git = runner(spawnGit, top, env)
   const wanted = [...entries].map(([file, entry]) => `${entry.mode} ${entry.sha}\t${file}`).sort()
@@ -190,6 +195,11 @@ export function publishCardCommit({ root, relPaths, message, defaultBranch, spaw
       if (tree === "") return fail(relPaths, "Desk could not write the tree", "git write-tree failed", `git -C ${root} status`, "nothing was written; retry the write")
       if (JSON.stringify(treeLines(spawnGit, top, tree, full)) !== JSON.stringify(wanted))
         return fail(relPaths, "the built tree differs from the captured files", "Git did not build the requested paths", `git -C ${root} status`, "nothing was published; preserve the staged files and retry the write")
+      // The commit may change only what was asked for: a change anywhere else means the private index was lost or clobbered.
+      const changed = git(["diff-tree", "-r", "--name-only", "--no-renames", "-z", onto, tree])
+      if (changed.status !== 0) return fail(relPaths, "Desk could not compare the built tree with the remote", "git diff-tree failed", `git -C ${root} diff-tree -r ${onto} ${tree}`, "nothing was published; retry the write")
+      const stray = changed.stdout.split("\0").filter(Boolean).filter((file) => !full.some((card) => file === card || file.startsWith(`${card}/`)))
+      if (stray.length > 0) return fail(relPaths, `the built tree would also change ${stray.length} path(s) outside the card, such as ${stray[0]}`, "the private index lost the remote's files while it was being built", `git -C ${root} diff-tree -r ${onto} ${tree}`, "nothing was published; the card stays staged, so retry the write")
       if (tree === git(["rev-parse", `${onto}^{tree}`]).stdout.trim()) {
         return publishedAnswer(git, onto, localCapture)
       }

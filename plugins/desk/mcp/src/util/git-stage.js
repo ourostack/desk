@@ -394,7 +394,23 @@ function capturedPaths(root, relPaths, spawnGit, entries) {
 }
 
 // A path written the way the index spells it (no `./`, no `..`, not absolute): the private-index commit matches paths by that spelling.
+const LOST_INDEX_MIN_FILES = 20
 const plainRelative = (p) => !path.isAbsolute(p) && path.posix.normalize(p) === p && !p.startsWith("../") && p !== "." && !p.includes("\\")
+
+/**
+ * True when the checkout's index holds under half of HEAD's files, which a fresh, damaged or emptied index does: a commit
+ * built from it would delete the rest. Unreadable counts are not evidence, so they never block.
+ */
+export function indexLooksLost(root, spawnGit) {
+  const count = (args) => {
+    const result = run(spawnGit, root, args)
+    return result.status === 0 && typeof result.stdout === "string" ? result.stdout.split("\0").filter(Boolean).length : null
+  }
+  const head = count(["ls-tree", "-r", "-z", "--name-only", "HEAD"])
+  if (head === null || head < LOST_INDEX_MIN_FILES) return false
+  const held = count(["ls-files", "-z"])
+  return held !== null && held * 2 < head
+}
 
 /**
  * `git commit` exactly `relPaths` (relative to `root`) with `message`, never
@@ -406,6 +422,7 @@ const plainRelative = (p) => !path.isAbsolute(p) && path.posix.normalize(p) === 
  * and reported as `{ ok: false, stderr: "timeout" }`.
  */
 export function commitPaths(root, relPaths, message, spawnGit, stateBranch, { keepLocal = false } = {}) {
+  if (indexLooksLost(root, spawnGit)) return { ok: false, stderr: `Desk did not commit ${relPaths.join(", ")}: this checkout's index holds under half of HEAD's files, so a commit would delete the rest. Probable cause: a fresh, partial or damaged clone. Look further: git -C ${root} status. Keep working: repair the checkout (git -C ${root} reset), then retry`, readback: "absent" }
   // A checkout on another branch (a worktree) publishes the commit to the remote's default branch instead of committing on its own branch.
   if (typeof stateBranch !== "string") {
     const target = defaultBranchForPublication(root, spawnGit)
