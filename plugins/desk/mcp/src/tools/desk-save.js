@@ -203,6 +203,8 @@ async function writeFiles(checked) {
  *
  * Returns: { status: "committed" | "nothing_to_commit" | "commit_failed" | "commit_unknown", commit?, desk_commit?, desk_pushed?, desk_note? }: a commit made here reports
  * its short sha as `desk_commit` (left out when Git cannot say) and `desk_pushed: false`, because the push is scheduled, not yet done.
+ * A branch-bound desk that publishes synchronously reports that published commit and `desk_pushed: true`; `checkout` and
+ * `checkout_note` distinguish a local copy committed without replacing earlier history from a failed local commit.
  */
 function tidyTrailer(message) {
   const trimmed = message.replace(/\s+$/u, "")
@@ -347,16 +349,26 @@ async function saveDesk({ deskRoot, input, person = null, env = process.env, spa
       throw Object.assign(new Error(`desk_save: add ${missing[0]} to \`paths\`: a move is committed with both its old and its new path`), { code: "desk_save_a_move_is_committed_with_2" })
     }
   }
-  const committed = commitPaths(deskRoot, paths, message, spawnGit)
+  const committed = commitPaths(deskRoot, paths, message, spawnGit, undefined, { keepLocal: true })
   if (!committed.ok) {
     return commitNotMade(commitFailure({ root: deskRoot, paths: listed, message, committed }))
   }
   // HEAD is read before the push is scheduled, so a push that rebases cannot hand back its own hash.
-  const deskCommit = headSha(deskRoot, spawnGit)
-  schedulePush({ root: deskRoot })
-  const answer = { status: "committed", ...deskPushNote({ root: deskRoot, spawnGit, note: DESK_SAVE_NOTE }), desk_pushed: false }
+  const published = committed.published === true
+  const deskCommit = headSha(deskRoot, spawnGit, committed.commit ?? "HEAD")
+  if (!published) schedulePush({ root: deskRoot })
+  const answer = published
+    ? { status: "committed", desk_pushed: true, desk_note: "Desk published these files to the remote's default branch, so they are already on the remote. Run no git to push them." }
+    : { status: "committed", ...deskPushNote({ root: deskRoot, spawnGit, note: DESK_SAVE_NOTE }), desk_pushed: false }
+  if (committed.checkout !== undefined) {
+    answer.checkout = committed.checkout
+    answer.checkout_note = committed.checkout_note
+  }
   if (contentAdmission !== null) answer.content_admission = contentAdmission
-  return deskCommit === null ? answer : { ...answer, ...commitHashAnswer({ env, hash: deskCommit }) }
+  return deskCommit === null ? answer : {
+    ...answer, ...commitHashAnswer({ env, hash: deskCommit, published }),
+    ...(published ? { desk_commit_note: "desk_commit identifies the published commit containing these saved paths, not this checkout's HEAD." } : {}),
+  }
 }
 
 // A stage or read failure: nothing was committed, and the route finishes the commit by hand (#623).

@@ -405,11 +405,11 @@ const plainRelative = (p) => !path.isAbsolute(p) && path.posix.normalize(p) === 
  * that runs past `GIT_TIMEOUT_MS` (a hung commit hook, most often) is killed
  * and reported as `{ ok: false, stderr: "timeout" }`.
  */
-export function commitPaths(root, relPaths, message, spawnGit, stateBranch) {
+export function commitPaths(root, relPaths, message, spawnGit, stateBranch, { keepLocal = false } = {}) {
   // A checkout on another branch (a worktree) publishes the commit to the remote's default branch instead of committing on its own branch.
   if (typeof stateBranch !== "string") {
     const target = defaultBranchForPublication(root, spawnGit)
-    if (target !== null) return publishCardCommit({ root, relPaths, message, defaultBranch: target, spawnGit })
+    if (target !== null) return publishCardCommit({ root, relPaths, message, defaultBranch: target, spawnGit, keepLocal })
   }
   const refusal = commitBranchRefusal(root, spawnGit, stateBranch)
   if (refusal !== null) return { ok: false, stderr: refusal, readback: "absent" }
