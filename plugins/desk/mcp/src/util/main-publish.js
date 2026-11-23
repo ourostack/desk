@@ -221,7 +221,7 @@ export function publishCardCommit({ root, relPaths, message, defaultBranch, spaw
         } else target = commit
       }
       git(["update-ref", remoteRef, target])
-      return publishedAnswer(git, target, localCapture, policy === null ? commit : target)
+      return publishedAnswer(git, target, localCapture, commit)
     }
     return fail(relPaths, `the remote kept rejecting the push to ${defaultBranch} after ${PUSH_ATTEMPTS} tries`, "other writers pushed to the default branch at the same time, or a hook declined the commit", `git -C ${root} fetch ${REMOTE} ${defaultBranch}`, "the card is still staged; retry the write")
   } finally {

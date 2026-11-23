@@ -13,7 +13,7 @@ function git(root, args) {
   return result.stdout.trim()
 }
 
-async function fixture({ diverged = false } = {}) {
+async function fixture({ diverged = false, pullRequest = false } = {}) {
   const base = await mkTempDeskRoot()
   const root = path.join(base, "desk")
   const origin = path.join(base, "origin.git")
@@ -28,6 +28,10 @@ async function fixture({ diverged = false } = {}) {
   await fs.writeFile(path.join(root, "unrelated.md"), "original\n")
   await fs.mkdir(path.join(root, "notes"))
   await fs.writeFile(path.join(root, "notes/old.md"), "old\n")
+  if (pullRequest) {
+    await fs.mkdir(path.join(root, ".desk"))
+    await fs.writeFile(path.join(root, ".desk/publication.json"), JSON.stringify({ schema_version: 1, mode: "pull-request", required_checks: ["ci"] }))
+  }
   git(root, ["add", "."])
   git(root, ["commit", "-qm", "Seed"])
   git(root, ["remote", "add", "origin", origin])
@@ -164,3 +168,36 @@ test("a timed-out push names the save commit even when a later remote commit rep
   assert.equal(git(worktree, ["show", `${result.desk_commit}:track/outcome/proof.md`]), "proof")
   git(worktree, ["merge-base", "--is-ancestor", result.desk_commit, "origin/main"])
 })
+
+for (const cutOff of [false, true]) {
+  test(`a merged publication PR ${cutOff ? "with a cut-off reply" : "with a normal reply"} names the save before a later writer replaces its bytes`, async () => {
+    const { root, worktree } = await fixture({ diverged: true, pullRequest: true })
+    let pr
+    const mergeThenReplace = (command, args, options) => {
+      if (command === "git" && args.includes("get-url")) return { status: 0, stdout: "https://github.com/sample/context.git\n", stderr: "" }
+      if (command !== "gh") return spawnSync(command, args, options)
+      if (pr === undefined) {
+        const branch = args.find((word) => word.startsWith("desk/publish/"))
+        const candidate = branch.slice("desk/publish/".length)
+        git(root, ["fetch", "-q", "origin", branch])
+        git(root, ["merge", "--ff-only", "-q", "FETCH_HEAD"])
+        git(root, ["push", "-q", "origin", "main"])
+        pr = { number: 1, url: "https://github.com/sample/context/pull/1", state: "MERGED", isDraft: false, headRefOid: candidate, baseRefName: "main", mergeCommit: { oid: candidate } }
+        writeFileSync(path.join(root, "track/outcome/proof.md"), "later writer\n")
+        git(root, ["commit", "-qam", "Later writer"])
+        git(root, ["push", "-q", "origin", "main"])
+        if (cutOff) return { status: null, stdout: "", stderr: "" }
+      }
+      return { status: 0, stdout: JSON.stringify(args.includes("list") ? [pr] : pr), stderr: "" }
+    }
+    const result = await save(worktree, "proof", { spawnGit: mergeThenReplace, schedulePush() {} })
+    assert.equal(result.status, "committed", JSON.stringify(result))
+    assert.equal(result.desk_pushed, true)
+    assert.equal(git(root, ["show", "origin/main:track/outcome/proof.md"]), "later writer")
+    assert.equal(git(worktree, ["show", `${result.desk_commit}:track/outcome/proof.md`]), "proof")
+    git(worktree, ["merge-base", "--is-ancestor", result.desk_commit, "origin/main"])
+    assert.equal(result.checkout.state, "saved_locally")
+    assert.equal(git(worktree, ["show", "HEAD:track/outcome/proof.md"]), "proof")
+    assert.equal(git(worktree, ["status", "--porcelain"]), "")
+  })
+}
