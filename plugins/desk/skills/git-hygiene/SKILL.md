@@ -88,6 +88,8 @@ The discipline:
    The worktree isolates the work: parallel units never collide in the working tree, and the canonical clone's resting state is never perturbed.
 3. **Clean up after yourself only at the recorded endpoint.** For an authorized merge, confirm the source-system PR state and actual merged source first; for GitHub, `gh pr view <id> --json state --jq .state` must return `MERGED`. This is necessary, not sufficient: apply every exact-owned cleanup gate above before `git worktree remove <path>` or deleting the specific branch. Do not chain removal unconditionally after merge or let a merge command's automatic branch deletion bypass these gates. Reconcile the canonical clone through the recorded repository policy afterward. An alpha or PR-only endpoint instead preserves or transfers the exact refs/worktree with a named owner and trigger. The end state has zero unaccounted-for resources, not zero deliberately retained branches. If merge failed or ownership/absence is uncertain, preserve the work and keep cleanup pending.
 
+4. **Spend disk like money.** Reuse one clone per repository and a worktree per unit of work; never make a fresh full clone for each review, fix or child session. For a large repository, use a partial clone (`--filter=blob:none`) and a sparse checkout of only the folders the work touches. Remove a worktree as soon as its endpoint is reached (step 3), and stop any preview or dev server you started, by its process ID, when its review ends.
+
 **Why:** the clone's checked-out state is cattle, not a pet — only `main` and the remote are durable. This is the working-copy layer of "Never leave state behind" (below) and the branch → PR → merge drive-to-merge motion: branch in a worktree → PR → merge → delete branch → remove worktree → clone back on clean `main`, no residue at any layer.
 
 ### Verify before delete — cleanup is not destroy
@@ -198,6 +200,8 @@ At session start, if git status in any repo shows unexpected uncommitted changes
 
 Never move a branch ref in place with `git update-ref` or an equivalent under a dirty checkout. In a desk, run `git pull --rebase --autostash` and commit only your own paths; other sessions' unfinished files stay where they are. In a code repository, start from a clean temporary worktree based on the current remote destination, replay only the exact task-owned change, stage only an explicit staged-path allowlist, inspect `git diff --cached --name-status` against that allowlist, then inspect the full staged diff before commit.
 
+Never run `git stash` in a shared checkout or a checkout another session might use: another session's uncommitted work can vanish into a stash nobody owns. To set work aside, use a detached worktree instead. Git's own `--autostash`, which reapplies the stash in the same command, is the exception. If that reapply reports a conflict, the stash is yours: resolve it and `git stash pop` it in the same turn; never drop it or leave it behind.
+
 (overlay users: consumer overlays often ship a state-repo-specific anti-pattern note — never branch or open a PR on a state repo to get around a denied push to `main`; the denial is a permission setting to fix, not a workflow to route around.)
 
 ## Commit identity and secrets
@@ -205,6 +209,8 @@ Never move a branch ref in place with `git update-ref` or an equivalent under a 
 If the operator lists a commit address for the repository's owner, set the repository's `user.email` to it before committing; on a new machine, set it once in each clone. GitHub can block any push whose newest commit carries a private email.
 
 Do not store secrets, credentials or private tokens in the desk.
+
+Never put a credential where it can be seen: not in a typed terminal line, a terminal multiplexer's send-keys or environment argument, a command-line flag, a `git -c` credential helper or extra header, a URL, a file or a capture. Let the inner shell or a credential wrapper fetch it at the point of use, and redact anything token-shaped (`gh[opsu]_…` and the like) from text before publishing it.
 
 ## Pre-commit scans (authorship, diff-scope)
 

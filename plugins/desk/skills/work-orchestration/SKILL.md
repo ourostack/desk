@@ -1,6 +1,6 @@
 ---
 name: work-orchestration
-description: Use to align new work before go (batch every decision that needs the human), when a material requirement arrives mid-task, and as the default way to run work with independent streams in parallel.
+description: Use to align new work before go (batch every decision that needs the human), when a material requirement arrives mid-task, when running as a lead or coordinator session, before starting work that needs approval from someone outside the operator's authority, and as the default way to run work with independent streams in parallel.
 ---
 
 # Work orchestration
@@ -14,6 +14,8 @@ Read the existing task, agreement and plan before choosing the matching Superpow
 ## Align new work before go
 
 Before new work starts, list every decision in it that needs the human's judgment: voice, relationships, irreversible or hard-to-undo choices, and real ambiguity. Naming and filing are not among them: the agent owns them (`start-task`). Resolve each one you can from the request, the code or a sensible default. Put the rest to the human now, not when you reach the fork, and especially any entangled calls, where one answer changes another or changes work done before the fork. Ask them as one batch, each with your recommendation, so execution then runs without blocking on the human. A fork that could not have been foreseen is raised when it appears; one you did not think about beforehand is not unforeseeable.
+
+Think it through before you ask for go. Read the actual source material, write the whole plan, and have an independent reviewer (a rubber-duck or critic agent) check it until neither of you finds a gap. Then ask for go once, with that whole plan, and start no implementation until you have it. Never drip-feed half-plans or surface gaps one message at a time.
 
 ## Authority and dependencies
 
@@ -96,7 +98,8 @@ This is the default for all work, not only multi-step plans. `superpowers:dispat
 
 - **Run independent streams at the same time.** Never hold a stream for one it doesn't depend on.
 - **Fast-follow downstream.** When an upstream artifact changes, update what depends on it right away, not in a final sweep.
-- **Keep the root for coordination.** When delegation is authorized, a subagent tool is available and the human has not chosen inline execution, hand work whose scope warrants a separate context to bounded children so the conversation does not wait on it. Do small, clear work directly when a worker adds no value.
+- **A coordinator delegates; it doesn't do the work.** A lead or coordinator session (one set up to run lanes or other sessions) hands investigation, fixes and builds to child sessions or subagents, then verifies what they return and reports the result. It doesn't investigate or fix inline, not even something small: while it works, nobody watches the lanes and the human waits on it. Only when it has no way to delegate, or the human chose inline execution, does it do the work itself, and it says so.
+- **Keep the root for coordination.** When delegation is authorized, a subagent tool is available and the human has not chosen inline execution, hand work whose scope warrants a separate context to bounded children so the conversation does not wait on it. Do small, clear work directly when a worker adds no value. In a lead or coordinator session, "A coordinator delegates" (above) replaces this small-work exception.
 - **Ship as you go: usable milestones early and often.** This governs delivery, after alignment: new work still waits for the go its alignment asks for, and the person's limits (local only, no push, one repository) still hold. Within them, each increment goes live once reviewed and green, with every surface it touches (README, docs, site, the page people watch) updated in the same change, and each merge reported with where it's live. Never hold finished work for the end of a pass or for a sibling change; a surface that can't update is a blocker to raise at once ([ship as you go](https://github.com/ourostack/.github/blob/main/agents/ship-the-smallest-unit.md)).
 - **Work smart, not hard.** Ambitious quality work needs no justification, but do it smartly: don't loop on reruns or rounds of rewording, don't duplicate another lane's work, and stop work whose goal has been superseded.
 - **Aim every lane at what the human will feel.** A lane's goal is a number the human would feel (frames, milliseconds, a count that must match), measured on synthetic data shaped like theirs, never a release, a gate or a pull-request count. Status to the human leads with those numbers, broken first (`interaction-style`, "Status leads with what the operator would feel").
@@ -114,8 +117,11 @@ When an independent outcome warrants a separate context, delegation is authorize
 
 Existing go is not a repeated permission or design gate. Preserve actual design uncertainty, security, access and consent boundaries, conflict reservations, review and correctness gates. Urgency changes sequencing, not authority or proof; it does not authorize an unbounded fleet.
 
+Defer work that waits on outside approval. Don't start, propose or ask about work that needs approval from people outside the operator's own authority (another team's sign-off, an identity or app registration, a policy exception) unless the operator asks for it. A review the repository requires before merging is not outside approval: request it as "Merging and the terminal state" says. Record the options you researched where the work's owner will find them (an issue or the task card), mark the work deferred and carry on with what needs nobody else. The operator's own decisions are not outside approval.
+
 ## Where agents live
 
+- **Every loop has an owner.** A loop, watcher or script that enqueues, re-queues or merges pull requests runs under a named owning session, recorded where others will look (the task card or the loop's own description). An ownerless loop keeps acting after the reason for it has gone; stop it or give it an owner.
 - **Every agent has a home, and starts there.** A session starts in the workspace that holds its task and context: its desk, or for an agent that several people or agents share, their shared workspace. It never starts homed in a repository it works on. To change code, it makes a worktree of that repository from its home, and the session stays in the desk. When you launch, dispatch or hand off a session, give it its home as the working directory; if all you have is a repository path, find the desk that owns the work.
 - **A home's name says it is a home.** Wherever sessions are listed by workspace, a person should tell a desk from a repository at a glance. Name a desk or shared workspace for what it is ("work desk", "personal desk", "team shared workspace"), and a repository by its owner and name ("acme/widgets"), not by a bare folder name that a desk and a repository can share. When a tool names workspaces after their folders, rename them, and make the rename part of the machine's setup so a new machine gets it too.
 - **Always-on work lives on the always-on host.** Work meant to run continuously, such as issue drains, watchers and schedulers, lives on a host that stays up and is not carried around. Create it there, in that host's own session list, and make it easy to find there: pinned or named so the person sees it first. A laptop that sleeps or travels hosts no always-on work, and a leftover copy on another host is retired once the always-on one is verified.
@@ -152,6 +158,10 @@ Spend less per piece of work, never by slowing the work. Pick the cheapest model
 ## Merging and the terminal state
 
 Finished work merges. Never leave a finished pull request sitting unmerged, in any repository: merge once its required checks pass, and let the default branch's own checks be the safety net. If a repository will let you merge, merge when confident. Being inside the operator's work boundary does not by itself require their approval. Do not ask the human to approve a pull request unless the repository or platform itself enforces a human approval (a required reviewer, a branch policy) or they asked for it on that work. When a platform does enforce one, request it with the exact reviewed head and status and resume after it. You own the whole terminal state either way: prepare the PR, wait for checks, review, merge, deploy, smoke, clean up, and never report completion while the PR remains open.
+
+Merge on the final head's own checks. Before a merge you trigger yourself, confirm that the required checks ran on the exact commit you are merging and finished green; a green rollup from an earlier head says nothing about the last push. Auto-merge already waits for this.
+
+Never hold a merge for a nit. A cosmetic issue, or a low-severity review finding that loses no data and has a known fix, doesn't block an otherwise green, reviewed pull request: merge it and open the fix as a fast-follow pull request straight away. Among the agent's own review findings, only correctness, data-loss and security problems block a merge; a human reviewer's open thread follows `pr-feedback-on-own-pr`. Where the repository requires resolved conversations, reply on the nit with the fast-follow pull request's link and leave the thread for the reviewer to close.
 
 ## The factory itself
 

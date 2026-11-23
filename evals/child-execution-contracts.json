@@ -8,7 +8,7 @@
     "plugins/desk/skills/using-superpowers-with-desk/SKILL.md",
     "plugins/desk/mcp/src/activation/superpowers-context.js"
   ],
-  "reviewedSourceFingerprint": "1095ead6c8b5ff44685443a9a6e1cc131188cf228badfdd157ce9461fddfa9ea",
+  "reviewedSourceFingerprint": "81a44fcc6b8a0bdbf8f29c1b88b471a55dc8fbc3a0dfbcd31cf92fcc05c6215f",
   "knownFailure": {
     "issue": "https://github.com/ourostack/desk/issues/1504",
     "case": "two-children-no-shared-names",
