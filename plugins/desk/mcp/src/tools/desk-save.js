@@ -349,7 +349,7 @@ async function saveDesk({ deskRoot, input, person = null, env = process.env, spa
       throw Object.assign(new Error(`desk_save: add ${missing[0]} to \`paths\`: a move is committed with both its old and its new path`), { code: "desk_save_a_move_is_committed_with_2" })
     }
   }
-  const committed = commitPaths(deskRoot, paths, message, spawnGit)
+  const committed = commitPaths(deskRoot, paths, message, spawnGit, undefined, { keepLocal: true })
   if (!committed.ok) {
     return commitNotMade(commitFailure({ root: deskRoot, paths: listed, message, committed }))
   }
