@@ -1,5 +1,35 @@
 # desk plugin — changelog
 
+## 3.2.438 — 2026-11-23
+
+Desk's MCP server now vendors Ouro UI v1.3.459, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.437 — 2026-11-23
+
+Desk's MCP server now vendors Ouro UI v1.3.458, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.436 — 2026-11-23
+
+Superpowers context scratch names are now qualified by task. `scratchFolderName`, `prBodyFileName` and the scratch rule in `briefRules` carry the task's slug and a short hash of its desk-relative path, so two tasks mapped at the same step and attempt no longer share a scratch folder or overwrite each other's pull-request body in a shared session scratchpad. The same task still maps to the same names each time, and the progress and report paths are unchanged.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.435 — 2026-11-23
+
+The shared missing-desk-directory refusal uses flag-neutral repair guidance, so the Superpowers context mapper no longer recommends the unsupported `--root` flag instead of its `--desk-root` option.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.434 — 2026-11-23
+
+Desk's MCP server now vendors Ouro UI v1.3.456, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.433 — 2026-11-22
 
 The hosted hooks receiver reports the body limit that actually rejected a request: 16 KB for creating a hook and 512 KB for incoming events. The limits, 413 status and body-too-large code are unchanged.
