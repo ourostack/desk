@@ -9,7 +9,7 @@
 import { spawnSync } from "node:child_process"
 import { existsSync, statSync } from "node:fs"
 import * as path from "node:path"
-import { commitPaths, hasUnstagedWork, indexLooksLost, stagePaths, stagedChanges } from "../util/git-stage.js"
+import { commitPaths, hasUnstagedWork, stagePaths, stagedChanges } from "../util/git-stage.js"
 
 const APPEND_QUIET_MS = 5000
 const APPEND_MAX_WAIT_MS = 30_000
@@ -57,7 +57,6 @@ export function commitWaitingLogs(root, spawnGit = spawnSync) {
   try {
     const rels = waitingLogs(root, spawnGit)
     if (rels.length === 0) return "empty"
-    if (indexLooksLost(root, spawnGit)) return "commit_failed"
     if (!stagePaths(root, rels, spawnGit).ok) return "stage_failed"
     const committed = commitPaths(root, rels, commitMessage(rels), spawnGit)
     // A commit reported as failed or unknown may have landed (a timeout on a slow machine): when nothing at these paths is left to commit, it did.
