@@ -178,7 +178,7 @@ for (const publication of [false, true]) test(`20 declared deletions in a 32-fil
   await fs.writeFile(path.join(checkout, "other-20.md"), "user\n")
   git(checkout, ["add", "other-20.md"])
   const staged = git(checkout, ["ls-files", "-s", "--", "other-20.md"])
-  await fs.rm(path.join(checkout, "declared"), { recursive: true })
+  await removeTree(path.join(checkout, "declared"))
   git(checkout, ["add", "-A", "--", "declared"])
   const result = commitPaths(checkout, ["declared"], "deliberate deletion", spawnSync)
   assert.equal(result.ok, true, result.stderr)
