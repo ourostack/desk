@@ -28,6 +28,32 @@ for (const [args, expected] of [
     assert.equal(result.stderr, `Superpowers context: ${expected}\ncode: ${code}\n`)
   })
 }
+test("context CLI missing-directory guidance leads to a successful retry", async (t) => {
+  const root = await fs.mkdtemp(path.join(tmpdir(), "superpowers-missing-root-"))
+  t.after(() => removeTree(root))
+  const missing = path.join(root, "absent")
+  const args = (deskRoot, flag = "--desk-root") => [
+    flag, deskRoot,
+    "--task-path", path.join(deskRoot, "task"),
+    "--iteration-path", path.join(deskRoot, "task", "iteration"),
+    "--step", "1", "--attempt", "1",
+  ]
+  const refused = spawnSync(process.execPath, [cli, ...args(missing)], { encoding: "utf8" })
+  assert.equal(refused.status, 1)
+  assert.equal(refused.stdout, "")
+  assert.match(refused.stderr, /the desk root does not exist\ncode: paths-desk-mcp-create-the-desk\n$/u)
+  assert.ok(!refused.stderr.includes(missing), "the shared refusal does not reveal the desk root")
+  await assert.rejects(fs.stat(missing), { code: "ENOENT" })
+
+  const hintedFlags = refused.stderr.match(/--[a-z][a-z-]*/gu) ?? []
+  assert.ok(hintedFlags.every((flag) => flag === "--desk-root"), "the repair hint names only the caller's supported root flag, or stays flag-neutral")
+  await fs.mkdir(path.join(root, "task", "iteration"), { recursive: true })
+  await fs.writeFile(path.join(root, "task", "task.md"), "task\n")
+  const retried = spawnSync(process.execPath, [cli, ...args(root, hintedFlags[0])], { encoding: "utf8" })
+  assert.equal(retried.status, 0, retried.stderr)
+  assert.equal(retried.stderr, "")
+  assert.equal(JSON.parse(retried.stdout).taskCardPath, path.join(root, "task", "task.md"))
+})
 test("context rejects a whitespace-only evidence root", async () => {
   await assert.rejects(resolveSuperpowersContext({ ...input, evidenceRoot: " 	 " }), { message: "Superpowers context: Pass evidenceRoot as a non-empty path: evidenceRoot must be a non-empty path when supplied" })
 })
