@@ -899,7 +899,7 @@ try {
 
   {
     // The runner drives a Copilot-compatible harness; this fake answers like one and logs every invocation.
-    const { parseTranscript, parseVerdict, heldOutEvidence } = require("./skill-evals-run.cjs");
+    const { parseTranscript, parseVerdict, heldOutEvidence, judgePrompt } = require("./skill-evals-run.cjs");
     const events = [
       { type: "assistant.message", data: { content: "", toolRequests: [{ name: "view", arguments: { path: "a" } }, { name: "glob" }] } },
       { type: "tool.execution_start", data: {} },
@@ -909,6 +909,14 @@ try {
       { type: "assistant.message", data: { content: "Final answer." } },
     ];
     assert.deepEqual(parseTranscript(`not json\n{broken\n${events.map((event) => JSON.stringify(event)).join("\n")}\n`), { response: "Final answer.", messages: ["Earlier checks no longer cover the changed requirement.", "Final answer."], tools: ['view {"path":"a"}', "glob {}"] });
+    const bodyFile = "work/child-one/desk/2026-11-23-review/superpowers/step-1/attempt-1/pr-body-child-one.md";
+    const command = `node verify-proof.cjs --capture "${"long-capture-name-".repeat(40)}.png" && gh pr create --title "A reviewed change" --body-file "${bodyFile}"`;
+    const request = { name: "bash", arguments: { command, description: "Publish the reviewed change" } };
+    const longTranscript = parseTranscript(JSON.stringify({ type: "assistant.message", data: { toolRequests: [request] } }));
+    assert.equal(longTranscript.tools[0], `bash ${JSON.stringify(request.arguments)}`, "the transcript must retain the complete command, including its final body-file argument");
+    const prompt = judgePrompt({ prompt: "Publish with a unique body file.", checks: [] }, longTranscript, "(none)");
+    assert.ok(prompt.includes(`--body-file \\"${bodyFile}\\"`), "the judge must receive the complete body-file argument after the long proof check");
+    assert.ok(prompt.includes(JSON.stringify(request.arguments)), "every tool argument must reach the judge unchanged");
     const verdictCase = { checks: [{ id: "a" }, { id: "b" }] };
     assert.deepEqual(parseVerdict('Here: {"checks":[{"id":"b","passed":false,"evidence":" x "},{"id":"a","passed":true,"evidence":"y"}]}', verdictCase), [{ id: "a", passed: true, evidence: "y" }, { id: "b", passed: false, evidence: "x" }]);
     assert.throws(() => parseVerdict("no json", verdictCase), /did not return a JSON object/u);
