@@ -75,6 +75,12 @@ function fixture(options = {}) {
       const statuses = currentPr.statusCheckRollup?.filter((check) => check.context !== undefined).map((check) => ({ context: check.context, state: check.state.toLowerCase() })) ?? null
       return ok([{ statuses }])
     }
+    if (options.earlyMerge === "auto" && operation === "merge" && args.includes("--auto") ||
+        options.earlyMerge === "label" && operation === "edit" && args.includes("--add-label")) {
+      pr.state = "MERGED"
+      pr.mergeCommit = { oid: merged }
+      return ok("")
+    }
     if (operation === "merge") return ok(options.mergeResult ?? { merged: true, sha: merged })
     assert.fail(`unexpected gh call: ${args.join(" ")}`)
   }
@@ -317,6 +323,47 @@ test("a reported check the policy does not name blocks the merge while it is pen
   const failing = fixture({ pr: { statusCheckRollup: [success, { context: "repository-validation", state: "FAILURE" }] } })
   assert.throws(() => publishPullRequest(failing.request), /PR check repository-validation failed \(FAILURE\)/u)
   assert.ok(!failing.calls.some((call) => call.includes("PUT")))
+})
+
+test("publication never arms an external merge before its policy checks pass", () => {
+  for (const earlyMerge of ["auto", "label"]) {
+    for (const checks of [[], [run("workspace-policy")], [run("workspace-policy", "FAILURE")],
+      [success, run("optional", "FAILURE")]]) {
+      // Server checks, if present, do not cover the policy-only floor or every optional failure.
+      for (const rules of [[[]], ruleset("server-check")]) {
+        const f = fixture({ earlyMerge, rules, pr: { statusCheckRollup: [...checks, run("server-check", "SUCCESS")] } })
+        assert.throws(() => publishPullRequest(f.request), /still missing or pending|PR check .* failed/u)
+        assert.equal(f.pr.state, "OPEN")
+        assert.ok(!f.calls.some((call) => call.includes("--auto") || call.includes("--add-label") || call.includes("PUT")))
+      }
+    }
+  }
+})
+
+test("successful policy checks authorize one exact-head merge without gh auto-merge", () => {
+  const pending = { ...fixture().pr, statusCheckRollup: [run("workspace-policy")] }
+  const ready = { ...pending, statusCheckRollup: [success] }
+  const f = fixture({ views: [pending, ready] })
+  const recorded = []
+  f.request.track = { record: (receipt) => recorded.push({ ...receipt }), clear: () => {} }
+  assert.equal(publishPullRequest(f.request).receipt.merge, merged)
+  assert.equal(recorded.length > 0, true)
+  assert.equal(recorded[0].labelled, undefined, "pending receipt is recorded without arming a relay")
+  assert.ok(!f.calls.some((call) => call.includes("--auto")))
+  const merges = f.calls.filter((call) => call.includes("PUT"))
+  assert.equal(merges.length, 1)
+  assert.ok(merges[0].includes(`sha=${head}`))
+})
+
+test("a qualified relay merge is verified when the concurrent exact-head merge is refused", () => {
+  for (const options of [{ fail: "merge" }, { mergeResult: { merged: false } }]) {
+    const f = fixture({ earlyMerge: "label", ...options })
+    const cleared = []
+    f.request.track = { record: () => {}, clear: (receipt) => cleared.push(receipt) }
+    assert.equal(publishPullRequest(f.request).receipt.merge, merged)
+    assert.equal(cleared.length, 1)
+    assert.ok(f.calls.some((call) => call[0] === "git" && call[1] === "merge-base"))
+  }
 })
 
 test("a check the base branch's rules or protection require blocks the merge until it is reported", () => {

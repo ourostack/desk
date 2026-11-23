@@ -246,6 +246,10 @@ The plugin's `artifacts/tombstones/tombstones.jsonl` lists documents, by path an
 
 Publishing a workspace candidate does not close other `desk/publish/*` pull requests or delete their branches. Independent Desk roots may publish unrelated changes. Recorded-save settlement closes duplicates only after verifying their content on actual upstream, and records the evidence while clearing the local waiting receipt.
 
+Workspace PR publication reads `.desk/publication.json` from the published target and waits for its required checks, the base branch's required checks, and every other reported check on the exact candidate head. Only then does it attach the merge relay's label and request an exact-head merge. It does not call `gh pr merge --auto`: that command can merge immediately when GitHub's own checks do not enforce the published policy.
+
+Checks that outlast the qualification timeout remain recorded and unlabelled. The background push worker retries pending-check qualification beyond its network retry budget; failed checks, unreadable policy/rules, authentication failures and changed or closed PRs still stop with the recorded diagnostic. A relay that merges the qualified PR concurrently is accepted only after rereading its exact identity and proving the candidate is on the actual upstream.
+
 ```sh
 npm test
 ```

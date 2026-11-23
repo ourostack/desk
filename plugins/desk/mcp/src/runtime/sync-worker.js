@@ -621,10 +621,10 @@ async function upstreamBack({ root, spawnGit, clock }) {
   return false
 }
 
-async function deliverUntilDone({ root, env, spawnGit, fileProblem, clock }) {
+async function deliverUntilDone({ root, env, spawnGit, fileProblem, clock, publicationClock }) {
   let pushedAt = null
   // Publication PRs still waiting from earlier saves are settled first: closed when superseded, rebuilt when they conflict with main.
-  settleSaves({ root, env, spawnGit })
+  settleSaves({ root, env, spawnGit, clock: publicationClock })
   for (let round = 0; round < MAX_ROUNDS; round += 1) {
     const delivered = deliveredSoFar(root, env)
     const pending = undeliveredCommits({ root, spawnGit, delivered })
@@ -633,7 +633,7 @@ async function deliverUntilDone({ root, env, spawnGit, fileProblem, clock }) {
       updateSyncStatus(root, env, { blocked: false, reason: null, paths: [], unpushed: 0, error: null, ...(pushedAt === null ? {} : { last_push_at: pushedAt, last_pull: null }) })
       return { result: "ok" }
     }
-    const outcome = deliver({ root, env, spawnGit, delivered })
+    const outcome = deliver({ root, env, spawnGit, delivered, publicationClock })
     if (outcome.reason === "no_upstream") {
       if (await upstreamBack({ root, spawnGit, clock })) continue
       return { result: "skipped", reason: "upstream_gone" }
@@ -672,9 +672,11 @@ export async function runPushWorker(options) {
   const sleep = (options.clock ?? REAL_CLOCK).sleep
   for (let attempt = 0; ; attempt += 1) {
     const result = await pushRounds(options)
-    // A network or contention failure may clear by itself: the worker waits (backing off, outside the lock) and tries again, so a save is never left waiting for the next write to retry it. Conflicts and auth failures need a person and are not retried.
-    if (result?.result !== "blocked" || !RETRYABLE.has(result.reason) || attempt >= delays.length) return result
-    await sleep(delays[attempt])
+    // Pending checks may outlive the network retry budget. Keep qualifying them without arming any merge trigger early.
+    if (result?.result !== "blocked") return result
+    const pending = result.reason === "publication_blocked" && readSyncStatus({ root: options.root, env: options.env })?.publication?.pending_checks === true
+    if (!pending && (!RETRYABLE.has(result.reason) || attempt >= delays.length)) return result
+    await sleep(delays[Math.min(attempt, delays.length - 1)] ?? 60_000)
   }
 }
 
@@ -694,7 +696,7 @@ async function pushRounds(options) {
 
 async function pushRound({
   root, env = process.env, debounceMs = DEFAULT_DEBOUNCE_MS, spawnGit = spawnSync, clock = REAL_CLOCK, fileProblem = queueDeskProblemFiling,
-  stderr = process.stderr, quietMs, maxWaitMs,
+  stderr = process.stderr, quietMs, maxWaitMs, publicationClock,
 }) {
   const lock = await acquireSyncLock({ root, env })
   if (lock?.refused) {
@@ -716,7 +718,7 @@ async function pushRound({
     const logs = commitWaitingLogs(root, spawnGit)
     if (["committed", "empty"].includes(logs) && waitingLogs(root, spawnGit).length === 0) clearLogsPending({ root, env })
     if (!pushable) return { result: { result: "skipped" }, logs }
-    return { result: await deliverUntilDone({ root, env, spawnGit, fileProblem, clock }), logs }
+    return { result: await deliverUntilDone({ root, env, spawnGit, fileProblem, clock, publicationClock }), logs }
   } finally {
     lock.release()
   }

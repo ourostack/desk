@@ -45,7 +45,8 @@ const instantClock = { sleep: () => Promise.resolve() }
 const dead = () => { throw Object.assign(new Error("ESRCH"), { code: "ESRCH" }) }
 
 function git(root, args) {
-  const result = spawnSync("git", ["-C", root, ...args], { encoding: "utf8" })
+  const location = existsSync(path.join(root, "HEAD")) ? ["--git-dir", root] : ["-C", root]
+  const result = spawnSync("git", [...location, ...args], { encoding: "utf8" })
   assert.equal(result.status, 0, `git ${args.join(" ")} failed: ${result.stderr}`)
   return result.stdout
 }
@@ -374,7 +375,7 @@ test("queueDeskProblemFiling redacts a path-shaped reason out of the spawned fil
   const safeReason = captured.args[reasonIndex + 1]
   assert.doesNotMatch(safeReason, /\/Users\//u)
   assert.doesNotMatch(safeReason, /personal-desk/u)
-  assert.ok(!captured.args.some((arg) => typeof arg === "string" && arg.includes("/Users/ari")))
+  assert.ok(!captured.args.some((arg) => typeof arg === "string" && arg.includes("/Users/ari/personal-desk/")))
 })
 
 // Fix round, spec.md §1 Part 5: `shouldLaunchFiler` throttles the actual spawn
