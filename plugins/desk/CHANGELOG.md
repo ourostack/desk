@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.465 — 2026-11-23
+
+Desk's MCP server now vendors Ouro UI v1.3.482, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.464 — 2026-11-23
 
 Keep independent workspace publication pull requests open when another Desk root publishes unrelated changes. Remove the unconditional branch-prefix supersession sweep; existing evidence-based settlement remains responsible for closing genuinely landed duplicates and clearing their waiting records.
