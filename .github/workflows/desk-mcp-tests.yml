@@ -287,7 +287,13 @@ jobs:
             echo "::error title=Coverage shard ${SHARD} is stuck::still running after 7 minutes; the process tree follows."
             # Kept in the shard's artifact too, because a stuck job's log has been lost before (#932).
             mkdir -p "$RUNNER_TEMP/desk-coverage-shard"
-            ps -eo pid,pgid,ppid,etimes,stat,args --forest | cut -c1-400 | tee "$RUNNER_TEMP/desk-coverage-shard/stuck-process-tree.txt"
+            ps -ww -eo pid,pgid,ppid,etimes,stat,args --forest | tee "$RUNNER_TEMP/desk-coverage-shard/stuck-process-tree.txt"
+            echo "Coverage file timings and currently running file:"
+            if [ -f "$RUNNER_TEMP/desk-coverage-shard/timings.json" ]; then
+              cat "$RUNNER_TEMP/desk-coverage-shard/timings.json"
+            else
+              echo "No timing snapshot was produced before the watchdog."
+            fi
             touch "$RUNNER_TEMP/shard-stuck"
             kill -TERM -- "-$shard" 2>/dev/null || true
             sleep 10

@@ -472,7 +472,7 @@ function runInstrumentedTests({
     ...(timingsPath ? [
       "--test-reporter=tap", "--test-reporter-destination=stdout",
       // A URL, because Node imports a reporter by specifier and rejects a Windows drive path (`D:\...`) as an unsupported URL scheme.
-      `--test-reporter=${pathToFileURL(path.join(defaultTestRoot, "_file_timing_reporter.mjs")).href}`, `--test-reporter-destination=${timingsPath}`,
+      `--test-reporter=${pathToFileURL(path.join(defaultTestRoot, "_file_timing_reporter.mjs")).href}`, "--test-reporter-destination=stdout",
     ] : []),
     // A shard names its own files; the whole suite is the glob plus, as separate path arguments that run as separate test workers, the offline suite and the CLI contract with their own hooks.
     ...(testFiles ?? [path.join(repoRoot, "tests/desk/mcp/__tests__/**/*.test.js"), ...offline.testTargets]),
@@ -489,6 +489,8 @@ function runInstrumentedTests({
       NODE_PATH: [path.join(defaultMcpRoot, "node_modules"), env.NODE_PATH].filter(Boolean).join(path.delimiter),
       ...(offline.registrationPath ? { OFFLINE_COVERAGE_PACKAGE_ROOT: defaultMcpRoot } : {}),
       DESK_COVERAGE_RUNNER_CHILD: "1",
+      // The reporter owns this file; a second destination stream would truncate or retain an old inode.
+      DESK_COVERAGE_TIMINGS_PATH: timingsPath ?? "",
     },
   })
 }
