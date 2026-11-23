@@ -1,0 +1,6 @@
+:root {
+  --status-ok: #1f883d;
+  --status-warn: #9a6700;
+  --status-bad: #cf222e;
+  --status-idle: #6e7781;
+}

@@ -536,11 +536,11 @@ function main() {
     "must not return control merely because the plan changed",
   ]);
 
-  // The foundation no longer carries a Visual proof section: evidence-discipline holds the whole rule, and a pressure run
+  // The foundation no longer carries a Visual proof section: the visual-proof skill holds the whole rule, and a pressure run
   // (2026-11-12, Haiku 4.5 and Sonnet 5, a merged and deployed change reported with only a log line) behaved the same with
   // and without the foundation's sentence.
-  assert.doesNotMatch(skill, /^## Visual proof$/mu, "the visual-proof rule lives in evidence-discipline");
-  assertSectionPhrases(section(owned("evidence-discipline"), "Visual proof"), "evidence-discipline Visual proof", [
+  assert.doesNotMatch(skill, /^## Visual proof$/mu, "the visual-proof rule lives in the visual-proof skill");
+  assertSectionPhrases(section(owned("visual-proof"), "Capture it"), "visual-proof Capture it", [
     "by default whenever work touches something a person sees",
     "not what it is called",
     "a brief's silence never waives it",

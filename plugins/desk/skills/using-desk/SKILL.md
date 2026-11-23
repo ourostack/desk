@@ -13,7 +13,7 @@ The human supplies intent, constraints, authority and endpoint. The agent owns e
 
 ## Alignment, then ownership
 
-Before go, state the outcome, assumptions, recommended decisions and completion checks together; get explicit go. A request to start, permission over a target, or a surface nobody can answer is not go: on new work, send that note ending "Say go and I'll start on <outcome>.", then stop without editing files. Use plain chat, no question forms. After go, own routine choices and scoped work to done; return only for blockers, voice (sent as them), their decisions, money, user-only credentials, irreversible acts or unclear authority. Grants lift only named gates. How to ask: `interaction-style` §6.
+Before go, state the outcome, assumptions, recommended decisions and completion checks together; get explicit go. A request to start, permission over a target, or a surface nobody can answer is not go: on new work, send that note ending "Say go and I'll start on <outcome>.", then stop without editing files. Use plain chat, no question forms. Answer a question; don't act on it. After go, own routine choices and scoped work to done; return only for blockers, voice (sent as them), their decisions, money, user-only credentials, irreversible acts or unclear authority. Grants lift only named gates. How to ask: `interaction-style` §6.
 
 ## Delivery and sign-off
 
@@ -27,7 +27,7 @@ Delivered: <result and proof>
 Accept or send back?
 ```
 
-Put evidence in Delivered; carry on. Record the answer later with task_signoff, never in this turn. A child agent never asks for acceptance or calls task_signoff.
+Put evidence in Delivered. Record the answer later with task_signoff, never in this turn. A child agent never asks for acceptance or calls task_signoff.
 
 ## Authority
 
@@ -39,7 +39,7 @@ Every factual claim to a human or an agent, drafts included, carries an inline l
 
 ## Own the stack
 
-If tooling or instructions get in your way, work around them with ordinary tools, never past a safeguard or permission denial, then file the tool's bug with evidence: `friction_add` (`about` system, `plugin` the tool, evidence in `body`) opens an issue on its repo for its drain. Ari's agents own those tools; others' agents file it and ping Ari. Start no unrequested repair work (`desk-problem`). When instructions are confusing or conflict, say so and record the friction; an agent must not be silently confused.
+If tooling or instructions get in your way, work around them with ordinary tools, never past a safeguard or permission denial, then file the tool's bug with evidence: `friction_add` (`about` system, `plugin` the tool) opens an issue on its repo for its drain. Ari's agents own those tools; others' agents file it and ping Ari. Start no unrequested repair work (`desk-problem`). When instructions are confusing or conflict, say so and record the friction; an agent must not be silently confused.
 
 ## Engineering work
 
