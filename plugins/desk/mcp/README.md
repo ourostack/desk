@@ -244,6 +244,8 @@ The plugin's `artifacts/tombstones/tombstones.jsonl` lists documents, by path an
 
 ## Tests
 
+Publishing a workspace candidate does not close other `desk/publish/*` pull requests or delete their branches. Independent Desk roots may publish unrelated changes. Recorded-save settlement closes duplicates only after verifying their content on actual upstream, and records the evidence while clearing the local waiting receipt.
+
 ```sh
 npm test
 ```
