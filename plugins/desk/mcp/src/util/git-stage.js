@@ -12,10 +12,10 @@
 // for tests only; real callers never pass it.
 
 import { spawnSync } from "node:child_process"
-import { existsSync, readFileSync, realpathSync, writeFileSync } from "node:fs"
+import { closeSync, existsSync, openSync, readFileSync, readSync, realpathSync, writeFileSync } from "node:fs"
 import * as path from "node:path"
 
-import { fastGitAnswer } from "../runtime/fast-refs.js"
+import { fastGitAnswer, gitDirs } from "../runtime/fast-refs.js"
 import { budgeted, commitCaptured, operationAnswer, treeLines } from "./cas-commit.js"
 import { defaultBranchForPublication, publishCardCommit } from "./main-publish.js"
 import { recordToolCommit } from "./tool-commits.js"
@@ -395,6 +395,7 @@ function capturedPaths(root, relPaths, spawnGit, entries) {
 
 // A path written the way the index spells it (no `./`, no `..`, not absolute): the private-index commit matches paths by that spelling.
 const LOST_INDEX_MIN_FILES = 20
+const LOST_INDEX_SUSPECT_ENTRIES = 1000
 const plainRelative = (p) => !path.isAbsolute(p) && path.posix.normalize(p) === p && !p.startsWith("../") && p !== "." && !p.includes("\\")
 
 /**
@@ -402,14 +403,34 @@ const plainRelative = (p) => !path.isAbsolute(p) && path.posix.normalize(p) === 
  * built from it would delete the rest. Unreadable counts are not evidence, so they never block.
  */
 export function indexLooksLost(root, spawnGit) {
+  if (spawnGit !== spawnSync && spawnGit.real !== spawnSync) return false
+  // The entry count sits in the index file's header, so a healthy checkout costs no Git process here.
+  const held = indexEntryCount(root)
+  if (held === null || held >= LOST_INDEX_SUSPECT_ENTRIES) return false
   const count = (args) => {
     const result = run(spawnGit, root, args)
     return result.status === 0 && typeof result.stdout === "string" ? result.stdout.split("\0").filter(Boolean).length : null
   }
   const head = count(["ls-tree", "-r", "-z", "--name-only", "HEAD"])
   if (head === null || head < LOST_INDEX_MIN_FILES) return false
-  const held = count(["ls-files", "-z"])
-  return held !== null && held * 2 < head
+  // A sparse index lists folders in its header, so the real count is asked of Git.
+  const full = count(["ls-files", "-z"])
+  return full !== null && full * 2 < head
+}
+
+function indexEntryCount(root) {
+  const dirs = gitDirs(root)
+  if (dirs === null) return null
+  let fd
+  try {
+    fd = openSync(path.join(dirs.gitDir, "index"), "r")
+    const header = Buffer.alloc(12)
+    return readSync(fd, header, 0, 12, 0) === 12 && header.toString("latin1", 0, 4) === "DIRC" ? header.readUInt32BE(8) : null
+  } catch {
+    return null
+  } finally {
+    if (fd !== undefined) closeSync(fd)
+  }
 }
 
 /**

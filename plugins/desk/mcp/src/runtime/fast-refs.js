@@ -18,7 +18,7 @@ function readText(file) {
 }
 
 // The directory holding this checkout's HEAD, and the one holding refs and config (the same unless this is a linked worktree).
-function gitDirs(root) {
+export function gitDirs(root) {
   const dot = path.join(root, ".git")
   const stats = statSync(dot, { throwIfNoEntry: false })
   if (stats === undefined) return null
