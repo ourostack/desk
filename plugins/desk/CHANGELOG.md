@@ -1,5 +1,13 @@
 # desk plugin — changelog
 
+## 3.2.474 — 2026-11-23
+
+Desk's MCP server now vendors Ouro UI v1.3.490, moved by Ouro Current.
+
+Plain Language now asks for two more things. Write from what the reader already knows: don't name a person, project, program or internal term they haven't met; describe it by what it is to them, or leave it out, then reread the draft as that reader. And define criteria, requirements and steps by what they let someone do, naming a technology only as an example of how. Both moved here from one operator's notes, where they only reached that operator's agents. Plain Language is 0.2.15.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.473 — 2026-11-23
 
 Desk's MCP server now vendors Ouro UI v1.3.489, moved by Ouro Current.
