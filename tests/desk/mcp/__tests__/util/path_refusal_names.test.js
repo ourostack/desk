@@ -107,7 +107,7 @@ test("a desk root that is missing or is a file is refused as the desk root, with
   const missing = path.join(root, "nowhere")
   const file = path.join(root, "a-file")
   await fs.writeFile(file, "x")
-  assert.equal(await refusalOf({ deskRoot: missing, segments: ["t.md"] }, root), "desk-mcp: Create the desk root, or pass --root with an existing desk: the desk root does not exist")
+  assert.equal(await refusalOf({ deskRoot: missing, segments: ["t.md"] }, root), "desk-mcp: Create the desk root, or choose an existing desk root: the desk root does not exist")
   assert.equal(await refusalOf({ deskRoot: file, segments: ["t.md"] }, root), "desk-mcp: Point the desk root at a directory: the desk root is not a directory")
 })
 

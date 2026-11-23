@@ -597,7 +597,7 @@ async function realDirectory(candidate) {
   try {
     stat = await fs.stat(candidate)
   } catch (error) {
-    if (error?.code === "ENOENT") throw Object.assign(new Error("desk-mcp: Create the desk root, or pass --root with an existing desk: the desk root does not exist"), { code: "paths_desk_mcp_create_the_desk" })
+    if (error?.code === "ENOENT") throw Object.assign(new Error("desk-mcp: Create the desk root, or choose an existing desk root: the desk root does not exist"), { code: "paths_desk_mcp_create_the_desk" })
     throw readRefusal(candidate, candidate, error)
   }
   if (!stat.isDirectory()) {
