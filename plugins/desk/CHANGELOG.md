@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.479 — 2026-11-23
+
+Desk's MCP server now vendors Ouro UI v1.3.494, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.478 — 2026-11-23
 
 Four rules now have skills named for the moment an agent is in, because an agent choosing skills by name didn't find them inside broader skills:
