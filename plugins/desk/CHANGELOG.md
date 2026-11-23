@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.435 — 2026-11-23
+
+The shared missing-desk-directory refusal uses flag-neutral repair guidance, so the Superpowers context mapper no longer recommends the unsupported `--root` flag instead of its `--desk-root` option.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.434 — 2026-11-23
 
 Desk's MCP server now vendors Ouro UI v1.3.456, moved by Ouro Current.
