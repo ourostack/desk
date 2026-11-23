@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.447 — 2026-11-23
+
+Allow declared folder deletions and reconstructed indexes during scoped card publication, while preserving undeclared files and concurrent publishers' private indexes.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.446 — 2026-11-23
 
 Desk's MCP server now vendors Ouro UI v1.3.466, moved by Ouro Current.
