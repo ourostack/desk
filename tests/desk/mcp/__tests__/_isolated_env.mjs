@@ -16,6 +16,7 @@ import { fileURLToPath } from "node:url"
 import { removeWithRetry } from "../../../../plugins/desk/mcp/src/util/remove-retry.js"
 // The tests live outside the shipped plugin; this links their bare-name imports to the installed dependencies.
 import "../../link-dependencies.mjs"
+import { traceWindowsAclPhases } from "./_native_acl_phase_trace.mjs"
 
 export const REAL_HOME_WRITE = "DESK_TEST_REAL_HOME_WRITE"
 
@@ -218,3 +219,5 @@ process.once("exit", () => {
 })
 
 export const testRun = Object.freeze({ runDir, realHome, ...locations })
+
+traceWindowsAclPhases()
