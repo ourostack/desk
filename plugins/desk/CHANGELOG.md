@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.446 — 2026-11-23
+
+Desk's MCP server now vendors Ouro UI v1.3.466, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.445 — 2026-11-23
 
 A card or log publish can no longer remove files it was not asked to publish. Two publishers on one checkout shared a single private index file, so one's cleanup could delete the other's index mid-build and a commit with no files could land on the default branch, as it did on 2026-11-22 when it emptied a whole desk. Each publish now builds in its own index file, refuses a repository-root path, refuses a built tree that differs from the remote anywhere outside the requested card paths (the card stays staged and the log keeps waiting), and a checkout whose index holds under half of HEAD's files commits nothing until it is repaired.
