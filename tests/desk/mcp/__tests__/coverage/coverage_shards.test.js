@@ -248,12 +248,14 @@ test("a shard runs only its own files, serially, and records raw coverage, timin
   const { result, output: io, invocations } = run(fixture, ["--shard", "2/2", "--output", output], { producer: shardProducer() })
   assert.equal(result, 0)
   assert.equal(invocations.length, 1)
-  const { args, config } = invocations[0]
+  const { args, config, options } = invocations[0]
   const shardFiles = [testFiles[0], testFiles[1]]
   assert.deepEqual(args.slice(-2), shardFiles.map((file) => path.join(realpathSync(fixture.repoRoot), file)))
   assert.ok(args.includes("--test-concurrency=1"), "instrumented files stay serial inside a shard")
   assert.ok(args.includes("--test-reporter=tap") && args.includes("--test-reporter-destination=stdout"), "the shard keeps its TAP log")
-  assert.ok(args.includes(`--test-reporter-destination=${path.join(output, "timings.json")}`))
+  assert.equal(args.filter((arg) => arg === "--test-reporter-destination=stdout").length, 2)
+  assert.ok(!args.includes(`--test-reporter-destination=${path.join(output, "timings.json")}`), "Node must not open a second writer to the reporter-owned timing file")
+  assert.equal(options.env.DESK_COVERAGE_TIMINGS_PATH, path.join(output, "timings.json"))
   assert.ok(args.includes(`--test-reporter=${pathToFileURL(path.join(mcpRoot, "../../../tests/desk/mcp/__tests__/_file_timing_reporter.mjs")).href}`))
   assert.equal(config.tempDir, path.join(output, "raw"))
   assert.equal(config.silent, true, "a shard reports nothing on its own")
