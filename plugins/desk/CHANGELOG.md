@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.483 — 2026-11-23
+
+Desk's MCP server now vendors Ouro UI v1.3.496, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.482 — 2026-11-23
 
 [`prior-art`](skills/prior-art/SKILL.md) now also fires when an agent is about to create a component, module, helper or file that resembles one the codebase already has. It says to extend the existing one (a prop, slot, variant or option) instead of duplicating it, because copies drift, quotes the owner's words, and asks the pull request to say what was searched and why nothing fit.
