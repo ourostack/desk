@@ -100,6 +100,28 @@ function canUse({ host, login, owner, repo, push, env, spawn, cache, now }) {
   })
 }
 
+/**
+ * `env` for a `gh` command about one repository. The Copilot app's `gh` has whichever account is active, which is not
+ * always the one that can reach the repository, and the `gh` wrapper that picks by owner is not always on the PATH Desk
+ * runs under. When no token variable is set and a signed-in account can push to the repository (else read it), the result
+ * carries that account's token for `gh`; otherwise it is `env` itself.
+ */
+/* istanbul ignore next -- the defaults are the real cache and clock; tests inject both. */
+export function ghEnvFor({ host, owner, repo, env, spawn, cache = lookupCache, now = Date.now }) {
+  if (TOKEN_VARIABLES.some((name) => name !== "GH_HOST" && (env[name] ?? "") !== "")) return env
+  if (!HOST.test(host) || !LOGIN.test(owner) || !REPO.test(repo)) return env
+  const candidates = [...new Set([owner, ...signedInLogins({ host, env, spawn, cache, now })])].filter((login) => LOGIN.test(login))
+  for (const push of [true, false]) {
+    for (const login of candidates) {
+      if (!canUse({ host, login, owner, repo, push, env, spawn, cache, now })) continue
+      const token = tokenFor({ host, login, env, spawn })
+      if (token === "") continue
+      return host === "github.com" ? { ...env, GH_TOKEN: token } : { ...env, GH_ENTERPRISE_TOKEN: token, GH_HOST: host }
+    }
+  }
+  return env
+}
+
 function gitText(spawn, root, args, env) {
   const result = (spawn === spawnSync ? fastGitAnswer(root, args) : null) ?? spawn("git", ["-C", root, ...args], { windowsHide: true, encoding: "utf8", timeout: LOOKUP_TIMEOUT_MS, env })
   return result.status === 0 ? result.stdout.trim() : ""

@@ -5,12 +5,14 @@
 // logs and cards merge), a conflict in the content itself stays open and is named with its files, and every open desk/publish/*
 // PR of the repository that conflicts is found and settled even when this machine never recorded it.
 
+import { spawnSync } from "node:child_process"
 import { readdirSync, readFileSync } from "node:fs"
 import * as path from "node:path"
 
 import { deliveryPaths, removeWorktree, replay, runner, upstreamOf } from "./deliver.js"
 import { resolveDeskStateDir } from "./last-start.js"
 import { publicationPolicy, publishPullRequest, repository } from "./pr-publication.js"
+import { ghEnvFor } from "./remote-identity.js"
 import { readSyncStatus, updateSyncStatus } from "./sync-worker.js"
 
 const STUCK_AFTER_MS = 10 * 60 * 1000
@@ -137,8 +139,20 @@ function supersession(git, head, main, link) {
 
 const short = (sha) => sha.slice(0, 12)
 
+// The repository a gh command names: a pull request URL, or `--repo` as `<host>/<owner>/<name>`.
+export function repositoryOf(args) {
+  const flag = args.indexOf("--repo")
+  const text = flag >= 0 ? args[flag + 1] : args.find((arg) => /^https:\/\/[^/]+\/[^/]+\/[^/]+\/pull\/\d+/u.test(arg))?.replace(/^https:\/\//u, "")
+  const [host, owner, repo] = typeof text === "string" ? text.split("/") : []
+  return host && owner && repo ? { host, owner, repo } : null
+}
+
 function ghRun(spawnGit, root, args) {
-  const result = spawnGit("gh", args, { cwd: root, encoding: "utf8", windowsHide: true, timeout: NETWORK_TIMEOUT_MS, env: process.env })
+  /* istanbul ignore next -- only the real spawnSync asks gh which account can reach the repository; tests inject a fake. */
+  const repo = spawnGit === spawnSync ? repositoryOf(args) : null
+  /* istanbul ignore next -- see above. */
+  const env = repo === null ? process.env : ghEnvFor({ ...repo, env: process.env, spawn: spawnSync })
+  const result = spawnGit("gh", args, { cwd: root, encoding: "utf8", windowsHide: true, timeout: NETWORK_TIMEOUT_MS, env })
   return { status: result.status, stdout: typeof result.stdout === "string" ? result.stdout : "" }
 }
 

@@ -7,7 +7,7 @@ import { strict as assert } from "node:assert"
 import { spawnSync } from "node:child_process"
 import { mkTempRoot } from "../_temp_roots.js"
 import { deliver } from "../../../../../plugins/desk/mcp/src/runtime/deliver.js"
-import { credentialHelperFor, hasCredentialOverride, parseHttpsRemote, remoteIdentityEnv } from "../../../../../plugins/desk/mcp/src/runtime/remote-identity.js"
+import { credentialHelperFor, ghEnvFor, hasCredentialOverride, parseHttpsRemote, remoteIdentityEnv } from "../../../../../plugins/desk/mcp/src/runtime/remote-identity.js"
 import { syncWorkspace } from "../../../../../plugins/desk/mcp/src/runtime/session-sync.js"
 
 const APP_OVERRIDE = { GIT_CONFIG_PARAMETERS: "'credential.https://github.com.helper=' 'credential.https://github.com.helper=copilot'", GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "credential.interactive", GIT_CONFIG_VALUE_0: "never" }
@@ -238,4 +238,25 @@ test("a refused pull on a branch that tracks a remote other than origin still na
 
   assert.equal(result.cause, "auth_failed")
   assert.match(result.diagnostic, /can reach the desk's remote \(/u)
+})
+
+test("gh about a work repository runs with the token of the account that can push to it, not the active account", () => {
+  const repo = { host: "github.com", owner: "gim-home", repo: "CIT" }
+  const { spawn } = fakeSpawn({ logins: ["arimendelow", "arimendelow_microsoft"], access: { arimendelow_microsoft: { pull: true, push: true } } })
+  const env = ghEnvFor({ ...repo, env: { PATH: "/usr/bin" }, spawn, cache: new Map() })
+  assert.equal(env.GH_TOKEN, "secret-arimendelow_microsoft")
+  const set = { GH_TOKEN: "chosen" }
+  assert.equal(ghEnvFor({ ...repo, env: set, spawn, cache: new Map() }), set, "a token the caller set is kept")
+  const none = { PATH: "/usr/bin" }
+  assert.equal(ghEnvFor({ ...repo, env: none, spawn: fakeSpawn({ logins: ["arimendelow"] }).spawn, cache: new Map() }), none, "no account can reach it: gh runs as before")
+})
+
+test("gh's environment skips bad names, uses an enterprise host's own token variables and falls back to read access", () => {
+  const base = { host: "github.com", owner: "gim-home", repo: "CIT", env: { PATH: "/usr/bin" }, cache: new Map() }
+  const { spawn } = fakeSpawn({ logins: ["a"], access: { a: { pull: true, push: false } } })
+  assert.equal(ghEnvFor({ ...base, owner: "bad owner", spawn }), base.env)
+  assert.equal(ghEnvFor({ ...base, spawn }).GH_TOKEN, "secret-a", "read access is enough when nobody can push")
+  const ghe = ghEnvFor({ ...base, host: "example.ghe.com", spawn: fakeSpawn({ logins: ["a"], access: { a: { pull: true, push: true } } }).spawn })
+  assert.deepEqual([ghe.GH_ENTERPRISE_TOKEN, ghe.GH_HOST], ["secret-a", "example.ghe.com"])
+  assert.equal(ghEnvFor({ ...base, spawn: fakeSpawn({ logins: ["a"], tokens: [], access: { a: { pull: true, push: true } } }).spawn }), base.env, "an account with no token is skipped")
 })
