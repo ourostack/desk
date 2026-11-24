@@ -170,6 +170,25 @@ test("without the pointer file the refusal still names the script by its place i
   }
 })
 
+test("a recovery pointer into a folder with no bootstrap.cjs (a source mirror) is ignored, so the refusal never names a script that cannot start a server", () => {
+  const root = makeDesk()
+  const mirror = path.join(root, "source-mirror")
+  try {
+    installCardGuard(root)
+    mkdirSync(path.join(mirror, "scripts"), { recursive: true })
+    const stale = path.join(mirror, "scripts", "local-recovery.js")
+    writeFileSync(stale, "")
+    writeFileSync(path.join(root, ".git", "hooks", RECOVERY_POINTER_NAME), `${stale}\n`)
+    writeFileSync(cardPath(root), CARD.replace("processing", "validating"))
+    const refused = commitAll(root)
+    const command = refused.stderr.split("\n").find((line) => line.includes("local-recovery.js"))
+    assert.ok(!command.includes(mirror), "the mirror script is not named")
+    assert.match(command, /<Desk plugin folder>\/mcp\/scripts\/local-recovery\.js/)
+  } finally {
+    removeWithRetry(root, { recursive: true, force: true })
+  }
+})
+
 test("a commit with no card change, or with a change to the card's other files, passes", () => {
   const root = makeDesk()
   try {
