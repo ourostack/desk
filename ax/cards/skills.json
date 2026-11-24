@@ -569,7 +569,7 @@
     {
       "id": "skill:desk:pr-surface-hygiene",
       "group": "desk-skills-pr-review",
-      "when": "Checking each line of a pull request body or top-level reply for rot, pipeline noise, invented sections and a missing screenshot, and running the Tim check before a pull request reaches GitHub or a reviewer",
+      "when": "Checking a pull request body or top-level reply for rot, pipeline noise, invented sections and a missing screenshot, and running the Tim check before a PR reaches GitHub or a reviewer",
       "effect": "read",
       "errors": [
         { "code": "visual-proof-missing", "means": "The proof checker exited nonzero, or the body has no inline image and no accurate no-visual-change reason.", "fix": "Block publication or readiness, report the gap and correct it within existing authority." },
