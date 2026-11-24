@@ -250,6 +250,39 @@
         "destructiveHint": false,
         "openWorldHint": false
       }
+    },
+    {
+      "name": "task_focus",
+      "title": "Task focus",
+      "description": "Declare the task this session is working on, so its time is credited to it. Pass `track` and `slug` of an existing card (live or archived), or `clear: true` for a side conversation. A subagent shares this session's server, so its call would move the main agent's focus: only the main agent calls it. Writes nothing: the focus is held in memory. Returns `task_status`, `recent_progress`, `next_step`, any `shelved_lessons` to read before you act, and `archive_due` for a done/cancelled card. `task_create` with `focus: true` does the same for a new task.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "track": {
+            "type": "string",
+            "description": "The track folder of the task you are working on; give it with `slug`."
+          },
+          "slug": {
+            "type": "string",
+            "description": "The task folder name; give it with `track`."
+          },
+          "clear": {
+            "type": "boolean",
+            "description": "Pass true, alone, to declare no task: for a side conversation that belongs to none."
+          },
+          "display_label": {
+            "type": "string",
+            "description": "Optional short description of the focused task, at most 72 characters; never paths, URLs, emails or credentials. Unsafe labels are ignored."
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "openWorldHint": false
+      }
     }
   ],
   "refusals": {}

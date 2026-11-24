@@ -219,12 +219,6 @@ const HAND_WRITTEN_INPUT_SCHEMAS = Object.freeze({
     reason: { type: "string", enum: ["not_what_was_asked", "defect", "changed_ask", "incomplete", "other"], description: "Required when refused, not allowed when accepted: the operator's reason, mapped from what they said." },
     return_reason: { ...RETURN_REASON, description: "Required when refused, not allowed when accepted: your own reading of the cause. agent_error is your mistake, changed_ask the operator's new ask, new_information something nobody knew, external an outside break." },
   }, ["track", "slug", "outcome"]),
-  task_focus: schema({
-    track: text("The track folder of the task you are working on; give it with `slug`."),
-    slug: text("The task folder name; give it with `track`."),
-    clear: flag("Pass true, alone, to declare no task: for a side conversation that belongs to none."),
-    display_label: DISPLAY_LABEL,
-  }),
   track_create: schema({
     slug: text("The track folder name: an outcome name, 1-6 lowercase kebab-case words, at most 48 characters."),
     title: text("The track title."),

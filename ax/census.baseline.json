@@ -45,7 +45,6 @@
     "http:hooks GET /healthz",
     "http:hooks GET /hooks",
     "http:hooks GET /hooks/:name/events",
-    "mcp:task_focus",
     "skill:superpowers:brainstorming",
     "skill:superpowers:verification-before-completion"
   ]
