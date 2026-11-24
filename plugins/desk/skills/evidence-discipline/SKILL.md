@@ -113,9 +113,13 @@ Clean up the processes you spawned by lineage, never by name alone. Use a tracke
 
 Before a prompt, plan or brief says "this extends PR #1234's pattern" or "we already migrated X to Y", check that the precedent is in HEAD: `git show <ref> -- <file>`, `git log --all --grep "<feature>"`, or a grep of current source for its claimed effect. What a PR proposed and what landed often differ. If HEAD disagrees, narrow the claim, pick another precedent or drop it before anyone builds on it.
 
+## A test earns its place
+
+Before adding or substantially changing a test, name the concrete regression it catches that existing tests miss. Then prove it: revert the fix or break the behavior, and watch the test fail for that reason. A test that still passes catches nothing; drop it or fix it. Prefer strengthening an existing test to adding a test, fixture, mock or harness. Don't test what the compiler, types or a schema already enforce, the same contract twice at layers that fail together, or only that a mock was called with some arguments, unless that call is itself the contract. "No new test" is an acceptable outcome, and an instruction to write tests doesn't waive this gate. Adapted from Tim Clem's [Test Quality Gate](https://github.com/tclem/dotfiles/blob/main/copilot/copilot-instructions.md#test-quality-gate).
+
 ## Test coverage: seven categories
 
-When writing or auditing tests for a change, cover each category or mark it `N/A` with a reason (for example `N/A: pure function, no state`):
+When writing or auditing tests for a change, check each category for a regression worth a test ("A test earns its place") or mark it `N/A` with a reason (for example `N/A: pure function, no state`):
 
 1. **Happy path:** the normal input, asserting the value and side effects.
 2. **Edge cases:** boundaries such as zero, maximum and minimum length, each as its own test.

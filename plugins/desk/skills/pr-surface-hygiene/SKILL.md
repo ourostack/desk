@@ -1,6 +1,6 @@
 ---
 name: pr-surface-hygiene
-description: Rules for writing and auditing PR descriptions and comments. Use before drafting, opening or marking a PR ready, and before publishing comments.
+description: Rules for writing and auditing PR descriptions and comments, and the Tim check every PR passes before it reaches GitHub or a reviewer. Use before drafting or opening a PR, changing its body, marking it ready or requesting review, and before publishing comments.
 ---
 
 # PR surface hygiene
@@ -57,7 +57,7 @@ List only items that are in the same repo, could have been part of this diff and
 
 ## PSH-008 — use the repo's template and convention
 
-Before opening any PR, look for a template (`.github/PULL_REQUEST_TEMPLATE.md`, `.github/PULL_REQUEST_TEMPLATE/*.md`, a root or `docs/` `pull_request_template.md`, or the host's equivalent) and read the last two or three merged PRs, which show the real convention; if the operator has written PRs in the repo, mirror theirs. Never invent sections (`## Problem`, `## Background`, `## Validation`) where a template or convention exists. Without either, a short `## What` and `## Why` is the safe default.
+Before opening any PR, look for a template (`.github/PULL_REQUEST_TEMPLATE.md`, `.github/PULL_REQUEST_TEMPLATE/*.md`, a root or `docs/` `pull_request_template.md`, or the host's equivalent) and read the last two or three merged PRs, which show the real convention; if the operator has written PRs in the repo, mirror theirs. Never invent sections (`## Problem`, `## Background`, `## Validation`) where a template or convention exists. Without either, a short `## What` and `## Why` is the safe default. Fill every section the template has, with no placeholders; if you can't tell what a section wants, read how recent merged PRs filled it. A demo or screenshot section gets before and after captures from a working build whenever the change is something a person sees ([`visual-proof`](../visual-proof/SKILL.md)); PSH-010 is the gate.
 
 ## PSH-009 — one body for human and agent readers
 
@@ -82,6 +82,30 @@ For private captures, use [`visual-proof`, "Privacy-safe rendered proof"](../vis
 ## PSH-011 — offer repository enforcement; do not install it by default
 
 When the repository lacks equivalent enforcement, recommend the [opt-in PR template and CI check](repository-setup.md). Offer setup once in the current task; a PR-writing request does not authorize changing repository workflows, templates, required checks, permissions or user-wide rules. Preserve existing templates and policy. Install only within explicit repository-owner approval, and leave required-check settings to their authorized owner.
+
+## PSH-012 — the body says why the diff exists
+
+The reviewer learns what changed from the diff. The body tells them what the diff can't: why it exists. Say that in a short paragraph: the problem or constraint, the approach in a sentence, and the one decision a reviewer would otherwise question. When the reason is obvious, one sentence is the whole body; go past a paragraph only for a reason you can name.
+
+- **Describe the approach; never recap the diff.** "Moves retries into the client so callers stop retrying twice" is fine. A list of the files, functions or skills changed is not, at any length.
+- **Never narrate how you got here.** No "tried X, then Y", "after review" or history of iterations. State each decision as its current reason ("uses Y because Z").
+- **No process status.** CI results, force-push notes and self-review findings already fixed stay out (PSH-001).
+- **Put nuance where the reviewer meets it.** Why one line reads as it does is a code comment; a point about one hunk is a review comment on that hunk. Only why the whole diff exists belongs in the body.
+- **Link context inline,** on the words it explains, to the thing's own page rather than the PR that made it, instead of writing backstory or a trailing "Related" list.
+
+Adapted from Tim Clem's [`pr-author`](https://github.com/tclem/dotfiles/blob/main/copilot/skills/pr-author/SKILL.md).
+
+## PSH-013 — the Tim check before a PR reaches GitHub or a reviewer
+
+Before you open a pull request, change its body, mark it ready or ask anyone to review it, ask yourself: would Tim Clem approve the shape of this PR? Tim is the engineer whose [Copilot instructions](https://github.com/tclem/dotfiles/tree/main/copilot) PSH-012 and the rules below adapt. Run the check yourself on the current diff and saved body and fix what fails before going on; it is your gate, so never wait for the operator to run it. It passes when:
+
+1. The body passes PSH-012, fills the repository's template (PSH-008) and carries visual proof where a person sees the change (PSH-010).
+2. Every new or changed test catches a concrete regression and fails with the fix reverted ([`evidence-discipline`, "A test earns its place"](../evidence-discipline/SKILL.md#a-test-earns-its-place)).
+3. A fix changes the one place the invariant broke, with no backstop stacked on it ([`runtime-symptom-investigation`, "Fix the one place it broke"](../runtime-symptom-investigation/SKILL.md#fix-the-one-place-it-broke)).
+4. Every review thread has a reply backed by evidence, and only threads the evidence settles are resolved ([`pr-feedback-on-own-pr`, "Each review item is a hypothesis"](../pr-feedback-on-own-pr/SKILL.md#each-review-item-is-a-hypothesis)).
+5. Required checks are green on a head that includes the current base branch.
+
+Items 1 to 4 hold before the PR is opened or its body changes. Item 5 holds before it is marked ready, sent to a reviewer or merged by hand; auto-merge already waits for it. The check adds no signature or AI credit line: credit stays with the person (`plain-language`).
 
 ## Allowed specifics
 
