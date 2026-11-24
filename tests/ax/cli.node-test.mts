@@ -90,6 +90,8 @@ test("a shell door's codes are read from its text; a file the lock file lists as
   assert.deepEqual(errors, []);
   assert.deepEqual(doors.find((d) => d.id === "cli:src/theirs.sh")!.evidence, {});
   assert.deepEqual(doors.find((d) => d.id === "cli:src/ours.sh")!.evidence, { raises: ["bad-input"] });
+  // A locked script is exempt too, and its card's `effect: read` stands as its read-only evidence.
+  assert.deepEqual(doors.find((d) => d.id === "cli:node src/theirs-read.js")!.evidence, { readOnly: true });
   const bare = await run(join(root, "src"), ".", "../cards-bare.json");
   assert.deepEqual(bare.doors.find((d) => d.id === "cli:theirs.sh")!.evidence, { raises: [] });
 });

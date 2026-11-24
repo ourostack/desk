@@ -659,6 +659,17 @@
       ]
     },
     {
+      "id": "cli:node plugins/desk/hooks/factory-end.cjs",
+      "group": "desk-cli-factory-workers",
+      "when": "Registered as the host's session-end and stop hook: it records the session's facts in the background and, at a stop, checks the final reply is verified",
+      "effect": "write",
+      "errors": [
+        { "code": "hook-worker-unavailable", "means": "The background worker could not start or timed out, so the session's facts were not captured; it prints an unverified line and exits 0.", "fix": "Run factory status, then flush; the next session end retries." },
+        { "code": "guard-unavailable", "means": "The delivery check could not run at a stop, so the final reply is unverified; it exits 0.", "fix": "Check the final reply against the delivery rules yourself before finishing." },
+        { "code": "correction-exhausted", "means": "The reply was already corrected once and the stop hook is active again, so it lets the stop through unverified.", "fix": "Check the final reply against the delivery rules yourself before finishing." }
+      ]
+    },
+    {
       "id": "cli:node plugins/desk/hooks/factory-start.cjs",
       "group": "desk-cli-factory-workers",
       "when": "Started detached by session-start hooks when a store opts in, to sweep session markers, flush facts and refresh andon issues",
@@ -762,14 +773,55 @@
       ]
     },
     {
+      "id": "cli:node plugins/desk/skills/pr-surface-hygiene/check-visual-proof.cjs",
+      "group": "desk-cli-local-checks",
+      "when": "Before publishing a pull request, to check its body carries a rendered image or a specific No visual change reason",
+      "effect": "read",
+      "errors": [
+        { "code": "no-visual-proof", "means": "The body has neither a hosted inline image nor a specific No visual change reason, so it exits 1.", "fix": "Add a rendered capture as an inline image, or No visual change: followed by a specific reason." },
+        { "code": "visual-change-contradicts-reason", "means": "The change is marked visual (--visual-change yes) but the body says No visual change, so it exits 1.", "fix": "Capture the changed surface with safe data and drop the No visual change line." },
+        { "code": "usage", "means": "The arguments were wrong: no or several of --stdin, --body and --event, a missing file, or a bad --visual-change value; it exits 2.", "fix": "Pass exactly one of --stdin, --body <file> or --event <file>, and --visual-change yes, no or unknown." },
+        { "code": "bad-event", "means": "The --event file has no pull_request.body, so it exits 2.", "fix": "Pass the pull_request event JSON the workflow received." },
+        { "code": "unreadable-input", "means": "The body or event file could not be read or parsed, so it exits 2.", "fix": "Check the file path and that an --event file is valid JSON." }
+      ]
+    },
+    {
+      "id": "cli:node plugins/desk/mcp/scripts/drains-launcher.mjs",
+      "group": "drains-issues",
+      "when": "A wake runner's one stable entry for the drains CLI: it fetches the released Desk and runs drains.js with the arguments given",
+      "effect": "write",
+      "errors": [
+        { "code": "fetch-failed", "means": "GitHub could not be reached or the fetch failed, so the last published copy of Desk runs; one line goes to stderr and resolve.log.", "fix": "Nothing is needed unless the line repeats; check network access to github.com." },
+        { "code": "release-unresolved", "means": "No released Desk could be resolved from the cache and there is no last good path, so it exits 1 without running anything.", "fix": "Check the line's reason, run a Desk update or restore access to github.com, then start the runner again." }
+      ]
+    },
+    {
+      "id": "cli:drains runtimes status",
+      "group": "drains-issues",
+      "when": "Checking whether any Copilot server runtime on this machine started without Desk's plugin, so its sessions have no desk tools",
+      "effect": "read",
+      "errors": [
+        { "code": "process-list-failed", "means": "ps could not list this host's processes, so no runtime was checked and it exits 1.", "fix": "Run ps -axo pid=,command= yourself to see why it fails, then run runtimes status again." }
+      ]
+    },
+    {
+      "id": "cli:migrations roots",
+      "group": "desk-cli-local-checks",
+      "when": "Listing the plugin folders whose migrations Desk's session start walks, one per plugin from Agency's cache",
+      "effect": "read",
+      "errors": [
+        { "code": "unknown-engine", "means": "--engine named an engine Agency does not cache plugins for, so it exits 2.", "fix": "Pass --engine copilot or --engine claude, or leave it out for copilot." }
+      ]
+    },
+    {
       "id": "cli:python3 plugins/desk/skills/pr-reviewer-audit/helpers/audit.py",
       "group": "desk-cli-local-checks",
       "when": "Asked who must approve an Azure DevOps pull request, to map its changed files to required reviewer groups and rank approvers",
       "effect": "read",
       "errors": [
-        { "code": "tenant-mismatch", "means": "The active az account is not in the expected tenant, so no request was sent and the result is empty.", "fix": "Run az login --tenant microsoft.onmicrosoft.com, then run the audit again." },
-        { "code": "token-unavailable", "means": "az could not issue an Azure DevOps bearer token, so the result is empty.", "fix": "Check az account show and sign in again with az login." },
-        { "code": "http-error", "means": "An Azure DevOps request failed and the script stopped with its HTTP error.", "fix": "Check the org, project, repository GUID and PR number, and the account's access to them." }
+        { "code": "tenant-mismatch", "means": "The active az account is not in the expected tenant, so no request was sent, the result is empty and it exits 3.", "fix": "Run az login --tenant microsoft.onmicrosoft.com, then run the audit again." },
+        { "code": "token-unavailable", "means": "az could not issue an Azure DevOps bearer token, so the result is empty and it exits 3.", "fix": "Check az account show and sign in again with az login." },
+        { "code": "http-error", "means": "An Azure DevOps request failed, so it prints the HTTP error and exits 1.", "fix": "Check the org, project, repository GUID and PR number, and the account's access to them." }
       ]
     },
     {
@@ -828,6 +880,17 @@
         { "code": "usage", "means": "The arguments were not PLAN_FILE TASK_NUMBER BASE -- TEST_COMMAND; exit 2.", "fix": "Pass the BASE task-start printed, then -- and the test command." },
         { "code": "bad-base", "means": "BASE is not a commit in the working tree's repository; exit 2.", "fix": "Pass the full SHA that task-start printed for this task." },
         { "code": "tests-failed", "means": "The test command exited non-zero, so the task was not recorded and its exit status is returned.", "fix": "Read the task's tests log in the workspace, fix the failure and run task-done again." }
+      ]
+    },
+    {
+      "id": "cli:node plugins/superpowers/skills/writing-skills/render-graphs.js",
+      "group": "superpowers-cli-writing-skills",
+      "when": "While writing or editing a skill, to render the dot diagrams in its SKILL.md to SVG files next to it, or into one combined SVG with --combine",
+      "effect": "write",
+      "errors": [
+        { "code": "usage", "means": "No skill folder was given, so it prints its usage and exits 1.", "fix": "Pass the skill's folder, optionally with --combine." },
+        { "code": "skill-md-missing", "means": "The folder has no SKILL.md, so it exits 1.", "fix": "Pass the skill's own folder, the one that holds SKILL.md." },
+        { "code": "graphviz-missing", "means": "The dot program is not installed, so it prints install hints and exits 1.", "fix": "Install graphviz (brew install graphviz or apt install graphviz), then run it again." }
       ]
     },
     {

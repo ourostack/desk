@@ -154,3 +154,16 @@ test("an Agency index past its size limit has no roots, the same index under it 
   writeFileSync(index, JSON.stringify({ ...parsed, pad: "x".repeat(4 * 1024 * 1024) }))
   assert.deepEqual(agencyMigrationRoots({ home: fixture.home }), [])
 })
+
+test("roots names unknown-engine for an engine Agency does not cache, and accepts claude", async () => {
+  const fixture = await agencyHome([{ spec: "claude:github:org/other:plugins/other@main", dir: "other", name: "other", fetched_at: 1 }])
+  const run = async (argv) => {
+    let out = ""
+    const code = await runMigrationCli({ argv, home: fixture.home, io: { stdout: { write: (text) => { out += text } }, stderr: { write() {} } }, pluginRoot: deskPluginRoot, cwd: fixture.home })
+    return [code, out]
+  }
+  assert.deepEqual(await run(["roots", "--engine", "claude"]), [0, `${fixture.folder("other")}\n`])
+  const [code, out] = await run(["roots", "--engine", "vim", "--json"])
+  assert.equal(code, 2)
+  assert.equal(JSON.parse(out).error.code, "unknown-engine")
+})

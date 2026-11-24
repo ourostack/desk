@@ -1,3 +1,4 @@
+# ax: read-only. It only runs az account show, gets a bearer token and sends Azure DevOps GET requests; it writes nothing.
 """ADO PR reviewer audit — 4-step recipe from ``../SKILL.md``.
 
 Implements the file→required-groups map + approver ranking for a
@@ -289,13 +290,19 @@ def main(
     project: str,
     repo_id: str,
     pr_id: str,
+    refusals: list[str] | None = None,
 ) -> dict[str, Any]:
     """Run the 4-step recipe and return the result dict.
 
     Return shape: ``{"file_to_groups": {...}, "approver_ranking": [...]}``.
+    When it returns the empty result because it could not start, it appends
+    the reason's code (``tenant-mismatch`` or ``token-unavailable``) to
+    ``refusals`` so the command line can report it.
     """
+    refusals = [] if refusals is None else refusals
     tenant_ok = ensure_tenant()
     if not tenant_ok:
+        refusals.append("tenant-mismatch")
         logger.warning(
             "proceeding with tenant-mismatch sentinel; no ADO requests will be issued"
         )
@@ -304,6 +311,7 @@ def main(
     try:
         token = _get_bearer_token()
     except RuntimeError as exc:
+        refusals.append("token-unavailable")
         logger.warning("could not acquire ADO bearer token: %s", exc)
         return {"file_to_groups": {}, "approver_ranking": []}
 
@@ -325,9 +333,19 @@ def main(
 def _cli_main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
     ns = parse_args(argv)
-    result = main(ns.org, ns.project, ns.repo_id, ns.pr_id)
+    refusals: list[str] = []
+    try:
+        result = main(ns.org, ns.project, ns.repo_id, ns.pr_id, refusals)
+    except requests.HTTPError as exc:
+        sys.stderr.write(f"http-error: {exc}\n")
+        return 1
     json.dump(result, sys.stdout, indent=2, default=str)
     sys.stdout.write("\n")
+    if refusals:
+        sys.stderr.write(
+            f"{refusals[0]}: the result above is empty because no Azure DevOps request was sent\n"
+        )
+        return 3
     return 0
 
 

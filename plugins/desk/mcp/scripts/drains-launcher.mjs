@@ -5,7 +5,8 @@
 // `releases/<commit>/`, never the checkout another runner may be updating. If GitHub cannot be reached the last published copy runs;
 // with no copy yet, the newest `plugins/desk@release` entry in
 // Agency's plugin cache (`~/.local/agency/plugins/cache/cache_index.json`) or the last path that worked runs. One line is logged
-// to stderr and to resolve.log whenever the fetch or the cache resolution fails.
+// to stderr and to resolve.log whenever the fetch or the cache resolution fails, as `<time> <code>: <sentence>` with the code
+// `fetch-failed` or `release-unresolved`; with nothing to run it then exits 1.
 // This file must stay standalone: the installed copy has no neighbours to import.
 import { spawnSync } from "node:child_process"
 import { randomUUID } from "node:crypto"
@@ -288,8 +289,8 @@ function launchWithLease({ argv, env, home, spawn, git, stderr, execPath, now, d
   const cache = env.AGENCY_PLUGIN_CACHE ?? path.join(home, ".local", "agency", "plugins", "cache")
   const lastGood = path.join(dir, "last-good-script")
   const own = path.join(dir, "desk-release")
-  const complain = (text) => {
-    const line = `${now().toISOString()} ${text}`
+  const complain = (code, text) => {
+    const line = `${now().toISOString()} ${code}: ${text}`
     stderr.write(`${line}\n`)
     mkdirSync(dir, { recursive: true })
     appendFileSync(path.join(dir, "resolve.log"), `${line}\n`)
@@ -307,7 +308,7 @@ function launchWithLease({ argv, env, home, spawn, git, stderr, execPath, now, d
   let script
   if (copy && existsSync(copy.script)) {
     script = copy.script
-    if (fetchError) complain(`could not fetch the released Desk (${fetchError}); using the copy from ${release.slice(0, 8)}`)
+    if (fetchError) complain("fetch-failed", `could not fetch the released Desk (${fetchError}); using the copy from ${release.slice(0, 8)}`)
   } else {
     release = null
     try {
@@ -318,7 +319,7 @@ function launchWithLease({ argv, env, home, spawn, git, stderr, execPath, now, d
       }
     } catch (error) {
       script = existsSync(lastGood) ? readFileSync(lastGood, "utf8").trim() : null
-      complain(`could not resolve the released Desk (${fetchError ? `${fetchError}; ` : ""}${error.message}); ${script ? `using the last good path ${script}` : "no last good path"}`)
+      complain("release-unresolved", `could not resolve the released Desk (${fetchError ? `${fetchError}; ` : ""}${error.message}); ${script ? `using the last good path ${script}` : "no last good path"}`)
       if (!script || !existsSync(script)) return 1
     }
   }

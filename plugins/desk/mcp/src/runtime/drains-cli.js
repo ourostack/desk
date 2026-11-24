@@ -177,7 +177,15 @@ function drainsCli({ script, env, now, connect, listProcesses, signedIn, fetchHo
         const paths = pathsOf(hookPaths({ env }), input)
         return withDesk({ status: await hookStatus({ paths, now: now(), fetchImpl: fetchHooks, token: hookToken, env }) }, { script, env })
       }),
-      command("runtimes status", { ...READ, summary: "Name the Copilot server runtimes started without Desk's plugin, and how to recover." }, () => ({ status: pluginlessRuntimeLines(findPluginlessRuntimes(listProcesses())) })),
+      command("runtimes status", { ...READ, summary: "Name the Copilot server runtimes started without Desk's plugin, and how to recover." }, () => {
+        let processes
+        try {
+          processes = listProcesses()
+        } catch (error) {
+          throw new AxError({ code: "process-list-failed", exit: 1, thing: "runtimes status", problem: `ps could not list this host's processes: ${error.message}`, fix: "Run ps -axo pid=,command= yourself to see why it fails, then run runtimes status again." })
+        }
+        return { status: pluginlessRuntimeLines(findPluginlessRuntimes(processes)) }
+      }),
     ],
   })
 }

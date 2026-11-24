@@ -38,3 +38,11 @@ test("drains.js runtimes status prints the findings, and needs the status word",
   assert.equal(await runDrainsCli({ argv: ["runtimes"], script: "s", io }), 2)
   assert.match(err.join(""), /drains: .*runtimes/u)
 })
+
+test("drains.js runtimes status names process-list-failed when ps cannot run", async () => {
+  const out = []
+  const io = { stdout: { write: (t) => out.push(t) }, stderr: { write() {} } }
+  const listProcesses = () => { throw new Error("spawn ps ENOENT") }
+  assert.equal(await runDrainsCli({ argv: ["runtimes", "status", "--json"], script: "s", io, listProcesses }), 1)
+  assert.equal(JSON.parse(out.join("")).error.code, "process-list-failed")
+})

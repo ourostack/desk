@@ -1,5 +1,8 @@
 "use strict";
 
+// The stable code printed when the background worker cannot run.
+const WORKER_UNAVAILABLE = "hook_worker_unavailable";
+
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
@@ -292,7 +295,7 @@ async function runBoundedHook(host, input, entry, { deadlineMs = DEADLINE_MS, st
         } catch { /* Accounting produces no stdout when no correction is due. */ }
       } else {
         const why = timedOut ? "deadline" : spawnError ? `spawn ${spawnError.code ?? "error"}` : signal ? `signal ${signal}` : `exit ${code}`;
-        stderr.write(`[desk-delivery] unverified: hook_worker_unavailable (${why})\n`);
+        stderr.write(`[desk-delivery] unverified: ${WORKER_UNAVAILABLE} (${why})\n`);
       }
       resolve();
     };
