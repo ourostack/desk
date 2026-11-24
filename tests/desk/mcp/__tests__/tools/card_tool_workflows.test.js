@@ -83,6 +83,8 @@ test("a person-scoped session is refused a solo sibling, and writes a Crew desk 
   assert.match(answer(refused).message, /person-scoped/u)
   const created = answer(await callTool({ deskRoot: bound, name: "task_create", input: { desk: "team", track: "t", slug: "work", title: "Work" }, person: "ari", env }))
   assert.equal(created.desk_root, crew)
+  const stranger = await callTool({ deskRoot: bound, name: "task_create", input: { desk: "team", track: "t", slug: "other", title: "Other" }, person: "ari", env: { ...env, DESK_PERSON: "", DESK_IDENTITY: "nobody" } })
+  assert.match(answer(stranger).message, /not a member on its roster/u)
   assert.match(await fs.readFile(path.join(crew, "desks", "ari", "t", "work", "task.md"), "utf8"), /Work/u)
 })
 

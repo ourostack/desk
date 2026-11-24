@@ -1072,7 +1072,7 @@ export async function task_update({ deskRoot, input, person = null, search, stat
   try {
     contentAdmission = admitUpdate(values.content_home)
   } catch (error) {
-    if (!/content_home_required/u.test(error?.message ?? "") || !progressOnly || values.log === undefined) throw error
+    if (!/content_home_required/u.test(error?.message ?? "") || !progressOnly) throw error
     contentAdmission = admitUpdate({ purpose: "coordination", lifecycle: "current" })
   }
   // `log` goes to log.md beside the card by the cheap append path. Alone, it is the whole call; with other fields, the rest of the call follows it.

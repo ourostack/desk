@@ -35,7 +35,7 @@ export async function resolveSiblingDesk({ tool, desk, boundRoot, person, env })
   if (found.desk.kind === "crew") {
     // The write is made as the member this machine's GitHub sign-in is on that desk's roster, the same way a session opened there would resolve it.
     const member = await resolveMember({ deskRoot: found.desk.path, env })
-    if (member.person === null) throw refusal(tool, `${found.desk.name} is a Crew desk, and this machine's GitHub sign-in is not a member on its roster (${memberMessage(member) ?? "no member resolved"}). Sign in to gh as the account you joined with, or open a session in that desk.`)
+    if (member.person === null) throw refusal(tool, `${found.desk.name} is a Crew desk, and this machine's GitHub sign-in is not a member on its roster (${memberMessage(member)}). Sign in to gh as the account you joined with, or open a session in that desk.`)
     return { deskRoot: real(found.desk.path), person: member.person }
   }
   if (person) throw refusal(tool, "this session writes as a person-scoped member, and a solo desk's card is written by a session opened in that desk.")
