@@ -1,0 +1,1 @@
+A repository's pre-push hook now tests the rebuilt tree that is about to land. Sync no longer sticks in `push_rejected` when the shared checkout has not yet caught up with commits already on the remote and the hook refuses that stale copy.
