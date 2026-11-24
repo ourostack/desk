@@ -108,6 +108,7 @@ async function statusCall({ deskRoot, person, statusContext = {}, signal, env = 
     const runtime = runtimeStatus(statusContext.runtime ?? {}, env)
     const activation = activationStatus(statusContext.activation)
     const search = await (stage ? stage("search_status", () => searchStatus(statusContext.search)) : searchStatus(statusContext.search))
+    const factoryOptions = { env, deskRoot: root.valid ? root.path : null, signal }
 
     return {
       status: root.valid ? "ok" : "error",
@@ -118,7 +119,7 @@ async function statusCall({ deskRoot, person, statusContext = {}, signal, env = 
       write_scope: writeScope,
       // The redacted active-task listing session start and status render (./desk/active-tasks.js).
       active_tasks: root.valid ? await (stage ? stage("active_tasks", () => activeTasks(root.path)) : activeTasks(root.path)) : null,
-      factory: await (stage ? stage("factory_status", () => factoryStatusAsync({ env, deskRoot: root.valid ? root.path : null, signal })) : factoryStatusAsync({ env, deskRoot: root.valid ? root.path : null, signal })),
+      factory: await (stage ? stage("factory_status", () => factoryStatusAsync(factoryOptions)) : factoryStatusAsync(factoryOptions)),
       sync: root.valid ? await (stage ? stage("sync_status", () => syncStatus({ deskRoot: root.path, env, signal })) : syncStatus({ deskRoot: root.path, env, signal })) : null,
       summary: summaryFor({ root, activation, search }),
     }
