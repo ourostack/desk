@@ -280,3 +280,18 @@ test("a base that cannot be read at all is named, and no admission means no chec
   t.after(() => removeTree(bare))
   assert.throws(() => assertPublishedContentBase(bare, { policy_commit: "0".repeat(40) }, "task_update"), /content_home_unpublished_base/u)
 })
+
+test("2: catching a checkout up smudges Git LFS files instead of leaving their pointers", async (t) => {
+  const root = await fixture(t)
+  const smudge = path.join(root, ".git", "smudge.cjs")
+  writeFileSync(smudge, 'const chunks = []\nprocess.stdin.on("data", (c) => chunks.push(c))\nprocess.stdin.on("end", () => process.stdout.write(process.env.GIT_LFS_SKIP_SMUDGE === "1" ? Buffer.concat(chunks) : "real content\\n"))\n')
+  git(root, ["config", "filter.fake.smudge", `node "${smudge.replaceAll("\\", "/")}"`])
+  writeFileSync(path.join(root, ".gitattributes"), "*.bin filter=fake\n")
+  git(root, ["add", ".gitattributes"])
+  git(root, ["commit", "-qm", "Track bin files"])
+  git(root, ["update-ref", "refs/remotes/origin/main", "HEAD"])
+  const tip = upstreamMoves(root, { "demo.bin": "pointer\n" })
+  assert.equal(catchUpBehind({ root }).state, "caught_up")
+  assert.equal(git(root, ["rev-parse", "HEAD"]), tip)
+  assert.equal(await fs.readFile(path.join(root, "demo.bin"), "utf8"), "real content\n")
+})
