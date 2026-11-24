@@ -30,3 +30,13 @@ If a real capture would expose private messages, identities, customer data or se
 Label the inline capture `Synthetic-data capture` and state what it demonstrates and what it does not: for example, “Synthetic-data capture: the changed renderer with made-up entries; does not verify private account integration.” Keep test/log evidence for behavior outside that scope. A drawing, AI-generated mock, reconstructed screenshot or screenshot of a different implementation is not proof of the running product. A synthetic render cannot prove a private live run, installed state, merge or rollout.
 
 If neither a safe bounded capture nor a real synthetic-data render is possible, record the reason and the strongest safe alternative, but do not call the visual claim verified. PR creation and readiness remain subject to [`pr-surface-hygiene` PSH-010](../pr-surface-hygiene/SKILL.md#psh-010--visual-proof-blocks-creation-and-readiness); a visible change stays blocked rather than acquiring a false `No visual change` reason.
+
+## Every delivered image must render where the recipient reads it
+
+This covers any image you deliver (proof, mockup, report figure, chat attachment), not only proof. Delivery is part of the work. Show it in the client the recipient actually uses (a phone, GitHub Mobile, Teams, a browser signed out of your account), not only the one you wrote it in. A URL that opens for you proves nothing about them.
+
+- Preserve the source's confidentiality and intended audience. Never move private bytes onto public or anonymous hosting to make an image render; if no destination keeps the audience right, say so and send nothing.
+- Before upload, inspect the destination's access controls (who can open the link, whether it expires or is signed) and the image's pixels and metadata for private content. Prefer a bounded crop or synthetic data.
+- Private repository `blob` or `raw` URLs, `raw.githubusercontent.com`, tokenised links and signed `private-user-images` URLs (minutes-long renderer URLs, not the stored reference) are a known risk: they depend on the viewer's sign-in, and clients may show a broken image. Do not present them as mobile-safe. `check-visual-proof.cjs` rejects them in pull request bodies; that is URL syntax only, not evidence that any other URL renders.
+- Name the client you checked. If you could not check the recipient's client, say the rendering is unverified.
+- A method (for example `gh` user-attachments) counts as supported only for the clients and repository access someone has tested; do not generalise from one.
