@@ -1,15 +1,16 @@
 // Issue drains: what the poll records, what it ignores and what it hands a runner to deliver. The GitHub side is a fake; every
 // state, config and lock file lives under a temporary root.
 import assert from "node:assert/strict"
-import { createHash } from "node:crypto"
+import { createHash, randomUUID } from "node:crypto"
 import { spawnSync } from "node:child_process"
-import { promises as fs, mkdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs"
+import { chmodSync, closeSync, existsSync, mkdirSync, mkdtempSync, openSync, promises as fs, readdirSync, readFileSync, renameSync, rmdirSync, rmSync, unlinkSync, utimesSync, writeFileSync } from "node:fs"
+import * as os from "node:os"
 import path from "node:path"
 import { test } from "node:test"
 import { fileURLToPath } from "node:url"
 import { mkTempRoot } from "../_temp_roots.js"
 import {
-  ackWake, connectGithub, DRAIN_STATUS_MARKER, drainPaths, drainsHome, deskInUse, drainStatusLines, installLauncher, parseDrainConfig, pollDrain, pollDrains, quotaHold, quotaLines, recoverDrainTarget, startSuccessor, successorKickoff,
+  acquireDrainLock, ackWake, connectGithub, DRAIN_STATUS_MARKER, drainPaths, drainsHome, deskInUse, drainStatusLines, installLauncher, parseDrainConfig, pollDrain, pollDrains, quotaHold, quotaLines, recoverDrainTarget, startSuccessor, successorKickoff,
   readDrainConfig, readDrainStates, wakeId, wakeMessage, whyOf, withDrainLock,
 } from "../../../../../plugins/desk/mcp/src/runtime/drains.js"
 import { runDrainsCli } from "../../../../../plugins/desk/mcp/src/runtime/drains-cli.js"
@@ -1482,7 +1483,12 @@ test("the command line says what is wrong: usage, a busy lock and a bad config",
   const busy = await cli(["status", "--config", config, "--state", state], { now: () => NOW })
   assert.equal(busy.code, 1)
   const locked = await cli(["poll", "--config", config, "--state", state])
-  assert.match(locked.err, /holds .* and is still working/u)
+  assert.match(locked.err, /cannot tell whether a poll still holds it/u)
+  assert.match(locked.err, /desk_drains_lock_legacy/u)
+  rmSync(`${state}.lock`)
+  mkdirSync(`${state}.lock`)
+  writeFileSync(path.join(`${state}.lock`, `owner-${"0".repeat(8)}-0000-0000-0000-${"0".repeat(12)}`), `${process.pid}\n`)
+  assert.match((await cli(["poll", "--config", config, "--state", state])).err, /holds .* and is still working/u)
 })
 
 test("the Desk in use is named by its version, and by the release commit when the launcher's own copy runs", async () => {
@@ -2121,76 +2127,178 @@ test("the state keeps GraphQL's quota beside REST's", async () => {
   assert.equal(w.state().quota, undefined)
 })
 
-test("the lock is never taken from a live owner, however long it has held it; its owner releases it, and only while it is still the owner's", async () => {
+const DEAD = 999999
+const ownerFiles = (lock) => readdirSync(lock).filter((name) => name.startsWith("owner-"))
+const plant = (lock, pid, content = `${pid}\n`) => {
+  mkdirSync(lock)
+  const name = `owner-${randomUUID()}`
+  writeFileSync(path.join(lock, name), content)
+  return name
+}
+const liveExceptDead = (pid) => pid !== DEAD
+
+test("the lock is published whole and never taken from a live owner, however long it has held it", async () => {
   const dir = await mkTempRoot("desk-drains-")
   const lock = path.join(dir, "poll.lock")
+  const seen = []
+  assert.equal(await withDrainLock(lock, () => {
+    const [name] = ownerFiles(lock)
+    assert.equal(Number.parseInt(readFileSync(path.join(lock, name), "utf8"), 10), process.pid)
+    return "done"
+  }, { onStep: (step) => seen.push([step, existsSync(lock)]) }), "done")
+  assert.deepEqual(seen, [["staging", false], ["staged", false]], "the lock does not exist until it is complete")
+  assert.deepEqual(readdirSync(dir), [], "release leaves neither the lock nor a staging directory")
+  const name = plant(lock, process.pid)
   for (const minutes of [16, 60, 600]) {
-    writeFileSync(lock, `${process.pid} some-token`)
     const old = new Date(Date.now() - minutes * 60_000)
+    utimesSync(path.join(lock, name), old, old)
     utimesSync(lock, old, old)
-    await assert.rejects(withDrainLock(lock, () => "never", { now: Date.now() + minutes * 60_000 }), /holds .* and is still working/u, `${minutes} minutes`)
-    assert.match(readFileSync(lock, "utf8"), /some-token/u)
+    await assert.rejects(withDrainLock(lock, () => "never"), (error) => /desk_drains_busy/u.test(error.message) && /process \d+ holds .* and is still working/u.test(error.message) && !/remove|delete/u.test(error.message), `${minutes} minutes`)
+    assert.deepEqual(ownerFiles(lock), [name])
   }
-  rmSync(lock)
+})
+
+test("a run releases only its own owner file: a lock that has passed to a later owner is left alone", async () => {
+  const dir = await mkTempRoot("desk-drains-")
+  const lock = path.join(dir, "poll.lock")
   let release
   const gate = new Promise((resolve) => { release = resolve })
   const slow = withDrainLock(lock, () => gate)
-  const mine = readFileSync(lock, "utf8")
-  assert.match(mine, /^\d+ [0-9a-f-]{36}$/u)
-  writeFileSync(lock, `${process.pid} the-next-owner`)
+  const [mine] = ownerFiles(lock)
+  unlinkSync(path.join(lock, mine))
+  rmdirSync(lock)
+  const next = plant(lock, process.pid)
   release("done")
   assert.equal(await slow, "done")
-  assert.equal(readFileSync(lock, "utf8"), `${process.pid} the-next-owner`, "a lock that is no longer this run's is left alone")
-  rmSync(lock)
+  assert.deepEqual(ownerFiles(lock), [next])
 })
 
-test("two contenders for a dead owner's lock cannot both take it: the one that loses the race leaves the winner's lock alone", async () => {
+test("a contender that stages its lock while another publishes first gets nothing and leaves the published lock whole", async () => {
   const dir = await mkTempRoot("desk-drains-")
   const lock = path.join(dir, "poll.lock")
-  writeFileSync(lock, "999999 dead-token")
-  let release
-  const gate = new Promise((resolve) => { release = resolve })
-  let winner = null
-  // The second contender has read the dead owner's lock and is asking whether it is alive when the first runs its whole takeover.
-  const loser = withDrainLock(lock, () => "never", {
-    alive: () => {
-      winner ??= withDrainLock(lock, () => gate, { alive: () => false })
-      return false
-    },
-  })
-  await assert.rejects(loser, /holds .* and is still working/u)
-  const held = readFileSync(lock, "utf8")
-  assert.match(held, new RegExp(`^${process.pid} [0-9a-f-]{36}$`, "u"), "the winner's lock is intact")
-  assert.throws(() => readFileSync(`${lock}.reap`), { code: "ENOENT" })
-  release("won")
-  assert.equal(await winner, "won")
-  assert.throws(() => readFileSync(lock), { code: "ENOENT" })
+  let other
+  assert.throws(() => acquireDrainLock(lock, { onStep: (step) => { if (step === "staged") other ??= acquireDrainLock(lock) } }), /desk_drains_busy/u)
+  assert.equal(ownerFiles(lock).length, 1, "the published lock is exactly the other contender's")
+  assert.equal(readdirSync(dir).filter((name) => name.includes(".new-")).length, 0, "the loser removed its staging directory")
+  other()
+  assert.deepEqual(readdirSync(dir), [])
 })
 
-test("a takeover that another contender is in the middle of, or a lock of garbage, a directory or a dead owner, is handled", async () => {
+test("two contenders for a dead owner's lock cannot both take it: one that holds a stale view removes nothing of the winner's", () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "desk-drains-"))
+  try {
+    const lock = path.join(dir, "poll.lock")
+    plant(lock, DEAD)
+    let winner
+    assert.throws(() => acquireDrainLock(lock, {
+      alive: liveExceptDead,
+      onStep: (step) => { if (step === "inspected") winner ??= acquireDrainLock(lock, { alive: liveExceptDead }) },
+    }), /desk_drains_busy/u)
+    assert.equal(ownerFiles(lock).length, 1, "the winner's lock is intact")
+    assert.equal(Number.parseInt(readFileSync(path.join(lock, ownerFiles(lock)[0]), "utf8"), 10), process.pid)
+    winner()
+    assert.deepEqual(readdirSync(dir), [])
+    // The same dead owner, found by two contenders that both finish their takeover in turn.
+    plant(lock, DEAD)
+    const first = acquireDrainLock(lock, { alive: liveExceptDead })
+    assert.throws(() => acquireDrainLock(lock, { alive: liveExceptDead }), /desk_drains_busy/u)
+    first()
+    assert.deepEqual(readdirSync(dir), [])
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test("what a crash leaves is recovered without a marker: an empty lock, and staging directories of dead processes (not of live ones)", async () => {
   const dir = await mkTempRoot("desk-drains-")
   const lock = path.join(dir, "poll.lock")
-  assert.equal(await withDrainLock(lock, () => "done"), "done")
-  assert.throws(() => readFileSync(lock), { code: "ENOENT" })
-  await assert.rejects(withDrainLock(lock, () => withDrainLock(lock, () => "inner")), /process \d+ holds .* and is still working/u)
-  writeFileSync(lock, "999999")
-  assert.equal(await withDrainLock(lock, () => "legacy lock of a dead owner", { alive: () => false }), "legacy lock of a dead owner")
-  writeFileSync(lock, String(spawnSync(process.execPath, ["-e", ""]).pid))
-  assert.equal(await withDrainLock(lock, () => "exited owner"), "exited owner")
+  mkdirSync(lock)
+  const noOwnerYet = path.join(dir, `poll.lock.new-${DEAD}-${randomUUID()}`)
+  mkdirSync(noOwnerYet)
+  const emptyOwner = path.join(dir, `poll.lock.new-${DEAD}-${randomUUID()}`)
+  mkdirSync(emptyOwner)
+  writeFileSync(path.join(emptyOwner, `owner-${randomUUID()}`), "")
+  const livesStill = path.join(dir, `poll.lock.new-${process.pid}-${randomUUID()}`)
+  mkdirSync(livesStill)
+  const stranger = path.join(dir, "poll.lock.new-notmine")
+  mkdirSync(stranger)
+  assert.equal(await withDrainLock(lock, () => "ran", { alive: liveExceptDead }), "ran")
+  assert.deepEqual(readdirSync(dir).sort(), [path.basename(livesStill), "poll.lock.new-notmine"].sort())
+})
+
+test("a lock that Desk cannot vouch for fails closed with its own error and nothing is removed", async () => {
+  const dir = await mkTempRoot("desk-drains-")
+  const lock = path.join(dir, "poll.lock")
+  const refuses = async (code, pattern) => {
+    await assert.rejects(withDrainLock(lock, () => "never", { alive: liveExceptDead }), (error) => error.message.includes(code) && pattern.test(error.message) && !/process \d+ holds/u.test(error.message))
+  }
+  for (const pid of [process.pid, DEAD]) {
+    writeFileSync(lock, `${pid}`)
+    await refuses("desk_drains_lock_legacy", /cannot tell whether a poll still holds it/u)
+    assert.equal(readFileSync(lock, "utf8"), `${pid}`, "a legacy lock file is never replaced")
+    rmSync(lock)
+  }
   writeFileSync(lock, "not a pid")
-  assert.equal(await withDrainLock(lock, () => "garbage"), "garbage")
-  writeFileSync(lock, "999999 dead")
-  writeFileSync(`${lock}.reap`, "")
-  await assert.rejects(withDrainLock(lock, () => "never", { alive: () => false }), /still working/u)
-  rmSync(`${lock}.reap`)
+  await refuses("desk_drains_lock_legacy", /cannot tell/u)
   rmSync(lock)
-  await assert.rejects(withDrainLock(lock, () => { throw new Error("work failed") }), /work failed/u)
-  assert.throws(() => readFileSync(lock), { code: "ENOENT" })
-  await fs.mkdir(path.join(dir, "dir.lock"))
-  await assert.rejects(withDrainLock(path.join(dir, "dir.lock"), () => "never"))
+  const name = plant(lock, process.pid, "not a pid")
+  await refuses("desk_drains_lock_unrecognized", /does not name a process/u)
+  writeFileSync(path.join(lock, "stranger"), "x")
+  await refuses("desk_drains_lock_unrecognized", /stranger/u)
+  rmSync(path.join(lock, "stranger"))
+  writeFileSync(path.join(lock, `owner-${randomUUID()}`), `${DEAD}\n`)
+  await refuses("desk_drains_lock_unrecognized", /owner-/u)
+  assert.equal(ownerFiles(lock).length, 2)
+  assert.equal(readFileSync(path.join(lock, name), "utf8"), "not a pid")
 })
 
-test("a lock that cannot be created for another reason than an existing owner is reported as it is", async () => {
+test("a lock that cannot be used for another reason than an owner names the error code instead of calling it busy", async () => {
   const dir = await mkTempRoot("desk-drains-")
-  await assert.rejects(withDrainLock(path.join(dir, `${"x".repeat(400)}.lock`), () => "x"), (error) => error.code !== "EEXIST")
+  await assert.rejects(withDrainLock(path.join(dir, `${"x".repeat(400)}.lock`), () => "x"), (error) => /desk_drains_lock_unavailable/u.test(error.message) && /ENAMETOOLONG/u.test(error.message) && !/still working/u.test(error.message))
+  if (process.platform === "win32" || process.getuid?.() === 0) return
+  const locked = path.join(dir, "readonly")
+  mkdirSync(locked)
+  chmodSync(locked, 0o500)
+  try {
+    await assert.rejects(withDrainLock(path.join(locked, "poll.lock"), () => "x"), (error) => /desk_drains_lock_unavailable/u.test(error.message) && /EACCES/u.test(error.message) && !/still working/u.test(error.message))
+  } finally {
+    chmodSync(locked, 0o700)
+  }
+})
+
+test("the file system does what the lock relies on, and an earlier Desk's file-only operations fail closed on the directory", { skip: process.platform === "win32" && "the lock's behaviour on Windows is not verified" }, async () => {
+  const dir = await mkTempRoot("desk-drains-")
+  const made = (name, file = "x") => { mkdirSync(path.join(dir, name)); writeFileSync(path.join(dir, name, "f"), file); return path.join(dir, name) }
+  const full = made("full")
+  assert.throws(() => renameSync(made("staged"), full), { code: "ENOTEMPTY" }, "a staged lock cannot replace a lock that has an owner")
+  mkdirSync(path.join(dir, "empty"))
+  renameSync(path.join(dir, "staged"), path.join(dir, "empty"))
+  writeFileSync(path.join(dir, "legacy"), "1")
+  assert.throws(() => renameSync(made("staged2"), path.join(dir, "legacy")), { code: "ENOTDIR" })
+  assert.throws(() => closeSync(openSync(full, "wx")), { code: "EEXIST" }, "an earlier Desk cannot create its lock over the directory")
+  assert.throws(() => readFileSync(full, "utf8"), { code: "EISDIR" })
+  assert.throws(() => rmSync(full, { force: true }), { code: "ERR_FS_EISDIR" }, "nor remove it")
+  assert.throws(() => unlinkSync(full), (error) => ["EISDIR", "EPERM"].includes(error.code))
+})
+
+test("two consecutive crashes of lock-owning processes, in each place, are recovered by the next poll", async () => {
+  const dir = await mkTempRoot("desk-drains-")
+  const lock = path.join(dir, "poll.lock")
+  const module = new URL("../../../../../plugins/desk/mcp/src/runtime/drains.js", import.meta.url).href
+  const child = `import { acquireDrainLock } from ${JSON.stringify(module)}
+    const at = process.env.CRASH_AT
+    const kill = () => process.kill(process.pid, "SIGKILL")
+    acquireDrainLock(process.env.LOCK, { onStep: (step) => { if (step === at) kill() } })
+    kill()`
+  for (const cycle of [1, 2]) {
+    for (const at of ["held", "staging", "staged"]) {
+      const crashed = spawnSync(process.execPath, ["--input-type=module", "-e", child], { env: { ...process.env, LOCK: lock, CRASH_AT: at } })
+      assert.equal(crashed.signal, "SIGKILL", `cycle ${cycle} ${at}`)
+      const left = readdirSync(dir)
+      assert.equal(left.length, 1, `${at} left one entry`)
+      assert.equal(left[0] === "poll.lock", at === "held", at)
+      assert.equal(await withDrainLock(lock, () => ownerFiles(lock).length), 1, `cycle ${cycle} recovered from ${at}`)
+      assert.deepEqual(readdirSync(dir), [], `cycle ${cycle} left nothing after ${at}`)
+    }
+  }
 })

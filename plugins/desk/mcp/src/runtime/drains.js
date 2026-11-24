@@ -6,7 +6,7 @@
 // something other than the drain changed it since the revision last recorded for that issue.
 import { createHash, randomUUID } from "node:crypto"
 import { spawnSync } from "node:child_process"
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, rmdirSync, unlinkSync, writeFileSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 import * as os from "node:os"
 import * as path from "node:path"
@@ -227,64 +227,145 @@ function writeDrainStates(file, states) {
   renameSync(temporary, file)
 }
 
-function create(lockFile, token) {
-  closeSync(openSync(lockFile, "wx"))
-  writeFileSync(lockFile, `${process.pid} ${token}`)
-}
-
-/** Who holds the lock: its process id and the token that tells this holder from any later one. */
-function lockOwner(lockFile) {
-  try {
-    const [pid, token] = readFileSync(lockFile, "utf8").trim().split(/\s+/u)
-    return { pid: Number.parseInt(pid, 10), token: token ?? "" }
-  } catch {
-    return null
-  }
-}
-
-const busy = (lockFile, pid) => problem("desk_drains_busy", "drains lock", `process ${pid} holds ${lockFile} and is still working`, `check that process, then look at ${lockFile}`, "run the command again once it finishes")
+const OWNER_FILE = /^owner-[0-9a-f-]{36}$/u
+const busy = (lockFile, who) => problem("desk_drains_busy", "drains lock", `${who} holds ${lockFile} and is still working`, `check that process; it releases the lock itself when it finishes, and a lock whose process has died is taken over by the next run`, "run the command again once it finishes")
+const lockProblem = (code, lockFile, probably, look, fix) => problem(code, "drains lock", probably, look, fix)
+const unavailable = (lockFile, error) => lockProblem("desk_drains_lock_unavailable", lockFile, `${lockFile} could not be used (${error.code ?? error.message})`, `the permissions and free space of ${path.dirname(lockFile)}, and the error code ${error.code ?? "unknown"}`, "fix that, then run the command again")
 
 /**
- * Runs `work`, which may be async, while this process owns the lock file. An owner that is alive is never taken from, however long
- * it works: the lock is released only by its owner. The lock of a dead owner is taken over under a second file made with `wx`, so
- * of several processes that find the same dead owner one reaps and the others stop; the winner takes the lock only if it is still
- * the dead owner's. The lock is removed afterwards only while it still carries this run's token.
+ * Takes the lock, or throws. The lock is a directory that is published whole: a sibling `<lock>.new-<pid>-<token>` is filled with
+ * the one file `owner-<token>` (this process's id) and then renamed onto the lock, which succeeds only where the lock is absent or
+ * an empty directory. So the lock is never visible empty or half-written, and a live owner is never taken from, however long it
+ * works. A dead owner is retired by removing its own `owner-<token>` file, a name no later owner reuses, so a contender holding a
+ * stale view finds nothing to remove (ENOENT) instead of a newer owner's lock; the empty directory is then removed with `rmdir`,
+ * which refuses a directory that has become someone's. Nothing is aged out, renamed away or removed recursively. An earlier Desk's
+ * lock is a plain file: it is never replaced, because replacing it by name cannot be made safe against that Desk's own takeover.
+ * `onStep` is a test seam called at "staging" (the sibling exists, the owner file is not written), "staged" and "inspected".
  */
-export async function withDrainLock(lockFile, work, { alive = processAlive } = {}) {
+export function acquireDrainLock(lockFile, { alive = processAlive, onStep = () => {} } = {}) {
+  const dir = path.dirname(lockFile)
+  const base = path.basename(lockFile)
+  sweepStaging(dir, base, alive)
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const token = randomUUID()
+    const staging = path.join(dir, `${base}.new-${process.pid}-${token}`)
+    const owner = path.join(staging, `owner-${token}`)
+    let renamed = false
+    try {
+      mkdirSync(staging)
+      onStep("staging")
+      writeFileSync(owner, `${process.pid}\n`)
+      onStep("staged")
+      renameSync(staging, lockFile)
+      renamed = true
+    } catch (error) {
+      if (error.code === "ENOTDIR") throw legacyLock(lockFile)
+      if (!["ENOTEMPTY", "EEXIST"].includes(error.code)) throw unavailable(lockFile, error)
+    } finally {
+      if (!renamed) removeStaging(staging)
+    }
+    if (renamed) return () => releaseDrainLock(lockFile, `owner-${token}`)
+    retireDeadOwner(lockFile, alive, onStep)
+  }
+  throw busy(lockFile, "another poll, which started while this one looked,")
+}
+
+function legacyLock(lockFile) {
+  let pid = "an unknown process"
+  try {
+    pid = `process ${Number.parseInt(readFileSync(lockFile, "utf8"), 10)}`
+  } catch {
+    // A file that cannot be read is named by its path alone.
+  }
+  return lockProblem("desk_drains_lock_legacy", lockFile, `${lockFile} is a file, the lock of an earlier Desk, and Desk cannot tell whether a poll still holds it (it names ${pid})`, `whether ${pid}, or any drains poll or ack started by an earlier Desk, is still running`, `once none is, remove ${lockFile} yourself and run the command again; Desk never replaces it, because that could take the lock from a poll that is still working`)
+}
+
+function removeStaging(staging) {
+  try {
+    for (const name of readdirSync(staging)) if (OWNER_FILE.test(name)) unlinkSync(path.join(staging, name))
+    rmdirSync(staging)
+  } catch (error) {
+    if (!["ENOENT", "ENOTEMPTY"].includes(error.code)) throw unavailable(staging, error)
+  }
+}
+
+/** A staging directory is never shared, so one whose creating process has died is a crash leftover and is removed by its exact name. */
+function sweepStaging(dir, base, alive) {
+  let names
+  try {
+    names = readdirSync(dir)
+  } catch (error) {
+    if (error.code === "ENOENT") return
+    throw unavailable(path.join(dir, base), error)
+  }
+  for (const name of names) {
+    const match = name.startsWith(`${base}.new-`) ? /^(\d+)-[0-9a-f-]{36}$/u.exec(name.slice(base.length + 5)) : null
+    if (match && !alive(Number(match[1]))) removeStaging(path.join(dir, name))
+  }
+}
+
+function retireDeadOwner(lockFile, alive, onStep) {
+  let names
+  try {
+    if (!lstatSync(lockFile).isDirectory()) throw legacyLock(lockFile)
+    names = readdirSync(lockFile)
+  } catch (error) {
+    if (error.code === "ENOENT") return
+    if (error.code && error.code !== "ENOTDIR") throw unavailable(lockFile, error)
+    throw error
+  }
+  if (names.length === 0) return removeEmptyLock(lockFile)
+  if (names.length !== 1 || !OWNER_FILE.test(names[0])) {
+    throw lockProblem("desk_drains_lock_unrecognized", lockFile, `${lockFile} holds ${names.slice(0, 5).join(", ")}, which is not one owner file of this Desk's lock`, `${lockFile}, and whether another tool or a newer Desk made it`, "leave it, or ask its owner; Desk removes nothing it did not make")
+  }
+  let pid
+  try {
+    pid = Number.parseInt(readFileSync(path.join(lockFile, names[0]), "utf8"), 10)
+  } catch (error) {
+    if (error.code === "ENOENT") return
+    throw unavailable(lockFile, error)
+  }
+  if (!Number.isInteger(pid) || pid <= 0) {
+    throw lockProblem("desk_drains_lock_unrecognized", lockFile, `${path.join(lockFile, names[0])} does not name a process`, `${lockFile}, and whether another tool or a newer Desk made it`, "leave it, or ask its owner; Desk removes nothing it did not make")
+  }
+  if (alive(pid)) throw busy(lockFile, `process ${pid}`)
+  onStep("inspected")
+  try {
+    unlinkSync(path.join(lockFile, names[0]))
+  } catch (error) {
+    if (error.code !== "ENOENT") throw unavailable(lockFile, error)
+  }
+  removeEmptyLock(lockFile)
+}
+
+/** `rmdir` fails on a directory that has an owner, so it cannot remove a lock published after it was looked at. */
+function removeEmptyLock(lockFile) {
+  try {
+    rmdirSync(lockFile)
+  } catch (error) {
+    if (!["ENOENT", "ENOTEMPTY", "EEXIST"].includes(error.code)) throw unavailable(lockFile, error)
+  }
+}
+
+/** Removes only this run's own owner file, so a lock that has since passed to another owner is left alone. */
+function releaseDrainLock(lockFile, ownerName) {
+  try {
+    unlinkSync(path.join(lockFile, ownerName))
+  } catch (error) {
+    if (error.code !== "ENOENT") throw unavailable(lockFile, error)
+  }
+  removeEmptyLock(lockFile)
+}
+
+/** Runs `work`, which may be async, while this process holds the lock (see acquireDrainLock). Only this run's owner file is removed afterwards. */
+export async function withDrainLock(lockFile, work, { alive = processAlive, onStep } = {}) {
   assertNotRealStateUnderTest(path.dirname(lockFile))
   mkdirSync(path.dirname(lockFile), { recursive: true })
-  const token = randomUUID()
-  try {
-    create(lockFile, token)
-  } catch (error) {
-    if (error.code !== "EEXIST") throw error
-    const owner = lockOwner(lockFile)
-    if (owner && alive(owner.pid)) throw busy(lockFile, owner.pid)
-    const marker = `${lockFile}.reap`
-    try {
-      closeSync(openSync(marker, "wx"))
-    } catch (markerError) {
-      if (markerError.code !== "EEXIST") throw markerError
-      throw busy(lockFile, "another poll, which is taking over a dead owner's lock,")
-    }
-    try {
-      const again = lockOwner(lockFile)
-      if (again && again.token !== owner?.token) throw busy(lockFile, again.pid)
-      rmSync(lockFile, { force: true })
-      try {
-        create(lockFile, token)
-      } catch (createError) {
-        if (createError.code === "EEXIST") throw busy(lockFile, "another poll")
-        throw createError
-      }
-    } finally {
-      rmSync(marker, { force: true })
-    }
-  }
+  const release = acquireDrainLock(lockFile, { alive, onStep })
   try {
     return await work()
   } finally {
-    if (lockOwner(lockFile)?.token === token) rmSync(lockFile, { force: true })
+    release()
   }
 }
 
