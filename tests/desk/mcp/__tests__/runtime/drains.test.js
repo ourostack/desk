@@ -899,6 +899,20 @@ test("reads the plain updated_at an older version stored, and records the full r
   matches(w.state().seen["1"], seenAt(T(0)))
 })
 
+test("a failure that carries a stable code keeps it beside its text, and the next good poll clears it", async () => {
+  const w = await world([issue(1, "2026-11-13T01:00:00Z")])
+  const real = w.connect
+  w.connect = async () => { throw Object.assign(new Error("Sign in the GitHub CLI"), { code: "drains_sign_in_the_github_cli" }) }
+  const out = await w.poll(NOW + 1000)
+  assert.deepEqual(out.errors, [{ repo: DRAIN.repo, error: "Sign in the GitHub CLI", code: "drains_sign_in_the_github_cli" }])
+  w.connect = async () => { throw new Error("plain") }
+  await w.poll(NOW + 2000)
+  assert.equal(w.state().lastErrorCode, undefined)
+  w.connect = real
+  await w.poll(NOW + 3000)
+  assert.equal(w.state().lastError, undefined)
+})
+
 test("an authentication or network failure wakes no one, leaves every marker and pending event alone and shows in the poll's errors", async () => {
   const w = await world([issue(1, "2026-11-13T01:00:00Z")])
   await w.poll()
