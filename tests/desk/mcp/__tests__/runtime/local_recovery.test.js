@@ -790,12 +790,28 @@ test("a log refused for a missing card changes nothing", async () => {
   assert.equal(git(root, "status", "--porcelain", "--", "work"), "")
 })
 
+// Only PATH is inherited: no tokens, hosts, Git config or default-desk profile reach the real spawned process.
+function isolatedEnv() {
+  const home = path.join(here, "spawned-home")
+  mkdirSync(home, { recursive: true })
+  return {
+    PATH: process.env.PATH,
+    HOME: home, USERPROFILE: home, TMPDIR: home,
+    XDG_CACHE_HOME: path.join(home, "cache"), XDG_STATE_HOME: path.join(home, "state"),
+    XDG_CONFIG_HOME: path.join(home, "config"), XDG_DATA_HOME: path.join(home, "data"),
+    DESK_STATE_HOME: path.join(home, "desk-state"),
+    GIT_CONFIG_GLOBAL: path.join(home, "gitconfig"), GIT_CONFIG_NOSYSTEM: "1",
+    GIT_AUTHOR_NAME: "Fixture", GIT_COMMITTER_NAME: "Fixture",
+    GIT_AUTHOR_EMAIL: "fixture@example.invalid", GIT_COMMITTER_EMAIL: "fixture@example.invalid",
+  }
+}
+
 test("the queued commit survives a real spawned bootstrap being closed", async () => {
   const root = fixture()
   const headBefore = git(root, "rev-parse", "HEAD")
   const { runRecovery, launchBootstrap } = await import("../../../../../plugins/desk/mcp/scripts/local-recovery.js")
   const result = await runRecovery({
-    argv: args(root), env: { ...env(), HOME: here, DESK_STATE_HOME: path.join(here, "spawned-state") }, cwd: root,
+    argv: args(root), env: isolatedEnv(), cwd: root,
     input: input(logOnly), launch: launchBootstrap, timeoutMs: 60000,
   })
   assert.equal(result.report.transport.shutdown, "closed", JSON.stringify(result.report))
