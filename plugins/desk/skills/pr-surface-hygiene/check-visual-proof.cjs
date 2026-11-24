@@ -16,11 +16,12 @@ function visibleBody(body) {
   }).join("\n").replace(/(`+)[\s\S]*?\1/gu, "");
 }
 
-// GitHub blob/raw and tokenised URLs need the viewer's repository session, which mobile and chat clients often lack.
+// Temporary signed renderer URLs (private-user-images, jwt/token) expire in minutes; the canonical github.com/user-attachments/assets URL is the stored reference. GitHub blob/raw and tokenised URLs need the viewer's repository session, which mobile and chat clients often lack.
 function authGatedGitHubUrl(url) {
   const host = url.hostname.toLowerCase();
   return host === "raw.githubusercontent.com" ||
-    host.endsWith(".githubusercontent.com") && url.searchParams.has("token") ||
+    host.endsWith(".githubusercontent.com") && (url.searchParams.has("token") || url.searchParams.has("jwt")) ||
+    host === "private-user-images.githubusercontent.com" ||
     (host === "github.com" || host === "www.github.com") && /^\/[^/]+\/[^/]+\/(?:blob|raw)\//iu.test(url.pathname);
 }
 

@@ -37,6 +37,6 @@ This covers any image you deliver (proof, mockup, report figure, chat attachment
 
 - Preserve the source's confidentiality and intended audience. Never move private bytes onto public or anonymous hosting to make an image render; if no destination keeps the audience right, say so and send nothing.
 - Before upload, inspect the destination's access controls (who can open the link, whether it expires or is signed) and the image's pixels and metadata for private content. Prefer a bounded crop or synthetic data.
-- Private repository `blob` or `raw` URLs, `raw.githubusercontent.com` and tokenised links are a known risk: they depend on the viewer's sign-in, and clients may show a broken image. Do not present them as mobile-safe. `check-visual-proof.cjs` rejects them in pull request bodies; that is URL syntax only, not evidence that any other URL renders.
+- Private repository `blob` or `raw` URLs, `raw.githubusercontent.com`, tokenised links and signed `private-user-images` URLs (minutes-long renderer URLs, not the stored reference) are a known risk: they depend on the viewer's sign-in, and clients may show a broken image. Do not present them as mobile-safe. `check-visual-proof.cjs` rejects them in pull request bodies; that is URL syntax only, not evidence that any other URL renders.
 - Name the client you checked. If you could not check the recipient's client, say the rendering is unverified.
 - A method (for example `gh` user-attachments) counts as supported only for the clients and repository access someone has tested; do not generalise from one.
