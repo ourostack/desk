@@ -1,5 +1,13 @@
 # desk plugin — changelog
 
+## 3.2.505 — 2026-11-24
+
+### A pull request names the session that opened it
+
+Every brief a Superpowers mapping produces now tells the child to put `Desk-Session: <its session id>` and, when the coordinator has one, `Desk-Parent-Session: <the coordinator's id>` in each pull-request body it opens, beside the Desk-Task line. A drain or coordinator can read the owner of an orphaned pull request straight off it.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.504 — 2026-11-24
 
 Desk's MCP server now vendors Ouro UI v1.3.509, moved by Ouro Current.
