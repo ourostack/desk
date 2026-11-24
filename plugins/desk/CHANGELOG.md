@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.502 — 2026-11-24
+
+Desk's internal status path can optionally report stage boundaries for bounded, request-correlated diagnostics in the existing protocol test workload. Covered runs retain the diagnostic receipt, including explicit missing or unfinished measurements, without changing ordinary status responses or time budgets. This observation support does not fix the original intermittent status delay.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.501 — 2026-11-24
 
 Desk's MCP server now vendors Ouro UI v1.3.507, moved by Ouro Current.
