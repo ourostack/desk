@@ -62,6 +62,9 @@ export function keyVaultFillFailure({ sentBefore = [] } = {}) {
   const before = sentBefore.length ? `${KEY_VAULT_FILL_SENT_BEFORE} ${sentBefore.join("; ")}.` : KEY_VAULT_FILL_NOTHING_BEFORE;
   return `${KEY_VAULT_FILL_FAILURE} ${KEY_VAULT_FILL_NOT_SENT} ${before} ${KEY_VAULT_FILL_NEXT}`;
 }
+/** An Error carrying the stable `code` the command prints before its message. */
+const coded = (code, message) => Object.assign(new Error(message), { code });
+
 export const isKeyVaultFillFailure = (stderr) => String(stderr ?? "").includes("KeyError: 'value'");
 
 // The one container the gateway runs in: the one named `gateway`, or the only one.
@@ -169,24 +172,24 @@ export function checkWritten({ before, after, secretList, keyVaultSecrets = {}, 
   const shown = parseShown(before);
   const listed = new Map(secretList.map((secret) => [secret.name, secret]));
   for (const { name } of shown.properties?.configuration?.secrets ?? []) {
-    if (!listed.has(name)) throw new Error(`Secret ${name} is gone from the app after the write.`);
+    if (!listed.has(name)) throw coded("write-check-failed", `Secret ${name} is gone from the app after the write.`);
   }
   const references = [...(shown.properties?.configuration?.secrets ?? []).filter((secret) => secret.keyVaultUrl).map(({ name }) => name), ...Object.keys(keyVaultSecrets)];
   for (const name of references) {
-    if (!listed.get(name)?.keyVaultUrl) throw new Error(`${name} is no longer a Key Vault reference after the write; it must be fixed before the app restarts.`);
+    if (!listed.get(name)?.keyVaultUrl) throw coded("write-check-failed", `${name} is no longer a Key Vault reference after the write; it must be fixed before the app restarts.`);
   }
   const held = lower(identityIds(parseShown(after)));
   for (const id of [...identityIds(shown), ...expectIdentities]) {
-    if (!held.has(id.toLowerCase())) throw new Error(`Identity ${id.split("/").at(-1)} is no longer attached to the app after the write.`);
+    if (!held.has(id.toLowerCase())) throw coded("write-check-failed", `Identity ${id.split("/").at(-1)} is no longer attached to the app after the write.`);
   }
   const app = parseShown(after);
   refuseForbidden(app, forbidIdentities, " after the write");
   if (registryIdentity) {
     const registries = app.properties?.configuration?.registries ?? [];
-    if (!registries.length) throw new Error(`The app has no registry after the write; it must pull with ${identityName(registryIdentity)}.`);
+    if (!registries.length) throw coded("write-check-failed", `The app has no registry after the write; it must pull with ${identityName(registryIdentity)}.`);
     for (const registry of registries) {
       if ((registry.identity ?? "").toLowerCase() !== registryIdentity.toLowerCase()) {
-        throw new Error(`The app pulls from ${registry.server} with ${identityName(registry.identity ?? "no identity")}, not ${identityName(registryIdentity)}, after the write.`);
+        throw coded("write-check-failed", `The app pulls from ${registry.server} with ${identityName(registry.identity ?? "no identity")}, not ${identityName(registryIdentity)}, after the write.`);
       }
     }
   }
@@ -211,7 +214,7 @@ export function writeAppYaml(text, { parent = tmpdir() } = {}) {
 
 function splitAssignment(text, flag) {
   const index = text.indexOf("=");
-  if (index <= 0) throw new Error(`${flag} takes NAME=value.`);
+  if (index <= 0) throw coded("usage", `${flag} takes NAME=value.`);
   return [text.slice(0, index), text.slice(index + 1)];
 }
 
@@ -262,19 +265,19 @@ export function cli(argv = process.argv.slice(2), { print = (line) => process.st
     const entry = gatewayContainer(parseShown(readFileSync(values.shown, "utf8"))).env?.find((candidate) => candidate.name === values["get-env"]);
     return print(entry?.value ?? "");
   }
-  if (!values.shown || !values.out) throw new Error("Usage: app-yaml.mjs --shown <show.json> --out <dir> [options]");
+  if (!values.shown || !values.out) throw coded("usage", "Usage: app-yaml.mjs --shown <show.json> --out <dir> [options]");
   const shown = parseShown(readFileSync(values.shown, "utf8"));
   const held = new Set((shown.properties?.configuration?.secrets ?? []).map((secret) => secret.name));
   const setSecrets = {};
   for (const name of values["ensure-secret"]) if (!held.has(name)) setSecrets[name] = randomBytes(32).toString("hex");
   for (const name of values["ensure-placeholder"]) if (!held.has(name)) setSecrets[name] = "unset";
   const setEnv = Object.fromEntries(values["set-env"].map((text) => splitAssignment(text, "--set-env")));
-  if (setEnv.DESK_GITHUB_SIGNIN !== undefined && !["on", "off"].includes(setEnv.DESK_GITHUB_SIGNIN)) throw new Error("DESK_GITHUB_SIGNIN must be on or off.");
+  if (setEnv.DESK_GITHUB_SIGNIN !== undefined && !["on", "off"].includes(setEnv.DESK_GITHUB_SIGNIN)) throw coded("bad-setting", "DESK_GITHUB_SIGNIN must be on or off.");
   const current = Object.fromEntries((gatewayContainer(shown).env ?? []).filter((entry) => entry.value !== undefined).map((entry) => [entry.name, entry.value]));
   const removeEnv = [...values["remove-env"]];
   if (values["remove-ouro"]) {
-    if (record) throw new Error("--remove-ouro takes every Ouro setting off; it can't also apply an identity record.");
-    if (Object.keys(setEnv).some((name) => OURO_SETTINGS.includes(name))) throw new Error("REMOVE_OURO_SETTINGS=1 removes every Ouro setting; don't pass DESK_GITHUB_SIGNIN with it. This update was not sent to the app.");
+    if (record) throw coded("bad-setting", "--remove-ouro takes every Ouro setting off; it can't also apply an identity record.");
+    if (Object.keys(setEnv).some((name) => OURO_SETTINGS.includes(name))) throw coded("bad-setting", "REMOVE_OURO_SETTINGS=1 removes every Ouro setting; don't pass DESK_GITHUB_SIGNIN with it. This update was not sent to the app.");
     removeEnv.push(...OURO_SETTINGS);
     note(`Removing every Ouro sign-in setting (${OURO_SETTINGS.join(", ")}); the gateway goes back to GitHub sign-in for DESK_ALLOWED_LOGINS.`);
   }
@@ -305,7 +308,7 @@ export function cli(argv = process.argv.slice(2), { print = (line) => process.st
     } catch (error) {
       const file = record ? `identity-${record.env}.json` : `identity-${values["identity-env"] ?? "<env>"}.json`;
       const incomplete = !record || identity.missing.length ? ` DESK_GITHUB_SIGNIN applies only once ${file} is complete.` : "";
-      throw new Error(`the app would hold Ouro settings the gateway refuses, so it would not start: ${error.message} This update was not sent to the app.${incomplete}`);
+      throw coded("bad-setting", `the app would hold Ouro settings the gateway refuses, so it would not start: ${error.message} This update was not sent to the app.${incomplete}`);
     }
   }
   const text = buildAppYaml({
@@ -327,7 +330,7 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   try {
     cli();
   } catch (error) {
-    process.stderr.write(`app-yaml: ${error.message}\n`);
+    process.stderr.write(`app-yaml: ${error.code ?? "update-refused"}: ${error.message}\n`);
     process.exit(1);
   }
 }

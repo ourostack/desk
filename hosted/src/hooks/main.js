@@ -44,6 +44,10 @@ export async function startHooks({ env = process.env, store, fetch = globalThis.
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  const server = await startHooks();
+  const server = await startHooks().catch((error) => {
+    const code = "start-failed";
+    process.stderr.write(`desk-hooks: ${code}: ${error.message}\n`);
+    process.exit(1);
+  });
   process.on("SIGTERM", () => server.close(() => process.exit(0)));
 }

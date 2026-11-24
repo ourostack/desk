@@ -44,7 +44,7 @@ export async function normalizeLockfile(lock, { view, download, concurrency = 8 
       if (!integrity) {
         const bytes = await download(dist.tarball);
         if (!dist.shasum || createHash("sha1").update(bytes).digest("hex") !== dist.shasum) {
-          throw new Error(`${spec}: the tarball doesn't match the registry's published shasum`);
+          throw coded("shasum-mismatch", `${spec}: the tarball doesn't match the registry's published shasum`);
         }
         integrity = `sha512-${createHash("sha512").update(bytes).digest("base64")}`;
         viaShasum += 1;
@@ -57,6 +57,9 @@ export async function normalizeLockfile(lock, { view, download, concurrency = 8 
   return { entries, viaShasum };
 }
 
+/** An Error carrying the stable `code` the command prints before its message. */
+const coded = (code, message) => Object.assign(new Error(message), { code });
+
 async function npmView(spec) {
   const { stdout } = await promisify(execFile)("npm", ["view", spec, "dist", "--json"], { maxBuffer: 1 << 20 });
   return JSON.parse(stdout);
@@ -64,14 +67,17 @@ async function npmView(spec) {
 
 async function fetchBytes(url) {
   const response = await fetch(url, { redirect: "follow", signal: AbortSignal.timeout(60_000) });
-  if (!response.ok) throw new Error(`download failed: HTTP ${response.status}`);
+  if (!response.ok) throw coded("download-failed", `HTTP ${response.status}`);
   return Buffer.from(await response.arrayBuffer());
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const path = process.argv[2] ?? new URL("../package-lock.json", import.meta.url).pathname;
   const lock = JSON.parse(readFileSync(path, "utf8"));
-  const { entries, viaShasum } = await normalizeLockfile(lock, { view: npmView, download: fetchBytes });
+  const { entries, viaShasum } = await normalizeLockfile(lock, { view: npmView, download: fetchBytes }).catch((error) => {
+    console.error(`${error.code ?? "view-failed"}: ${error.message}`);
+    process.exit(1);
+  });
   writeFileSync(path, `${JSON.stringify(lock, null, 2)}\n`);
   console.log(`${entries} entries normalized to registry.npmjs.org (${viaShasum} sha512s computed from shasum-checked tarballs)`);
 }

@@ -430,7 +430,8 @@ export async function main(env = process.env, deps = {}) {
     stopping ??= stopGateway({ server, relay, pushDesk: push, closeTokenSocket }).then(
       () => process.exit(0),
       (error) => {
-        log(`shutdown failed: ${error.message}`);
+        const code = "shutdown-failed";
+        log(`${code}: ${error.message}`);
         process.exit(1);
       },
     );
@@ -442,7 +443,8 @@ export async function main(env = process.env, deps = {}) {
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   main().catch((error) => {
-    log(error.message);
+    const code = "start-failed";
+    log(`${code}: ${error.message}`);
     process.exit(1);
   });
 }
