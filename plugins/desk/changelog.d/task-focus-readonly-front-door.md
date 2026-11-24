@@ -1,0 +1,1 @@
+The tools list a client actually receives now marks `task_focus` as read-only. The earlier fix declared it in the action declarations, but the front door served its own annotation list, so a real session still saw `readOnlyHint: false`.
