@@ -1,5 +1,55 @@
 # desk plugin — changelog
 
+## 3.2.517 — 2026-11-24
+
+The `task_focus` tool now serves `readOnlyHint: true`, like `desk_search`, because it only holds the session's focus in memory. It is declared in the action declarations, so the generated MCP projection carries the annotation, and its description now says why a subagent must not call it: it shares the session's server, so its call would move the main agent's focus.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.516 — 2026-11-24
+
+Desk's MCP server now vendors Ouro UI v1.3.519, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.515 — 2026-11-24
+
+The [pull request visual-proof checker](skills/pr-surface-hygiene/check-visual-proof.cjs) now rejects image URLs that depend on a viewer's repository sign-in or expire within minutes: `github.com/.../blob/` and `/raw/`, `raw.githubusercontent.com`, `githubusercontent.com` URLs with a `token` or `jwt` parameter, and `private-user-images.githubusercontent.com`. Canonical `github.com/user-attachments/assets/...` URLs still pass. The check judges URL syntax only; it is not evidence that any client, mobile or Teams included, renders an image.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.514 — 2026-11-24
+
+Desk's MCP server now vendors Ouro UI v1.3.518, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.513 — 2026-11-24
+
+Desk's MCP server now vendors Ouro UI v1.3.516, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.512 — 2026-11-24
+
+Desk's MCP server now vendors Ouro UI v1.3.515, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.511 — 2026-11-24
+
+Desk's MCP server now vendors Ouro UI v1.3.514, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.510 — 2026-11-24
+
+### Catching a checkout up keeps Git LFS files whole
+
+When a sync moved a checkout forward, Desk wrote every Git LFS file that changed as its small pointer, so a demo video or image in the checkout would not open and `git status` still read clean. The catch-up now lets Git LFS fetch the real content for the files it writes. A checkout already holding pointers is repaired with `git lfs pull`.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.509 — 2026-11-24
 
 Desk's MCP server now vendors Ouro UI v1.3.513, moved by Ouro Current.

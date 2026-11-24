@@ -16,3 +16,5 @@ export function build(router) {
   const errors = [{ code: "declared-only", means: "m", fix: "f" }]
   return app
 }
+
+import "./pages.js"
