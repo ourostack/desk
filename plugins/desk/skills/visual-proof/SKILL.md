@@ -30,3 +30,12 @@ If a real capture would expose private messages, identities, customer data or se
 Label the inline capture `Synthetic-data capture` and state what it demonstrates and what it does not: for example, “Synthetic-data capture: the changed renderer with made-up entries; does not verify private account integration.” Keep test/log evidence for behavior outside that scope. A drawing, AI-generated mock, reconstructed screenshot or screenshot of a different implementation is not proof of the running product. A synthetic render cannot prove a private live run, installed state, merge or rollout.
 
 If neither a safe bounded capture nor a real synthetic-data render is possible, record the reason and the strongest safe alternative, but do not call the visual claim verified. PR creation and readiness remain subject to [`pr-surface-hygiene` PSH-010](../pr-surface-hygiene/SKILL.md#psh-010--visual-proof-blocks-creation-and-readiness); a visible change stays blocked rather than acquiring a false `No visual change` reason.
+
+## Proof must render where the recipient reads it
+
+Delivery is part of the proof. Show the image in the client the recipient actually uses (a phone, GitHub Mobile, Teams, a browser signed out of your account), not only the one you wrote it in. A URL that opens for you proves nothing about them.
+
+- Never embed a private repository's `blob` or `raw` URL, `raw.githubusercontent.com` or a tokenised link and call it mobile-safe: they need the viewer's repository session, and many clients show a broken image. `check-visual-proof.cjs` rejects these; that is URL syntax only, never proof that any other URL renders.
+- Choose a method whose audience can open it, and say which client you checked. If you could not check the recipient's client, say it is unverified rather than "renders".
+- Uploads are shared with whoever can open the link. Check pixels and metadata for private content first, and prefer a bounded crop or synthetic data.
+- A method (for example `gh` user-attachments) is supported only for the clients someone has actually tested; do not generalise from one.

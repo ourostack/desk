@@ -16,10 +16,18 @@ function visibleBody(body) {
   }).join("\n").replace(/(`+)[\s\S]*?\1/gu, "");
 }
 
+// GitHub blob/raw and tokenised URLs need the viewer's repository session, which mobile and chat clients often lack.
+function authGatedGitHubUrl(url) {
+  const host = url.hostname.toLowerCase();
+  return host === "raw.githubusercontent.com" ||
+    host.endsWith(".githubusercontent.com") && url.searchParams.has("token") ||
+    (host === "github.com" || host === "www.github.com") && /^\/[^/]+\/[^/]+\/(?:blob|raw)\//iu.test(url.pathname);
+}
+
 function hostedImage(value) {
   try {
     const url = new URL(value);
-    return url.protocol === "https:" && !url.username && !url.password &&
+    return url.protocol === "https:" && !url.username && !url.password && !authGatedGitHubUrl(url) &&
       !/^(?:www\.)?example\.(?:com|org|net)$/iu.test(url.hostname) &&
       !/[<>{}]/u.test(value);
   } catch {
