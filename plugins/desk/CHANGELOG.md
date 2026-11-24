@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.531 — 2026-11-24
+
+Desk's MCP server now vendors Ouro UI v1.3.525, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.530 — 2026-11-24
 
 Desk now takes every declared tool's read-only and destructive hints from its declaration, in the first tool list and after the session is ready, instead of a second hand-kept list. `task_focus` stays read-only; `desk_status` now reports that it is not read-only, matching its declaration.
