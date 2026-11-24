@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.525 — 2026-11-24
+
+desk-web's browser now presses the Continue button on GitHub's enterprise SSO page, once, and says in the reply what happened. The reply carries `sso.state`: `renewed` when Entra renewed the session and GitHub returned to the page, `needs_person` when Entra asked to sign in (a person must do that once in their own browser; desk-web never types a password or copies a token), and `stalled` when the page did not leave the SSO page in time. Before, a managed-account page stopped at the SSO page and the agent had to guess why.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.524 — 2026-11-24
 
 Desk's local scripts now name their failures with stable codes. `check-visual-proof.cjs` prints `no-visual-proof`, `visual-change-contradicts-reason`, `usage`, `bad-event` or `unreadable-input` before its message. `audit.py` prints `tenant-mismatch` or `token-unavailable` and exits 3 when it could not send any request (it used to exit 0 with an empty result), and prints `http-error` and exits 1 when Azure DevOps refuses a request. The drains launcher's resolve line starts with `fetch-failed` or `release-unresolved`. `drains runtimes status` reports `process-list-failed` when `ps` cannot run, `migrations roots --engine` reports `unknown-engine` for an engine other than `copilot` or `claude`, and the end hook's unverified line carries its code. Each has a card in the Ouro AX census.
