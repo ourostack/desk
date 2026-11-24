@@ -213,7 +213,7 @@ test("state-branch options cannot override undeclared branch policy", async () =
 
 // A fake server that answers every request, after `statusDelayMs` for desk_status, and answers task_update after `updateDelayMs`
 // (never, when it is null). It records each task_update it receives and applies an effect before answering.
-function fakeServer(root, { statusDelayMs = 0, updateDelayMs = null, onDispatch, onStatus }) {
+function fakeServer(root, { statusDelayMs = 0, updateDelayMs = null, onDispatch, onStatus, result = { status: "nothing_to_commit" } }) {
   return async () => {
     const toServer = new PassThrough()
     const fromServer = new PassThrough()
@@ -232,7 +232,7 @@ function fakeServer(root, { statusDelayMs = 0, updateDelayMs = null, onDispatch,
       if (request.params?.name === "task_update") {
         onDispatch()
         writeFileSync(path.join(root, "applied.txt"), "effect before answer")
-        if (updateDelayMs !== null) reply(request.id, { content: [{ type: "text", text: JSON.stringify({ status: "nothing_to_commit" }) }] }, updateDelayMs)
+        if (updateDelayMs !== null) reply(request.id, { content: [{ type: "text", text: JSON.stringify(result) }] }, updateDelayMs)
         return
       }
       reply(request.id, {}, 0)
@@ -556,4 +556,139 @@ if (threads.isMainThread) {
   assert.equal(git(root, "show", "--format=", "--name-only", "HEAD"), "work/one/task.md")
   assert.equal(Number(git(root, "rev-list", "--count", "HEAD")), beforeCount + 1, "no mutation replay")
   assert.match(readFileSync(path.join(root, "work/one/task.md"), "utf8"), /status: processing/u)
+})
+
+// A queued log is in the working tree when the call returns. Its commit belongs to Desk's background writer, so the tests below accept either moment and only assert what holds at both.
+async function commitOfLog(root, rel, headBefore) {
+  const stop = Date.now() + 30000
+  while (Date.now() < stop) {
+    if (git(root, "rev-parse", "HEAD") !== headBefore && git(root, "status", "--porcelain", "--", rel) === "") return git(root, "show", "--format=", "--name-only", "HEAD")
+    await new Promise((resolve) => setTimeout(resolve, 200))
+  }
+  return null
+}
+const logOnly = { track: "work", slug: "one", log: "Diagnosed: the P0 cause is the stale index." }
+
+function assertQueuedOrObserved(result, rel, headBefore, root) {
+  const { report } = result
+  assert.equal(report.effects.mutation, "reported_applied", JSON.stringify(report))
+  assert.equal(report.queued.path, rel)
+  assert.match(readFileSync(path.join(root, rel), "utf8"), /stale index/u, "the entry is in the log whichever moment this reads")
+  assert.notEqual(report.code, "unexpected_tool_result")
+  if (report.effects.log === "queued") {
+    assert.equal(result.exitCode, 2)
+    assert.equal(report.status, "partial")
+    assert.equal(report.code, "commit_queued")
+    assert.equal(report.effects.commit, "queued")
+    assert.equal(report.git.headBefore, report.git.headAfter, "nothing committed at return")
+    assert.match(report.readback, /Do not resend/u)
+  } else {
+    assert.equal(report.effects.log, "observed")
+    assert.equal(report.effects.commit, "observed")
+    assert.notEqual(report.git.headAfter, headBefore)
+  }
+}
+
+test("a log-only update is reported as an admitted queued write, not unexpected_tool_result", async () => {
+  const root = fixture()
+  const headBefore = git(root, "rev-parse", "HEAD")
+  const result = await recover(root, logOnly)
+  assertQueuedOrObserved(result, "work/one/log.md", headBefore, root)
+  assert.equal(result.report.effects.push, "not_applicable")
+  assert.equal(await commitOfLog(root, "work/one/log.md", headBefore), "work/one/log.md")
+  assert.equal(Number(git(root, "rev-list", "--count", `${headBefore}..HEAD`)), 1, "one commit, no replay")
+})
+
+test("a log-only update in a published member desk is queued under the default coordination purpose", async () => {
+  const root = fixture()
+  mkdirSync(path.join(root, "desks/ari/work/one"), { recursive: true })
+  mkdirSync(path.join(root, ".desk"))
+  writeFileSync(path.join(root, "desks/ari/work/one/task.md"), readFileSync(path.join(root, "work/one/task.md"), "utf8"))
+  writeFileSync(path.join(root, ".desk/content-home.json"), JSON.stringify({
+    schema_version: 1, mode: "declared-purpose", repository: "sample/context",
+    context_purposes: ["coordination", "project-plan", "metadata", "source-context", "historical-evidence", "migration-pointer"],
+    product_purposes: ["product-contract", "product-tool", "product-run-artifact"],
+  }))
+  git(root, "add", ".")
+  git(root, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-m", "member desk")
+  const remote = path.join(here, `remote-${process.pid}-${++sequence}.git`)
+  git(root, "init", "--bare", "-b", "main", remote)
+  git(root, "remote", "add", "origin", remote)
+  git(root, "push", "--quiet", "-u", "origin", "main")
+  const headBefore = git(root, "rev-parse", "HEAD")
+  const rel = "desks/ari/work/one/log.md"
+  const result = await recover(root, logOnly, ["--person", "ari"], (options) => launch({
+    ...options, readinessPolicy: { semantic: "unsupported", write_authority: "person" },
+  }))
+  assertQueuedOrObserved(result, rel, headBefore, root)
+  assert.equal(result.report.effects.push, "pending")
+  assert.equal(await commitOfLog(root, rel, headBefore), rel)
+  assert.equal(readFileSync(path.join(root, "work/one/task.md"), "utf8").includes("log"), false)
+})
+
+test("a mixed update keeps the observed card commit and the queued log separate", async () => {
+  const root = fixture()
+  const headBefore = git(root, "rev-parse", "HEAD")
+  const result = await recover(root, { ...logOnly, status: "processing" })
+  const { report } = result
+  assert.equal(report.effects.commit, "observed", "the card commit is its own observation")
+  assert.equal(report.queued.path, "work/one/log.md")
+  assert.ok(["queued", "observed"].includes(report.effects.log), JSON.stringify(report))
+  assert.equal(result.exitCode, report.effects.log === "queued" ? 2 : 0)
+  if (report.effects.log === "queued") assert.equal(report.code, "commit_queued")
+  assert.match(readFileSync(path.join(root, "work/one/task.md"), "utf8"), /status: processing/u)
+  assert.equal(await commitOfLog(root, "work/one/log.md", report.git.headAfter), "work/one/log.md")
+  assert.ok(Number(git(root, "rev-list", "--count", `${headBefore}..HEAD`)) === 2)
+})
+
+for (const [name, answer] of [
+  ["a log without the queued marker", { status: "logged", path: "work/one/log.md" }],
+  ["an unknown status", { status: "SOMETHING_NEW" }],
+]) {
+  test(`${name} still ends unexpected and is never resent`, async () => {
+    const root = fixture()
+    let dispatches = 0
+    const { runRecovery } = await import("../../../../../plugins/desk/mcp/scripts/local-recovery.js")
+    const result = await runRecovery({
+      argv: args(root), env: env(), cwd: root, input: input(logOnly),
+      launch: fakeServer(root, { onDispatch: () => dispatches++, updateDelayMs: 0, result: answer }),
+    })
+    assert.equal(result.report.code, "unexpected_tool_result")
+    assert.equal(result.report.effects.mutation, "unknown")
+    assert.equal(result.exitCode, 2)
+    assert.equal(dispatches, 1)
+  })
+}
+
+test("deferred publication reports that no background commit is scheduled for a queued log", async () => {
+  const root = fixture()
+  const headBefore = git(root, "rev-parse", "HEAD")
+  const result = await recover(root, logOnly, ["--publication", "deferred"])
+  assert.equal(result.report.queued.committer, "next_session_start")
+  assert.equal(result.report.effects.log, "queued")
+  assert.equal(result.report.code, "commit_queued")
+  assert.match(result.report.readback, /no background commit is scheduled/u)
+  assert.equal(git(root, "rev-parse", "HEAD"), headBefore)
+})
+
+test("a log refused for a missing card changes nothing", async () => {
+  const root = fixture()
+  const headBefore = git(root, "rev-parse", "HEAD")
+  const result = await recover(root, { ...logOnly, slug: "absent" })
+  assert.equal(result.report.code, "tool_error")
+  assert.equal(git(root, "rev-parse", "HEAD"), headBefore)
+  assert.equal(git(root, "status", "--porcelain", "--", "work"), "")
+})
+
+test("the queued commit survives a real spawned bootstrap being closed", async () => {
+  const root = fixture()
+  const headBefore = git(root, "rev-parse", "HEAD")
+  const { runRecovery, launchBootstrap } = await import("../../../../../plugins/desk/mcp/scripts/local-recovery.js")
+  const result = await runRecovery({
+    argv: args(root), env: { ...env(), HOME: here, DESK_STATE_HOME: path.join(here, "spawned-state") }, cwd: root,
+    input: input(logOnly), launch: launchBootstrap, timeoutMs: 60000,
+  })
+  assert.equal(result.report.transport.shutdown, "closed", JSON.stringify(result.report))
+  assertQueuedOrObserved(result, "work/one/log.md", headBefore, root)
+  assert.equal(await commitOfLog(root, "work/one/log.md", headBefore), "work/one/log.md", "the detached worker commits after the child is gone")
 })
