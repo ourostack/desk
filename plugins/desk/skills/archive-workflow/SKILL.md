@@ -129,4 +129,4 @@ search reaches every surface — the active desk and the back-of-the-room shelve
 
 ## The archive is read-only
 
-don't modify archived tasks. if a cancelled task needs to be restarted, create a new task instead — don't un-archive. the archive is the historical record; resurrecting a directory in place loses the "this was abandoned then restarted" signal that a fresh task preserves.
+don't edit archived tasks in place. if a cancelled task needs to be restarted, create a new task instead of un-archiving it. the only reopening is for delivered work that needs a sign-off or a refusal handled, which goes through `task_update` with `unarchive: true` (see "Archiving a delivered task"). the archive is the historical record; resurrecting a directory in place loses the "this was abandoned then restarted" signal that a fresh task preserves.

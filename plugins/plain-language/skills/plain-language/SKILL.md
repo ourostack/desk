@@ -35,6 +35,7 @@ Test each sentence: does the reader learn something they cannot already see? The
 - Do not summarize your own work. A work report states the outcome and its evidence and describes a change only where the reader cannot see it.
 - A code comment explains why a line is surprising, and a doc comment states the contract. Neither narrates the code.
 - Assume expertise and let the reader ask for more depth.
+- Write no defensive disclaimer or hedge nobody asked for, in a skill, doc, brief or prompt: no "this is our own rendering, nothing is copied", no "read the original for more", no legal or provenance caveat. It is implicit, it confuses the agents downstream and the reader acts on none of it. A brief never tells a subagent to add one, even when a similar file opens with one.
 
 A subagent kickoff brief is the exception: it starts with no context, so it may be as long as it needs to be.
 

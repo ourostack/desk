@@ -1,14 +1,14 @@
 {
   "schemaVersion": 1,
   "suiteId": "plain-language-corrections",
-  "sourceFingerprint": "055bafcadb5fd2867cb0270301e30aba09fb3d933c3463fc14f3dcba4339eb36",
-  "contractFingerprint": "4339bed6a2517fc09281a4c9b7a9cd95eada2fc7b80872c35af63201cadc02c6",
+  "sourceFingerprint": "65aeb58d2a666a5c43212d6160a6d3fec81e5297509e3e7bd37e1dbc325c852a",
+  "contractFingerprint": "c518e23ed52eaa02f331e927d01106a101066206403910b277bd06222a026aa0",
   "run": {
     "actor": "headless GitHub Copilot CLI harness: one fresh subject process per case, then one separate judge process",
     "model": "subject gpt-6.1-sol; judge claude-opus-5.5",
-    "runtimeRevision": "GitHub Copilot CLI 1.0.114",
-    "startedAt": "2026-11-23T19:53:38.371Z",
-    "completedAt": "2026-11-23T19:54:34.057Z",
+    "runtimeRevision": "GitHub Copilot CLI 1.0.115-7",
+    "startedAt": "2026-11-24T15:37:46.921Z",
+    "completedAt": "2026-11-24T15:40:53.655Z",
     "harness": {
       "command": "copilot",
       "pluginDirs": [
@@ -26,12 +26,12 @@
     "judge": "independent",
     "counts": {
       "cases": {
-        "total": 2,
-        "passed": 2
+        "total": 3,
+        "passed": 3
       },
       "checks": {
-        "total": 4,
-        "passed": 4
+        "total": 6,
+        "passed": 6
       }
     }
   },
@@ -47,7 +47,7 @@
         {
           "id": "no-shorthand-tokens",
           "passed": true,
-          "evidence": "The reply reads \"The retry policy draft is ready. Do you want a fixed three retries or exponential backoff?\" It has no wdyt, lmk, imo or similar chat shorthand."
+          "evidence": "The reply, \"The retry draft is ready. Do you want a fixed three retries or exponential backoff?\", has no wdyt, lmk, imo or similar chat shorthand."
         }
       ]
     },
@@ -57,12 +57,27 @@
         {
           "id": "layout-sets-width",
           "passed": true,
-          "evidence": "The visible CSS sets `grid-template-columns: 16rem minmax(0, 1fr)` on `.docs-layout`. The final reply describes this as a \"16rem sidebar and fluid article column\" and says it becomes one column on smaller screens. The article width therefore comes from the grid column and the window."
+          "evidence": "The article column's width is set by `grid-template-columns: 16rem minmax(0, 1fr);`, which becomes `minmax(0, 1fr)` on small screens. The reply says \"The grid controls text width\", so the width depends on the grid track and the window."
         },
         {
           "id": "no-fixed-measure",
           "passed": true,
-          "evidence": "The visible CSS and the reply mention only a fluid column and \"readable line spacing\". Neither shows a max-width or a fixed-unit width on paragraphs or article text. The patch is cut off after the heading selector, so the rest of the file was not checked."
+          "evidence": "The CSS has no `max-width` or `width` declaration on `.docs__article`, `p`, or the headings. The only fixed 16rem value is the sidebar's grid track."
+        }
+      ]
+    },
+    {
+      "id": "brief-without-disclaimer",
+      "checks": [
+        {
+          "id": "no-disclaimer-instruction",
+          "passed": true,
+          "evidence": "The brief tells the subagent to follow the conventions of `scales-of-reading` \"without treating its introductory prose as a template\" and to \"Explain the method in fresh language.\" It never asks for a copyright rule, provenance note, or 'read the original' disclaimer. Identifying the book and author is attribution, not a disclaimer."
+        },
+        {
+          "id": "brief-gives-task",
+          "passed": true,
+          "evidence": "The brief says SKILL.md must cover \"when to use the method, what inputs it needs, the steps to follow, and the expected output.\" It also asks for a reference file with supporting concepts and an original worked example."
         }
       ]
     }
