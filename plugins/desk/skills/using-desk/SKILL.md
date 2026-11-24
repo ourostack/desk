@@ -17,7 +17,7 @@ Before go, state the outcome, assumptions, recommended decisions and completion 
 
 ## Delivery and sign-off
 
-After go say only "ready" and "done". When part is usable, say `Ready: <what>, at <where>. I'm continuing.` with a primary-source screenshot; never hold it for CI. Delivered images must render for recipients (mobile too), privately (`visual-proof`).
+After go say only "ready" and "done". When part is usable, say `Ready: <what>, at <where>. I'm continuing.` with a primary-source screenshot; never hold it for CI.
 
 Done is a delivery, not an acceptance. Required format, not an optional follow-up:
 
