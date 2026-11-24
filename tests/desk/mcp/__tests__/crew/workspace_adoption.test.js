@@ -651,3 +651,16 @@ test("history that turns out shallow after the recovery fails at the ownership c
   assert.match(result.reason, /no claim can be inferred from this shallow history/u)
   assert.equal(git(repo.clone, ["status", "--porcelain"]), "")
 })
+
+test("adoption into a workspace that requires pull requests adds the missing template files through one, keeping the existing files", async () => {
+  const repo = await startWorkspaceFixture()
+  await pushFromElsewhere(repo, { ...MINE, ".desk/publication.json": "{\"schema_version\":1,\"mode\":\"pull-request\",\"required_checks\":[\"ci\"]}\n" }, "someone's folder")
+  git(repo.clone, ["pull", "-q", "--ff-only", repo.bare, "main"])
+  const revision = (await previewOf(repo)).revision
+  const result = await joinWorkspace(join(repo, { adoptExisting: revision, apply: true }))
+  assert.equal(result.state, "joined", result.message)
+  assert.match(result.deskPr, /\/pull\/\d+$/u)
+  assert.equal(onMain(repo.bare, `${DESK}/AGENTS.md`), MINE[`${DESK}/AGENTS.md`])
+  assert.ok(onMain(repo.bare, `${DESK}/README.md`) !== null)
+  assert.deepEqual(readCrewRoster(repo.clone).map((row) => row.alias), ["test-founder", "newbie"])
+})
