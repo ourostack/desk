@@ -1058,14 +1058,23 @@ export async function task_update({ deskRoot, input, person = null, search, stat
   ) {
     throw Object.assign(new Error("task_update: Pass `track` and `slug`: `track` and `slug` are required"), { code: "task_update_track_and_slug_are_required" })
   }
-  const contentAdmission = admitContent({
+  const admitUpdate = (declaration) => admitContent({
     deskRoot,
     tool: "task_update",
-    declaration: values.content_home,
+    declaration,
     subjects: Object.entries(values)
       .filter(([key, value]) => !["track", "slug", "display_label", "content_home"].includes(key) && value !== undefined)
       .map(([id, value]) => ({ id, content: typeof value === "string" ? value : JSON.stringify(value) })),
   })
+  // A call that only records progress (`log`, `child_session`) is coordination content, so a repository that requires `content_home` gets that declaration when the caller left it out.
+  const progressOnly = Object.entries(values).every(([key, value]) => value === undefined || ["track", "slug", "display_label", "log", "child_session"].includes(key))
+  let contentAdmission
+  try {
+    contentAdmission = admitUpdate(values.content_home)
+  } catch (error) {
+    if (!/content_home_required/u.test(error?.message ?? "") || !progressOnly || values.log === undefined) throw error
+    contentAdmission = admitUpdate({ purpose: "coordination", lifecycle: "current" })
+  }
   // `log` goes to log.md beside the card by the cheap append path. Alone, it is the whole call; with other fields, the rest of the call follows it.
   let logged = null
   if (values.child_session !== undefined && values.log === undefined) {

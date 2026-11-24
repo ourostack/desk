@@ -65,17 +65,25 @@ test("task_update writes a card in a second registered desk, by name or path, an
   assert.doesNotMatch(await fs.readFile(path.join(sibling, "t", "work", "task.md"), "utf8"), /\bno\b\s*$/mu)
 })
 
-test("a person-scoped session and a Crew desk are refused a sibling write", async () => {
+test("a person-scoped session is refused a solo sibling, and writes a Crew desk card as that desk's member", async () => {
   const bound = await gitDesk()
-  const sibling = await gitDesk()
+  const solo = await gitDesk()
+  const crew = await gitDesk()
+  await fs.mkdir(path.join(crew, "_meta"), { recursive: true })
+  await fs.mkdir(path.join(crew, "desks", "ari"), { recursive: true })
+  await fs.writeFile(path.join(crew, "_meta", "desks.md"), "| alias | identity | path |\n|---|---|---|\n| ari | ari_microsoft | desks/ari |\n")
+  git(crew, "add", ".")
+  git(crew, "commit", "-q", "-m", "roster")
   const home = realpathSync(await mkTempDeskRoot())
   const file = path.join(home, "desks.md")
-  await fs.writeFile(file, `| crew | local path | repo |\n|---|---|---|\n| team | ${sibling} | sample/team |\n`)
-  const env = { ...process.env, HOME: home, DESK_REGISTRY: file }
-  const crew = await call(bound, "task_update", { desk: "team", track: "t", slug: "work", note: "x" }, env)
-  assert.match(answer(crew).message, /Crew desk/u)
-  const person = await callTool({ deskRoot: bound, name: "task_update", input: { desk: "team", track: "t", slug: "work", note: "x" }, person: "ari", env })
-  assert.match(answer(person).message, /person-scoped/u)
+  await fs.writeFile(file, `| desk | local path | repo |\n|---|---|---|\n| solo | ${solo} | sample/solo |\n`)
+  await fs.appendFile(file, `\n| crew | local path | repo |\n|---|---|---|\n| team | ${crew} | sample/team |\n`)
+  const env = { ...process.env, HOME: home, DESK_REGISTRY: file, DESK_PERSON: "ari" }
+  const refused = await callTool({ deskRoot: bound, name: "task_update", input: { desk: "solo", track: "t", slug: "work", note: "x" }, person: "ari", env })
+  assert.match(answer(refused).message, /person-scoped/u)
+  const created = answer(await callTool({ deskRoot: bound, name: "task_create", input: { desk: "team", track: "t", slug: "work", title: "Work" }, person: "ari", env }))
+  assert.equal(created.desk_root, crew)
+  assert.match(await fs.readFile(path.join(crew, "desks", "ari", "t", "work", "task.md"), "utf8"), /Work/u)
 })
 
 test("task_update records many resource rows in one commit", async () => {
