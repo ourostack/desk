@@ -44,7 +44,7 @@ import { DEFERRED_TOOLS_LOAD_HINT } from "../util/deferred-tools.js"
 export const TOOL_COMMIT_ENV = "DESK_TOOL_COMMIT"
 /** The first marker line of the hook Desk writes. */
 export const HOOK_MARKER = "# desk-card-commit-guard"
-const HOOK_VERSION = 7
+const HOOK_VERSION = 8
 export const CHAINED_NAME = "pre-commit.desk-chained"
 /** Set by the hook while it runs; a second entry (the pre-commit framework's `pre-commit.legacy` chain) exits 0 instead of looping. */
 const RUNNING_ENV = "DESK_CARD_GUARD_RUNNING"
@@ -112,7 +112,8 @@ desk_card_guard() {
     echo "$refused" | sed 's/^/  /'
     echo "Use task_update (status, repos, a progress note, the next step, more body text), task_create, task_update or task_archive: each writes the card and commits it for you."
     recovery=$(cat "$(dirname "$0")/${RECOVERY_POINTER_NAME}" 2>/dev/null)
-    [ -f "$recovery" ] || recovery="<Desk plugin folder>/mcp/scripts/local-recovery.js"
+    # A pointer into a source mirror has no bootstrap.cjs beside its scripts folder and could never start a server.
+    { [ -f "$recovery" ] && [ -f "$(dirname "$recovery")/../bootstrap.cjs" ]; } || recovery="<Desk plugin folder>/mcp/scripts/local-recovery.js"
     track=$(echo "$first" | awk -F/ '{print $(NF-2)}')
     slug=$(echo "$first" | awk -F/ '{print $(NF-1)}')
     person=""
