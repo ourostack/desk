@@ -9,7 +9,7 @@ import { strict as assert } from "node:assert"
 import { appendFileSync, readFileSync, writeFileSync } from "node:fs"
 import * as path from "node:path"
 import { spawnSync } from "node:child_process"
-import { CIT_SHAPED, ORIGIN, bareGit, fakeGh, git, mainFiles, noWait, onMain, plantPullRequest, startedTeamRepo, teamRepo } from "./_fixtures.js"
+import { CIT_SHAPED, ORIGIN, bareGit, fakeGh, git, mainFiles, noWait, onMain, plantPullRequest, pushFromElsewhere, startedTeamRepo, teamRepo } from "./_fixtures.js"
 import { crewStatus, joinWorkspace, startWorkspace } from "../../../../../plugins/desk/mcp/src/crew/workspace.js"
 
 const NOW = () => 1767225600000
@@ -345,4 +345,18 @@ test("a reused join pull request whose row another machine landed meanwhile is c
   assert.equal(second.alias, "bob2")
   assert.equal(fake.state.prs.find((pr) => pr.url === first.pr).open, false)
   assert.equal(creates(fake).length, 1)
+})
+
+test("a join into a workspace whose .desk/publication.json requires pull requests lands the desk through one too, never by push", async () => {
+  const repo = await started()
+  await pushFromElsewhere(repo, { ".desk/publication.json": "{\"schema_version\":1,\"mode\":\"pull-request\",\"required_checks\":[\"ci\"]}\n" })
+  const fake = fakeGh(repo.bare)
+  const bob = memberClone(repo, "bob")
+  const result = await joinWorkspace({ repo: bob.clone, spawnGit: repo.spawnGit, gh: fake.gh, identity: "bob_example", alias: "bob", wait: noWait, now: NOW, apply: true })
+  assert.equal(result.state, "joined", result.message)
+  assert.equal(creates(fake).length, 2)
+  assert.match(result.deskPr, /\/pull\/\d+$/u)
+  assert.ok(mainFiles(repo.bare).includes("desks/bob/AGENTS.md"))
+  assert.match(onMain(repo.bare, "_meta/desks.md"), /\| bob \| bob_example \|/u)
+  assert.equal((await crewStatus({ repo: memberClone(repo, "check").clone, identity: "bob_example" })).member.alias, "bob")
 })
