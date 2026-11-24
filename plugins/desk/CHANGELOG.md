@@ -1,5 +1,13 @@
 # desk plugin — changelog
 
+## 3.2.526 — 2026-11-24
+
+### Crew join follows the workspace's publication mode
+
+`crew join` now reads `.desk/publication.json` on the default branch. When its mode is `pull-request`, the new desk lands through a checked pull request instead of a push to the default branch, so a join no longer fails against a pull-request-only workspace. Workspaces without that file join as before.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.525 — 2026-11-24
 
 desk-web's browser now presses the Continue button on GitHub's enterprise SSO page, once, and says in the reply what happened. The reply carries `sso.state`: `renewed` when Entra renewed the session and GitHub returned to the page, `needs_person` when Entra asked to sign in (a person must do that once in their own browser; desk-web never types a password or copies a token), and `stalled` when the page did not leave the SSO page in time. Before, a managed-account page stopped at the SSO page and the agent had to guess why.
