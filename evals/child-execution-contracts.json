@@ -8,7 +8,7 @@
     "plugins/desk/skills/using-superpowers-with-desk/SKILL.md",
     "plugins/desk/mcp/src/activation/superpowers-context.js"
   ],
-  "reviewedSourceFingerprint": "324dc35730f279d7df70a86f1ca823689918d332f1d65f9cf70699652a6b52dd",
+  "reviewedSourceFingerprint": "5baad525faa95388f6ea868b46c40bf4beeff0e872d8f2ea3a55d890843dfafb",
   "requirements": [
     {
       "id": "report-returned-as-text",
