@@ -724,24 +724,37 @@ for (const flag of ["--assume-unchanged", "--skip-worktree"]) {
   })
 }
 
-test("a Git pathspec metacharacter in the reported log path is read literally", async () => {
+// The log lives in a directory literally named "[ab]"; an unrelated dirty file matches that name as a glob.
+const globFixture = (root) => {
+  mkdirSync(path.join(root, "work/[ab]"), { recursive: true })
+  writeFileSync(path.join(root, "work/[ab]/log.md"), "# Log\n\n## entry\n")
+}
+const globAnswer = { ...MIXED, log: { path: "work/[ab]/log.md", commit: "queued" } }
+const dirtyGlobMatch = (root) => {
+  mkdirSync(path.join(root, "work/a"), { recursive: true })
+  writeFileSync(path.join(root, "work/a/log.md"), "unrelated dirty file\n")
+}
+
+test("an unrelated dirty path matching the log path as a glob does not make a committed log pending", async () => {
   const { report, exitCode } = await mixed((root) => {
-    writeLog(root)
-    git(root, "add", "work/one/log.md")
+    globFixture(root)
+    git(root, "add", "-f", "work/[ab]/log.md")
     commitCard(root)
-  }, { ...MIXED, log: { path: "work/*/log.md", commit: "queued" } })
-  assert.equal(report.effects.log, "unknown")
-  assert.equal(exitCode, 2)
+    dirtyGlobMatch(root)
+  }, globAnswer)
+  assert.equal(report.effects.log, "observed", JSON.stringify(report.effects))
+  assert.equal(exitCode, 0, JSON.stringify(report))
 })
 
-test("a tracked log whose working bytes equal the reported HEAD blob is observed", async () => {
+test("an unrelated dirty path matching an ignored log path as a glob does not make it pending", async () => {
   const { report, exitCode } = await mixed((root) => {
-    writeLog(root)
-    git(root, "add", "work/one/log.md")
     commitCard(root)
-  })
-  assert.equal(report.effects.log, "observed")
-  assert.equal(exitCode, 0, JSON.stringify(report))
+    writeFileSync(path.join(root, ".git/info/exclude"), "work/[[]ab]/\n")
+    globFixture(root)
+    dirtyGlobMatch(root)
+  }, globAnswer)
+  assert.equal(report.effects.log, "unknown", JSON.stringify(report.effects))
+  assert.equal(exitCode, 2)
 })
 
 test("log-only update with a missing log path is unknown evidence, not observed", async () => {
@@ -810,8 +823,14 @@ test("the queued commit survives a real spawned bootstrap being closed", async (
   const root = fixture()
   const headBefore = git(root, "rev-parse", "HEAD")
   const { runRecovery, launchBootstrap } = await import("../../../../../plugins/desk/mcp/scripts/local-recovery.js")
+  const spawnedEnv = isolatedEnv()
+  const allowed = /^(PATH|HOME|USERPROFILE|TMPDIR|XDG_[A-Z]+_HOME|DESK_STATE_HOME|GIT_CONFIG_GLOBAL|GIT_CONFIG_NOSYSTEM|GIT_(AUTHOR|COMMITTER)_(NAME|EMAIL))$/u
+  assert.deepEqual(Object.keys(spawnedEnv).filter((key) => !allowed.test(key)), [], "only controlled variables reach the spawned bootstrap")
+  for (const key of ["HOME", "TMPDIR", "XDG_CACHE_HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "DESK_STATE_HOME", "GIT_CONFIG_GLOBAL"]) {
+    assert.ok(spawnedEnv[key].startsWith(here), `${key} stays under the synthetic temp root`)
+  }
   const result = await runRecovery({
-    argv: args(root), env: isolatedEnv(), cwd: root,
+    argv: args(root), env: spawnedEnv, cwd: root,
     input: input(logOnly), launch: launchBootstrap, timeoutMs: 60000,
   })
   assert.equal(result.report.transport.shutdown, "closed", JSON.stringify(result.report))
