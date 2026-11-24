@@ -46,3 +46,9 @@ test("a card's codes count as raised when the file holds them outside error card
   assert.deepEqual(doors.find((d) => d.id === "http:gw POST /hooks/:id")!.evidence, { raises: ["hook-not-found", "from-imported-page"] });
   assert.deepEqual(errors, [`http:gw GET /gone: a card in ${at("cards.json")} for a route the walker doesn't find in ${at("app.js")}. Fix: remove the card, or fix its id.`]);
 });
+
+test("a READ_ONLY_ROUTES list in the app's file is its routes' read-only evidence, and an entry that matches no route is a census error", async () => {
+  const { doors, errors } = await walk(options({ source: at("read-only.js") }));
+  assert.deepEqual(doors.map((d) => [d.id, d.evidence]), [["http:gw GET /ping", { readOnly: true }], ["http:gw POST /post", {}]]);
+  assert.deepEqual(errors, [`${at("read-only.js")}:3: READ_ONLY_ROUTES lists "GET /gone", a route the walker doesn't find. Fix: remove the entry, or fix its spelling.`]);
+});

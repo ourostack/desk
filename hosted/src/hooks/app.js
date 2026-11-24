@@ -38,6 +38,11 @@ function secretFor(spec, given) {
   return { secret: given, show: false };
 }
 
+// The routes that write nothing, which test/read-only-routes.test.js proves by serving each one with the store
+// recording its calls. The census reads this list as their read-only evidence. GET /hooks/:name/events is not on it:
+// reading a hook's events also deletes those older than 7 days.
+export const READ_ONLY_ROUTES = ["GET /healthz", "GET /hooks"];
+
 export function createHooksApp({ store, identity, key, publicUrl, now = Date.now, log = console.log }) {
   const app = express();
   app.disable("x-powered-by");

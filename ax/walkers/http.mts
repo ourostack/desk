@@ -13,6 +13,10 @@
 // `cards` is the sidecar of cards, `{ "doors": [DoorCard] }`; a card whose door isn't found is a census error. The
 // literals outside error cards, in the file and in the local modules it imports (followed through their imports), are
 // the codes it may raise, as written or with hyphens as underscores. A route's handler may live in an imported file.
+//
+// Read-only evidence is a list in the app's file: `const READ_ONLY_ROUTES = ["GET /healthz", ...]`, each entry a
+// door's `<METHOD> <path>`. A route on the list has `evidence.readOnly`; an entry that matches no route is a census
+// error. The list is a claim, so a test beside the app must prove each listed route writes nothing.
 import { readFileSync } from "node:fs";
 import { relative, resolve } from "node:path";
 import ts from "typescript";
@@ -52,6 +56,15 @@ export async function walk(opts: WalkerOptions): Promise<WalkResult> {
     ts.forEachChild(n, findApps);
   };
   findApps(sf);
+  const readOnlyList: { text: string; node: ts.Node }[] = [];
+  for (const st of sf.statements) {
+    if (!ts.isVariableStatement(st)) continue;
+    for (const decl of st.declarationList.declarations) {
+      if (ts.isIdentifier(decl.name) && decl.name.text === "READ_ONLY_ROUTES" && decl.initializer && ts.isArrayLiteralExpression(decl.initializer)) {
+        for (const el of decl.initializer.elements) if (isText(el)) readOnlyList.push({ text: el.text, node: el });
+      }
+    }
+  }
   const parse = (p: string): ts.SourceFile => (p === path ? sf : ts.createSourceFile(p, readFileSync(p, "utf8"), ts.ScriptTarget.Latest, true, /\.[cm]?ts$/.test(p) ? ts.ScriptKind.TS : ts.ScriptKind.JS));
   for (const p of importClosure(path, parse)) collect(literals)(parse(p));
 
@@ -102,11 +115,14 @@ export async function walk(opts: WalkerOptions): Promise<WalkResult> {
   const ids = new Set(doors.map((d) => d.id));
   for (const card of cards) if (!ids.has(card.id)) errors.push(`${card.id}: a card in ${opts.cards} for a route the walker doesn't find in ${file}. Fix: remove the card, or fix its id.`);
   const byId = new Map(cards.map((c) => [c.id, c]));
+  for (const entry of readOnlyList) if (!doors.some((d) => d.name === `${label} ${entry.text}`)) errors.push(`${file}:${lineOf(entry.node)}: READ_ONLY_ROUTES lists "${entry.text}", a route the walker doesn't find. Fix: remove the entry, or fix its spelling.`);
+  const listed = new Set(readOnlyList.map((e) => `${label} ${e.text}`));
   const raised = (code: unknown) => typeof code === "string" && (literals.has(code) || literals.has(code.replaceAll("-", "_")));
   return {
     doors: doors.map((d) => {
       const card = byId.get(d.id) ?? null;
-      return { ...d, card, evidence: card && Array.isArray(card.errors) ? { raises: card.errors.map((e) => e?.code).filter(raised) as string[] } : {} };
+      const raises = card && Array.isArray(card.errors) ? { raises: card.errors.map((e) => e?.code).filter(raised) as string[] } : {};
+      return { ...d, card, evidence: { ...(listed.has(d.name) ? { readOnly: true } : {}), ...raises } };
     }),
     errors,
     unwalked,
