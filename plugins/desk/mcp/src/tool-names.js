@@ -43,8 +43,6 @@ const HAND_WRITTEN_DESCRIPTIONS = {
     "Use when a task's work is finished or cancelled: move <track>/<slug>/ to <track>/_archive/<slug>/. A task not yet done or cancelled needs `evidence` or `outcome: \"cancelled\"`. Returns archive_pending with the retained path and next_action when publication is unproven; that is not completed publication. Repeating an archived task is safe.",
   task_signoff:
     "Record the operator's answer to a delivered task: accepted or refused. Call it only after the operator has answered, in a turn after the one that delivered the work. A refusal needs `reason` (theirs) and `return_reason` (your own reading) and puts the task back to processing. Desk records any call as the operator's answer without checking which agent made it, so it is the main agent's tool: a subagent has not heard the answer.",
-  task_focus:
-    "Declare the task this session is working on, so its time is credited to it. Pass `track` and `slug` of an existing card (live or archived), or `clear: true` for a side conversation. Main agent only; a subagent never calls it. Writes nothing. Returns `task_status`, `recent_progress`, `next_step`, any `shelved_lessons` to read before you act, and `archive_due` for a done/cancelled card. `task_create` with `focus: true` does the same for a new task.",
   track_create:
     "Use when new work needs its own track: create a track at <slug>/track.md. `slug` must be an outcome name (1-6 lowercase kebab-case words, at most 48 characters) and `scope` is required: one line, at most 240 characters, \"<what belongs>; not <what doesn't>\". A rejection says what to fix. On a Git desk it stages and commits the new track.md; a commit failure keeps the written file and is reported in a `commit` field.",
   track_update:

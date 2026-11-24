@@ -40,3 +40,18 @@ export const improvementNext = defineAction({
   },
   output: {},
 });
+
+export const taskFocus = defineAction({
+  id: "task_focus",
+  consent: "read",
+  label: "Task focus",
+  description: "Declare the task this session is working on.",
+  agent: "Declare the task this session is working on, so its time is credited to it. Pass `track` and `slug` of an existing card (live or archived), or `clear: true` for a side conversation. A subagent shares this session's server, so its call would move the main agent's focus: only the main agent calls it. Writes nothing: the focus is held in memory. Returns `task_status`, `recent_progress`, `next_step`, any `shelved_lessons` to read before you act, and `archive_due` for a done/cancelled card. `task_create` with `focus: true` does the same for a new task.",
+  input: {
+    track: field.string({ label: "Track", description: "The track folder of the task you are working on; give it with `slug`.", optional: true }),
+    slug: field.string({ label: "Slug", description: "The task folder name; give it with `track`.", optional: true }),
+    clear: field.boolean({ label: "Clear", description: "Pass true, alone, to declare no task: for a side conversation that belongs to none.", optional: true }),
+    displayLabel: field.string({ label: "Display label", description: "Optional short description of the focused task, at most 72 characters; never paths, URLs, emails or credentials. Unsafe labels are ignored.", optional: true, wire: "display_label" }),
+  },
+  output: {},
+});
