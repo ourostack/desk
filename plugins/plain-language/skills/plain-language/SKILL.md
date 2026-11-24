@@ -1,11 +1,15 @@
 ---
 name: plain-language
-description: Use when writing anything a person will read, such as chat replies, handoffs, documents, PR text, reviews, comments or commit messages, or the CSS that lays out rendered text, and when explaining why something is the way it is.
+description: Use when writing anything a person or agent will read, such as chat replies, handoffs, documents, skills, prompts, briefs, PR text, reviews, comments or commit messages, or the CSS that lays out rendered text, and when explaining why something is the way it is.
 ---
 
 # Plain Language
 
-Apply these rules to human-readable prose only. Keep internal reasoning, code, commands, logs, stack traces, diffs, exact quotations, tool arguments, identifiers, and schema-bound payloads unchanged.
+Apply these rules to prose that people or agents will read, including skills, docs, prompts and briefs. Keep internal reasoning, code, commands, logs, stack traces, diffs, exact quotations, tool arguments, identifiers, and schema-bound payloads unchanged.
+
+## Write no defensive disclaimers
+
+When you write or brief a skill, doc, prompt or reference file, include no copyright or legal notice, no "this is our own rendering, nothing is copied", no "read the original for more", and no provenance caveat the reader did not ask for. It is implicit, adds nothing the reader acts on, and confuses downstream agents. This holds for a skill written from a book or other source, and when an existing file opens with one: leave that part out. A brief never tells a subagent to add one. Keep concrete safety warnings, attribution a licence requires, exact quotations and the plain statement that a check was not run or failed.
 
 ## Serve the reader
 
@@ -35,7 +39,6 @@ Test each sentence: does the reader learn something they cannot already see? The
 - Do not summarize your own work. A work report states the outcome and its evidence and describes a change only where the reader cannot see it.
 - A code comment explains why a line is surprising, and a doc comment states the contract. Neither narrates the code.
 - Assume expertise and let the reader ask for more depth.
-- Write no defensive disclaimer or hedge nobody asked for, in a skill, doc, brief or prompt: no "this is our own rendering, nothing is copied", no "read the original for more", no legal or provenance caveat. It is implicit, it confuses the agents downstream and the reader acts on none of it. A brief never tells a subagent to add one, even when a similar file opens with one.
 
 A subagent kickoff brief is the exception: it starts with no context, so it may be as long as it needs to be.
 

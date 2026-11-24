@@ -1,0 +1,3 @@
+### No defensive disclaimers in skills, docs or briefs
+
+Agents downstream of Desk no longer write copyright notices, "our own rendering" statements, read-the-original lines or other unrequested provenance caveats into skills, docs, prompts or briefs, and a brief never tells a subagent to add one. Plain Language now states the rule, Desk's start and child-agent lines point skills, prompts and briefs at it, and `using-superpowers-with-desk` applies it to briefs and `writing-skills` use. Concrete warnings, required attribution, exact quotations and unrun or failed checks stay explicit. Follows #1692, which closed #1671.
