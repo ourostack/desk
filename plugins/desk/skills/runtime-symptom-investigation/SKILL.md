@@ -1,6 +1,6 @@
 ---
 name: runtime-symptom-investigation
-description: Use when the operator reports a runtime symptom (error, regression, unexpected output, slowdown), to investigate the running system before reading source.
+description: Use when the operator reports a runtime symptom (error, regression, unexpected output, slowdown), to investigate the running system before reading source, and before writing any bug fix, to fix the one place it broke.
 ---
 
 # Runtime-symptom investigation
@@ -43,6 +43,10 @@ Code analysis builds models of MECHANISM. Many mechanisms produce similar sympto
 Do not change product behavior while the cause remains a hypothesis. A surviving hypothesis is not proof: confirm it counterfactually by changing the one suspected input or condition and observing the symptom appear and disappear with it. If the symptom does not track, return to step 1 because the hypothesis space was incomplete.
 
 Record every temporary diagnostic change before use. Before handback, reverse only that diagnostic delta and verify its added content and artifacts are absent. Preserve unrelated concurrent changes; a pre-investigation fingerprint is evidence, not ownership. Never restore a fingerprint by undoing a concurrent user or tool change. A diagnosis leaves no logging, probes, injected failures, temporary configuration, or other diagnostic edits in the worktree.
+
+## Fix the one place it broke
+
+Before writing a fix, name in one sentence the one place where the invariant broke; if you can't, keep investigating. Fix it there, even when that touches more files than a patch where the symptom shows. Don't stack a backstop on a real fix: a fallback, retry, default, extra `try`/`catch`, extra hash input or "just in case" check guarding the same invariant is a second fix that hides the next bug, and needing one means the fix is in the wrong layer. A layer stays only if you can name the separate invariant it enforces, a failure from real use (not an imagined chain of events) that it prevents, and what it costs when it drifts. Separate concerns at separate layers (authentication beside input validation), fallbacks for an unreliable upstream such as the network, and compatibility shims with an end date are not backstops. Pin the regression test on the behavior a person sees, not on a layer, and if a later reader is likely to add the backstop you rejected, leave a one-line comment at the site naming the invariant that makes it unnecessary. Adapted from Tim Clem's [`fixing-root-causes`](https://github.com/tclem/dotfiles/blob/main/copilot/skills/fixing-root-causes/SKILL.md).
 
 ## Asking the operator IS one of the cheapest observations
 

@@ -1701,6 +1701,12 @@ contract("every general operator rule is stated in the skill that owns its topic
     ["git-hygiene", /Never run `git stash` in a shared checkout or a checkout another session might use[\s\S]+use a detached worktree instead/u, "Never leave state behind"],
     ["git-hygiene", /Never put a credential where it can be seen[\s\S]+redact anything token-shaped/u, "Commit identity and secrets"],
     ["evidence-discipline", /\*\*Start where they start\.\*\* Run the scenario from the state a real person is usually in[\s\S]+\*\*Isolate test copies by construction\.\*\*/u, "Offline evals on synthetic data, online evals from counts"],
+    ["pr-surface-hygiene", /The body tells them what the diff can't: why it exists[\s\S]+\*\*Describe the approach; never recap the diff\.\*\*[\s\S]+\*\*Never narrate how you got here\.\*\*[\s\S]+\*\*No process status\.\*\*/u, "PSH-012 — the body says why the diff exists"],
+    ["pr-surface-hygiene", /would Tim Clem approve the shape of this PR\?[\s\S]+never wait for the operator to run it[\s\S]+5\. Required checks are green on a head that includes the current base branch\.[\s\S]+The check adds no signature or AI credit line/u, "PSH-013 — the Tim check before a PR reaches GitHub or a reviewer"],
+    ["pr-surface-hygiene", /Fill every section the template has, with no placeholders[\s\S]+before and after captures from a working build/u, "PSH-008 — use the repo's template and convention"],
+    ["evidence-discipline", /name the concrete regression it catches that existing tests miss\. Then prove it: revert the fix or break the behavior, and watch the test fail for that reason[\s\S]+"No new test" is an acceptable outcome/u, "A test earns its place"],
+    ["runtime-symptom-investigation", /name in one sentence the one place where the invariant broke[\s\S]+Don't stack a backstop on a real fix/u, "Fix the one place it broke"],
+    ["pr-feedback-on-own-pr", /Treat every review item[\s\S]+as a claim to test[\s\S]+A dismissal needs evidence at least as strong as an acceptance[\s\S]+bound the set, check every member[\s\S]+a thread is resolved only when the evidence supports its outcome/u, "Each review item is a hypothesis"],
   ];
   const failures = [];
   if (/Near a usage limit, run fewer children/u.test(text(skill("work-orchestration")))) {

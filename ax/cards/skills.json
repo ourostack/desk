@@ -287,7 +287,8 @@
         { "code": "no-fixture", "means": "An estimate has no stage definition, past run record or telemetry behind it.", "fix": "Strip the number and offer to measure it, or proceed without an estimate." },
         { "code": "real-account-check", "means": "A test, reproduction or measurement would run on the human's real data or account.", "fix": "Use synthetic data shaped like theirs, and raise any gate that demands it with the repository owner." },
         { "code": "record-conflict", "means": "A current source contradicts a curated desk record.", "fix": "Record both and take the conflict to the decision's owner instead of overwriting it." },
-        { "code": "precedent-not-in-head", "means": "A claimed precedent is not in HEAD.", "fix": "Narrow the claim, pick another precedent or drop it." }
+        { "code": "precedent-not-in-head", "means": "A claimed precedent is not in HEAD.", "fix": "Narrow the claim, pick another precedent or drop it." },
+        { "code": "test-catches-nothing", "means": "A new or changed test names no concrete regression, or still passes with the fix reverted.", "fix": "Make it fail for the regression it guards, strengthen an existing test instead, or drop it." }
       ],
       "uses": ["skill:desk:session-resumption", "skill:desk:interaction-style", "skill:desk:runtime-symptom-investigation", "skill:desk:operator-voice-comments", "skill:desk:preflight-actions", "skill:desk:pr-surface-hygiene", "skill:desk:using-desk", "host:Bash"]
     },
@@ -522,7 +523,8 @@
         { "code": "plan-gap", "means": "A disposition has no unit, a skeptical pass raises a new architectural decision, or a prerequisite is missing.", "fix": "Stop for the operator; for a disposition with no unit, go back to the shape and walk-through phases." },
         { "code": "landed-code-short", "means": "The landed diff does not satisfy the reviewer's ask.", "fix": "Go back to planning or execution before resolving the thread." },
         { "code": "ci-platform-needed", "means": "The same build failed for infrastructure reasons after two re-runs.", "fix": "Tell the operator it needs CI platform support." },
-        { "code": "access-denied", "means": "A permission denial or unreachable service blocks a phase.", "fix": "Return to the operator with that reason." }
+        { "code": "access-denied", "means": "A permission denial or unreachable service blocks a phase.", "fix": "Return to the operator with that reason." },
+        { "code": "unproven-dismissal", "means": "A review item would be dismissed or resolved without evidence that meets the claim, or a claim about a whole set rests on samples.", "fix": "Gather the evidence or check every member of the set; otherwise keep the item open and the thread active." }
       ],
       "uses": ["skill:desk:pr-self-review", "skill:desk:using-superpowers-with-desk", "skill:desk:operator-voice-comments", "skill:desk:interaction-style", "skill:desk:git-hygiene", "skill:desk:pr-surface-hygiene", "skill:superpowers:brainstorming", "skill:superpowers:writing-plans", "skill:superpowers:requesting-code-review", "host:Bash"]
     },
@@ -567,13 +569,15 @@
     {
       "id": "skill:desk:pr-surface-hygiene",
       "group": "desk-skills-pr-review",
-      "when": "Checking each line of a pull request body or top-level reply for rot, pipeline noise, invented sections and a missing screenshot",
+      "when": "Checking a pull request body or top-level reply for rot, pipeline noise, invented sections and a missing screenshot, and running the Tim check before a PR reaches GitHub or a reviewer",
       "effect": "read",
       "errors": [
         { "code": "visual-proof-missing", "means": "The proof checker exited nonzero, or the body has no inline image and no accurate no-visual-change reason.", "fix": "Block publication or readiness, report the gap and correct it within existing authority." },
         { "code": "safe-proof-unavailable", "means": "Privacy-safe rendered proof cannot be produced.", "fix": "Keep readiness blocked and state what remains unverified." },
         { "code": "tracker-item-unfit", "means": "A cited work item's title or state does not fit its role, or its body is empty.", "fix": "Read the item, pick the right one and fill its body before linking it." },
-        { "code": "enforcement-unapproved", "means": "Installing the PR template or CI check lacks the repository owner's approval.", "fix": "Offer the setup once and leave repository workflows and checks unchanged." }
+        { "code": "enforcement-unapproved", "means": "Installing the PR template or CI check lacks the repository owner's approval.", "fix": "Offer the setup once and leave repository workflows and checks unchanged." },
+        { "code": "body-not-why", "means": "The body recaps the diff, narrates how the work went or reports process status instead of saying why the diff exists.", "fix": "Rewrite it as a short paragraph on why the diff exists, and move per-line nuance to code or review comments." },
+        { "code": "tim-check-failed", "means": "Before opening, changing the body, marking ready or requesting review, the pull request fails one of the Tim check's five items.", "fix": "Fix the failing item yourself, then rerun the check on the current diff and saved body." }
       ],
       "uses": ["cli:node plugins/desk/skills/pr-surface-hygiene/check-visual-proof.cjs", "skill:desk:operator-voice-comments", "skill:desk:evidence-discipline", "skill:desk:using-superpowers-with-desk", "host:Bash"]
     },
@@ -653,7 +657,8 @@
         { "code": "hypothesis-unconfirmed", "means": "The surviving hypothesis has not been confirmed counterfactually.", "fix": "Change the one suspected input and watch the symptom track it before changing product behavior." },
         { "code": "metric-stuck", "means": "A polled metric stayed unchanged across consecutive polls.", "fix": "Stop polling and inspect the supervisor's last result, the newest log tail, orphan processes and artifact times." },
         { "code": "outside-view-only", "means": "Only control-plane status says the system is wedged.", "fix": "Check the freshness of the system's inside signal before any restart." },
-        { "code": "diagnostic-left", "means": "Temporary diagnostic edits remain in the worktree.", "fix": "Reverse only the recorded diagnostic delta and verify its content is gone." }
+        { "code": "diagnostic-left", "means": "Temporary diagnostic edits remain in the worktree.", "fix": "Reverse only the recorded diagnostic delta and verify its content is gone." },
+        { "code": "stacked-backstop", "means": "A fix adds a fallback, retry, default or extra check guarding the same invariant as the real fix.", "fix": "Name the one place the invariant broke, fix it there and drop the backstop." }
       ],
       "uses": ["skill:desk:evidence-discipline", "host:Bash"]
     },

@@ -1,6 +1,6 @@
 ---
 name: pr-feedback-on-own-pr
-description: Work through requested review feedback on the operator's own pull request and route fixes to the implementation owner. Not for another author's PR.
+description: Work through requested review feedback on the operator's own pull request and route fixes to the implementation owner. Use also before accepting, dismissing, replying to or resolving any review item on it. Not for another author's PR.
 ---
 
 # pr-feedback-on-own-pr
@@ -32,6 +32,10 @@ pr_feedback_prefs:
   reply_format: behavioral   # "Addressed — <what changed>. <why it matches the ask, if not obvious>." SHA only if the reviewer needs a hunk.
   thread_close_policy: agent-closes-when-addressed     # or: agent-replies-operator-closes; the operator can override per thread
 ```
+
+## Each review item is a hypothesis
+
+Treat every review item, from a person, a bot or `pr-self-review`, as a claim to test: neither an order to follow nor noise to clear. Name the invariant or question it tests; a question can expose a real problem even when its suggested fix is wrong. Accept or dismiss it only with evidence that fits the claim: a reproduction, a failing test, a traced code path or the governing contract. A dismissal needs evidence at least as strong as an acceptance; a plausible story or two sampled call sites is not proof. When the comment or your answer makes a claim about a whole set ("all", "none", "only", "no other caller"), bound the set, check every member and list what you checked in the reply. Record each item as accepted, accepted with a different fix, open, or dismissed with proof, and before dismissing a high-impact or cross-cutting one, ask an independent reviewer to try to prove the reviewer right. Every thread gets a reply (phase 9), and a thread is resolved only when the evidence supports its outcome; an open one stays active. Adapted from Tim Clem's [`pr-review-reply`](https://github.com/tclem/dotfiles/blob/main/copilot/skills/pr-review-reply/SKILL.md).
 
 ## Buckets
 
