@@ -191,14 +191,14 @@ function gitHead(root, env) {
   return result.status === 0 ? result.stdout.trim() : null
 }
 
-// A queued log is already in the working tree. A clean path means the detached worker has committed it; a dirty one means the commit is still pending.
+// A queued log is already in the working tree. It counts as committed only when Git tracks the path in HEAD and the working file matches it; a blank status alone also describes a missing or ignored path.
 function logCommitState(root, env, rel) {
   if (typeof rel !== "string" || !rel || path.isAbsolute(rel) || rel.split(/[\\/]/u).includes("..")) return "unknown"
-  const result = spawnSync("git", ["status", "--porcelain", "--", rel], {
-    cwd: root, env, encoding: "utf8", timeout: 5000, windowsHide: true,
-  })
-  if (result.status !== 0) return "unknown"
-  return result.stdout.trim() === "" ? "committed" : "pending"
+  const git = (args) => spawnSync("git", args, { cwd: root, env, encoding: "utf8", timeout: 5000, windowsHide: true })
+  const status = git(["status", "--porcelain", "--", rel])
+  if (status.status !== 0) return "unknown"
+  if (status.stdout.trim() !== "") return "pending"
+  return git(["cat-file", "-e", `HEAD:${rel}`]).status === 0 ? "committed" : "unknown"
 }
 
 /** One mutation at most, through the ordinary MCP bootstrap and admission. */
@@ -345,6 +345,9 @@ export async function runRecovery({
     report.effects.push = status.sync === "no remote configured" ? "not_applicable" : options["publication"] === "deferred" ? "deferred" : "pending"
     const commitExpected = ["updated", "created", "archived", "committed"].includes(result.status) || (logOnly && logState === "committed")
     const logPending = report.effects.log === "queued"
+    if (report.effects.log === "unknown") {
+      report.readback = `The entry at ${queuedPath} was reported written, but Git does not show it committed or pending. Do not resend it: that may duplicate the entry. Read that path first. ${report.readback}`
+    }
     if (logPending) {
       // --publication deferred schedules no background worker, so nothing in this run will commit the entry.
       const who = report.queued.committer === "background_worker" ? "its commit is pending in Desk's background writer"
@@ -352,12 +355,13 @@ export async function runRecovery({
       report.readback = `Entry written to ${queuedPath}; ${who}. Do not resend it: that would duplicate the entry. ${report.readback}`
     }
     if (report.effects.commit === "failed" || result.commit?.status === "unknown" || report.effects.push === "pending" || logPending ||
-        (logOnly && report.effects.commit === "unknown") || (commitExpected && report.effects.commit !== "observed")) {
+        report.effects.log === "unknown" || (commitExpected && report.effects.commit !== "observed")) {
       report.status = "partial"
       report.code = report.effects.commit === "failed" ? "commit_failed"
         : result.commit?.status === "unknown" ? "commit_unknown"
         : commitExpected && report.effects.commit !== "observed" ? "commit_not_observed"
         : logPending ? "commit_queued"
+        : report.effects.log === "unknown" ? "log_evidence_unknown"
         : report.effects.push === "pending" ? "push_pending" : "commit_not_observed"
       exitCode = 2
     } else {

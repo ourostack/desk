@@ -626,19 +626,92 @@ test("a log-only update in a published member desk is queued under the default c
   assert.equal(readFileSync(path.join(root, "work/one/task.md"), "utf8").includes("log"), false)
 })
 
-test("a mixed update keeps the observed card commit and the queued log separate", async () => {
+test("a mixed update keeps the observed card commit and the queued log separate, at either timing", async () => {
   const root = fixture()
   const headBefore = git(root, "rev-parse", "HEAD")
   const result = await recover(root, { ...logOnly, status: "processing" })
   const { report } = result
-  assert.equal(report.effects.commit, "observed", "the card commit is its own observation")
+  // Under heavy host load the real card commit can exhaust its own time budget; recovery then correctly says commit_unknown, and the deterministic cases below cover the observed path.
+  if (report.result.commit?.status === "unknown") return assert.equal(report.code, "commit_unknown")
+  assert.equal(report.effects.commit, "observed", JSON.stringify(report))
   assert.equal(report.queued.path, "work/one/log.md")
   assert.ok(["queued", "observed"].includes(report.effects.log), JSON.stringify(report))
   assert.equal(result.exitCode, report.effects.log === "queued" ? 2 : 0)
   if (report.effects.log === "queued") assert.equal(report.code, "commit_queued")
   assert.match(readFileSync(path.join(root, "work/one/task.md"), "utf8"), /status: processing/u)
-  assert.equal(await commitOfLog(root, "work/one/log.md", report.git.headAfter), "work/one/log.md")
-  assert.ok(Number(git(root, "rev-list", "--count", `${headBefore}..HEAD`)) === 2)
+  // Whichever commit lands first, the log ends committed once, under its own path.
+  const stop = Date.now() + 30000
+  while (Date.now() < stop && spawnSync("git", ["cat-file", "-e", "HEAD:work/one/log.md"], { cwd: root }).status !== 0) await new Promise((resolve) => setTimeout(resolve, 200))
+  assert.equal(git(root, "status", "--porcelain", "--", "work/one/log.md"), "")
+  assert.equal(Number(git(root, "rev-list", "--count", `${headBefore}..HEAD`)), 2)
+  assert.equal(git(root, "log", "--format=%H", "--", "work/one/log.md").split("\n").length, 1)
+})
+
+// The fake server's tool call applies `during` to the fixture before answering, so each timing is exact rather than raced.
+const MIXED = { status: "updated", commit: { status: "committed" }, log: { path: "work/one/log.md", commit: "queued" } }
+function commitCard(root) {
+  writeFileSync(path.join(root, "work/one/task.md"), "---\nname: One\nstatus: processing\n---\n\n# One\n")
+  git(root, "add", "work/one/task.md")
+  git(root, "commit", "-m", "card")
+}
+async function mixed(during, answer = MIXED, extra = []) {
+  const root = fixture()
+  const { runRecovery } = await import("../../../../../plugins/desk/mcp/scripts/local-recovery.js")
+  const result = await runRecovery({
+    argv: [...args(root), ...extra], env: env(), cwd: root, input: input(logOnly),
+    launch: fakeServer(root, { onDispatch: () => during(root), updateDelayMs: 0, result: answer }),
+  })
+  return { root, ...result }
+}
+const writeLog = (root) => writeFileSync(path.join(root, "work/one/log.md"), "# Log\n\n## entry\n")
+
+test("mixed update, log still pending after the card commit: card observed, log queued, exit 2", async () => {
+  const { report, exitCode } = await mixed((root) => { commitCard(root); writeLog(root) })
+  assert.equal(report.effects.commit, "observed")
+  assert.equal(report.effects.log, "queued")
+  assert.equal(report.code, "commit_queued")
+  assert.equal(exitCode, 2)
+  assert.match(report.readback, /Do not resend/u)
+})
+
+test("mixed update, log committed before readback: both observed, exit 0", async () => {
+  const { report, exitCode } = await mixed((root) => {
+    commitCard(root)
+    writeLog(root)
+    git(root, "add", "work/one/log.md")
+    git(root, "commit", "-m", "log")
+  })
+  assert.equal(report.effects.commit, "observed")
+  assert.equal(report.effects.log, "observed")
+  assert.equal(exitCode, 0, JSON.stringify(report))
+})
+
+for (const [name, during, answer] of [
+  ["a missing log path", (root) => commitCard(root), MIXED],
+  ["an ignored untracked log (a blank status)", (root) => {
+    writeFileSync(path.join(root, ".gitignore"), "log.md\n")
+    git(root, "add", ".gitignore")
+    commitCard(root)
+    writeLog(root)
+  }, MIXED],
+  ["an invalid log path", (root) => commitCard(root), { ...MIXED, log: { path: "../outside.md", commit: "queued" } }],
+]) {
+  test(`mixed update with ${name} keeps the card observation but never claims the log observed`, async () => {
+    const { report, exitCode } = await mixed(during, answer)
+    assert.equal(report.effects.commit, "observed", "the card observation is preserved")
+    assert.equal(report.effects.log, "unknown")
+    assert.equal(report.status, "partial")
+    assert.equal(report.code, "log_evidence_unknown")
+    assert.equal(exitCode, 2)
+    assert.match(report.readback, /Do not resend/u)
+  })
+}
+
+test("log-only update with a missing log path is unknown evidence, not observed", async () => {
+  const { report, exitCode } = await mixed(() => {}, { status: "logged", path: "work/one/log.md", commit: "queued" })
+  assert.equal(report.effects.log, "unknown")
+  assert.equal(exitCode, 2)
+  assert.match(report.readback, /Do not resend/u)
 })
 
 for (const [name, answer] of [
