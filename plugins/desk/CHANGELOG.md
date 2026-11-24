@@ -1,5 +1,25 @@
 # desk plugin — changelog
 
+## 3.2.529 — 2026-11-24
+
+Desk's MCP server now vendors Ouro UI v1.3.524, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.528 — 2026-11-24
+
+The tools list a client actually receives now marks `task_focus` as read-only. The earlier fix declared it in the action declarations, but the front door served its own annotation list, so a real session still saw `readOnlyHint: false`.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.527 — 2026-11-24
+
+The issue-drain poller no longer wakes a drain when a bot rewrites the body of its own issue, such as a delivery-health table refreshed every few minutes. A bot issue that is new, a human edit, a comment, a label or a state change still wakes it.
+
+Desk's MCP server now vendors Ouro UI v1.3.523, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.526 — 2026-11-24
 
 ### Crew join follows the workspace's publication mode
