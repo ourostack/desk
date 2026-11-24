@@ -24,7 +24,7 @@ async function jsonFiles(dir, out) {
 }
 
 /** `text` with every whole-path citation of `sourcePrefix` (or a file under it) changed to `destinationPrefix`, and how many. */
-export function rewriteCitations(text, sourcePrefix, destinationPrefix) {
+function rewriteCitations(text, sourcePrefix, destinationPrefix) {
   let count = 0
   const after = text.replace(new RegExp(`(^|[^A-Za-z0-9_./-])${escape(sourcePrefix)}(?=$|[^A-Za-z0-9_.-])`, "g"), (_, lead) => {
     count += 1
