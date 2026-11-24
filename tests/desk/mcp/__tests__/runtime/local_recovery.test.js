@@ -707,6 +707,43 @@ for (const [name, during, answer] of [
   })
 }
 
+// A tracked log that differs from HEAD while Git's status is told to ignore it: the readback compares content with the blob at the reported HEAD.
+for (const flag of ["--assume-unchanged", "--skip-worktree"]) {
+  test(`a tracked log changed behind ${flag} is pending, not observed`, async () => {
+    const { report, exitCode } = await mixed((root) => {
+      writeLog(root)
+      git(root, "add", "work/one/log.md")
+      commitCard(root)
+      git(root, "update-index", flag, "work/one/log.md")
+      writeFileSync(path.join(root, "work/one/log.md"), "# Log\n\n## entry\n\n## newer queued entry\n")
+      assert.equal(git(root, "status", "--porcelain", "--", "work/one/log.md"), "", "status is blind to the change")
+    })
+    assert.equal(report.effects.log, "queued", JSON.stringify(report.effects))
+    assert.equal(report.code, "commit_queued")
+    assert.equal(exitCode, 2)
+  })
+}
+
+test("a Git pathspec metacharacter in the reported log path is read literally", async () => {
+  const { report, exitCode } = await mixed((root) => {
+    writeLog(root)
+    git(root, "add", "work/one/log.md")
+    commitCard(root)
+  }, { ...MIXED, log: { path: "work/*/log.md", commit: "queued" } })
+  assert.equal(report.effects.log, "unknown")
+  assert.equal(exitCode, 2)
+})
+
+test("a tracked log whose working bytes equal the reported HEAD blob is observed", async () => {
+  const { report, exitCode } = await mixed((root) => {
+    writeLog(root)
+    git(root, "add", "work/one/log.md")
+    commitCard(root)
+  })
+  assert.equal(report.effects.log, "observed")
+  assert.equal(exitCode, 0, JSON.stringify(report))
+})
+
 test("log-only update with a missing log path is unknown evidence, not observed", async () => {
   const { report, exitCode } = await mixed(() => {}, { status: "logged", path: "work/one/log.md", commit: "queued" })
   assert.equal(report.effects.log, "unknown")

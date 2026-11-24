@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { spawn, spawnSync } from "node:child_process"
-import { realpathSync, statSync, promises as fs } from "node:fs"
+import { lstatSync, realpathSync, statSync, promises as fs } from "node:fs"
 import * as path from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import { resolveStartupStateBranch } from "../src/runtime/startup-resolve.js"
@@ -191,14 +191,24 @@ function gitHead(root, env) {
   return result.status === 0 ? result.stdout.trim() : null
 }
 
-// A queued log is already in the working tree. It counts as committed only when Git tracks the path in HEAD and the working file matches it; a blank status alone also describes a missing or ignored path.
-function logCommitState(root, env, rel) {
-  if (typeof rel !== "string" || !rel || path.isAbsolute(rel) || rel.split(/[\\/]/u).includes("..")) return "unknown"
-  const git = (args) => spawnSync("git", args, { cwd: root, env, encoding: "utf8", timeout: 5000, windowsHide: true })
-  const status = git(["status", "--porcelain", "--", rel])
-  if (status.status !== 0) return "unknown"
-  if (status.stdout.trim() !== "") return "pending"
-  return git(["cat-file", "-e", `HEAD:${rel}`]).status === 0 ? "committed" : "unknown"
+// A queued log is already in the working tree. It counts as committed only when the working file, hashed with the path's own Git filters (EOL included), is the very blob `head` holds at that path. Status flags such as assume-unchanged cannot hide a difference from that comparison, and every path is literal. A path Git neither tracks at `head` nor shows as untracked (missing, ignored) stays unknown. This observes content at `head`; it does not attribute who wrote it.
+function logCommitState(root, env, rel, head) {
+  if (typeof rel !== "string" || !rel || path.isAbsolute(rel) || rel.split(/[\\/]/u).includes("..") || !head) return "unknown"
+  const git = (args) => spawnSync("git", ["--literal-pathspecs", ...args], { cwd: root, env, encoding: "utf8", timeout: 5000, windowsHide: true })
+  let file
+  try {
+    file = path.join(root, rel)
+    if (!lstatSync(file).isFile()) return "unknown"
+  } catch { file = null }
+  const blob = git(["rev-parse", "--verify", `${head}:${rel}`])
+  if (blob.status !== 0) {
+    const status = git(["status", "--porcelain", "--", rel])
+    return status.status === 0 && status.stdout.trim() !== "" && file !== null ? "pending" : "unknown"
+  }
+  if (file === null) return "unknown"
+  const working = git(["hash-object", `--path=${rel}`, "--", file])
+  if (working.status !== 0) return "unknown"
+  return working.stdout.trim() === blob.stdout.trim() ? "committed" : "pending"
 }
 
 /** One mutation at most, through the ordinary MCP bootstrap and admission. */
@@ -322,8 +332,8 @@ export async function runRecovery({
     // Only an admitted queued log is accepted; a bare "logged" without it stays unexpected.
     const queuedPath = result.status === "logged" && result.commit === "queued" ? result.path
       : result.status === "updated" && result.log?.commit === "queued" ? result.log.path : null
-    const logState = queuedPath === null ? null : logCommitState(root, env, queuedPath)
     report.git.headAfter = gitHead(root, env)
+    const logState = queuedPath === null ? null : logCommitState(root, env, queuedPath, report.git.headAfter)
     if (response.isError || result.status === "error") throw failure("tool_error")
     if (!["logged", "updated", "created", "archived", "already_archived", "committed", "nothing_to_commit", "commit_failed", "commit_unknown"].includes(result.status) || (result.status === "logged" && queuedPath === null)) {
       throw failure("unexpected_tool_result")
