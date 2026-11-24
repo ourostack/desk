@@ -44,6 +44,9 @@ async function desk({ gitDesk = true } = {}) {
   for (const slug of ["book-flights", "book-flights-two"]) await task_create({ deskRoot: root, input: { track: "t", slug, title: slug }, ...NO_PUSH })
   await write(root, "t/book-flights/notes.md", "# Notes\n")
   await write(root, "_shared/weekly/2026-w45.json", WEEK)
+  await write(root, "_shared/_cache/stale.json", WEEK)
+  await write(root, "_shared/readme.md", "t/book-flights/task.md\n")
+  await write(root, "_shared/weekly/other.json", "{}")
   await write(root, "pages/lab/exp.json", JSON.stringify({ path: "t/book-flights/task.md" }))
   if (gitDesk) {
     git(root, "add", "-A")
@@ -61,6 +64,8 @@ test("task_archive repoints shared records that cite the card, in the archive co
   assert.deepEqual(week.goals[0].evidence, ["t/_archive/book-flights/task.md", "t/_archive/book-flights/notes.md", "t/_archive/book-flights"])
   assert.deepEqual(week.goals[1].evidence, ["t/book-flights-two/task.md", "xt/book-flights/task.md", "t/book-flights.md"])
   assert.equal(JSON.parse(await read(root, "pages/lab/exp.json")).path, "t/_archive/book-flights/task.md")
+  assert.equal(await read(root, "_shared/_cache/stale.json"), WEEK)
+  assert.equal(await read(root, "_shared/readme.md"), "t/book-flights/task.md\n")
   assert.equal(git(root, "status", "--short"), "")
   assert.ok(git(root, "show", "--name-only", "--format=", "HEAD").includes("_shared/weekly/2026-w45.json"))
 })
