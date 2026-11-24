@@ -374,7 +374,7 @@ function stderrFacts(memory, totalBytes) {
 }
 
 export function identityArtifactPath() {
-  return fileURLToPath(new URL("../../../../../windows-archive-race-observations.json", import.meta.url))
+  return fileURLToPath(new URL("../../../../../windows-archive-identity-observations.json", import.meta.url))
 }
 
 export function decodeFileIdInfo(bytes) {

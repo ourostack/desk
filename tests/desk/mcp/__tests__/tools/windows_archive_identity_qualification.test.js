@@ -297,7 +297,7 @@ test("synthetic: persistence resolver targets the checkout root from the actual 
     cwd: fileURLToPath(new URL("../../../../../plugins/desk/mcp/", import.meta.url)), encoding: "utf8", env: process.env,
   })
   assert.equal(result.status, 0, result.error?.code ?? "isolated resolver child failed")
-  assert.equal(result.stdout, path.join(fileURLToPath(new URL("../../../../../", import.meta.url)), "windows-archive-race-observations.json"))
+  assert.equal(result.stdout, path.join(fileURLToPath(new URL("../../../../../", import.meta.url)), "windows-archive-identity-observations.json"))
 })
 
 function failedBeforeReady(fields = {}, stderr = null) {

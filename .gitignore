@@ -4,6 +4,7 @@ coverage/
 
 # Owned archive qualification observations are retained by the test/CI caller.
 /windows-archive-race-observations.json
+/windows-archive-identity-observations.json
 
 # Guard tests' fake "real" (non-temp) state-home fixtures; see tests/desk/mcp/__tests__/_fake_real_root.js.
 .test-fake-real/
