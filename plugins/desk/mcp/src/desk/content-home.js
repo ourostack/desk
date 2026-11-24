@@ -142,7 +142,6 @@ function holdsNothingUnpublished(root, head, base) {
   const fork = git(root, ["merge-base", head, base])
   if (fork.status !== 0) return false
   const changed = git(root, ["diff", "--name-only", "-z", fork.stdout.trim(), head])
-  if (changed.status !== 0 || changed.stdout === "") return false
   const paths = changed.stdout.split("\0").filter(Boolean)
   return git(root, ["diff", "--quiet", head, base, "--", ...paths]).status === 0
 }
