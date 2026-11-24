@@ -342,14 +342,18 @@ async function saveDesk({ deskRoot, input, person = null, env = process.env, spa
   const everything = stagedChanges(deskRoot, [], spawnGit)
   if (everything === null) return { status: "nothing_to_commit", commit: notCommitted(deskRoot, paths, message, "git could not list the staged changes") }
   const listed = paths.map((p) => path.relative(deskRoot, path.resolve(deskRoot, p)).split(path.sep).join("/"))
-  const covered = (p) => listed.some((rel) => rel === "" || p === rel || p.startsWith(`${rel}/`))
+  const covered = (p, rel) => rel === "" || p === rel || p.startsWith(`${rel}/`)
   for (const change of everything) {
-    const missing = change.paths.filter((p) => !covered(p))
+    const missing = change.paths.filter((p) => !listed.some((rel) => covered(p, rel)))
     if (change.paths.length === 2 && missing.length === 1) {
       throw Object.assign(new Error(`desk_save: add ${missing[0]} to \`paths\`: a move is committed with both its old and its new path`), { code: "desk_save_a_move_is_committed_with_2" })
     }
   }
-  const committed = commitPaths(deskRoot, paths, message, spawnGit, undefined, { keepLocal: true })
+  // A listed path with no change and no staged change (an ignored generated file, say) is not known to Git, and `git commit -- <it>`
+  // would refuse the whole commit with a pathspec error; it is left out and named in the answer.
+  const changed = paths.filter((p, i) => unstaged.includes(p) || everything.some((change) => change.paths.some((q) => covered(q, listed[i]))))
+  const unchanged = paths.filter((p) => !changed.includes(p))
+  const committed = commitPaths(deskRoot, changed, message, spawnGit, undefined, { keepLocal: true })
   if (!committed.ok) {
     return commitNotMade(commitFailure({ root: deskRoot, paths: listed, message, committed }))
   }
@@ -360,6 +364,7 @@ async function saveDesk({ deskRoot, input, person = null, env = process.env, spa
   const answer = published
     ? { status: "committed", desk_pushed: true, desk_note: "Desk published these files to the remote's default branch, so they are already on the remote. Run no git to push them." }
     : { status: "committed", ...deskPushNote({ root: deskRoot, spawnGit, note: DESK_SAVE_NOTE }), desk_pushed: false }
+  if (unchanged.length > 0) answer.unchanged_paths = unchanged
   if (committed.checkout !== undefined) {
     answer.checkout = committed.checkout
     answer.checkout_note = committed.checkout_note
