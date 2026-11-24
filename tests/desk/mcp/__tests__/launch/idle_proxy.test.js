@@ -6,7 +6,8 @@ import { EventEmitter } from "node:events"
 import { createRequire } from "node:module"
 import { PassThrough } from "node:stream"
 import * as path from "node:path"
-import { mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, readFileSync, renameSync, writeFileSync } from "node:fs"
+import { removeTreeSync } from "../_remove_tree.js"
 import { tmpdir } from "node:os"
 import { bootstrapPath } from "./_mcp_handshake.js"
 
@@ -615,12 +616,12 @@ test("the idle proxy starts each new server from the chosen Desk, keeps a plugin
 test("a session whose own Desk folder was removed keeps working: the next server runs the newest installed copy of the same Desk", () => {
   const s = sessions({ own: { version: "3.2.390", abis: ["127"] }, a: { version: "3.2.480", abis: ["127"] }, b: { version: "3.2.495", abis: ["127"] }, other: { version: "3.2.499", plugin: { repository: "https://example.com/fork" } } })
   const own = bootstrap.readOwn(s.mcp("own"), process.platform, process.arch)
-  rmSync(path.dirname(s.mcp("own")), { recursive: true, force: true })
+  removeTreeSync(path.dirname(s.mcp("own")))
   const ask = (extra) => bootstrap.newestDesk({ mcpRoot: s.mcp("own"), current: NODE, platform: process.platform, arch: process.arch, scanRoot: s.scanRoot, ...extra })
   assert.equal(ask({}), null, "with no record of what it was, it cannot tell which Desk to follow")
   assert.equal(ask({ own }).version, "3.2.495")
-  rmSync(path.dirname(s.mcp("b")), { recursive: true, force: true })
-  rmSync(path.dirname(s.mcp("a")), { recursive: true, force: true })
+  removeTreeSync(path.dirname(s.mcp("b")))
+  removeTreeSync(path.dirname(s.mcp("a")))
   assert.equal(ask({ own }), null, "nothing installed is left to follow")
 })
 
@@ -641,7 +642,7 @@ test("a copy in a <plugin>/<version> folder, as a host's plugin cache keeps them
   const ask = (extra) => bootstrap.newestDesk({ mcpRoot: old, current: NODE, platform: process.platform, arch: process.arch, ...extra })
   assert.equal(ask({}).version, "3.2.495", "a live copy follows the newest sibling too")
   const own = bootstrap.readOwn(old, process.platform, process.arch)
-  rmSync(path.dirname(old), { recursive: true, force: true })
+  removeTreeSync(path.dirname(old))
   assert.equal(ask({ own }).pluginRoot, path.join(cache, "3.2.495"))
   assert.equal(bootstrap.newestDesk({ mcpRoot: path.join(cache, "plain", "mcp"), current: NODE, platform: process.platform, arch: process.arch, own }), null, "a folder that is neither layout is left alone")
 })
