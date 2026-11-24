@@ -77,7 +77,7 @@
     "evals/worlds/always-on-collaboration/requirement-change-names-stale-proof/desk/desks/alex/posts-site/track.md",
     "evals/worlds/always-on-collaboration/requirement-change-names-stale-proof/person"
   ],
-  "reviewedSourceFingerprint": "5bd070b8289976b8f14043d244cf294f7c902f590345d0c48f98c2570dd06a15",
+  "reviewedSourceFingerprint": "22fba1a0f2cba203b92028ee5192b07ab4411431dd52b80151439eb8bc8911d1",
   "requirements": [
     {"id": "git-backed-memory", "description": "Disable native harness memory while Desk is active. Keep durable instructions and preferences in the Git-backed desk, never in store_memory, vote_memory or another host memory store."},
     {"id": "scratch-reclamation", "description": "Budget scratch storage and verify actual reclaimed space; process exit and pending acceptance do not complete disposable-profile cleanup."},
