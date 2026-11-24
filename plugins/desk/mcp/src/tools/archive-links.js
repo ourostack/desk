@@ -4,6 +4,7 @@ import { promises as fs } from "node:fs"
 import * as path from "node:path"
 import { rewriteForMove } from "../util/archive-links.js"
 import { isGitRepository } from "../util/git-stage.js"
+import { planCitationRewrites } from "../util/citations.js"
 
 const SKIP_DIRS = new Set(["node_modules", ".git", ".state", "_cache"])
 const posixPath = (file) => file.split(path.sep).join("/")
@@ -115,6 +116,8 @@ export async function planArchiveLinks({ effectiveRoot, srcDir, archiveDir, trac
         state.not_rewritten.push({ file: rel, reason: error.message })
       }
     }
+    for (const cited of await planCitationRewrites({ root: effectiveRoot, pairs: [[sourcePrefix, destinationPrefix]] }))
+      plan.inbound.push({ ...cited, unresolved: [] })
     const nextTrackPlan = trackText === null ? trackPlan
       : await composeTrackLinks({ plan, trackPlan, trackFile, trackRel, trackText, effectiveRoot, spawnGit })
     return { plan, state, trackPlan: nextTrackPlan }
