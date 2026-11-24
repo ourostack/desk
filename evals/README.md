@@ -34,6 +34,8 @@ The receipt's `run` records the harness command and version, the plugins loaded,
 
 The judge evaluates each requirement as written, including prohibitions such as "Do not ask for a new go"; it must not negate them again. It writes the evidence before the pass/fail field and makes that field agree with its evidence. Verdicts are still model judgments: retain the outputs with `--keep` when investigating variation rather than rerunning until a passing receipt replaces the failure.
 
+The runner takes the verdict object from anywhere in the judge's output, inside a code fence or with notes and stray braces around it. Two different verdicts in one output count as none. A judge whose process fails or whose output holds no usable verdict is asked once more. If the second attempt fails too, the run reports a harness error, apart from any behavior failure, because no check was judged: it writes no receipt, and the fix is to rerun the suite, not to change the skill.
+
 Tool requests retain their complete arguments in the transcript and judge evidence, including paths at the end of long shell commands. A passing rerun does not repair missing evidence; fix the evidence loss and cover it with a deterministic regression before refreshing the evaluation.
 
 Add scenarios from observed regressions, not to inflate counts.

@@ -927,6 +927,24 @@ try {
     for (const bad of ['"passed":"yes","evidence":"y"', '"passed":true,"evidence":7', '"passed":true,"evidence":"  "']) {
       assert.throws(() => parseVerdict(`{"checks":[{"id":"a",${bad}},{"id":"b","passed":true,"evidence":"y"}]}`, verdictCase), /boolean passed and non-empty evidence/u, bad);
     }
+    // The verdict object is found wherever it sits: in a fence, between notes, beside stray braces, with braces in its own strings.
+    const verdictJson = '{"checks":[{"id":"a","passed":true,"evidence":"quoted {braces} and a \\"}\\" here"},{"id":"b","passed":false,"evidence":"x"}]}';
+    const expectedVerdict = [{ id: "a", passed: true, evidence: 'quoted {braces} and a "}" here' }, { id: "b", passed: false, evidence: "x" }];
+    for (const text of [
+      "```json\n" + verdictJson + "\n```",
+      "```\n" + verdictJson + "\n```\nNote: both checks were judged from the replies {as shown}.",
+      verdictJson + "\n\n{\"note\":\"the second reply decided b\"}",
+      "Reading {the evidence} first.\n" + verdictJson,
+      "An unclosed { before the verdict.\n" + verdictJson,
+      verdictJson + "\n" + verdictJson,
+    ]) {
+      assert.deepEqual(parseVerdict(text, verdictCase), expectedVerdict, text);
+    }
+    assert.throws(() => parseVerdict(verdictJson + "\n" + verdictJson.replace('"passed":false', '"passed":true'), verdictCase), /conflicting verdicts/u, "two different verdicts are not resolved by picking one");
+    assert.throws(() => parseVerdict('{"note":"no checks here"}', verdictCase), /did not return a JSON object/u);
+    for (const text of ["no json", "{broken}", '{"checks":"x"}', verdictJson + "\n" + verdictJson.replace('"passed":false', '"passed":true')]) {
+      assert.throws(() => parseVerdict(text, verdictCase), (error) => error.harnessError === true, `an unusable verdict is a harness error: ${text}`);
+    }
 
     const fakeHarness = [
       '"use strict";',
@@ -966,6 +984,7 @@ try {
       '  const ids = [...prompt.matchAll(/- id: (\\S+)/gu)].map((match) => match[1]);',
       '  const failing = (process.env.FAKE_FAIL || "").split(",");',
       '  console.log("```json\\n" + JSON.stringify({ checks: ids.map((id) => ({ id, passed: !failing.includes(id), evidence: "Fake evidence for " + id })) }) + "\\n```");',
+      '  if (mode === "trailing") console.log("\\nNote: the replies {as quoted} decided every check.");',
       "}",
     ].join("\n");
     const runFixture = (mutate = () => {}) => {
@@ -1117,6 +1136,26 @@ try {
       assert.equal(noCopilot.status, 1);
       assert.match(noCopilot.stderr, /could not run `copilot --version`/u);
       assert.equal(fs.existsSync(receiptFile), false, "no failed run writes a receipt");
+
+      // A verdict the judge never makes usable is the harness failing, not the skill: say so, and don't send the reader to fix behavior.
+      for (const env of [{ FAKE_MODE: "garbage" }, { FAKE_MODE: "exit-judge" }]) {
+        const result = run(["fixture", ...fake], env);
+        assert.match(result.stderr, /harness error in fixture \(not a behavior failure; no check was judged\)/u, JSON.stringify(env));
+        assert.match(result.stderr, /rerun the suite/u, JSON.stringify(env));
+        assert.doesNotMatch(result.stderr, /Fix the behavior or the skill/u, JSON.stringify(env));
+      }
+      const garbageLog = path.join(dir, "garbage.jsonl");
+      run(["fixture", ...fake], { FAKE_MODE: "garbage", FAKE_LOG: garbageLog });
+      assert.equal(fs.readFileSync(garbageLog, "utf8").trim().split("\n").map((line) => JSON.parse(line).role).join(), "subject,judge,judge", "an unparseable verdict is judged once more before it is reported");
+      const behavior = run(["fixture", ...fake], { FAKE_FAIL: "check-must-not" });
+      assert.match(behavior.stderr, /suite\(s\) failed: fixture\. Fix the behavior or the skill/u, "a failed check stays a behavior failure");
+      assert.doesNotMatch(behavior.stderr, /harness error/u);
+
+      const trailingLog = path.join(dir, "trailing.jsonl");
+      const trailing = run(["fixture", ...fake], { FAKE_MODE: "trailing", FAKE_LOG: trailingLog });
+      assert.equal(trailing.status, 0, trailing.stderr);
+      assert.equal(fs.readFileSync(trailingLog, "utf8").trim().split("\n").map((line) => JSON.parse(line).role).join(), "subject,judge", "a verdict with a note after it parses the first time");
+      fs.rmSync(receiptFile, { force: true });
 
       const flakyLog = path.join(dir, "flaky.jsonl");
       const flaky = run(["fixture", ...fake], { FAKE_MODE: "flaky", FAKE_LOG: flakyLog });
