@@ -140,7 +140,7 @@ function supersession(git, head, main, link) {
 const short = (sha) => sha.slice(0, 12)
 
 // The repository a gh command names: a pull request URL, or `--repo` as `<host>/<owner>/<name>`.
-function repositoryOf(args) {
+export function repositoryOf(args) {
   const flag = args.indexOf("--repo")
   const text = flag >= 0 ? args[flag + 1] : args.find((arg) => /^https:\/\/[^/]+\/[^/]+\/[^/]+\/pull\/\d+/u.test(arg))?.replace(/^https:\/\//u, "")
   const [host, owner, repo] = typeof text === "string" ? text.split("/") : []

@@ -12,7 +12,7 @@ import { mkTempRoot } from "../_temp_roots.js"
 import { runner } from "../../../../../plugins/desk/mcp/src/runtime/deliver.js"
 import { publishPullRequest } from "../../../../../plugins/desk/mcp/src/runtime/pr-publication.js"
 import { readSyncStatus, runPushWorker } from "../../../../../plugins/desk/mcp/src/runtime/sync-worker.js"
-import { abandonedComment, allStuckSaves, savesFor, settleSaves, stuckLine, stuckSaves, withStuckSaves } from "../../../../../plugins/desk/mcp/src/runtime/unmerged-saves.js"
+import { abandonedComment, allStuckSaves, repositoryOf, savesFor, settleSaves, stuckLine, stuckSaves, withStuckSaves } from "../../../../../plugins/desk/mcp/src/runtime/unmerged-saves.js"
 import { resolveDeskStateDir } from "../../../../../plugins/desk/mcp/src/runtime/last-start.js"
 import { formatBootText } from "../../../../../plugins/desk/mcp/src/runtime/boot-text.js"
 import { runDrainsCli } from "../../../../../plugins/desk/mcp/src/runtime/drains-cli.js"
@@ -591,4 +591,11 @@ test("a duplicate save is closed as superseded even when the remote is not a Git
   savesFor({ root: desk, env, now: Date.now }).record({ url, head: gh.prs.get(1).head, branch: gh.prs.get(1).branch, base: "main" })
   const local = (command, args, options) => (command === "git" && args.includes("get-url") ? { status: 0, stdout: `${origin}\n`, stderr: "" } : gh(command, args, options))
   assert.deepEqual(settleSaves({ root: desk, env, spawnGit: local, clock: clockOf() }).closed, [url])
+})
+
+test("the repository a gh command names comes from --repo or a pull request URL", () => {
+  assert.deepEqual(repositoryOf(["pr", "view", "--repo", "github.com/gim-home/CIT"]), { host: "github.com", owner: "gim-home", repo: "CIT" })
+  assert.deepEqual(repositoryOf(["pr", "close", "https://github.com/gim-home/CIT/pull/7"]), { host: "github.com", owner: "gim-home", repo: "CIT" })
+  assert.equal(repositoryOf(["pr", "list"]), null)
+  assert.equal(repositoryOf(["pr", "view", "--repo"]), null)
 })

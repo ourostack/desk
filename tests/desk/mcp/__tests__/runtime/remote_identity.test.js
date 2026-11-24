@@ -250,3 +250,13 @@ test("gh about a work repository runs with the token of the account that can pus
   const none = { PATH: "/usr/bin" }
   assert.equal(ghEnvFor({ ...repo, env: none, spawn: fakeSpawn({ logins: ["arimendelow"] }).spawn, cache: new Map() }), none, "no account can reach it: gh runs as before")
 })
+
+test("gh's environment skips bad names, uses an enterprise host's own token variables and falls back to read access", () => {
+  const base = { host: "github.com", owner: "gim-home", repo: "CIT", env: { PATH: "/usr/bin" }, cache: new Map() }
+  const { spawn } = fakeSpawn({ logins: ["a"], access: { a: { pull: true, push: false } } })
+  assert.equal(ghEnvFor({ ...base, owner: "bad owner", spawn }), base.env)
+  assert.equal(ghEnvFor({ ...base, spawn }).GH_TOKEN, "secret-a", "read access is enough when nobody can push")
+  const ghe = ghEnvFor({ ...base, host: "example.ghe.com", spawn: fakeSpawn({ logins: ["a"], access: { a: { pull: true, push: true } } }).spawn })
+  assert.deepEqual([ghe.GH_ENTERPRISE_TOKEN, ghe.GH_HOST], ["secret-a", "example.ghe.com"])
+  assert.equal(ghEnvFor({ ...base, spawn: fakeSpawn({ logins: ["a"], tokens: [], access: { a: { pull: true, push: true } } }).spawn }), base.env, "an account with no token is skipped")
+})
