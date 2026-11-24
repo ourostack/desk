@@ -1,5 +1,13 @@
 # desk plugin — changelog
 
+## 3.2.499 — 2026-11-24
+
+### A squash-merged checkout takes content-home writes again
+
+A checkout whose commits were published by a squash or rebase merge used to refuse every content-home write with `content_home_unpublished_base`. When the base already holds those files' bytes, Desk now moves the checkout onto the base and keeps local edits.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.498 — 2026-11-24
 
 Archive-handoff diagnostics now carry each actor's existing bounded production attempts through final/error IPC and parent artifact persistence, retaining early capture failures that have no move observation. Parent-owned attempts and existing move/candidate receipts remain separate, and missing evidence stays explicit. This diagnostic repair changes no archive outcomes or time limits and does not resolve the Windows readiness cause. See [CI evidence guidance](../../../docs/ci.md).
