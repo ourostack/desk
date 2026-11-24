@@ -273,11 +273,14 @@ jobs:
         env:
           DESK_COVERAGE_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before }}
           SHARD: ${{ matrix.shard }}/${{ strategy.job-total }}
+          DESK_STATUS_DIAGNOSTICS: "1"
+          DESK_STATUS_DIAGNOSTICS_OUTPUT: ${{ github.workspace }}/status-request-diagnostics.jsonl
         # A shard that has not finished after 7 minutes (the step takes about 2 to 3) is stuck, not slow. The
         # shard runs in its own process group so the watchdog can stop exactly it and everything it started: it prints
         # what is still running (the deepest node process names the test file that is not finishing), then signals
         # that group and no other process. A stopped shard exits non-zero, so the run fails there with output.
         run: |
+          mkdir -p "$RUNNER_TEMP/desk-coverage-shard"
           setsid npm run test:coverage -- --shard "$SHARD" --output "$RUNNER_TEMP/desk-coverage-shard" &
           shard=$!
           (
@@ -307,6 +310,17 @@ jobs:
           # A shard the watchdog stopped fails even if it exited 0 on the signal.
           if [ -e "$RUNNER_TEMP/shard-stuck" ]; then exit 1; fi
           exit "$status"
+
+      # The guarded fixture writes only inside its checkout. Copy after the runner has exited, even on failure;
+      # putting the staging file in the shard directory would violate its empty-output-at-start contract.
+      - name: Retain status request diagnostics
+        if: ${{ !cancelled() }}
+        run: |
+          if [ -f "$GITHUB_WORKSPACE/status-request-diagnostics.jsonl" ]; then
+            cp "$GITHUB_WORKSPACE/status-request-diagnostics.jsonl" "$RUNNER_TEMP/desk-coverage-shard/status-request-diagnostics.jsonl"
+          else
+            echo "No status request receipt: this shard may not contain the fixture, or it exited before publication."
+          fi
 
       # A failed shard still writes its manifest with its status, so it is uploaded too and the merge names it.
       - name: Retain the shard's raw coverage

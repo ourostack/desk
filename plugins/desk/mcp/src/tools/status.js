@@ -97,15 +97,18 @@ export function desk_status(request) {
 }
 
 async function statusCall({ deskRoot, person, statusContext = {}, signal, env = process.env }) {
+  // Internal fixture seam: no collector, timers or output on the ordinary status path.
+  const stage = typeof statusContext.statusStages === "function" ? statusContext.statusStages : null
   const writeScope = writeScopeOf(deskRoot, person, statusContext.member ?? null)
   const reader = createStatusInspection(deskRoot, { signal })
   try {
-    const root = await reader.inspect("root", statusContext.root)
+    const root = await (stage ? stage("root_inspection", () => reader.inspect("root", statusContext.root)) : reader.inspect("root", statusContext.root))
     // The sync section comes last; its worker thread starts while the inspections run.
     if (root.valid) warmStatusGitReads()
     const runtime = runtimeStatus(statusContext.runtime ?? {}, env)
     const activation = activationStatus(statusContext.activation)
-    const search = await searchStatus(statusContext.search)
+    const search = await (stage ? stage("search_status", () => searchStatus(statusContext.search)) : searchStatus(statusContext.search))
+    const factoryOptions = { env, deskRoot: root.valid ? root.path : null, signal }
 
     return {
       status: root.valid ? "ok" : "error",
@@ -115,13 +118,13 @@ async function statusCall({ deskRoot, person, statusContext = {}, signal, env = 
       search,
       write_scope: writeScope,
       // The redacted active-task listing session start and status render (./desk/active-tasks.js).
-      active_tasks: root.valid ? await activeTasks(root.path) : null,
-      factory: await factoryStatusAsync({ env, deskRoot: root.valid ? root.path : null, signal }),
-      sync: root.valid ? await syncStatus({ deskRoot: root.path, env, signal }) : null,
+      active_tasks: root.valid ? await (stage ? stage("active_tasks", () => activeTasks(root.path)) : activeTasks(root.path)) : null,
+      factory: await (stage ? stage("factory_status", () => factoryStatusAsync(factoryOptions)) : factoryStatusAsync(factoryOptions)),
+      sync: root.valid ? await (stage ? stage("sync_status", () => syncStatus({ deskRoot: root.path, env, signal })) : syncStatus({ deskRoot: root.path, env, signal })) : null,
       summary: summaryFor({ root, activation, search }),
     }
   } finally {
-    await reader.close()
+    await (stage ? stage("reader_close", () => reader.close()) : reader.close())
   }
 }
 
