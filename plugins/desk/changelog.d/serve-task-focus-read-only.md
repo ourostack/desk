@@ -1,1 +1,1 @@
-Desk now tells your client that `task_focus` is read-only from the first tool list, before and after the session is ready. Tools declared in `actions/` serve their declared hints everywhere, so `desk_status` now reports that it is not read-only, matching its declaration.
+Desk now takes every declared tool's read-only and destructive hints from its declaration, in the first tool list and after the session is ready, instead of a second hand-kept list. `task_focus` stays read-only; `desk_status` now reports that it is not read-only, matching its declaration.
