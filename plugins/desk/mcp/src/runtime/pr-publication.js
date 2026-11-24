@@ -6,7 +6,7 @@ const OBJECT_ID = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/u
 
 const POLICY = ".desk/publication.json"
 const FIELDS = "number,url,state,isDraft,headRefOid,baseRefName,baseRefOid,mergeCommit,mergeable"
-// The label a merge-when-green relay (runtime/relays.js) polls for; a policy may name another with `merge_label`.
+// The default label a merge-when-green relay (runtime/relays.js) polls for.
 const MERGE_LABEL = "merge-when-green"
 const WAIT_MS = 300_000
 const CLOCK = {
@@ -184,7 +184,18 @@ export function publishPullRequest({ git, spawnGit, root, upstream, head, onto, 
         // A relay label can trigger a merge too. Arm it only after policy qualification; gh --auto can merge immediately.
         const attempt = (args) => { try { gh(args, false); return true } catch { return false } }
         attempt(["label", "create", MERGE_LABEL, "--repo", repo.full, "--force", "--description", "Merge when the required checks are green"])
-        receipt.labelled = attempt(["pr", "edit", String(pr.number), "--repo", repo.full, "--add-label", MERGE_LABEL])
+        try {
+          // gh pr edit uses GraphQL, which an otherwise working repository token may not be allowed to use.
+          const labels = gh(["api", "--hostname", repo.host, "--method", "POST", `repos/${repo.name}/issues/${pr.number}/labels`,
+            "-f", `labels[]=${MERGE_LABEL}`])
+          if (!Array.isArray(labels) || !labels.some((label) => label?.name === MERGE_LABEL)) {
+            throw Object.assign(new Error("Check the PR's labels, then retry publication: the merge relay label was not confirmed by GitHub"), { code: "pr_publication_relay_label_unconfirmed" })
+          }
+          receipt.labelled = true
+        } catch (error) {
+          receipt.labelled = false
+          receipt.label_error = error.message
+        }
         try {
           const merged = gh(["api", "--hostname", repo.host, "--method", "PUT", `repos/${repo.name}/pulls/${pr.number}/merge`,
             "-f", `sha=${head}`, "-f", "merge_method=merge"])
@@ -193,7 +204,10 @@ export function publishPullRequest({ git, spawnGit, root, upstream, head, onto, 
         } catch (error) {
           pr = view()
           verify(pr)
-          if (pr.state !== "MERGED") throw error
+          if (pr.state !== "MERGED") {
+            if (!receipt.labelled) error.message += `. The merge relay label was not confirmed: ${receipt.label_error}`
+            throw error
+          }
         }
         break
       }

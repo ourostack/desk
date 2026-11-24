@@ -38,6 +38,7 @@ function fixture(options = {}) {
     assert.equal(command, "gh")
     calls.push(["gh", ...args])
     const operation = args[0] === "api" ? args.includes("PUT") ? "merge" : args.some((arg) => arg.includes("/status?")) ? "statuses"
+      : args.some((arg) => /\/issues\/\d+\/labels$/u.test(arg)) ? "labels"
       : args.some((arg) => arg.includes("/rules/branches/")) ? "rules" : args.some((arg) => /\/branches\/[^/]+$/u.test(arg)) ? "branch" : "checks" : args[1]
     if (options.fail === operation) return { status: options.timeout ? null : 1, stderr: "made-up-private-credential" }
     if (options.invalidJson === operation) return { status: 0, stdout: "not JSON" }
@@ -76,11 +77,12 @@ function fixture(options = {}) {
       return ok([{ statuses }])
     }
     if (options.earlyMerge === "auto" && operation === "merge" && args.includes("--auto") ||
-        options.earlyMerge === "label" && operation === "edit" && args.includes("--add-label")) {
+        options.earlyMerge === "label" && operation === "labels") {
       pr.state = "MERGED"
       pr.mergeCommit = { oid: merged }
-      return ok("")
+      return ok([{ name: "merge-when-green" }])
     }
+    if (operation === "labels") return ok(options.labels ?? [{ name: "merge-when-green" }])
     if (operation === "merge") return ok(options.mergeResult ?? { merged: true, sha: merged })
     assert.fail(`unexpected gh call: ${args.join(" ")}`)
   }
@@ -334,7 +336,7 @@ test("publication never arms an external merge before its policy checks pass", (
         const f = fixture({ earlyMerge, rules, pr: { statusCheckRollup: [...checks, run("server-check", "SUCCESS")] } })
         assert.throws(() => publishPullRequest(f.request), /still missing or pending|PR check .* failed/u)
         assert.equal(f.pr.state, "OPEN")
-        assert.ok(!f.calls.some((call) => call.includes("--auto") || call.includes("--add-label") || call.includes("PUT")))
+        assert.ok(!f.calls.some((call) => call.includes("--auto") || call.includes("--add-label") || call.includes("labels[]=merge-when-green") || call.includes("PUT")))
       }
     }
   }
@@ -364,6 +366,38 @@ test("a qualified relay merge is verified when the concurrent exact-head merge i
     assert.equal(cleared.length, 1)
     assert.ok(f.calls.some((call) => call[0] === "git" && call[1] === "merge-base"))
   }
+})
+
+test("a qualified save arms the relay through REST even when GraphQL PR edits are refused", () => {
+  for (const options of [{ fail: "edit", create: true }, { fail: "edit" }, { fail: "create" }]) {
+    const f = fixture(options)
+    const result = publishPullRequest(f.request)
+    assert.equal(result.receipt.labelled, true)
+    const labels = f.calls.filter((call) => call.includes("repos/example/workspace/issues/42/labels"))
+    assert.equal(labels.length, 1)
+    assert.ok(labels[0].includes("POST") && labels[0].includes("--hostname") && labels[0].includes("github.example"))
+    assert.ok(labels[0].includes("labels[]=merge-when-green"))
+    assert.ok(!f.calls.some((call) => call[1] === "pr" && call[2] === "edit"))
+  }
+})
+
+test("a missing relay label and refused exact-head merge report both failed delivery paths", () => {
+  const f = fixture({ labels: [], fail: "merge" })
+  assert.throws(() => publishPullRequest(f.request), (error) => {
+    assert.equal(error.publication.labelled, false)
+    assert.match(error.message, /merge relay label.*not confirmed/u)
+    assert.match(error.message, /CLI api --hostname failed/u)
+    return true
+  })
+  assert.equal(f.pr.state, "OPEN")
+})
+
+test("a refused label request does not hide a successful exact-head merge", () => {
+  const f = fixture({ fail: "labels" })
+  const result = publishPullRequest(f.request)
+  assert.equal(result.receipt.merge, merged)
+  assert.equal(result.receipt.labelled, false)
+  assert.match(result.receipt.label_error, /CLI api --hostname failed/u)
 })
 
 test("a check the base branch's rules or protection require blocks the merge until it is reported", () => {

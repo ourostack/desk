@@ -83,7 +83,7 @@ const conflictFiles = (save) => save.conflict?.files ?? []
 /** One plain sentence per stuck save, naming its PR link, and the files that conflict when Desk could not merge them. */
 export const stuckLine = (save) => conflictFiles(save).length > 0
   ? `Desk save not on main after ${save.minutes} min: ${save.url} conflicts with main in ${conflictFiles(save).join(", ")}, which Desk cannot merge by itself; open the pull request, resolve the conflict and merge it`
-  : `Desk save not on main after ${save.minutes} min: ${save.url} (the pull request is still open; Desk rebases it and the merge-when-green relay merges it once its checks are green)`
+  : `Desk save not on main after ${save.minutes} min: ${save.url} (the pull request is still open; Desk retries qualification and merges it or hands it to the merge-when-green relay only after its checks pass)`
 
 /** `reply` with the stuck saves named, when there are any. A reply that is not an object, or a call with no desk, is returned as it is. */
 export function withStuckSaves(reply, { root, env, now }) {

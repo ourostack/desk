@@ -87,6 +87,11 @@ function fakeGh(origin, options = {}) {
       return ok(prs.get(number).url)
     }
     if (args[0] === "pr" && args[1] === "edit") { byRef(args[2]).labels.push(args[args.indexOf("--add-label") + 1]); return ok("") }
+    if (args[0] === "api" && args.some((arg) => /\/issues\/\d+\/labels$/u.test(arg))) {
+      const pr = byRef(args.find((arg) => /\/issues\/\d+\/labels$/u.test(arg)).match(/issues\/(\d+)/u)[1])
+      pr.labels.push(args[args.indexOf("-f") + 1].slice("labels[]=".length))
+      return ok(pr.labels.map((name) => ({ name })))
+    }
     if (args[0] === "pr" && args[1] === "merge") return options.autoMergeRefused ? { status: 1, stderr: "Auto merge is not allowed for this repository" } : ok("")
     if (args[0] === "pr" && args[1] === "view") return ok(view(byRef(args[2])))
     if (args[0] === "pr" && args[1] === "close") {
