@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.524 — 2026-11-24
+
+Desk's local scripts now name their failures with stable codes. `check-visual-proof.cjs` prints `no-visual-proof`, `visual-change-contradicts-reason`, `usage`, `bad-event` or `unreadable-input` before its message. `audit.py` prints `tenant-mismatch` or `token-unavailable` and exits 3 when it could not send any request (it used to exit 0 with an empty result), and prints `http-error` and exits 1 when Azure DevOps refuses a request. The drains launcher's resolve line starts with `fetch-failed` or `release-unresolved`. `drains runtimes status` reports `process-list-failed` when `ps` cannot run, `migrations roots --engine` reports `unknown-engine` for an engine other than `copilot` or `claude`, and the end hook's unverified line carries its code. Each has a card in the Ouro AX census.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.523 — 2026-11-24
 
 The first-step alignment for new work now ends on its go request. `work-orchestration` says the reply ends with "Say go and I'll start on <outcome>." after any scope or summary, because the engineering kernel evaluation `v2-new-work-alignment` failed intermittently when the reply ended on the delivery scope instead of asking for go.
