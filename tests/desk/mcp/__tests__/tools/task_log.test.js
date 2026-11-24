@@ -246,3 +246,14 @@ test("desk_save flags a scratch path in what it saves, and still saves it", asyn
   assert.equal(answer.status, "committed")
   assert.match(answer.scratch_paths, /^Copy the file into the task's folder with desk_save.*These files names `\/tmp\/ghw\/run\.log`/u)
 })
+
+test("a delegation log names the child's session, and a bad or lone child session is refused", async (t) => {
+  const root = await fixture(t)
+  const answer = await call(root, { log: "Delegated S2 to S4.", child_session: "7e07f4e0-1111-2222-3333-444455556666" })
+  assert.equal(answer.status, "logged")
+  const text = await fs.readFile(path.join(root, "track/work/log.md"), "utf8")
+  assert.match(text, /Child session: 7e07f4e0-1111-2222-3333-444455556666\n\nDelegated S2 to S4\./u)
+  await assert.rejects(call(root, { child_session: "7e07f4e0-1111-2222-3333-444455556666" }), { code: "task_update_child_session_needs_log" })
+  await assert.rejects(call(root, { log: "x", child_session: "no spaces allowed" }), { code: "task_update_child_session_is_not_a_session_id" })
+  await assert.rejects(call(root, { log: "x", child_session: 7 }), { code: "task_update_child_session_is_not_a_session_id" })
+})

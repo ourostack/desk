@@ -347,7 +347,7 @@ const OPTIONAL_RUNTIME_FIELDS = [
 // __tests__/tool_schema_parity.test.js checks these against the tool's
 // declared schema in tool-schemas.js.
 export const TASK_CREATE_FIELDS = ["track", "slug", "title", "status", "body", "focus", "steps", "intake_proposal", "display_label", "desk", ...OPTIONAL_RUNTIME_FIELDS]
-export const TASK_UPDATE_FIELDS = ["track", "slug", "status", "frontmatter", "body_append", "note", "next_step", "evidence", "repos_removed_reason", "return_reason", "step", "resource", "display_label", "replace_section", "content_home", "log", "resources", "desk"]
+export const TASK_UPDATE_FIELDS = ["track", "slug", "status", "frontmatter", "body_append", "note", "next_step", "evidence", "repos_removed_reason", "return_reason", "step", "resource", "display_label", "replace_section", "content_home", "log", "child_session", "resources", "desk"]
 export const TASK_ARCHIVE_FIELDS = ["track", "slug", "evidence", "outcome", "desk"]
 
 // The three outcome records are written only by the task tools; a caller never supplies them.
@@ -1068,9 +1068,12 @@ export async function task_update({ deskRoot, input, person = null, search, stat
   })
   // `log` goes to log.md beside the card by the cheap append path. Alone, it is the whole call; with other fields, the rest of the call follows it.
   let logged = null
+  if (values.child_session !== undefined && values.log === undefined) {
+    throw Object.assign(new Error("task_update: Pass `log` with `child_session`: the child's session id is recorded in the log entry that says what was delegated; nothing was changed. Example: {\"track\": \"t\", \"slug\": \"s\", \"child_session\": \"<its session id>\", \"log\": \"Delegated S2 to S4\"}."), { code: "task_update_child_session_needs_log" })
+  }
   if (values.log !== undefined) {
-    logged = await appendCardLog({ deskRoot, person, track, slug, text: requiredText(values.log, "log"), admission: contentAdmission, search, schedulePush })
-    if (Object.keys(values).every((key) => ["track", "slug", "display_label", "content_home", "log"].includes(key))) {
+    logged = await appendCardLog({ deskRoot, person, track, slug, text: requiredText(values.log, "log"), childSession: values.child_session, admission: contentAdmission, search, schedulePush })
+    if (Object.keys(values).every((key) => ["track", "slug", "display_label", "content_home", "log", "child_session"].includes(key))) {
       if (contentAdmission !== null) logged.content_admission = contentAdmission
       return logged
     }

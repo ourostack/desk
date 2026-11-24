@@ -24,7 +24,10 @@ const stamp = (date) => `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad
  * and the note that says no git is needed. Throws before writing anything when the task does not exist or the purpose policy
  * refuses; `admission` is the receipt `admitContent` gave this call, which has checked the base.
  */
-export async function appendCardLog({ deskRoot, person, track, slug, text, admission, search, schedulePush, now = new Date() }) {
+export async function appendCardLog({ deskRoot, person, track, slug, text, childSession, admission, search, schedulePush, now = new Date() }) {
+  if (childSession !== undefined && !(typeof childSession === "string" && /^[\w.:-]{4,128}$/u.test(childSession))) {
+    throw Object.assign(new Error("task_update: Pass `child_session` as the child's session id, 4 to 128 letters, digits, dots, colons, dashes or underscores: that is not a session id; nothing was changed"), { code: "task_update_child_session_is_not_a_session_id" })
+  }
   const card = await resolveWriteTarget({ deskRoot, person, segments: [track, slug, "task.md"] })
   if (!(await pathExists(card))) {
     throw Object.assign(new Error(`task_update: Check the track and slug, then try again: task does not exist at ${deskRelativePath(deskRoot, card)}`), { code: "task_update_task_does_not_exist_at" })
@@ -32,7 +35,8 @@ export async function appendCardLog({ deskRoot, person, track, slug, text, admis
   const file = path.join(path.dirname(card), LOG_FILE)
   const rel = deskRelativePath(deskRoot, file)
   assertCleanContentTarget(deskRoot, rel, admission, "task_update", written.get(file))
-  const entry = `\n## ${stamp(now)}\n\n${text.trim()}\n`
+  const owner = childSession === undefined ? "" : `Child session: ${childSession}\n\n`
+  const entry = `\n## ${stamp(now)}\n\n${owner}${text.trim()}\n`
   if (existsSync(file)) appendFileSync(file, entry)
   else writeFileSync(file, `# Log: ${track}/${slug}\n\nAppend-only record for this task, oldest first: rulings, decisions and where the evidence is. Write entries with task_update's \`log\`.\n${entry}`)
   written.set(file, digest(file))
