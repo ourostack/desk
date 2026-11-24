@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.517 — 2026-11-24
+
+The `task_focus` tool now serves `readOnlyHint: true`, like `desk_search`, because it only holds the session's focus in memory. It is declared in the action declarations, so the generated MCP projection carries the annotation, and its description now says why a subagent must not call it: it shares the session's server, so its call would move the main agent's focus.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.516 — 2026-11-24
 
 Desk's MCP server now vendors Ouro UI v1.3.519, moved by Ouro Current.

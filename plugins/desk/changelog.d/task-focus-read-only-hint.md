@@ -1,1 +1,0 @@
-The `task_focus` tool now serves `readOnlyHint: true`, like `desk_search`, because it only holds the session's focus in memory. It is declared in the action declarations, so the generated MCP projection carries the annotation, and its description now says why a subagent must not call it: it shares the session's server, so its call would move the main agent's focus.
