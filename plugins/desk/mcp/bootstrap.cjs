@@ -708,7 +708,7 @@ function start(o, stderr, serve) {
       if (proxy) {
         // Read while this copy's folder is still there: a host may remove it later, and the copy that replaces it must be the same Desk.
         var ownCopy = readOwn(mcpRoot, platform, either(o.arch, process.arch));
-        var proxied = idle.runIdleProxy({ node: current.path, indexFile: indexFile, chooseIndex: function () { return newestDesk({ mcpRoot: mcpRoot, current: current, platform: platform, arch: either(o.arch, process.arch), scanRoot: o.scanRoot, own: ownCopy }); }, exists: function (p) { return fs.existsSync(p); }, args: args, env: env, idleMs: idleMs, spawn: o.spawn, stdin: o.stdin, stdout: o.stdout, stderr: stderr, exit: o.exit, signals: o.signals, kill: o.kill, now: o.now, setTimer: o.setTimer, clearTimer: o.clearTimer });
+        var proxied = idle.runIdleProxy({ node: current.path, indexFile: indexFile, chooseIndex: function () { return newestDesk({ mcpRoot: mcpRoot, current: current, platform: platform, arch: either(o.arch, process.arch), scanRoot: o.scanRoot, own: ownCopy }); }, exists: fs.existsSync, args: args, env: env, idleMs: idleMs, spawn: o.spawn, stdin: o.stdin, stdout: o.stdout, stderr: stderr, exit: o.exit, signals: o.signals, kill: o.kill, now: o.now, setTimer: o.setTimer, clearTimer: o.clearTimer });
         if (proxied.error !== null) throw proxied.error;
         return new Promise(function () {});
       }
