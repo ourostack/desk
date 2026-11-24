@@ -12,8 +12,8 @@ import { readCleanupIndex } from "../../../../../plugins/desk/mcp/src/desk/clean
 import { activeTasks } from "../../../../../plugins/desk/mcp/src/desk/active-tasks.js"
 import { ART, SLUG, RESOURCE, exists, digest, record, fixture, options, complete, readCard,
   openReadiness, requests, realGit, git, spawnActor, actorMessage, send, finishActor, drainActors, errorData, ownIdentity,
-  nativeMoveObserver, nativeActorObservations, drainWithNativeObservations,
-  archiveOwned, archiveCandidateObservations, archiveProductionObservations } from "./archive_handoff_qualification_child.mjs"
+  nativeMoveObserver, drainWithNativeObservations, persistNativeObservations,
+  archiveOwned } from "./archive_handoff_qualification_child.mjs"
 
 const reports = []
 const readers = []
@@ -192,13 +192,7 @@ after(async () => {
       journalCloseFailures: failures.map((item) => String(item.reason)),
       retainedFixtures: true, noOperatorState: true, noNetworkPush: true, productSourceWritesByHarness: false }
     try {
-      const target = new URL("../../../../../windows-archive-race-observations.json", import.meta.url)
-      const artifact = fs.existsSync(target) ? JSON.parse(fs.readFileSync(target, "utf8")) :
-        { scope: "owned two-process archive observations; criteria and product bytes unchanged", platform: process.platform, variants: [] }
-      artifact.actorReceipts = nativeActorObservations()
-      artifact.candidateAttempts = archiveCandidateObservations()
-      artifact.productionAttempts = archiveProductionObservations()
-      fs.writeFileSync(target, JSON.stringify(artifact, null, 2) + "\n")
+      persistNativeObservations(new URL("../../../../../windows-archive-race-observations.json", import.meta.url))
     } catch (error) { result.observationPersistenceFailure = error.code ?? "unavailable" }
     fs.writeFileSync(path.join(ART, "summary.json"), JSON.stringify(result, null, 2) + "\n")
     assert.equal(result.observationPersistenceFailure, undefined, "Passive observation persistence failed; original scenario verdicts are unchanged")

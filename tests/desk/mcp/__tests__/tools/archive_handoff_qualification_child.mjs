@@ -227,14 +227,25 @@ function missingHandleStages(native) {
 export function nativeActorObservations() {
   return [...actors].filter(actor => actor.role === "archive").map(actor => {
     const attempts = actor.messages.findLast(message => message.candidateAttempts)?.candidateAttempts ?? []
-    const observation = actor.messages.findLast(message => message.moveObservation)?.moveObservation ?? attempts.at(-1) ?? null
+    const production = actor.messages.findLast(message => message.productionAttempts)?.productionAttempts ?? []
+    const observation = actor.messages.findLast(message => message.moveObservation)?.moveObservation ??
+      attempts.at(-1) ?? production.at(-1) ?? null
     return { actorPid: actor.pid, caseId: actor.caseId, receipt: observation,
       missingNativeStages: ["test_only_preadmitted_source_handle", "production_default_archive_session"].includes(observation?.kind) ?
         missingHandleStages(observation.native) :
         observation ? nativeStages.filter(type => !observation.events.some(item => item.type === type)) : nativeStages,
       candidateAttempts: attempts,
+      productionAttempts: production,
       receiptReceived: observation !== null }
   })
+}
+export function persistNativeObservations(target) {
+  const artifact = fs.existsSync(target) ? JSON.parse(fs.readFileSync(target, "utf8")) :
+    { scope: "owned two-process archive observations; criteria and product bytes unchanged", platform: process.platform, variants: [] }
+  artifact.actorReceipts = nativeActorObservations()
+  artifact.candidateAttempts = archiveCandidateObservations()
+  artifact.productionAttempts = archiveProductionObservations()
+  fs.writeFileSync(target, JSON.stringify(artifact, null, 2) + "\n")
 }
 export async function drainWithNativeObservations(drain, persist) {
   let result, primary, failed = false
@@ -643,7 +654,7 @@ if (process.argv[1] === HELPER) {
   }
   moveObserver?.event("archive-result", { status: result?.status ?? null, errorPhase: failure?.phase ?? null })
   await sendMessage({ type: "result", result: result ?? null, error: failure ?? null, renameReturned, moveObservation,
-    candidateAttempts: archiveCandidateObservations() })
+    candidateAttempts: archiveCandidateObservations(), productionAttempts: archiveProductionObservations() })
   await take("finish")
   await drainActors()
   clearTimeout(lease)
