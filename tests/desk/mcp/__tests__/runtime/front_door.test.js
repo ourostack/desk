@@ -4,7 +4,7 @@ import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import { PassThrough } from "node:stream"
 import { DOCTOR_REPAIRS, FRONT_DOOR_TOOLS, startFrontDoor } from "../../../../../plugins/desk/mcp/src/runtime/front-door.js"
-import { TOOL_NAMES } from "../../../../../plugins/desk/mcp/src/tool-names.js"
+import { TOOL_ANNOTATIONS as ADMITTED_ANNOTATIONS, TOOL_NAMES } from "../../../../../plugins/desk/mcp/src/tool-names.js"
 
 function serve(options = {}) {
   const input = new PassThrough()
@@ -172,4 +172,22 @@ test("the default handshake hook is optional", async () => {
   const door = startFrontDoor({ input, output, callTool: () => ({}) })
   input.end(`${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" })}\n`)
   await door.closed
+})
+
+test("tools/list serves the declared annotations before and after the handshake: task_focus is read-only, desk_doctor is not, archive and save stay destructive", async () => {
+  const { lines, send, input, door } = serve({ callTool: () => ({}), onHandshake: () => {} })
+  send({ id: 1, method: "tools/list" })
+  door.notifyToolsChanged()
+  send({ id: 2, method: "tools/list" })
+  input.end()
+  await door.closed
+  const lists = lines.filter((line) => line.result?.tools).map((line) => Object.fromEntries(line.result.tools.map((tool) => [tool.name, tool.annotations])))
+  assert.equal(lists.length, 2)
+  for (const list of lists) {
+    assert.equal(list.task_focus.readOnlyHint, true)
+    assert.equal(list.desk_doctor.readOnlyHint, false)
+    assert.equal(list.task_archive.destructiveHint, true)
+    assert.equal(list.desk_save.destructiveHint, true)
+    for (const [name, annotations] of Object.entries(ADMITTED_ANNOTATIONS)) assert.deepEqual(list[name], annotations, name)
+  }
 })
