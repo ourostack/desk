@@ -209,18 +209,6 @@ for (const [name, label, minutes, woken] of [
   })
 }
 
-test("a bot rewriting the body of its own issue does not wake the drain, but a new bot issue and a human edit still do", async () => {
-  const bot = (number, updated_at, body) => ({ ...issue(number, updated_at, `Issue ${number}`, body), user: { login: "github-actions[bot]", type: "Bot" } })
-  const w = await world([bot(1, T(0), "health: 1"), issue(2, T(0))])
-  await w.poll()
-  w.issues.splice(0, 2, bot(1, T(5), "health: 2"), issue(2, T(5), "Issue 2", "edited"))
-  await w.poll()
-  assert.deepEqual(w.sent, [[DRAIN.session, "New or changed issues in acme/widgets: #2 Issue 2 (title or body edited). Drain them."]])
-  w.issues.push(bot(3, T(6), "health: 1"))
-  await w.poll()
-  assert.match(w.sent.at(-1)[1], /#3 Issue 3 \(new issue\)/u)
-})
-
 test("never wakes for a closed issue the drain handled, and drops its waiting event", async () => {
   const w = await world([issue(1, T(0)), issue(2, T(0))])
   await w.poll()
@@ -974,7 +962,7 @@ test("a failure while reading comments leaves the markers where they were", asyn
   }
   await w.poll()
   assert.deepEqual(w.sent, [])
-  assert.deepEqual(w.state().seen, { 1: { updatedAt: "2026-11-13T01:00:00Z", digest: w.state().seen["1"].digest }, 2: { updatedAt: "2026-11-13T01:00:00Z", digest: w.state().seen["2"].digest } })
+  assert.deepEqual(w.state().seen, { 1: { updatedAt: "2026-11-13T01:00:00Z", digest: w.state().seen["1"].digest, title: "Issue 1" }, 2: { updatedAt: "2026-11-13T01:00:00Z", digest: w.state().seen["2"].digest, title: "Issue 2" } })
   await w.poll()
   assert.equal(w.sent.length, 1)
 })
@@ -1769,4 +1757,214 @@ test("a failed successor start keeps its reason when the next wake is refused as
   recoverDrainTarget({ paths: w.paths, repo: DRAIN.repo, now: NOW, start: () => ({ ok: false, error: "no project" }) })
   ackWake({ paths: w.paths, repo: DRAIN.repo, wake, error: ARCHIVED, now: NOW + 1000 })
   assert.match(w.state().targetGone.error, /starting its successor failed: no project/u)
+})
+
+// Bot body edits: the fake GitHub answers `issueEdits` from `w.history[number]`, the complete edit history the real adapter reads.
+const editBy = (editedAt, login, type = "Bot", extra = {}) => ({ editedAt, deletedAt: null, editor: login === null ? null : { login, type }, ...extra })
+async function editsWorld(issues, options) {
+  const w = await world(issues, options)
+  w.history = {}
+  w.asked = []
+  w.api.issueEdits = async (repo, number) => {
+    w.asked.push([repo, number])
+    const made = w.history[number]
+    if (made instanceof Error) throw made
+    const found = w.issues.find((item) => item.number === number)
+    return typeof made === "function" ? made(found) : { title: found.title, body: found.body, updatedAt: found.updated_at, complete: true, edits: made ?? [] }
+  }
+  return w
+}
+const BOT = "github-actions[bot]"
+
+test("an issue whose body only bots edited since the last poll wakes nobody, whoever created it, and the marker advances", async () => {
+  const w = await editsWorld([issue(1, T(0), "Health", "health: 1"), { ...issue(2, T(0), "Mine", "m1"), user: { login: BOT, type: "Bot" } }])
+  await w.poll()
+  w.issues.splice(0, 2, issue(1, T(5), "Health", "health: 2"), { ...issue(2, T(5), "Mine", "m2"), user: { login: BOT, type: "Bot" } })
+  w.history[1] = [editBy(T(0), "someone"), editBy(T(5), BOT), editBy(T(5), "other-app[bot]")]
+  w.history[2] = [editBy(T(4), BOT)]
+  await w.poll()
+  assert.deepEqual(w.sent, [])
+  assert.equal(w.state().seen["1"].updatedAt, T(5))
+  assert.equal(w.state().seen["1"].title, "Health")
+  assert.deepEqual(w.state().pending, [])
+})
+
+test("a body edit stays news unless every edit since the last poll is a bot's: a person, a person before a bot, a person after one, an unknown or deleted edit, a title change, no edit at all", async () => {
+  const cases = [
+    ["a person", [editBy(T(5), "ari", "User")]],
+    ["a bot-created issue edited by a person", [editBy(T(0), BOT), editBy(T(4), "ari", "User")]],
+    ["a person, then a bot in the same interval", [editBy(T(3), "ari", "User"), editBy(T(5), BOT)]],
+    ["a bot, then a person", [editBy(T(3), BOT), editBy(T(5), "ari", "User")]],
+    ["a person at the same second as the last poll", [editBy(T(0), "ari", "User"), editBy(T(5), BOT)]],
+    ["an edit whose editor is gone", [editBy(T(3), null), editBy(T(5), BOT)]],
+    ["a deleted edit", [editBy(T(3), BOT, "Bot", { deletedAt: T(4) }), editBy(T(5), BOT)]],
+    ["an edit with no time", [editBy(null, BOT)]],
+    ["an editor with no type or login", [{ editedAt: T(5), deletedAt: null, editor: { login: null, type: null } }]],
+    ["no edit in the interval", [editBy("2026-11-13T00:59:00Z", BOT)]],
+  ]
+  for (const [name, edits] of cases) {
+    const w = await editsWorld([issue(1, T(0), "Health", "health: 1")])
+    await w.poll()
+    w.issues[0] = issue(1, T(5), "Health", "health: 2")
+    w.history[1] = edits
+    await w.poll()
+    assert.equal(w.sent.length, 1, name)
+    assert.match(w.sent[0][1], /#1 Health \(title or body edited\)/u, name)
+  }
+})
+
+test("a bot edit is not proof when the history is incomplete, the snapshot is not the issue the poll listed, the title moved, the record is from before titles were kept, or there is no history reader", async () => {
+  const bots = [editBy(T(5), BOT)]
+  const cases = [
+    ["an incomplete history", (found) => ({ title: found.title, body: found.body, updatedAt: found.updated_at, complete: false, edits: bots })],
+    ["a newer update than listed", (found) => ({ title: found.title, body: found.body, updatedAt: T(9), complete: true, edits: bots })],
+    ["a different body than listed", (found) => ({ title: found.title, body: "raced", updatedAt: found.updated_at, complete: true, edits: bots })],
+    ["a different title than listed", (found) => ({ title: "raced", body: found.body, updatedAt: found.updated_at, complete: true, edits: bots })],
+    ["an issue the history cannot find", () => null],
+  ]
+  for (const [name, answer] of cases) {
+    const w = await editsWorld([issue(1, T(0), "Health", "health: 1")])
+    await w.poll()
+    w.issues[0] = issue(1, T(5), "Health", "health: 2")
+    w.history[1] = answer
+    await w.poll()
+    assert.equal(w.sent.length, 1, name)
+  }
+  const retitled = await editsWorld([issue(1, T(0), "Health", "health: 1")])
+  await retitled.poll()
+  retitled.issues[0] = issue(1, T(5), "Health, renamed", "health: 2")
+  retitled.history[1] = bots
+  await retitled.poll()
+  assert.equal(retitled.sent.length, 1, "a title change is not a bot-only body edit")
+  const legacy = await editsWorld([issue(1, T(0), "Health", "health: 1")])
+  await legacy.poll()
+  const stored = readDrainStates(legacy.paths.state)
+  delete stored[DRAIN.repo].seen["1"].title
+  writeFileSync(legacy.paths.state, JSON.stringify(stored))
+  legacy.issues[0] = issue(1, T(5), "Health", "health: 2")
+  legacy.history[1] = bots
+  await legacy.poll()
+  assert.equal(legacy.sent.length, 1, "a record without a title cannot show the title is unchanged")
+  const blind = await world([issue(1, T(0), "Health", "health: 1")])
+  await blind.poll()
+  blind.issues[0] = issue(1, T(5), "Health", "health: 2")
+  await blind.poll()
+  assert.equal(blind.sent.length, 1, "no history reader is no proof")
+})
+
+test("a bot's body edit does not hide the rest: a person's comment, an outside label, a reopen and a cross-reference still wake", async () => {
+  const quietEdit = async (setup) => {
+    const w = await editsWorld([issue(1, T(0), "Health", "health: 1")])
+    await w.poll()
+    w.issues[0] = issue(1, T(5), "Health", "health: 2")
+    w.history[1] = [editBy(T(5), BOT)]
+    setup(w)
+    await w.poll()
+    return w
+  }
+  const quiet = await quietEdit(() => {})
+  assert.deepEqual(quiet.sent, [])
+  assert.deepEqual(quiet.asked, [[DRAIN.repo, 1]])
+  const comment = await quietEdit((w) => { w.comments = async () => [{ id: 7, body: "please look", updated_at: T(4), user: { login: "ari", type: "User" } }] })
+  assert.match(comment.sent[0][1], /comment 7 by ari/u)
+  const label = await quietEdit((w) => { w.events = async () => [{ ...labelEvent(T(4), "bug"), actor: { login: "ari" } }] })
+  assert.match(label.sent[0][1], /labeled bug/u)
+  const reopen = await quietEdit((w) => { w.events = async () => [lifecycle("reopened", T(4), "ari")] })
+  assert.match(reopen.sent[0][1], /reopened/u)
+  const reference = await quietEdit((w) => { w.timeline = async () => [{ event: "cross-referenced", created_at: T(4), source: { issue: { number: 9, repository_url: "https://api.github.com/repos/acme/other" } } }] })
+  assert.match(reference.sent[0][1], /cross-reference from acme\/other#9/u)
+  const drainsOwn = await quietEdit((w) => { w.comments = async () => [statusComment(8, T(4))] })
+  assert.deepEqual(drainsOwn.sent, [], "the drain's own comment still wakes nobody")
+})
+
+test("a failed edit-history read is a poll error that moves no marker, no cursor and no tag, and the next good poll wakes for the change", async () => {
+  const w = await deltaWorld([issue(1, T(0), "Health", "health: 1")])
+  w.asked = []
+  w.history = new Error("Check gh auth status, then try again: GitHub answered HTTP 502 for /graphql")
+  w.api.issueEdits = async (...args) => { w.asked.push(args); if (w.history instanceof Error) throw w.history; return w.history }
+  await w.poll()
+  const before = JSON.stringify({ seen: w.state().seen, pending: w.state().pending, cursor: w.state().cursor, etag: w.state().etag })
+  w.issues[0] = issue(1, T(5), "Health", "health: 2")
+  w.delta = async () => ({ issues: [w.issues[0]], etag: '"new"' })
+  const out = await w.poll(NOW + 300_000)
+  assert.deepEqual(out.errors, [{ repo: DRAIN.repo, error: w.history.message }])
+  assert.equal(JSON.stringify({ seen: w.state().seen, pending: w.state().pending, cursor: w.state().cursor, etag: w.state().etag }), before)
+  const tags = []
+  w.delta = async (...args) => { tags.push(args[2]); return { issues: [w.issues[0]], etag: '"new"' } }
+  w.history = { title: "Health", body: "health: 2", updatedAt: T(5), complete: true, edits: [editBy(T(5), "ari", "User")] }
+  const retry = await w.poll(NOW + 600_000)
+  assert.deepEqual(retry.errors, [])
+  assert.equal(tags[0], undefined, "the retry asks for the list again, not for a 304")
+  assert.deepEqual(retry.wakes[0].events.map((event) => event.why), ["title or body edited"])
+  assert.equal(w.state().etag.tag, '"new"')
+})
+
+function graphqlAnswer(nodes, { next = false, cursor = "c1", title = "Health", body = "health: 2", updatedAt = T(5), headers = {} } = {}) {
+  return response({ data: { repository: { issue: { title, body, updatedAt, userContentEdits: { pageInfo: { hasNextPage: next, endCursor: next ? cursor : null }, nodes } } } } }, { headers })
+}
+
+test("issueEdits reads the whole edit history over GraphQL with the account's token, across pages, and keeps its quota apart from REST's", async () => {
+  const spawn = () => ({ status: 0, stdout: "tok\n" })
+  const calls = []
+  const answers = [
+    response([issue(1, "u1")], { headers: { "x-ratelimit-remaining": "4000", "x-ratelimit-limit": "5000", "x-ratelimit-reset": "1900000000", "x-ratelimit-resource": "core" } }),
+    graphqlAnswer([{ editedAt: T(5), deletedAt: null, editor: { __typename: "Bot", login: "app[bot]" } }], { next: true, headers: { "x-ratelimit-remaining": "4990", "x-ratelimit-limit": "5000", "x-ratelimit-reset": "1900000100", "x-ratelimit-resource": "graphql" } }),
+    graphqlAnswer([{ editedAt: T(1), deletedAt: T(2), editor: null }, { editedAt: T(0), editor: { __typename: "User", login: "ari" } }]),
+  ]
+  const fetchImpl = async (url, init) => { calls.push([url, init]); return answers.shift() }
+  const api = await connectGithub("maintainer", { spawn, fetchImpl, env: { PATH: "/bin" }, login: "maintainer" })
+  await api.openIssues("o/r")
+  const history = await api.issueEdits("o/r", 5)
+  assert.equal(calls[1][0], "https://api.github.com/graphql")
+  assert.equal(calls[1][1].method, "POST")
+  assert.equal(calls[1][1].headers.Authorization, "Bearer tok")
+  const first = JSON.parse(calls[1][1].body)
+  assert.deepEqual(first.variables, { owner: "o", name: "r", number: 5, after: null })
+  assert.match(first.query, /userContentEdits\(first: 100, after: \$after\)/u)
+  assert.match(first.query, /editor \{ __typename login \}/u)
+  assert.equal(JSON.parse(calls[2][1].body).variables.after, "c1")
+  assert.deepEqual(history, {
+    title: "Health", body: "health: 2", updatedAt: T(5), complete: true,
+    edits: [
+      { editedAt: T(5), deletedAt: null, editor: { type: "Bot", login: "app[bot]" } },
+      { editedAt: T(1), deletedAt: T(2), editor: null },
+      { editedAt: T(0), deletedAt: null, editor: { type: "User", login: "ari" } },
+    ],
+  })
+  assert.equal(api.quota().remaining, 4000, "the REST reading is not replaced by GraphQL's")
+  assert.equal(api.graphqlQuota().remaining, 4990)
+  assert.deepEqual(api.calls(), { total: 3, notModified: 0 })
+})
+
+test("issueEdits is not complete when pages disagree about the issue, a page is malformed or the history is too long; a missing issue is null", async () => {
+  const connect = (answers) => connectGithub("maintainer", { spawn: () => ({ status: 0, stdout: "tok" }), fetchImpl: async () => (answers.length > 1 ? answers.shift() : answers[0]), env: { PATH: "/bin" }, login: "maintainer" })
+  const raced = await connect([graphqlAnswer([], { next: true }), graphqlAnswer([], { updatedAt: T(9) })])
+  assert.equal((await raced.issueEdits("o/r", 1)).complete, false)
+  const malformed = await connect([response({ data: { repository: { issue: { title: "t", body: "b", updatedAt: T(1), userContentEdits: null } } } })])
+  assert.equal((await malformed.issueEdits("o/r", 1)).complete, false)
+  const noCursor = await connect([graphqlAnswer([], { next: true, cursor: undefined })])
+  assert.equal((await noCursor.issueEdits("o/r", 1)).complete, false)
+  const endless = await connect([graphqlAnswer([], { next: true })])
+  assert.equal((await endless.issueEdits("o/r", 1)).complete, false)
+  const missing = await connect([response({ data: { repository: { issue: null } } })])
+  assert.equal(await missing.issueEdits("o/r", 1), null)
+})
+
+test("a GraphQL failure is reported with its reason: HTTP errors, GraphQL errors, no data and a spent GraphQL quota", async () => {
+  const connect = (answer) => connectGithub("maintainer", { spawn: () => ({ status: 0, stdout: "tok" }), fetchImpl: async () => answer, env: { PATH: "/bin" }, login: "maintainer" })
+  await assert.rejects((await connect(response({}, { status: 502 }))).issueEdits("o/r", 1), /HTTP 502 for \/graphql/u)
+  await assert.rejects((await connect(response({ errors: [{ message: "Something went wrong" }] }))).issueEdits("o/r", 1), /Something went wrong/u)
+  await assert.rejects((await connect(response({ data: null }))).issueEdits("o/r", 1), /refused or unreadable/u)
+  const limited = response({ errors: [{ type: "RATE_LIMITED", message: "API rate limit exceeded" }] }, { headers: { "x-ratelimit-reset": "1900000000" } })
+  await assert.rejects((await connect(limited)).issueEdits("o/r", 1), (error) => error.code === "drains_rate_limited" && /GraphQL limit is used up/u.test(error.message))
+  await assert.rejects((await connect(response({}, { status: 403, headers: { "x-ratelimit-remaining": "0" } }))).issueEdits("o/r", 1), (error) => error.rateLimited === true)
+})
+
+test("the state keeps GraphQL's quota beside REST's", async () => {
+  const w = await world([issue(1, T(0))])
+  const graphqlQuota = { remaining: 4990, limit: 5000, reset: Math.floor(NOW / 1000) + 600, at: new Date(NOW).toISOString() }
+  w.api.graphqlQuota = () => graphqlQuota
+  await w.poll()
+  matches(w.state(), { graphqlQuota })
+  assert.equal(w.state().quota, undefined)
 })

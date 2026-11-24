@@ -29,6 +29,9 @@ const GONE_MS = 30 * 24 * 3_600_000
 const LOCK_STALE_MS = 15 * 60_000
 const MAX_TITLES = 20
 const PAGE = 100
+/** An issue's edit history is read this many pages deep at most (100 edits each); a longer one is not proof, so the change is news. */
+const EDIT_PAGES = 50
+const EDITS_QUERY = "query($owner: String!, $name: String!, $number: Int!, $after: String) { repository(owner: $owner, name: $name) { issue(number: $number) { title body updatedAt userContentEdits(first: 100, after: $after) { pageInfo { hasNextPage endCursor } nodes { editedAt deletedAt editor { __typename login } } } } } }"
 /** A full listing of the open issues is read again this often; between them only issues updated since the last change are read. */
 const FULL_SYNC_MS = 3_600_000
 /** The list is read from a little before the newest change it knew, so an update GitHub lists late is still seen. */
@@ -307,6 +310,23 @@ const ownStatus = (comment, login) => comment.user?.login?.toLowerCase() === log
 const ignoredComment = (comment, rules) => rules.some((rule) => comment.user?.login?.toLowerCase() === rule.author && (rule.match === null || rule.match.test(comment.body ?? "")))
 
 const isBot = (item) => item.user?.type === "Bot" || (item.user?.login ?? "").toLowerCase().endsWith("[bot]")
+const isBotActor = (actor) => actor?.type === "Bot" || (actor?.login ?? "").toLowerCase().endsWith("[bot]")
+const lines = (text) => String(text ?? "").replace(/\r\n/gu, "\n")
+
+/**
+ * Whether every edit of the issue's body since `since` was made by a bot, proven from the issue's complete edit history. Anything
+ * the history cannot show (no adapter, a page missing, an edit with no editor or a deleted one, a snapshot that no longer matches
+ * the issue the poll listed, no edit in the interval) is not proof, so the change stays news.
+ */
+async function botOnlyBodyEdits(api, repo, issue, since) {
+  if (typeof api.issueEdits !== "function") return false
+  const history = await api.issueEdits(repo, issue.number)
+  if (!history?.complete || history.updatedAt !== issue.updated_at || history.title !== issue.title || lines(history.body) !== lines(issue.body)) return false
+  const floor = Date.parse(since)
+  if (!Number.isFinite(floor)) return false
+  const interval = history.edits.filter((edit) => !(Date.parse(edit.editedAt) < floor))
+  return interval.length > 0 && interval.every((edit) => Number.isFinite(Date.parse(edit.editedAt)) && !edit.deletedAt && edit.editor && isBotActor(edit.editor))
+}
 
 /** A bot comment's text without what changes from run to run: run URLs and IDs, dates, times and durations. */
 function repeatableText(body) {
@@ -354,10 +374,13 @@ function newsEvent(event, rules, claims, login, openedAt) {
 /** An issue the drain filed or already triaged: a label in its `drain:` namespace, or its status marker in the body, is there before the poll first sees it, so it is already seen. */
 const filedByDrain = (issue) => (issue.labels ?? []).some((label) => (label?.name ?? "").toLowerCase().startsWith(DRAIN_LABEL_PREFIX)) || (issue.body ?? "").includes(DRAIN_STATUS_MARKER)
 
-/** What someone but the drain changed since `before` (a new issue, an edit to a human's issue (a bot that rewrites its own issue's body, such as a health table, is not news), an edit, another comment, a reopen or a label outside the drain's own), or null. The reason travels with the event. */
+/** What someone but the drain changed since `before` (a new issue, a title or body edit (an edit that only bots made to the body, such as a health table's refresh, is not news), an edit, another comment, a reopen or a label outside the drain's own), or null. The reason travels with the event. */
 async function changedByOthers(api, repo, issue, before, digest, ignored, rules) {
   if (!before) return filedByDrain(issue) ? null : "new issue"
-  if (before.digest && (before.ignored ?? "") === ignored && before.digest !== digest && !isBot(issue)) return "title or body edited"
+  if (before.digest && (before.ignored ?? "") === ignored && before.digest !== digest) {
+    // A record from before titles were kept cannot show the title is unchanged, so its first changed poll is news as it always was.
+    if (before.title !== issue.title || !(await botOnlyBodyEdits(api, repo, issue, before.updatedAt))) return "title or body edited"
+  }
   const since = before.updatedAt
   const comments = (await api.comments(repo, issue.number, since)).filter((comment) => comment.updated_at > since)
   const all = {}
@@ -415,8 +438,7 @@ async function listIssues(api, drain, state, now) {
   const since = isoSeconds(Date.parse(state.cursor) - DELTA_SLACK_MS)
   const changed = await api.changedIssues(drain.repo, since, state.etag?.since === since ? state.etag.tag : undefined)
   if (changed.notModified) return { full: false, issues: [], untouched: true }
-  state.etag = changed.etag ? { since, tag: changed.etag } : undefined
-  return { full: false, issues: changed.issues }
+  return { full: false, issues: changed.issues, etag: changed.etag ? { since, tag: changed.etag } : undefined, newEtag: true }
 }
 
 /** What the account's quota says to do about this drain now: null to poll, or why not (until the window resets, or for a while). */
@@ -441,7 +463,11 @@ export async function pollDrain(drain, states, { connect, now, desk }) {
       state.loginAt = new Date(now).toISOString()
     }
     const listed = await listIssues(api, drain, state, now)
-    if (!listed.untouched) await recordChanges(api, drain, state, listed, { now, desk })
+    if (!listed.untouched) {
+      await recordChanges(api, drain, state, listed, { now, desk })
+      // The tag of the list is kept only once every change in it is recorded: a failed poll asks for the same list again, never a 304 for it.
+      if (listed.newEtag) state.etag = listed.etag
+    }
     state.lastOkAt = new Date(now).toISOString()
     delete state.lastError
     delete state.lastErrorCode
@@ -452,6 +478,8 @@ export async function pollDrain(drain, states, { connect, now, desk }) {
   }
   const quota = api?.quota?.()
   if (quota) state.quota = quota
+  const graphqlQuota = api?.graphqlQuota?.()
+  if (graphqlQuota) state.graphqlQuota = graphqlQuota
   state.calls = api?.calls?.() ?? { total: 0, notModified: 0 }
   delete state.hold
   state.lastPollAt = new Date(now).toISOString()
@@ -479,7 +507,7 @@ async function recordChanges(api, drain, state, { full, issues }, { now, desk })
     }
     if (full && issue.updated_at > cursor) cursor = issue.updated_at
     const digest = digestOf(issue, trailers)
-    seen[key] = { updatedAt: issue.updated_at, digest, ...(ignored ? { ignored } : {}) }
+    seen[key] = { updatedAt: issue.updated_at, digest, title: issue.title, ...(ignored ? { ignored } : {}) }
     if (!state.seeded || before?.updatedAt === issue.updated_at) continue
     const why = await changedByOthers(api, drain.repo, issue, before, digest, ignored, rules)
     if (why) recorded.push({ number: issue.number, title: issue.title, updatedAt: issue.updated_at, seenAt: new Date(now).toISOString(), why })
@@ -708,7 +736,7 @@ export async function connectGithub(account, { spawn = spawnSync, fetchImpl = fe
   if (!token && transient) throw Object.assign(new Error(`Wait for the next poll, which reads the token again: the GitHub CLI's token read for ${account ?? "its active account"} gave no answer, probably because the keyring was busy or slow (${transient.slice(0, 160)})`), { code: "drains_github_cli_token_unavailable", transient: true })
   if (!token) throw Object.assign(new Error(`Sign in the GitHub CLI: the GitHub CLI has no token for ${account ?? "its active account"} (run \`gh auth login --hostname github.com\`)`), { code: "drains_sign_in_the_github_cli" })
   // What this connection spent and what GitHub says is left in the account's window; a 304 answer costs nothing against it.
-  const meter = { total: 0, notModified: 0, quota: null }
+  const meter = { total: 0, notModified: 0, quota: null, graphqlQuota: null }
   const get = async (route, { etag } = {}) => {
     const response = await fetchImpl(`https://api.github.com${route}`, {
       headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json", "User-Agent": "desk-issue-drains", ...(etag ? { "If-None-Match": etag } : {}) },
@@ -716,7 +744,7 @@ export async function connectGithub(account, { spawn = spawnSync, fetchImpl = fe
     })
     meter.total += 1
     const remaining = response.headers.get("x-ratelimit-remaining")
-    if (remaining !== null) meter.quota = { remaining: Number(remaining), limit: Number(response.headers.get("x-ratelimit-limit")), reset: Number(response.headers.get("x-ratelimit-reset")), at: new Date().toISOString() }
+    if (remaining !== null && response.headers.get("x-ratelimit-resource") !== "graphql") meter.quota = { remaining: Number(remaining), limit: Number(response.headers.get("x-ratelimit-limit")), reset: Number(response.headers.get("x-ratelimit-reset")), at: new Date().toISOString() }
     if (response.status === 304) {
       meter.notModified += 1
       return { notModified: true }
@@ -755,6 +783,52 @@ export async function connectGithub(account, { spawn = spawnSync, fetchImpl = fe
     meter.total += 1
     return { ok: response.ok, status: response.status, body: await response.json().catch(() => ({})) }
   }
+  // GraphQL has its own quota window: its headers are kept apart from the REST reading, and a failure names this API.
+  const graphql = async (query, variables) => {
+    const response = await fetchImpl("https://api.github.com/graphql", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json", "User-Agent": "desk-issue-drains", "Content-Type": "application/json" },
+      body: JSON.stringify({ query, variables }),
+      signal: AbortSignal.timeout(30_000),
+    })
+    meter.total += 1
+    const remaining = response.headers.get("x-ratelimit-remaining")
+    if (remaining !== null) meter.graphqlQuota = { remaining: Number(remaining), limit: Number(response.headers.get("x-ratelimit-limit")), reset: Number(response.headers.get("x-ratelimit-reset")), at: new Date().toISOString() }
+    const payload = response.ok ? await response.json().catch(() => null) : null
+    const limited = response.status === 429 || (response.status === 403 && remaining === "0") || (payload?.errors ?? []).some((error) => error?.type === "RATE_LIMITED")
+    if (limited) {
+      const reset = Number(response.headers.get("x-ratelimit-reset"))
+      const until = Number.isFinite(reset) && reset > 0 ? new Date(reset * 1000).toISOString() : "the next window"
+      throw Object.assign(new Error(`Wait for the quota to reset: GitHub's hourly GraphQL limit is used up, rate limited until ${until} (HTTP ${response.status} for /graphql)`), { code: "drains_rate_limited", status: response.status, rateLimited: true })
+    }
+    if (!response.ok) throw Object.assign(new Error(`Check gh auth status, then try again: GitHub answered HTTP ${response.status} for /graphql`), { code: "drains_check_gh_auth_status_then", status: response.status })
+    if (!payload || (Array.isArray(payload.errors) && payload.errors.length > 0) || typeof payload.data !== "object" || payload.data === null) {
+      const said = Array.isArray(payload?.errors) ? payload.errors.map((error) => String(error?.message ?? "")).join("; ").slice(0, 160) : "no data"
+      throw Object.assign(new Error(`Check gh auth status, then try again: GitHub's GraphQL answer for the issue's edit history was refused or unreadable (${said})`), { code: "drains_graphql_failed" })
+    }
+    return payload.data
+  }
+  // The whole edit history of one issue with its current title, body and update time. `complete` is false for a history that is cut short or whose pages disagree about the issue.
+  const issueEdits = async (repo, number) => {
+    const [owner, name] = repo.split("/")
+    const edits = []
+    let snapshot = null
+    let after = null
+    for (let page = 1; page <= EDIT_PAGES; page++) {
+      const found = (await graphql(EDITS_QUERY, { owner, name, number, after })).repository?.issue
+      if (!found) return null
+      const current = { title: found.title, body: found.body, updatedAt: found.updatedAt }
+      if (snapshot && JSON.stringify(snapshot) !== JSON.stringify(current)) return { ...snapshot, edits, complete: false }
+      snapshot = current
+      const connection = found.userContentEdits
+      if (!Array.isArray(connection?.nodes) || typeof connection.pageInfo?.hasNextPage !== "boolean") return { ...snapshot, edits, complete: false }
+      edits.push(...connection.nodes.map((node) => ({ editedAt: node?.editedAt ?? null, deletedAt: node?.deletedAt ?? null, editor: node?.editor ? { type: node.editor.__typename ?? null, login: node.editor.login ?? null } : null })))
+      if (!connection.pageInfo.hasNextPage) return { ...snapshot, edits, complete: true }
+      after = connection.pageInfo.endCursor
+      if (typeof after !== "string") return { ...snapshot, edits, complete: false }
+    }
+    return { ...snapshot, edits, complete: false }
+  }
   // Who the token really is decides which comments are the drain's own, so each drain's account is resolved from the token that polls its repository.
   const login = knownLogin || (await get("/user").then(({ body }) => String(body.login ?? ""), () => "")) || account || ""
   return {
@@ -777,6 +851,8 @@ export async function connectGithub(account, { spawn = spawnSync, fetchImpl = fe
     get,
     send,
     quota: () => meter.quota,
+    graphqlQuota: () => meter.graphqlQuota,
+    issueEdits,
     calls: () => ({ total: meter.total, notModified: meter.notModified }),
     timeline: (repo, issue) => all(`/repos/${repo}/issues/${issue}/timeline`),
     pull: async (repo, number) => (await get(`/repos/${repo}/pulls/${number}`)).body,
