@@ -244,6 +244,16 @@ test("classify calls the AGENTS.md files session start prints instructions", () 
   for (const rel of ["LESSONS.md", "desks/ari/LESSONS.md"]) assert.deepEqual(classify(rel), { kind: "lesson", track: null, task_slug: null })
 })
 
+test("a track's own card is indexed as kind track, in a track with no tasks too", () => {
+  for (const rel of ["errands/track.md", "desks/ari/errands/track.md"]) {
+    assert.equal(isIndexable(rel), true)
+    assert.deepEqual(classify(rel), { kind: "track", track: "errands", task_slug: null })
+  }
+  assert.equal(classify("_archive/track.md").kind, "archive")
+  assert.equal(classify("_meta/track.md").kind, "other")
+  assert.equal(classify("errands/buy-milk/track.md").kind, "task-file")
+})
+
 test("classify is purely path-driven", () => {
   assert.deepEqual(classify("trackA/slug/task.md"), {
     kind: "task",
