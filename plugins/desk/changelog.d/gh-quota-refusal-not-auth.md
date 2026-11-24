@@ -1,1 +1,0 @@
-When `gh` fails while Desk publishes through a pull request, Desk now says what `gh` reported instead of always blaming auth. A quota or rate-limit refusal reads "Wait for the GitHub API quota to recover" and shows gh's first line (with the reset time its guard gives); only an auth error from gh names `gh auth status`, and any other failure says to run it again.

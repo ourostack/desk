@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.522 — 2026-11-24
+
+When `gh` fails while Desk publishes through a pull request, Desk now says what `gh` reported instead of always blaming auth. A quota or rate-limit refusal reads "Wait for the GitHub API quota to recover" and shows gh's first line (with the reset time its guard gives); only an auth error from gh names `gh auth status`, and any other failure says to run it again.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.521 — 2026-11-24
 
 Moving a task no longer leaves shared records citing its old path. `task_archive` and `task_update` (to another track, or merging into another task) now rewrite whole-path citations of the moved folder, such as `track/slug/task.md`, in the JSON records under `_shared/` and `pages/`, in the same commit as the move. A record with unstaged or untracked changes is left as it is and named in `citations_not_repointed` (or `links.not_rewritten` for an archive).
