@@ -369,14 +369,16 @@ test("a qualified relay merge is verified when the concurrent exact-head merge i
 })
 
 test("a qualified save arms the relay through REST even when GraphQL PR edits are refused", () => {
-  const f = fixture({ fail: "edit", create: true })
-  const result = publishPullRequest(f.request)
-  assert.equal(result.receipt.labelled, true)
-  const labels = f.calls.filter((call) => call.includes("repos/example/workspace/issues/42/labels"))
-  assert.equal(labels.length, 1)
-  assert.ok(labels[0].includes("POST") && labels[0].includes("--hostname") && labels[0].includes("github.example"))
-  assert.ok(labels[0].includes("labels[]=merge-when-green"))
-  assert.ok(!f.calls.some((call) => call[1] === "pr" && call[2] === "edit"))
+  for (const options of [{ fail: "edit", create: true }, { fail: "edit" }, { fail: "create" }]) {
+    const f = fixture(options)
+    const result = publishPullRequest(f.request)
+    assert.equal(result.receipt.labelled, true)
+    const labels = f.calls.filter((call) => call.includes("repos/example/workspace/issues/42/labels"))
+    assert.equal(labels.length, 1)
+    assert.ok(labels[0].includes("POST") && labels[0].includes("--hostname") && labels[0].includes("github.example"))
+    assert.ok(labels[0].includes("labels[]=merge-when-green"))
+    assert.ok(!f.calls.some((call) => call[1] === "pr" && call[2] === "edit"))
+  }
 })
 
 test("a missing relay label and refused exact-head merge report both failed delivery paths", () => {
