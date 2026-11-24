@@ -306,7 +306,7 @@ const ownStatus = (comment, login) => comment.user?.login?.toLowerCase() === log
 /** A comment a drain's `ignoreComments` rule skips: written by the rule's author (case-insensitive) and, when the rule has a `match`, a body that matches it. */
 const ignoredComment = (comment, rules) => rules.some((rule) => comment.user?.login?.toLowerCase() === rule.author && (rule.match === null || rule.match.test(comment.body ?? "")))
 
-const isBot = (comment) => comment.user?.type === "Bot" || (comment.user?.login ?? "").toLowerCase().endsWith("[bot]")
+const isBot = (item) => item.user?.type === "Bot" || (item.user?.login ?? "").toLowerCase().endsWith("[bot]")
 
 /** A bot comment's text without what changes from run to run: run URLs and IDs, dates, times and durations. */
 function repeatableText(body) {
@@ -354,10 +354,10 @@ function newsEvent(event, rules, claims, login, openedAt) {
 /** An issue the drain filed or already triaged: a label in its `drain:` namespace, or its status marker in the body, is there before the poll first sees it, so it is already seen. */
 const filedByDrain = (issue) => (issue.labels ?? []).some((label) => (label?.name ?? "").toLowerCase().startsWith(DRAIN_LABEL_PREFIX)) || (issue.body ?? "").includes(DRAIN_STATUS_MARKER)
 
-/** What someone but the drain changed since `before` (a new issue, an edit, another comment, a reopen or a label outside the drain's own), or null. The reason travels with the event. */
+/** What someone but the drain changed since `before` (a new issue, an edit to a human's issue (a bot that rewrites its own issue's body, such as a health table, is not news), an edit, another comment, a reopen or a label outside the drain's own), or null. The reason travels with the event. */
 async function changedByOthers(api, repo, issue, before, digest, ignored, rules) {
   if (!before) return filedByDrain(issue) ? null : "new issue"
-  if (before.digest && (before.ignored ?? "") === ignored && before.digest !== digest) return "title or body edited"
+  if (before.digest && (before.ignored ?? "") === ignored && before.digest !== digest && !isBot(issue)) return "title or body edited"
   const since = before.updatedAt
   const comments = (await api.comments(repo, issue.number, since)).filter((comment) => comment.updated_at > since)
   const all = {}
