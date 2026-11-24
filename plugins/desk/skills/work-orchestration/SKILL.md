@@ -15,7 +15,7 @@ Read the existing task, agreement and plan before choosing the matching Superpow
 
 Before new work starts, list every decision in it that needs the human's judgment: voice, relationships, irreversible or hard-to-undo choices, and real ambiguity. Naming and filing are not among them: the agent owns them (`start-task`). Resolve each one you can from the request, the code or a sensible default. Put the rest to the human now, not when you reach the fork, and especially any entangled calls, where one answer changes another or changes work done before the fork. Ask them as one batch, each with your recommendation, so execution then runs without blocking on the human. A fork that could not have been foreseen is raised when it appears; one you did not think about beforehand is not unforeseeable.
 
-Think it through before you ask for go. Read the actual source material, write the whole plan, and have an independent reviewer (a rubber-duck or critic agent) check it until neither of you finds a gap. Then ask for go once, with that whole plan, and start no implementation until you have it. Never drip-feed half-plans or surface gaps one message at a time.
+Think it through before you ask for go. Read the actual source material, write the whole plan, and have an independent reviewer (a rubber-duck or critic agent) check it until neither of you finds a gap. Then ask for go once, with that whole plan, and start no implementation until you have it. End the reply on the go request itself ("Say go and I'll start on <outcome>."), after any scope or summary; a reply that ends on scope, or only says implementation has not started, has not asked. Never drip-feed half-plans or surface gaps one message at a time.
 
 ## Authority and dependencies
 
