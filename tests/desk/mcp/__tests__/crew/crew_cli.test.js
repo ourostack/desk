@@ -35,7 +35,7 @@ test("main hands each action its options and exits by the result's state", async
     joinWorkspace: async (args) => (calls.push(["join", args]), { state: "refused" }),
     startWorkspace: async (args) => (calls.push(["start", args]), { state: "plan" }),
   }
-  assert.deepEqual(await run(["status"], engine), { code: 0, err: "", result: { state: "not_crew" } })
+  assert.deepEqual(await run(["status"], engine), { code: 1, err: "", result: { state: "not_crew" } })
   assert.deepEqual(calls.pop(), ["status", { repo: "/work/team", identity: undefined, session: true }])
   assert.equal((await run(["join", "--repo", "/r", "--identity", "me", "--alias", "me", "--apply"], engine)).code, 1)
   assert.deepEqual(calls.pop(), ["join", { repo: "/r", identity: "me", alias: "me", apply: true }])
@@ -60,7 +60,7 @@ test("main hands each action its options and exits by the result's state", async
 test("the real engine through main: a team repository that is not a Crew workspace yet", async () => {
   const repo = await teamRepo(CIT_SHAPED)
   const { code, result } = await run(["status", "--repo", repo.clone])
-  assert.equal(code, 0)
+  assert.equal(code, 1)
   assert.equal(result.state, "not_crew")
   assert.match(result.message, /crew:start-crew/u)
   const removed = await run(["adopt", "--repo", repo.clone])
