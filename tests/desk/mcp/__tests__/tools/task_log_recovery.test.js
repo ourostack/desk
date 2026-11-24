@@ -259,6 +259,20 @@ test("commits whose bytes a squash merge already put on the base are moved onto 
   assert.equal(await fs.readFile(path.join(root, "local.md"), "utf8"), "Mine.\n")
 })
 
+test("commits that change nothing net are moved onto a base that has moved on", async (t) => {
+  const { root, base } = await aheadOfBase(t)
+  git(root, ["revert", "--no-edit", "HEAD"])
+  const held = git(root, ["rev-parse", "HEAD"])
+  git(root, ["checkout", "-q", "--detach", base])
+  await fs.writeFile(path.join(root, "newer.md"), "Newer.\n")
+  git(root, ["add", "newer.md"])
+  git(root, ["commit", "-qm", "Newer"])
+  const newer = git(root, ["rev-parse", "HEAD"])
+  git(root, ["checkout", "-q", "-B", "main", held])
+  assertPublishedContentBase(root, { policy_commit: newer, policy_sha256: policySha(root) }, "task_update")
+  assert.equal(git(root, ["rev-parse", "HEAD"]), newer)
+})
+
 test("a base that cannot be read at all is named, and no admission means no check", async (t) => {
   const root = await fixture(t)
   assert.equal(assertPublishedContentBase(root, null, "task_update"), undefined)
