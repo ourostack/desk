@@ -432,6 +432,20 @@ function removeIdenticalUntracked(git, target, stderr) {
   return removed
 }
 
+// A tracked file whose working-tree bytes are exactly the incoming file's is staged: the checkout puts the same bytes back, and a stale index entry no longer refuses the move.
+function stageIdenticalTracked(git, target, stderr) {
+  const top = git(["rev-parse", "--show-toplevel"]).stdout.trim()
+  let staged = 0
+  for (const match of stderr.matchAll(/^(?:error: )?Entry '(.+)' not uptodate\./gmu)) {
+    const file = match[1]
+    const incoming = git(["rev-parse", "--verify", "--quiet", `${target}:${file}`]).stdout.trim()
+    const local = git(["hash-object", "--", path.join(top, file)]).stdout.trim()
+    if (incoming === "" || incoming !== local) continue
+    if (git(["add", "--", path.join(top, file)]).status === 0) staged += 1
+  }
+  return staged
+}
+
 /**
  * Moves the checkout with its upstream only when both name the same branch. A checkout on another branch (a worktree on a
  * feature branch that tracks the default branch) keeps its branch: moving it would move the work it holds.
@@ -458,6 +472,7 @@ function catchUp({ git, upstream, head, target }) {
     git(["update-index", "-q", "--refresh"])
     moved = git(["read-tree", "-m", "-u", head, target], CHECKOUT_TIMEOUT_MS, smudge)
   }
+  if (moved.status !== 0 && stageIdenticalTracked(git, target, moved.stderr) > 0) moved = git(["read-tree", "-m", "-u", head, target], CHECKOUT_TIMEOUT_MS, smudge)
   if (moved.status !== 0 && removeIdenticalUntracked(git, target, moved.stderr) > 0) moved = git(["read-tree", "-m", "-u", head, target], CHECKOUT_TIMEOUT_MS, smudge)
   if (moved.status !== 0) {
     const named = [...moved.stderr.matchAll(/^(?:error: )?Entry '(.+)' (?:not uptodate|would be overwritten)/gmu)].map((match) => match[1])

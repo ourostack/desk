@@ -111,6 +111,39 @@ test("incident 1: an untracked file matching an incoming tracked one never stops
   assert.equal(git(desk, ["status", "--porcelain", "--", "_meta"]), "", "the identical untracked file is now the tracked one")
 })
 
+test("a tracked file whose working-tree bytes already equal the published ones does not hold the checkout behind (#1588)", async () => {
+  const { origin, desk, elsewhere } = await mkShared()
+  await commit(elsewhere, "notes/shared.md", "shared notes\npublished elsewhere\n", "elsewhere: edit notes")
+  git(elsewhere, ["push", "-q", "origin", "main"])
+
+  // The published bytes sit in the working tree as an unstaged change, and another session has dirty work in a different file.
+  await write(desk, "notes/shared.md", "shared notes\npublished elsewhere\n")
+  await write(desk, "drafts/untracked.md", "untracked work in progress\n")
+  await commit(desk, "tasks/other.md", card({ status: "doing", updated: "2026-10-28T21:04:00Z", progress: ["new card"] }), "desk: card update")
+
+  const result = deliver({ root: desk })
+
+  assert.equal(result.state, "delivered")
+  assert.equal(result.checkout.state, "caught_up", JSON.stringify(result.checkout))
+  assert.equal(git(desk, ["rev-parse", "HEAD"]), bare(origin, ["rev-parse", "main"]))
+  assert.equal(git(desk, ["status", "--porcelain", "--", "notes"]), "")
+  assert.equal(await fs.readFile(path.join(desk, "drafts/untracked.md"), "utf8"), "untracked work in progress\n")
+})
+
+test("a tracked file whose working-tree bytes differ from the published ones still holds the checkout behind", async () => {
+  const { desk, elsewhere } = await mkShared()
+  await commit(elsewhere, "notes/shared.md", "shared notes\npublished elsewhere\n", "elsewhere: edit notes")
+  git(elsewhere, ["push", "-q", "origin", "main"])
+  await write(desk, "notes/shared.md", "shared notes\nmy own edit\n")
+  await commit(desk, "tasks/other.md", card({ status: "doing", updated: "2026-10-28T21:04:00Z", progress: ["new card"] }), "desk: card update")
+
+  const result = deliver({ root: desk })
+
+  assert.equal(result.checkout.state, "behind")
+  assert.equal(result.checkout.reason, "local_changes")
+  assert.equal(await fs.readFile(path.join(desk, "notes/shared.md"), "utf8"), "shared notes\nmy own edit\n")
+})
+
 test("incident 2: a task card conflict while other files are dirty resolves itself and Desk's commit reaches the remote", async () => {
   const { origin, desk, elsewhere } = await mkShared()
   // The operator signs off on another machine: newer progress line, but an older update time than the desk's own write.
