@@ -687,8 +687,8 @@ async function recordChanges(api, drain, state, { full, issues }, { now, desk })
     const digest = digestOf(issue, trailers)
     seen[key] = { updatedAt: issue.updated_at, digest, title: issue.title, ...(ignored ? { ignored } : {}), ...(before?.edits && before.digest === digest ? { edits: before.edits } : {}) }
     if (!state.seeded || before?.updatedAt === issue.updated_at) continue
-    // A body that changed on an issue a person created is news unless bots alone edited it; one a bot created is a bot's own to rewrite.
-    const bodyChanged = Boolean(before?.digest) && (before.ignored ?? "") === ignored && before.digest !== digest && !isBot(issue)
+    // A body that changed is news unless bots alone edited it, whoever created the issue.
+    const bodyChanged = Boolean(before?.digest) && (before.ignored ?? "") === ignored && before.digest !== digest
     // A record from before titles were kept cannot show the title is unchanged, so its first changed poll is news as it always was.
     const edited = bodyChanged && before.title !== issue.title ? "title or body edited" : null
     todo.push({ issue, key, before, digest, edited, scan: bodyChanged && !edited })

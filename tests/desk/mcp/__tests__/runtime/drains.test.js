@@ -1991,13 +1991,11 @@ test("a change is news unless every new edit is a bot's: a person, a person befo
   }
 })
 
-test("a title change is news with no history read; a bot-created issue's own rewrite stays quiet with none either; a record without a title is news; so is a reader that is not there", async () => {
-  const w = await editsWorld([ISSUE(), { ...issue(2, T(0), "Mine", "m1"), user: { login: BOT, type: "Bot" } }])
+test("a title change is news with no history read; a record without a title is news; so is a reader that is not there", async () => {
+  const w = await editsWorld([ISSUE()])
   w.hist[1] = history(3)
-  w.hist[2] = history(3, { extra: [personEdit("p", T(4))] })
   await w.poll()
   w.issues[0] = issue(1, T(5), "Renamed", "health: 2")
-  w.issues[1] = { ...issue(2, T(5), "Mine", "m2"), user: { login: BOT, type: "Bot" } }
   const out = await w.poll(NOW + 360_000)
   assert.deepEqual(out.wakes[0].events.map((event) => `${event.number} ${event.why}`), ["1 title or body edited"])
   assert.deepEqual(w.reads, [])
@@ -2013,6 +2011,32 @@ test("a title change is news with no history read; a bot-created issue's own rew
   await none.poll()
   none.issues[0] = issue(1, T(5), "Health", "health: 2")
   assert.equal((await none.poll(NOW + 360_000)).wakes.length, 1)
+})
+
+test("who created the issue is no veto: on a bot-created issue a bot-only rewrite is quiet, a person's edit wakes, and so does a person's edit followed by a bot's", async () => {
+  const mine = () => ({ ...ISSUE(), user: { login: BOT, type: "Bot" } })
+  const setup = async () => {
+    const w = await editsWorld([mine()])
+    w.hist[1] = history(3)
+    await w.poll()
+    return w
+  }
+  const quiet = await setup()
+  quiet.change(1, NOW + 360_000, botEdit("b1", iso(NOW + 360_000)))
+  quiet.issues[0] = { ...quiet.issues[0], user: { login: BOT, type: "Bot" } }
+  await quiet.poll(NOW + 360_000)
+  assert.deepEqual(quiet.sent, [])
+  assert.ok(quiet.reads.length > 0, "the history was read")
+  const human = await setup()
+  human.change(1, NOW + 360_000, personEdit("p1", iso(NOW + 360_000)))
+  human.issues[0] = { ...human.issues[0], user: { login: BOT, type: "Bot" } }
+  assert.equal((await human.poll(NOW + 360_000)).wakes.length, 1)
+  const both = await setup()
+  both.change(1, NOW + 300_000, personEdit("p1", iso(NOW + 300_000)))
+  both.change(1, NOW + 360_000, botEdit("b1", iso(NOW + 360_000)))
+  both.issues[0] = { ...both.issues[0], user: { login: BOT, type: "Bot" } }
+  const out = await both.poll(NOW + 360_000)
+  assert.deepEqual(out.wakes[0].events.map((event) => event.number), [1])
 })
 
 test("a bot's body edit does not hide the rest: a person's comment, an outside label, a reopen, a cross-reference and an assignment still wake", async () => {
