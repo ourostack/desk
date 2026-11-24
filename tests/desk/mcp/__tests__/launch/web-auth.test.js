@@ -3560,3 +3560,21 @@ test("in a real page, eval runs functions and expressions as given, with or with
     server.close()
   }
 })
+
+test("an enterprise SSO page's Continue is pressed once, and the reply says whether Entra renewed the session or needs a person", async () => {
+  for (const [end, state] of [["https://github.com/teams-example/app/pull/1", "renewed"], ["https://login.microsoftonline.com/common/oauth2/authorize", "needs_person"]]) {
+    const native = fakeDriver({ packet: buttonSnapshot("Continue") })
+    let url = "https://github.com/enterprises/example/sso?return_to=x"
+    native.page.url = () => url
+    native.page.goto = async () => { native.calls.push(["goto"]) }
+    const adapter = adapterFor(native, await mkTempRoot("auth-sso-"), 8000)
+    const original = native.page.locator
+    try {
+      const pending = adapter.call(["goto", "https://github.com/teams-example/app/pull/1"])
+      setTimeout(() => { url = end }, 300)
+      const reply = await pending
+      assert.equal(reply.sso.state, state)
+      assert.equal(clicks(native), 1)
+    } finally { void original; await adapter.close() }
+  }
+})

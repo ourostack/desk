@@ -4,6 +4,7 @@ var fs = require("fs");
 var path = require("path");
 var crypto = require("crypto");
 var launch = require("./web-launch.cjs");
+var sso = require("./web-sso.cjs");
 var failures = new WeakMap();
 // Each read's look (see lookOf), for telling what an action or a wait changed. Never part of a reply.
 var looks = new WeakMap();
@@ -1634,6 +1635,21 @@ function create(context, outputDir, timeoutMs, runtimePolicy, options) {
     outcome.appLaunch = launch.report({ schemes: schemesOf(fresh), host: last.host, how: how, option: option, url: outcome.page.url, problem: problem });
     return outcome;
   }
+  // GitHub's enterprise SSO page: its Continue is pressed once and the reply says whether Entra renewed the session.
+  async function followSso(reader, outcome) {
+    var option = sso.isSsoPage(addressOf(reader.page.url())) ? sso.continueIn(outcome.snapshot) : null;
+    if (!option) return outcome;
+    try { outcome = await execute(["click", option.ref], true); } catch (error) { return outcome; }
+    var end = Date.now() + Math.min(WEB_PATH_WAIT_MS, Math.floor(timeoutMs / 4));
+    var url = addressOf(reader.page.url());
+    while ((sso.isSsoPage(url) || sso.onEntra(url)) && Date.now() < end) {
+      await sleep(WEB_PATH_POLL_MS); checkRuntime(); url = addressOf(reader.page.url());
+    }
+    outcome = await settled(reader, false, true);
+    url = addressOf(reader.page.url());
+    outcome.sso = sso.report(sso.onEntra(url) ? "needs_person" : sso.isSsoPage(url) ? "stalled" : "renewed");
+    return outcome;
+  }
   // A read never acts: a launch it finds that no reply has told yet is reported with the page's web option and its click.
   function reportLaunch(reader, outcome) {
     var rec = recorderFor(reader.page);
@@ -1839,6 +1855,7 @@ function create(context, outputDir, timeoutMs, runtimePolicy, options) {
       }
       if (typed) outcome.typed = typed;
       if (!inner && (command === "click" || NAVIGATIONS.indexOf(command) !== -1)) outcome = await followLaunch(reader, command, outcome, mark);
+      if (!inner && (command === "click" || NAVIGATIONS.indexOf(command) !== -1)) outcome = await followSso(reader, outcome);
       else if (!inner) reportLaunch(reader, outcome);
       reportChange(command, seen, outcome);
       return outcome;
