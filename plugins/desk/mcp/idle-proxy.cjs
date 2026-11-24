@@ -11,7 +11,6 @@
 "use strict";
 
 var childProcess = require("child_process");
-var fs = require("fs");
 var path = require("path");
 var v8 = require("v8");
 var vm = require("vm");
@@ -395,7 +394,7 @@ function runIdleProxy(o) {
       if (newest) {
         var ownRoot = path.dirname(path.dirname(o.indexFile));
         // A root the host set that no longer exists (a pruned version) is replaced too.
-        if (!childEnv.DESK_PLUGIN_ROOT || childEnv.DESK_PLUGIN_ROOT === ownRoot || !fs.existsSync(childEnv.DESK_PLUGIN_ROOT)) childEnv.DESK_PLUGIN_ROOT = newest.pluginRoot;
+        if (!childEnv.DESK_PLUGIN_ROOT || childEnv.DESK_PLUGIN_ROOT === ownRoot || !o.exists(childEnv.DESK_PLUGIN_ROOT)) childEnv.DESK_PLUGIN_ROOT = newest.pluginRoot;
         indexFile = newest.indexFile;
         pick("stderr").write("[desk-mcp] idle proxy: running Desk " + newest.version + " from " + newest.pluginRoot + "\n");
       }

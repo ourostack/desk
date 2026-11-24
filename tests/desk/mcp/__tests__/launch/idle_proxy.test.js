@@ -593,7 +593,7 @@ test("the idle proxy starts each new server from the chosen Desk, keeps a plugin
   const run = (env) => runIdleProxy({
     node: "/node", indexFile: "/own/mcp/index.js", args: ["--root", "/d"], idleMs: IDLE, stdin, stdout: { write() {} }, stderr: { write: (t) => logs.push(t) },
     exit() {}, signals: new EventEmitter(), kill() {}, setTimer: () => 1, clearTimer() {}, env,
-    chooseIndex: () => { if (choice instanceof Error) throw choice; return choice },
+    exists: () => true, chooseIndex: () => { if (choice instanceof Error) throw choice; return choice },
     spawn: (...call) => { calls.push(call); return Object.assign(new EventEmitter(), { stdin: new EventEmitter(), stdout: new PassThrough(), kill() {} }) },
   })
   run({})
@@ -602,8 +602,8 @@ test("the idle proxy starts each new server from the chosen Desk, keeps a plugin
   assert.match(logs.join(""), /running Desk 3\.2\.290 from \/new/u)
   run({ DESK_PLUGIN_ROOT: "/own" })
   assert.equal(calls[1][2].env.DESK_PLUGIN_ROOT, "/new", "the root this copy would have used moves with it")
-  run({ DESK_PLUGIN_ROOT: tmpdir() })
-  assert.equal(calls[2][2].env.DESK_PLUGIN_ROOT, tmpdir(), "a root the host set that exists stays")
+  run({ DESK_PLUGIN_ROOT: "/pinned" })
+  assert.equal(calls[2][2].env.DESK_PLUGIN_ROOT, "/pinned", "a root the host set that exists stays")
   choice = null
   run({})
   assert.equal(calls[3][1][0], "/own/mcp/index.js")
@@ -650,7 +650,7 @@ test("the idle proxy replaces a plugin root the host set when that folder no lon
   const calls = []
   runIdleProxy({
     node: "/node", indexFile: "/own/mcp/index.js", args: [], idleMs: IDLE, stdin: new PassThrough(), stdout: { write() {} }, stderr: { write() {} },
-    exit() {}, signals: new EventEmitter(), kill() {}, setTimer: () => 1, clearTimer() {}, env: { DESK_PLUGIN_ROOT: path.join(tmpdir(), "desk-pruned-version") },
+    exit() {}, signals: new EventEmitter(), kill() {}, setTimer: () => 1, clearTimer() {}, env: { DESK_PLUGIN_ROOT: "/gone" }, exists: () => false,
     chooseIndex: () => ({ indexFile: "/new/mcp/index.js", pluginRoot: "/new", version: "3.2.495" }),
     spawn: (...call) => { calls.push(call); return Object.assign(new EventEmitter(), { stdin: new EventEmitter(), stdout: new PassThrough(), kill() {} }) },
   })
