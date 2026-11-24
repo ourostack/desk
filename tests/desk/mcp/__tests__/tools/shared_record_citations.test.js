@@ -10,6 +10,7 @@ import { moveTask } from "../../../../../plugins/desk/mcp/src/tools/move.js"
 import { task_create, task_archive } from "../../../../../plugins/desk/mcp/src/tools/task.js"
 import { track_create } from "../../../../../plugins/desk/mcp/src/tools/track.js"
 import { mkTempDeskRoot } from "./_helpers.js"
+import { removeTree } from "../_remove_tree.js"
 
 const NO_PUSH = { schedulePush: () => {} }
 const DONE_EVIDENCE = { kind: "pr", ref: "https://github.com/example-org/example-repo/pull/1" }
@@ -100,8 +101,8 @@ test("a desk without Git repoints citations too, and skips a JSON file that is n
 
 test("a desk with no _shared or pages folder moves as before", async () => {
   const root = await desk({ gitDesk: false })
-  await fs.rm(path.join(root, "_shared"), { recursive: true })
-  await fs.rm(path.join(root, "pages"), { recursive: true })
+  await removeTree(path.join(root, "_shared"))
+  await removeTree(path.join(root, "pages"))
   const result = await moveTask({ deskRoot: root, input: { track: "t", slug: "book-flights", to_track: "u" }, ...NO_PUSH })
   assert.equal(result.citations_not_repointed, undefined)
 })
