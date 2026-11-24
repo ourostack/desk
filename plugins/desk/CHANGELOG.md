@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.498 — 2026-11-24
+
+Archive-handoff diagnostics now carry each actor's existing bounded production attempts through final/error IPC and parent artifact persistence, retaining early capture failures that have no move observation. Parent-owned attempts and existing move/candidate receipts remain separate, and missing evidence stays explicit. This diagnostic repair changes no archive outcomes or time limits and does not resolve the Windows readiness cause. See [CI evidence guidance](../../../docs/ci.md).
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.497 — 2026-11-24
 
 Windows CI retains archive-handoff receipts and finite identity observations in separate files, so a later identity fixture cannot overwrite the earlier archive failure evidence. This does not change native readiness timeouts or fix their unresolved timing cause.
