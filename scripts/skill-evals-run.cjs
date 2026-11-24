@@ -454,24 +454,66 @@ ${checks}
 Reply with one JSON object and nothing else, in this shape: {"checks":[{"id":"<check id>","evidence":"<one or two sentences quoting or pointing to the specific text that decided it>","passed":true}]}. Include every check id exactly once. Write each check's evidence before its passed field, then set passed to agree with that evidence: true if the requirement is satisfied, false if it is violated or not established.`;
 }
 
-function parseVerdict(text, testCase) {
-  const start = text.indexOf("{");
-  const end = text.lastIndexOf("}");
-  if (start < 0 || end < start) throw new Error("the judge did not return a JSON object");
-  let verdict;
-  try {
-    verdict = JSON.parse(text.slice(start, end + 1));
-  } catch (error) {
-    throw new Error(`the judge's JSON did not parse: ${error.message}`);
+// A failure of the evaluation machinery (the judge process, or a verdict it never made usable), not of the behavior being judged.
+function harnessError(message) {
+  return Object.assign(new Error(message), { harnessError: true });
+}
+
+// The end of the balanced, string-aware JSON object that opens at `start`, or -1 when it never closes.
+function objectEnd(text, start) {
+  let depth = 0;
+  let inString = false;
+  for (let index = start; index < text.length; index += 1) {
+    const character = text[index];
+    if (inString) {
+      if (character === "\\") index += 1;
+      else if (character === '"') inString = false;
+    } else if (character === '"') inString = true;
+    else if (character === "{") depth += 1;
+    else if (character === "}") {
+      depth -= 1;
+      if (depth === 0) return index;
+    }
   }
+  return -1;
+}
+
+// Every top-level JSON object in the judge's output, wherever it sits: in a fence, between notes, after a stray brace.
+// A brace that opens no parseable object is skipped, so prose around the verdict cannot swallow it.
+function jsonObjects(text) {
+  const objects = [];
+  let parseError = null;
+  for (let start = text.indexOf("{"); start >= 0; start = text.indexOf("{", start + 1)) {
+    const end = objectEnd(text, start);
+    if (end < 0) continue;
+    try {
+      // Text from a "{" to its matching "}" parses only as an object.
+      objects.push(JSON.parse(text.slice(start, end + 1)));
+      start = end;
+    } catch (error) {
+      parseError ??= error;
+    }
+  }
+  return { objects, parseError };
+}
+
+function parseVerdict(text, testCase) {
+  const { objects, parseError } = jsonObjects(text);
+  const verdicts = objects.filter((object) => Object.hasOwn(object, "checks"));
+  if (verdicts.length === 0) {
+    if (parseError !== null && objects.length === 0) throw harnessError(`the judge's JSON did not parse: ${parseError.message}`);
+    throw harnessError("the judge did not return a JSON object with its checks");
+  }
+  if (verdicts.some((verdict) => JSON.stringify(verdict) !== JSON.stringify(verdicts[0]))) throw harnessError(`the judge returned ${verdicts.length} conflicting verdicts`);
+  const [verdict] = verdicts;
   const expected = testCase.checks.map((check) => check.id);
   const returned = Array.isArray(verdict.checks) ? verdict.checks : [];
   const ids = returned.map((check) => check?.id);
   if (ids.length !== expected.length || expected.some((id) => !ids.includes(id))) {
-    throw new Error(`the judge must return exactly these checks: ${expected.join(", ")}`);
+    throw harnessError(`the judge must return exactly these checks: ${expected.join(", ")}`);
   }
   for (const check of returned) {
-    if (typeof check.passed !== "boolean" || typeof check.evidence !== "string" || check.evidence.trim() === "") throw new Error(`the judge's check ${check.id} needs a boolean passed and non-empty evidence`);
+    if (typeof check.passed !== "boolean" || typeof check.evidence !== "string" || check.evidence.trim() === "") throw harnessError(`the judge's check ${check.id} needs a boolean passed and non-empty evidence`);
   }
   return expected.map((id) => {
     const { passed, evidence } = returned.find((check) => check.id === id);
@@ -529,7 +571,7 @@ async function runCaseIn(testCase, context, workspace) {
   for (let attempt = 1; attempt <= 2; attempt += 1) {
     const judgeRun = await runProcess(command, judgeArgs, { cwd: root, env: copilotAccountEnvironment(), timeoutSeconds: budget(context, options.timeoutSeconds ?? judgeTimeoutSeconds) });
     if (judgeRun.timedOut || judgeRun.code !== 0) {
-      lastError = new Error(`the judge process ${describeFailure(judgeRun)}`);
+      lastError = harnessError(`the judge process ${describeFailure(judgeRun)}`);
       continue;
     }
     try {
@@ -544,7 +586,7 @@ async function runCaseIn(testCase, context, workspace) {
       lastError = error;
     }
   }
-  throw new Error(`case ${testCase.id}: ${lastError.message}`);
+  throw Object.assign(new Error(`case ${testCase.id}: ${lastError.message}`), { harnessError: lastError.harnessError === true });
 }
 
 // One limit for every case of every suite, so suites run side by side without starting more subject processes than asked for.
@@ -688,11 +730,17 @@ async function runCommand(args, api) {
   if (version === null && options.harness === "copilot") api.fail("could not run `copilot --version`; install the GitHub Copilot CLI or pass --harness <command>");
   const context = { options, root, command, version, log, limit: createLimiter(options.concurrency) };
   const outcomes = await Promise.all(entries.map((entry) => runSuite(entry, context, api).catch((error) => {
-    return { suite: entry.suite.id, outcome: "failed", error: error.message };
+    return { suite: entry.suite.id, outcome: error.harnessError === true ? "harness-error" : "failed", error: error.message };
   })));
+  // A judge that never returned a usable verdict says nothing about the skill, so it is reported apart from behavior failures.
+  const harness = outcomes.filter((outcome) => outcome.outcome === "harness-error").map((outcome) => `harness error in ${outcome.suite} (not a behavior failure; no check was judged): ${outcome.error}`);
   const failed = outcomes.filter((outcome) => outcome.outcome === "failed").map((outcome) => outcome.suite);
-  const errors = outcomes.filter((outcome) => outcome.error !== undefined).map((outcome) => `\n${outcome.suite}: ${outcome.error}`).join("");
-  if (failed.length > 0) api.fail(`suite(s) failed: ${failed.join(", ")}.${errors} Fix the behavior or the skill, or add "knownFailure" with an issue URL if it fails for an unrelated reason.`);
+  const errors = outcomes.filter((outcome) => outcome.outcome === "failed" && outcome.error !== undefined).map((outcome) => `\n${outcome.suite}: ${outcome.error}`).join("");
+  const messages = [
+    ...(failed.length > 0 ? [`suite(s) failed: ${failed.join(", ")}.${errors} Fix the behavior or the skill, or add "knownFailure" with an issue URL if it fails for an unrelated reason.`] : []),
+    ...(harness.length > 0 ? [`${harness.join("\n")}\nNo receipt written; rerun the suite.`] : []),
+  ];
+  if (messages.length > 0) api.fail(messages.join("\n"));
 }
 
 module.exports = { runCommand, parseTranscript, parseVerdict, judgePrompt, changedEntries, heldOutEvidence };
