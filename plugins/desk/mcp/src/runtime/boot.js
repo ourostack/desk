@@ -1616,7 +1616,6 @@ export async function runBootCli({ argv = [], env = process.env, io = process, b
     name: "boot",
     summary: "Run the session-start boot: migrations, host, prerequisites, workspace sync, active tasks, push accounts and open PRs.",
     effect: "private",
-    readOnly: true,
     output: "the boot result",
     flags: {
       task: { type: "string", placeholder: "<name>", description: "The task to open; a blank name is no task." },

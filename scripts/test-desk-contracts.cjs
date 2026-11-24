@@ -1606,7 +1606,7 @@ contract("every general operator rule is stated in the skill that owns its topic
     ["using-desk", /Product, HX, performance, CI and test calls are yours: decide, record, ship/u],
     ["using-desk", /money, user-only credentials, irreversible acts/u],
     ["fast-honest-ci", /Download CI output from the operator's own repositories without asking/u],
-    ["interaction-style", /run sign-in flows yourself; never type a password or paste a secret/u],
+    ["interaction-style", /run sign-in flows yourself; never type a password into a page or put a secret in context/u],
     ["work-orchestration", /merge when confident[\s\S]+never report completion while the PR remains open/u],
     ["desk-problem", /Do not spawn a repair child, take an improvement card, edit tooling source or open a repair PR unless that repair is explicitly in this task's scope/u],
     ["interaction-style", /### Status leads with what the operator would feel\n\nA status or progress answer opens with how the work would feel to the operator if they used it today: what is broken first, each with its measured number against its bar[\s\S]+"On track" means they will enjoy it[\s\S]+Activity \(pull requests merged, CI runs, lanes busy\) is not progress unless a felt number moved[\s\S]+ask it first, plainly, one at a time/u],

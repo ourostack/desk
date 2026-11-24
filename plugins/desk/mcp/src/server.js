@@ -304,10 +304,11 @@ export async function callTool({ deskRoot, name, input, person = null, statusCon
     // `desk` points a card tool at another desk registered on this machine. That desk has its own search index and focus, so the call takes neither of this session's.
     if (SIBLING_DESK_TOOLS.includes(name) && target.input.desk !== undefined) {
       const { desk, ...rest } = target.input
-      target = { deskRoot: resolveSiblingDesk({ tool: name, desk, boundRoot: deskRoot, person, env }).deskRoot, input: rest, statusContext: {}, search: null }
+      const sibling = await resolveSiblingDesk({ tool: name, desk, boundRoot: deskRoot, person, env })
+      target = { deskRoot: sibling.deskRoot, person: sibling.person, input: rest, statusContext: {}, search: null }
     }
     const invoke = () => impl({
-      deskRoot: target.deskRoot, input: target.input, person, statusContext: target.statusContext, search: target.search,
+      deskRoot: target.deskRoot, input: target.input, person: target.person === undefined ? person : target.person, statusContext: target.statusContext, search: target.search,
       queryRouter: searchRouter(target.search), signal,
     })
     let stageStore = null

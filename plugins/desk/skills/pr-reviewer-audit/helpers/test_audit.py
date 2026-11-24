@@ -480,7 +480,43 @@ def test_module_run_as_main_exits_zero() -> None:
                 runpy.run_path(str(HERE / "audit.py"), run_name="__main__")
             except SystemExit as exc:
                 exited = True
-                assert exc.code == 0
+                assert exc.code == 3
         assert exited, "_cli_main should have raised SystemExit"
     finally:
         sys.argv = original_argv
+
+
+def test_cli_main_reports_a_refusal_and_exits_three(capsys) -> None:  # type: ignore[no-untyped-def]
+    import audit
+
+    def refuse(org, project, repo_id, pr_id, refusals):  # type: ignore[no-untyped-def]
+        refusals.append("tenant-mismatch")
+        return {"file_to_groups": {}, "approver_ranking": []}
+
+    with _mock.patch.object(audit, "main", side_effect=refuse):
+        rc = audit._cli_main(["org", "proj", "repo", "42"])
+
+    assert rc == 3
+    assert "tenant-mismatch:" in capsys.readouterr().err
+
+
+def test_cli_main_reports_an_http_error_and_exits_one(capsys) -> None:  # type: ignore[no-untyped-def]
+    import audit
+
+    with _mock.patch.object(audit, "main", side_effect=audit.requests.HTTPError("403")):
+        rc = audit._cli_main(["org", "proj", "repo", "42"])
+
+    assert rc == 1
+    assert "http-error: 403" in capsys.readouterr().err
+
+
+def test_main_records_the_token_refusal() -> None:
+    import audit
+
+    refusals: list[str] = []
+    with _mock.patch.object(audit, "ensure_tenant", return_value=True), _mock.patch.object(
+        audit, "_get_bearer_token", side_effect=RuntimeError("no token")
+    ):
+        audit.main("o", "p", "r", "1", refusals)
+
+    assert refusals == ["token-unavailable"]

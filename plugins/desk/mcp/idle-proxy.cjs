@@ -2,7 +2,7 @@
 //
 // A Desk server holds about 200 MB once it has loaded its runtime, its tools and its search index, and a host keeps one per hosted session for days. This proxy is the process the host talks to: it holds none of that. It starts the real server (index.js) as a child, passes the MCP stream through line by line, and when nothing has crossed it for DESK_MCP_IDLE_MS (3 minutes by default) and no call is waiting for an answer, it ends the child, which gives all of that memory back. The next message from the host starts a new child first: the proxy replays the `initialize` handshake the host already sent (the child's answer to that replay is dropped, so the host never sees a second handshake) and then delivers the message.
 //
-// A new child runs the newest compatible installed Desk, not the copy this proxy was installed with (bootstrap.cjs newestDesk), so an idle session follows Desk releases without a restart.
+// A new child runs the newest compatible installed Desk, not the copy this proxy was installed with (bootstrap.cjs newestDesk), so an idle session follows Desk releases without a restart, and a session whose copy a host removed keeps working on the next call.
 //
 // DESK_MCP_IDLE_MS=0 turns the release off: bootstrap.cjs then runs index.js in this process, as before.
 //
@@ -393,7 +393,8 @@ function runIdleProxy(o) {
       }
       if (newest) {
         var ownRoot = path.dirname(path.dirname(o.indexFile));
-        if (!childEnv.DESK_PLUGIN_ROOT || childEnv.DESK_PLUGIN_ROOT === ownRoot) childEnv.DESK_PLUGIN_ROOT = newest.pluginRoot;
+        // A root the host set that no longer exists (a pruned version) is replaced too.
+        if (!childEnv.DESK_PLUGIN_ROOT || childEnv.DESK_PLUGIN_ROOT === ownRoot || !o.exists(childEnv.DESK_PLUGIN_ROOT)) childEnv.DESK_PLUGIN_ROOT = newest.pluginRoot;
         indexFile = newest.indexFile;
         pick("stderr").write("[desk-mcp] idle proxy: running Desk " + newest.version + " from " + newest.pluginRoot + "\n");
       }

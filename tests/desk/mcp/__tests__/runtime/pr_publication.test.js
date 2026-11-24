@@ -106,6 +106,29 @@ test("published policy is absent, valid, or explicitly refused before delivery",
   assert.deepEqual(publicationPolicy((args) => ({ status: 0, stdout: args[0] === "show" ? JSON.stringify(policy) : ".desk/publication.json" }), onto), policy)
 })
 
+test("a gh quota refusal is reported as a quota wait, auth only when gh says so, and other failures name neither", () => {
+  const quota = "Wait until 11:09 (12 min), then rerun: the work account has 464 of 5000 REST calls left, under the floor of 500.\nsecond line"
+  for (const [stderr, expected, forbidden] of [
+    [quota, /GitHub API quota is low.*464 of 5000 REST calls left/u, /Check gh auth status/u],
+    ["gh: To get started with GitHub CLI, please run:  gh auth login", /Check gh auth status/u, /quota/u],
+    [undefined, /Run it again: GitHub CLI pr list failed \(exit 1\)/u, /auth|quota/u],
+    ["made-up-private-credential", /Run it again: GitHub CLI pr list failed \(exit 1\)/u, /auth|quota/u],
+  ]) {
+    const f = fixture({ fail: "list" })
+    const base = f.request.spawnGit
+    f.request.spawnGit = (command, args, options) => {
+      const result = base(command, args, options)
+      return result.status === 0 ? result : { ...result, stderr }
+    }
+    assert.throws(() => publishPullRequest(f.request), (error) => {
+      assert.match(error.message, expected)
+      assert.doesNotMatch(error.message, forbidden)
+      assert.doesNotMatch(error.message, /second line|made-up-private-credential/u)
+      return true
+    })
+  }
+})
+
 test("HTTPS, SCP and SSH publication use an exact-head merge and never push upstream", () => {
   for (const remote of ["https://github.example/example/workspace.git", "git@github.example:example/workspace.git", "ssh://git@github.example/example/workspace"]) {
     const f = fixture({ remote, create: true })

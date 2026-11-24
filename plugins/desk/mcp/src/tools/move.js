@@ -4,9 +4,10 @@
 // repository, a plain rename otherwise), touch the small set of frontmatter
 // fields that record ownership (`track:` on a moved/reparented task card),
 // and best-effort keep each `track.md`'s "## Tasks" table in sync. Neither
-// tool ever rewrites free text elsewhere — it only reports, in `mentions`,
-// other text files under the desk that still mention the old relative path,
-// so the agent (or the operator) can fix them if they matter. On a Git desk
+// tool rewrites free text elsewhere — they only report, in `mentions`,
+// other Markdown files under the desk that still mention the old relative
+// path. The one exception is a task move, which repoints whole-path
+// citations in the JSON records under `_shared/` and `pages/`. On a Git desk
 // they stage every file they write (M4-5 fix round 4) and commit exactly
 // the paths they wrote — the moved directory plus any track.md tables it
 // edited — right after (M4-6 Part 2); a plain rename with no commit is as
@@ -31,6 +32,7 @@ import { commitFailure, withNext } from "../util/route-around.js"
 import { deskFailure } from "../runtime/desk-failure.js"
 import { schedulePush as schedulePushDefault } from "../runtime/sync-worker.js"
 import { redactCredentialLikeText, redactName } from "../util/redact.js"
+import { planCitationRewrites } from "../util/citations.js"
 import { focusNote } from "./task-focus.js"
 import { resolveTaskHandle, resolveTrackHandle } from "../desk/handles.js"
 import {
@@ -399,6 +401,27 @@ async function findMentions({ root, oldRelPath, exclude }) {
   return mentions.map((abs) => relPath(root, abs))
 }
 
+// ── Citations in shared JSON records ───────────────────────────────────────
+
+/**
+ * Repoints citations of a moved folder (and, for a merge, its renamed card) in the JSON records under `_shared/` and `pages/`, so the
+ * workspace's own record checks keep passing. A record with unstaged work on a Git desk is left alone and named. Returns
+ * `{ files, left }`: absolute paths written, and `[{ file, reason }]`.
+ */
+async function repointCitations({ root, pairs, spawnGit }) {
+  const files = [], left = []
+  const git = isGitRepository(root, spawnGit)
+  for (const cited of await planCitationRewrites({ root, pairs })) {
+    if (git && hasUnstagedWork(root, [cited.rel], spawnGit)) {
+      left.push({ file: cited.rel, reason: "it has unstaged or untracked changes, so another session may be editing it" })
+      continue
+    }
+    await fs.writeFile(cited.file, cited.after)
+    files.push(cited.file)
+  }
+  return { files, left }
+}
+
 // ── task_update ────────────────────────────────────────────────────────────
 
 /**
@@ -651,6 +674,11 @@ export async function moveTask({ deskRoot, input, person = null, search, statusC
     }
   }
 
+  const pairs = intoTask === undefined ? [] : [[`${relPath(effectiveRoot, srcDir)}/task.md`, relPath(effectiveRoot, destFile)]]
+  pairs.push([relPath(effectiveRoot, srcDir), relPath(effectiveRoot, destDir)])
+  const cited = await repointCitations({ root: effectiveRoot, pairs, spawnGit })
+  for (const file of cited.files) updatedFiles.push(relPath(deskRoot, file))
+
   const writtenFiles = updatedFiles.map((p) => path.join(deskRoot, p))
   stageWrites({
     root: effectiveRoot,
@@ -681,6 +709,7 @@ export async function moveTask({ deskRoot, input, person = null, search, statusC
     updated_files: updatedFiles.map(shownPath),
     mentions: mentions.map(shownPath),
   }
+  if (cited.left.length > 0) result.citations_not_repointed = cited.left.map((entry) => ({ ...entry, file: shownPath(entry.file) }))
   if (commit) result.commit = commit
   // The held focus follows the card it names (a merge follows into the card that keeps the job); with nothing
   // focused, a task tool call carries the no-focus hint until the session declares. A different focus is left alone.

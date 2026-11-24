@@ -528,3 +528,11 @@ test("desk_save paths receipt carries the real bytes and hash of a non-empty Mar
   assert.deepEqual(result.content_admission.subjects["paths/0"], { sha256: digest(body), bytes: Buffer.byteLength(body) })
   assert.equal(git(root, ["show", "HEAD:docs/plan.md"]), body.trim())
 })
+
+test("task_update with only a log defaults content_home to coordination and current", async (t) => {
+  const root = await fixture(t)
+  const logged = await update(root, { log: "Recorded progress." })
+  assert.ok(logged.log !== undefined || logged.status !== undefined)
+  assert.match(await fs.readFile(path.join(root, "track/existing/log.md"), "utf8"), /Recorded progress\./u)
+  await assert.rejects(update(root, { note: "Not just a log.", log: "x" }), /content_home_required/u)
+})

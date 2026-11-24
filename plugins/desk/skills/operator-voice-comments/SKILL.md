@@ -17,6 +17,10 @@ Anything sent or scheduled in the operator's name — a chat message, an email, 
 
 Before you show a draft, check it with a zero-context reviewer (below), so the operator sees a clean draft and any open judgment call at once. The review never replaces the approval.
 
+## Relaying is not sending as them
+
+When you pass the operator's views, feedback or decisions to someone else, you are not sending as the operator. Write as yourself, label it as your reading ("Here's generally what Ari was thinking, as I understood it"), and name the operator as the person to ask about anything unclear. Never write it in their first person or as "in my words". Use the operator's voice only for text they send themselves or approve for sending in their name, under the approval rule above.
+
 ## Surfaces in scope
 
 In scope: replies in reviewer threads, top-level PR comments, PR descriptions you draft or audit, work-item comments and descriptions, group-chat messages, and emails and calendar invitations in the operator's name. Out of scope: skill, planning and doing prose, commit messages, your own replies to the operator, friction entries and cards.

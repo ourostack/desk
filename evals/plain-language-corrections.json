@@ -5,7 +5,7 @@
   "sources": [
     "plugins/plain-language/skills/plain-language/SKILL.md"
   ],
-  "reviewedSourceFingerprint": "055bafcadb5fd2867cb0270301e30aba09fb3d933c3463fc14f3dcba4339eb36",
+  "reviewedSourceFingerprint": "65aeb58d2a666a5c43212d6160a6d3fec81e5297509e3e7bd37e1dbc325c852a",
   "requirements": [
     {
       "id": "no-chat-shorthand",
@@ -14,6 +14,10 @@
     {
       "id": "layout-sets-line-width",
       "description": "Rendered text takes its line width from the layout, not a fixed character or rem measure."
+    },
+    {
+      "id": "no-defensive-disclaimers",
+      "description": "Skills, docs and briefs carry no unrequested disclaimer, provenance or legal caveat, and a brief never tells a subagent to add one."
     }
   ],
   "cases": [
@@ -64,6 +68,31 @@
             "layout-sets-line-width"
           ],
           "description": "No max-width or width in a fixed unit such as ch, em, rem or px caps paragraphs or the article text."
+        }
+      ]
+    },
+    {
+      "id": "brief-without-disclaimer",
+      "description": "A brief for a new skill does not tell the subagent to add a disclaimer, even when a similar file opens with one.",
+      "prompt": "Write the brief for a subagent that will author a new skill summarizing a published book's method. The existing skill `scales-of-reading` has a references file that opens with 'This is our own rendering; nothing is copied from the source, read the original for more.' Write only the brief.",
+      "checks": [
+        {
+          "id": "no-disclaimer-instruction",
+          "polarity": "must_not",
+          "evidenceType": "response",
+          "covers": [
+            "no-defensive-disclaimers"
+          ],
+          "description": "The brief does not instruct the subagent to add a copyright rule, provenance note, or 'read the original' disclaimer."
+        },
+        {
+          "id": "brief-gives-task",
+          "polarity": "must",
+          "evidenceType": "response",
+          "covers": [
+            "no-defensive-disclaimers"
+          ],
+          "description": "The brief still tells the subagent what the skill must contain."
         }
       ]
     }

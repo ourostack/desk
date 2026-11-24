@@ -32,7 +32,7 @@ export function resolveHookDeskRoot({ env = process.env, cwd = process.cwd(), ho
     })
     return { root: resolved.root, source: resolved.source, binding_path: bindingPath }
   } catch (error) {
-    return { root: null, source: null, binding_path: bindingPath, tried: error.tried ?? [], error: error.message }
+    return { root: null, source: null, binding_path: bindingPath, tried: error.tried ?? [], error: error.message, code: "desk-root-not-found" }
   }
 }
 
@@ -57,7 +57,6 @@ export async function main({ argv = process.argv.slice(2), env = process.env, wr
       name: "resolve-desk-root",
       summary: "Print the bound desk root as JSON, or the one line a flag asks for.",
       effect: "private",
-      readOnly: true,
       protocol: true,
       output: "the root's JSON, or the one line a flag asks for",
       flags: FLAGS,

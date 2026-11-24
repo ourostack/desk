@@ -882,14 +882,14 @@ async function finishStart({ action, top, git, apply, connect, result, origin })
  *
  * Adds Crew's shape to a new or existing repository; `tooling.repo` makes it dual-repo, and that repository must exist
  * and hold what is declared. `state`: "plan" (nothing written), "published" (landed on the default branch),
- * "committed" (a clone with no origin), "pr_open", "already_crew", "refused" (before any write) or "failed" (with
+ * "committed" (a clone with no origin), "pr_open", "already_crew", "not_git", "refused" (before any write) or "failed" (with
  * `stage`; the clone is put back as it was).
  */
 export async function startWorkspace({ repo, apply = false, tooling, founder, team, spawnGit = spawnSync, gh = personGh(), wait = sleep, now = Date.now }) {
   const action = "start"
   const refuse = (message) => ({ action, state: "refused", repo, message: `${message}. Nothing was written.` })
   const top = toplevel(repo, spawnGit)
-  if (top === null) return { action, state: "refused", repo, message: notGit(repo) }
+  if (top === null) return { action, state: "not_git", repo, message: notGit(repo) }
   const { git, origin, base } = workspaceFacts(top, spawnGit)
   const declaration = declarationFor({ tooling })
   const parsed = parseCrewConfig(JSON.stringify(declaration))

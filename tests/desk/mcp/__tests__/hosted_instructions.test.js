@@ -87,7 +87,7 @@ test("hostedInstructions: the foundation without frontmatter, the desk's AGENTS.
   assert.ok(text.trimEnd().endsWith(DESK_STATUS_LINE), "ends with the desk_status line")
 })
 
-test("hostedInstructions leads with what matters: the first 512 characters say to call desk_status first, keep memory in the desk and never type a password or paste a secret", async () => {
+test("hostedInstructions leads with what matters: the first 512 characters say to call desk_status first, keep memory in the desk and never type a password into a page or put a secret in context", async () => {
   // These are the three rules Desk's instructions state that matter most. The "task cards change only through task_update" rule is not part of the instructions (it lives in the task-card-format skill), so it is not asserted here.
   for (const agents of ["# Desk Instructions\n\nThe harbor master logs every ferry.\n", null]) {
     const { desk, pluginRoot } = await scratchDesk({ agents })
@@ -95,11 +95,11 @@ test("hostedInstructions leads with what matters: the first 512 characters say t
     assert.match(head, /Call desk_status first/u)
     assert.match(head, /Don't use this client's built-in memory/u)
     assert.match(head, /Desk's tools/u)
-    assert.match(head, /Never type a password or paste a secret/u)
+    assert.match(head, /Never type a password into a page or put a secret in context/u)
   }
   const none = hostedInstructions({}).slice(0, 512)
   assert.match(none, /Call desk_status first/u)
-  assert.match(none, /Never type a password or paste a secret/u)
+  assert.match(none, /Never type a password into a page or put a secret in context/u)
 })
 
 test("hostedInstructions skips a missing AGENTS.md, a missing foundation or a missing root, never failing", async () => {

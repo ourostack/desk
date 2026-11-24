@@ -35,7 +35,7 @@ This applies equally to plugin defaults and operator workspace config: both auto
 
 ### 1. Confirm the `~/<runtime>.toml` link is in place
 
-This is `desk:session-start` Step 4.7's job (symlink → hardlink → copy fallback per platform). Detect current state:
+This is `desk:session-start`'s "Workspace MCP link" section (`details.md`)'s job (symlink → hardlink → copy fallback per platform). Detect current state:
 
 ```bash
 readlink "$HOME/<runtime>.toml" 2>/dev/null
@@ -175,6 +175,6 @@ Added [<alias>] to $DESK/<runtime>.toml. Next launch will load it.
 
 ## Cross-references
 
-- `desk:session-start` Step 4.7 — `~/<runtime>.toml` link auto-creation + platform fallback.
+- `desk:session-start`'s "Workspace MCP link" section (`details.md`) — `~/<runtime>.toml` link auto-creation + platform fallback.
 - `desk:git-hygiene` — commit + push cadence.
 - `<runtime> mcp <name> --help` (runtime CLI) — per-builtin arg surface, source of truth for builtin schema.

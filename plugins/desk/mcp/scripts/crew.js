@@ -6,7 +6,7 @@
 // Without --apply, no member or shared files change; join may fetch missing Git history for its preview.
 // `--repo` defaults to the current folder.
 // `initiative` writes the working tree only; publish the result through the shared-path protocol.
-// Exits 1 when the result is refused, failed, has layout problems or is not a Git clone, and 2 for a usage error (one line on stderr).
+// Exits 1 when the result is refused, failed, has layout problems or the folder is not a Git clone or not a Crew workspace, and 2 for a usage error (one line on stderr).
 
 import process from "node:process"
 import { realpathSync } from "node:fs"
@@ -27,14 +27,14 @@ function founderOf(text) {
   return at === -1 ? { alias: text, identity: "" } : { alias: text.slice(0, at), identity: text.slice(at + 1) }
 }
 
-const FAILED = new Set(["refused", "failed", "not_git", "problems"])
+const FAILED = new Set(["refused", "failed", "not_git", "not_crew", "problems"])
 
 function crewCli({ cwd, engine, script }) {
   const command = (name, def, run) => defineCommand({ name, output: "one JSON value", text: (result) => JSON.stringify(result, null, 2), exit: (result) => (FAILED.has(result.state) ? "error" : "ok"), effect: "private", ...def, run })
   const repoOf = (input) => input.repo ?? cwd
   return defineCli({
     name: "crew",
-    about: ["Crew workspace setup, one deterministic step at a time. Exits 1 when the result is refused, failed, has layout problems or is not a Git clone."],
+    about: ["Crew workspace setup, one deterministic step at a time. Exits 1 when the result is refused, failed, has layout problems, or the folder is not a Git clone or not a Crew workspace."],
     groups: { initiative: "A shared initiative, written to the working tree only; publish the result through the shared-path protocol." },
     commands: [
       // status also says what a Desk session started in the clone binds (`session`), the check a join runs before it delivers.

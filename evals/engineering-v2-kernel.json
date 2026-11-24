@@ -23,7 +23,7 @@
     "evals/fixtures/unicode-slug/__tests__/tools/friction_add.test.js",
     "evals/worlds/engineering-v2-kernel/v2-approved-local-delivery/held-out/oracle.test.js"
   ],
-  "reviewedSourceFingerprint": "fe06da12ba60befc1c31e5fc8d0cd598b48c56ac506b9b18058a52a57886e51a",
+  "reviewedSourceFingerprint": "407e483573cbedf8fd062024740f72879fb17bb9a3ba6855eb09bdda28818cb5",
   "requirements": [
     {"id": "v2-substantive-alignment", "description": "Ground the first conversation in current behavior and material choices rather than silently choosing the outcome."},
     {"id": "v2-explicit-go", "description": "New engineering work needs explicit agreement and go before implementation; contribution permission is not enough."},
