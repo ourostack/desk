@@ -143,6 +143,8 @@ function holdsNothingUnpublished(root, head, base) {
   if (fork.status !== 0) return false
   const changed = git(root, ["diff", "--name-only", "-z", fork.stdout.trim(), head])
   const paths = changed.stdout.split("\0").filter(Boolean)
+  // Merges of the base into HEAD leave no net change: with no path to compare, an empty pathspec would compare whole trees.
+  if (paths.length === 0) return true
   return git(root, ["diff", "--quiet", head, base, "--", ...paths]).status === 0
 }
 
