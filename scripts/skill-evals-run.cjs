@@ -487,11 +487,9 @@ function jsonObjects(text) {
     const end = objectEnd(text, start);
     if (end < 0) continue;
     try {
-      const value = JSON.parse(text.slice(start, end + 1));
-      if (value !== null && typeof value === "object" && !Array.isArray(value)) {
-        objects.push(value);
-        start = end;
-      }
+      // Text from a "{" to its matching "}" parses only as an object.
+      objects.push(JSON.parse(text.slice(start, end + 1)));
+      start = end;
     } catch (error) {
       parseError ??= error;
     }
