@@ -3,6 +3,14 @@ import { performance } from "node:perf_hooks"
 
 const limitations = "Interval measurements, not request-only CPU: process CPU includes worker/background threads; main-thread CPU and event-loop active/idle include unrelated callbacks. Overlapping stages cannot be summed. Active time does not distinguish synchronous blocking from descheduling. Unsupported metrics are null."
 
+export async function finishStatusFixture({ close, publish }) {
+  const errors = []
+  try { await close() } catch (error) { errors.push(error) }
+  try { if (publish) await publish() } catch (error) { errors.push(error) }
+  if (errors.length === 1) throw errors[0]
+  if (errors.length > 1) throw new AggregateError(errors, errors.map(error => error.message).join("; and "))
+}
+
 export function createStatusDiagnostics({ enabled = false, metrics = {
   now: () => performance.now(),
   cpuUsage: () => process.cpuUsage(),
@@ -11,7 +19,7 @@ export function createStatusDiagnostics({ enabled = false, metrics = {
 } } = {}) {
   const requests = new Map()
   const stages = []
-  const dropped = { requests: 0, stages: 0 }
+  const dropped = { requests: 0, stages: 0, unattributedStages: 0, unrecordedRequestStages: 0 }
   const scope = enabled ? new AsyncLocalStorage() : null
   const origin = enabled ? metrics.now() : null
   const read = (fn) => {
@@ -54,8 +62,14 @@ export function createStatusDiagnostics({ enabled = false, metrics = {
       return enabled ? scope.run(requests.has(requestId) ? requestId : null, operation) : operation()
     },
     stage(name, operation) {
+      if (!enabled) return operation()
       const requestId = scope?.getStore()
-      if (requestId === undefined || requestId === null) return operation()
+      if (requestId === undefined || requestId === null) {
+        dropped.stages++
+        if (requestId === undefined) dropped.unattributedStages++
+        else dropped.unrecordedRequestStages++
+        return operation()
+      }
       if (stages.length >= 2048) { dropped.stages++; return operation() }
       const start = sample()
       const entry = { requestId, stage: name, startMs: start.at, endMs: null, metrics: null, outcome: "pending" }

@@ -11,7 +11,7 @@ import { runInWorker } from "../../../../../plugins/desk/mcp/src/runtime/admissi
 import { copilotSessionFile, recordCopilotSession } from "../../../../../plugins/desk/mcp/src/runtime/copilot-session.js"
 import { lastStartRootKey } from "../../../../../plugins/desk/mcp/src/runtime/last-start.js"
 import { mkTempRoot } from "../_temp_roots.js"
-import { createStatusDiagnostics } from "./_status_diagnostics.js"
+import { createStatusDiagnostics, finishStatusFixture } from "./_status_diagnostics.js"
 
 let sequence = 0
 const update = { track: "work", slug: "one", status: "processing" }
@@ -76,6 +76,11 @@ async function fixture(t, { explicit = false, person = null, capturedFolder = fa
   delete env.CLAUDE_PLUGIN_DATA
   delete env.CLAUDE_PROJECT_DIR
   const input = new PassThrough()
+  const statusWireIds = diagnostics.enabled ? [] : null
+  if (diagnostics.enabled) input.on("data", (chunk) => {
+    const request = JSON.parse(chunk.toString())
+    if (request.method === "tools/call" && request.params?.name === "desk_status" && statusWireIds.length < 128) statusWireIds.push(request.id)
+  })
   const output = new PassThrough()
   const waiting = new Map()
   let pending = ""
@@ -158,20 +163,19 @@ async function fixture(t, { explicit = false, person = null, capturedFolder = fa
       ? diagnostics.stage("session_dispatch", () => callTool(request))
       : callTool(request)
   }
-  t.after(async () => {
+  t.after(() => finishStatusFixture({
     // An idle wait joins only the current attempt; shutdown stops queued work too.
-    input.end()
-    try {
+    close: async () => {
+      input.end()
       await handle.closed
       assert.equal(handle.admission.running, false)
-    } finally {
-      if (diagnostics.enabled) {
-        const line = JSON.stringify({ scenario: t.name, ...diagnostics.snapshot() })
-        if (process.env.DESK_STATUS_DIAGNOSTICS_OUTPUT) appendFileSync(process.env.DESK_STATUS_DIAGNOSTICS_OUTPUT, `${line}\n`)
-        else t.diagnostic(line)
-      }
-    }
-  })
+    },
+    publish: diagnostics.enabled ? () => {
+      const line = JSON.stringify({ scenario: t.name, ...diagnostics.snapshot() })
+      if (process.env.DESK_STATUS_DIAGNOSTICS_OUTPUT) appendFileSync(process.env.DESK_STATUS_DIAGNOSTICS_OUTPUT, `${line}\n`)
+      else t.diagnostic(line)
+    } : null,
+  }))
   await rpc("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "late-context-fixture", version: "1" } })
   await rpc("tools/list", {})
   await handle.admission.idle({ waitMs: 15000 })
@@ -222,7 +226,7 @@ async function fixture(t, { explicit = false, person = null, capturedFolder = fa
     assert.fail("runtime status detail did not arrive")
   }
   return { a, b, base, cwd, env, handle, call, rpc, associate, config, card, connectedRoots, status, focuses, diagnostics,
-    resolutionTrace, dispatchTrace, holdNextResolution: async () => {
+    statusWireIds, resolutionTrace, dispatchTrace, holdNextResolution: async () => {
       await handle.admission.idle({ waitMs: 15000 })
       hold = true
     },
@@ -376,6 +380,10 @@ for (const failure of ["removed", "untrusted", "unreadable"]) {
       const trace = f.diagnostics.snapshot()
       const requestIds = new Set(trace.requests.map((entry) => entry.requestId))
       assert.ok(trace.stages.length > 0, "measured RPC must reach the session/runtime seams")
+      assert.equal(trace.stages.find(entry => entry.stage === "runtime_detail").requestId, f.statusWireIds[0],
+        "the first runtime detail belongs to the actual initiating wire request")
+      assert.equal(trace.stages.find(entry => entry.stage === "root_inspection").requestId, f.statusWireIds[0],
+        "completed source work retains its initiating wire request, not an overlapping response")
       for (const entry of trace.stages) assert.ok(requestIds.has(entry.requestId), JSON.stringify(entry))
       for (const stage of ["session_dispatch", "runtime_detail", "root_inspection", "search_status", "active_tasks", "factory_status", "sync_status", "reader_close"]) {
         assert.ok(trace.stages.some((entry) => entry.stage === stage && entry.endMs !== null), `missing completed ${stage}`)
