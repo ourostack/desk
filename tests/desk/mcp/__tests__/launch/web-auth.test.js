@@ -3560,3 +3560,44 @@ test("in a real page, eval runs functions and expressions as given, with or with
     server.close()
   }
 })
+
+test("an enterprise SSO page's Continue is pressed once, and the reply says whether Entra renewed the session or needs a person", async () => {
+  for (const [end, state] of [["https://github.com/teams-example/app/pull/1", "renewed"], ["https://login.microsoftonline.com/common/oauth2/authorize", "needs_person"]]) {
+    const native = fakeDriver({ packet: buttonSnapshot("Continue") })
+    let url = "https://github.com/enterprises/example/sso?return_to=x"
+    native.page.url = () => url
+    native.page.goto = async () => { native.calls.push(["goto"]) }
+    const adapter = adapterFor(native, await mkTempRoot("auth-sso-"), 8000)
+    const original = native.page.locator
+    try {
+      const pending = adapter.call(["goto", "https://github.com/teams-example/app/pull/1"])
+      setTimeout(() => { url = end }, 300)
+      const reply = await pending
+      assert.equal(reply.sso.state, state)
+      assert.equal(clicks(native), 1)
+    } finally { void original; await adapter.close() }
+  }
+})
+
+test("an SSO page that never leaves after Continue is reported as stalled, and a Continue that cannot be pressed adds no SSO report", async () => {
+  const stuck = fakeDriver({ packet: buttonSnapshot("Continue") })
+  stuck.page.url = () => "https://github.com/enterprises/example/sso"
+  const stuckAdapter = adapterFor(stuck, await mkTempRoot("auth-sso-stalled-"), 8000)
+  try {
+    const reply = await stuckAdapter.call(["goto", "https://github.com/enterprises/example/sso"])
+    assert.equal(reply.sso.state, "stalled")
+    assert.match(reply.sso.keepWorking, /press Continue once more/u)
+    assert.equal(clicks(stuck), 1, "Continue is pressed once, not retried")
+  } finally { await stuckAdapter.close() }
+
+  const refused = fakeDriver({ packet: buttonSnapshot("Continue") })
+  refused.page.url = () => "https://github.com/enterprises/example/sso"
+  for (const handle of refused.handles.values()) handle.click = async () => { throw new Error(PASSWORD) }
+  const refusedAdapter = adapterFor(refused, await mkTempRoot("auth-sso-refused-"), 8000)
+  try {
+    const reply = await refusedAdapter.call(["goto", "https://github.com/enterprises/example/sso"])
+    assert.equal(reply.sso, undefined, "no SSO state is claimed when Continue was never pressed")
+    assert.equal(JSON.stringify(reply).includes(PASSWORD), false)
+    assert.equal(clicks(refused), 0)
+  } finally { await refusedAdapter.close() }
+})
