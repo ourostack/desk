@@ -20,8 +20,10 @@
 // is a census error, so the walker can't go blind unnoticed.
 //
 // `cards` is the sidecar of cards, `{ "doors": [DoorCard] }`. A card whose door isn't found is a census error.
-// `handlers` are extra files or folders whose literals count as raised for every door, beside the door's own file;
-// a code counts as raised as written or with its hyphens as underscores. Read-only evidence is the kit's `readOnly:
+// A card's error code counts as raised only when it is a literal in the door's own file or in a local module that file
+// imports, followed through every local import (a relative `import`, `export ... from`, `import()` or `require`), never
+// in a folder the door doesn't import. A Python or shell door's codes are not checked yet: the walker can't read its
+// text for raised codes, and Superpowers' locked shell scripts print none of the codes their cards list. A code counts as raised as written or with its hyphens as underscores. Read-only evidence is the kit's `readOnly:
 // true` on the command. A hand-written script declares itself read-only with a comment line that reads exactly
 // `ax: read-only`, alone or followed by a space, `.` or `;` and the reason, in the comments before its first code (a
 // `#!` line aside): for a Node script, its leading two-slash `//` or `/* */` comments (a block's lines may start with `*`); for a
@@ -30,6 +32,7 @@
 import { closeSync, openSync, readFileSync, readSync, readdirSync, statSync } from "node:fs";
 import { basename, dirname, extname, join, relative, resolve } from "node:path";
 import ts from "typescript";
+import { directImports, importClosure } from "./imports.mts";
 import type { Door, DoorCard, Gap, WalkerOptions, WalkResult } from "../scripts/ouro-census/types.mts";
 
 const SCRIPT = /\.[cm]?[jt]s$/;
@@ -320,21 +323,6 @@ function firstWords(sf: ts.SourceFile): Map<string, number> {
   return words;
 }
 
-/** The relative modules a file imports directly: static imports, re-exports, `require("./x")` and `import("./x")`. */
-function directImports(sf: ts.SourceFile, from: string): string[] {
-  const out: string[] = [];
-  const add = (spec: ts.Node | undefined) => {
-    if (isText(spec) && spec.text.startsWith(".")) out.push(resolve(dirname(from), spec.text));
-  };
-  const visit = (n: ts.Node): void => {
-    if ((ts.isImportDeclaration(n) || ts.isExportDeclaration(n)) && n.moduleSpecifier) add(n.moduleSpecifier);
-    if (ts.isCallExpression(n) && (n.expression.kind === ts.SyntaxKind.ImportKeyword || (ts.isIdentifier(n.expression) && n.expression.text === "require"))) add(n.arguments[0]);
-    ts.forEachChild(n, visit);
-  };
-  visit(sf);
-  return out;
-}
-
 /** The scripts the hooks files register: every `hooks/<file>` named in a hook's command, and a dispatcher's script. */
 function hookScripts(all: readonly string[]): Set<string> {
   const scripts = new Set<string>();
@@ -470,11 +458,16 @@ export async function walk(opts: WalkerOptions): Promise<WalkResult> {
   if (found.length === 0 && unwalked.length === 0) errors.push(`${opts.source}: no commands or scripts under it, so the walker finds nothing. Fix: point the source at a folder of code.`);
   const cards = readCards(opts.root, opts.cards, errors);
   const byId = new Map(cards.map((c) => [c.id, c]));
-  const handlerLiterals = new Set<string>();
-  for (const h of opts.handlers ?? []) {
-    const p = resolve(opts.root, h);
-    for (const f of statSync(p).isDirectory() ? files(p).filter((x) => SCRIPT.test(x)) : [p]) for (const l of literals(sourceOf(f))) handlerLiterals.add(l);
-  }
+  const closures = new Map<string, Set<string>>();
+  const raisedIn = (file: string): Set<string> => {
+    let found = closures.get(file);
+    if (!found) {
+      found = new Set<string>();
+      for (const path of importClosure(file, sourceOf)) for (const l of literals(sourceOf(path))) found.add(l);
+      closures.set(file, found);
+    }
+    return found;
+  };
   const doors: Door[] = [];
   const seen = new Set<string>();
   for (const { door: d, readOnly } of found) {
@@ -486,8 +479,8 @@ export async function walk(opts: WalkerOptions): Promise<WalkResult> {
     const card = byId.get(d.id) ?? null;
     let raises: string[] | undefined;
     if (card && Array.isArray(card.errors) && SCRIPT.test(d.file)) {
-      const own = literals(sourceOf(resolve(opts.root, d.file)));
-      const has = (code: string) => own.has(code) || own.has(code.replaceAll("-", "_")) || handlerLiterals.has(code) || handlerLiterals.has(code.replaceAll("-", "_"));
+      const own = raisedIn(resolve(opts.root, d.file));
+      const has = (code: string) => own.has(code) || own.has(code.replaceAll("-", "_"));
       raises = card.errors.map((e) => e?.code).filter((code): code is string => typeof code === "string" && has(code));
     }
     doors.push({ ...d, card, evidence: { ...(readOnly ? { readOnly: true } : {}), ...(raises ? { raises } : {}) } });

@@ -73,10 +73,10 @@ test("a command or CLI the walker can't follow is an unwalked gap", async () => 
   );
 });
 
-test("a card's codes count as raised when the door's file or a handler holds them, hyphens or underscores; a shell script claims none", async () => {
-  const { doors, errors } = await walk(options("plug", { cards: at("cards.json"), handlers: [at("handlers")] }));
+test("a card's codes count as raised when the door's file or a module it imports (transitively) holds them, hyphens or underscores, never an unimported folder; a shell script claims none", async () => {
+  const { doors, errors } = await walk(options("plug", { cards: at("cards.json") }));
   const by = (id: string) => doors.find((d) => d.id === id)!;
-  assert.deepEqual(by("cli:tasks add").evidence, { raises: ["slug-invalid"] });
+  assert.deepEqual(by("cli:tasks add").evidence, { raises: ["slug-invalid", "chain-code"] });
   assert.equal(by("cli:tasks add").card?.group, "g");
   assert.deepEqual(by("cli:session-boot").evidence, { readOnly: true, raises: ["raised-here"] });
   assert.deepEqual(by("cli:" + at("plug/scripts/task-done")).evidence, {});

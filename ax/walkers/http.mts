@@ -11,10 +11,12 @@
 // and the census would ask for the doors to come off the baseline.
 //
 // `cards` is the sidecar of cards, `{ "doors": [DoorCard] }`; a card whose door isn't found is a census error. The
-// file's literals outside error cards are the codes it may raise, as written or with hyphens as underscores.
+// literals outside error cards, in the file and in the local modules it imports (followed through their imports), are
+// the codes it may raise, as written or with hyphens as underscores. A route's handler may live in an imported file.
 import { readFileSync } from "node:fs";
 import { relative, resolve } from "node:path";
 import ts from "typescript";
+import { importClosure } from "./imports.mts";
 import type { Door, DoorCard, Gap, WalkerOptions, WalkResult } from "../scripts/ouro-census/types.mts";
 
 const METHODS = new Set(["get", "post", "put", "patch", "delete", "all", "use", "route"]);
@@ -37,16 +39,21 @@ export async function walk(opts: WalkerOptions): Promise<WalkResult> {
   const lineOf = (n: ts.Node) => sf.getLineAndCharacterOfPosition(n.getStart(sf)).line + 1;
   const apps = new Set<string>();
   const literals = new Set<string>();
-  const findApps = (n: ts.Node): void => {
-    if (ts.isVariableDeclaration(n) && ts.isIdentifier(n.name) && n.initializer && ts.isCallExpression(n.initializer) && ts.isIdentifier(n.initializer.expression) && n.initializer.expression.text === "express") apps.add(n.name.text);
+  const collect = (into: Set<string>) => (n: ts.Node): void => {
     if (ts.isObjectLiteralExpression(n)) {
       const keys = new Set(n.properties.map((p) => keyText(p.name)));
       if (keys.has("code") && keys.has("means") && keys.has("fix")) return;
     }
-    if (isText(n)) literals.add(n.text);
+    if (isText(n)) into.add(n.text);
+    ts.forEachChild(n, collect(into));
+  };
+  const findApps = (n: ts.Node): void => {
+    if (ts.isVariableDeclaration(n) && ts.isIdentifier(n.name) && n.initializer && ts.isCallExpression(n.initializer) && ts.isIdentifier(n.initializer.expression) && n.initializer.expression.text === "express") apps.add(n.name.text);
     ts.forEachChild(n, findApps);
   };
   findApps(sf);
+  const parse = (p: string): ts.SourceFile => (p === path ? sf : ts.createSourceFile(p, readFileSync(p, "utf8"), ts.ScriptTarget.Latest, true, /\.[cm]?ts$/.test(p) ? ts.ScriptKind.TS : ts.ScriptKind.JS));
+  for (const p of importClosure(path, parse)) collect(literals)(parse(p));
 
   const errors: string[] = [];
   const doors: Door[] = [];

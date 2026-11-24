@@ -10,8 +10,8 @@
   "sources": [
     { "walker": "desk-mcp", "module": "plugins/desk/mcp/src/tool-names.js", "source": "plugins/desk/mcp/src/tool-names.js", "cards": "ax/cards/mcp-desk.json", "handlers": ["plugins/desk/mcp/src"] },
     { "walker": "desk-mcp", "module": "plugins/desk/mcp/web-catalog.json", "source": "plugins/desk/mcp/web-catalog.json", "cards": "ax/cards/mcp-desk-web.json", "handlers": ["plugins/desk/mcp/web.cjs", "plugins/desk/mcp/web-auth.cjs", "plugins/desk/mcp/web-browser-discovery.cjs", "plugins/desk/mcp/web-launch.cjs"] },
-    { "walker": "desk-cli", "module": "", "source": "plugins", "cards": "ax/cards/cli-plugins.json", "handlers": ["plugins/desk/mcp/src"] },
-    { "walker": "desk-cli", "module": "", "source": "hosted", "cards": "ax/cards/cli-hosted.json", "handlers": ["hosted/src"] },
+    { "walker": "desk-cli", "module": "", "source": "plugins", "cards": "ax/cards/cli-plugins.json" },
+    { "walker": "desk-cli", "module": "", "source": "hosted", "cards": "ax/cards/cli-hosted.json" },
     { "walker": "desk-skills", "module": "", "source": "plugins", "cards": "ax/cards/skills.json" },
     { "walker": "desk-hooks", "module": "", "source": "plugins", "cards": "ax/cards/hooks.json" },
     { "walker": "desk-http", "module": "gateway", "source": "hosted/src/server.js", "cards": "ax/cards/http-gateway.json" },
