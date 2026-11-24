@@ -177,14 +177,14 @@ test("a refused or unreachable send is a failure with the code that files a bug"
   const { dir } = await state()
   const refused = capture()
   assert.equal(await runSessionsCli({ argv: ["send", B, "hi", "--from", "none"], io: refused.io, deps: sendDeps(dir, app({ dir, deliver: false, reply: { accepted: false, reply: "error", error: "session archived" } })) }), 1)
-  assert.match(refused.out.stderr, /session archived.*sessions_send_refused/u)
+  assert.match(refused.out.stderr, /session archived.*sessions-send-refused/u)
   const noApp = capture()
   const deps = sendDeps(dir, app({ dir, deliver: false }), { socket: () => ({ reason: "the app has not written its local socket files, so it is not running" }) })
   assert.equal(await runSessionsCli({ argv: ["send", B, "hi", "--from", "none"], io: noApp.io, deps }), 1)
-  assert.match(noApp.out.stderr, /so it is not running.*sessions_app_socket/u)
+  assert.match(noApp.out.stderr, /so it is not running.*sessions-app-socket/u)
   const nobody = capture()
   assert.equal(await runSessionsCli({ argv: ["send", "nobody", "hi"], io: nobody.io, deps: sendDeps(dir, app({ dir, deliver: false })) }), 1)
-  assert.match(nobody.out.stderr, /sessions_target/u)
+  assert.match(nobody.out.stderr, /sessions-target/u)
 })
 
 // A WebSocket that answers from a script: `script(sent)` returns the events to deliver after the open, each a string, an Error or a function.
@@ -254,7 +254,7 @@ test("whoami says it cannot walk processes on Windows, and anything else resolve
   const { dir } = await state()
   const win = capture()
   assert.equal(await runSessionsCli({ argv: ["whoami"], io: win.io, deps: { stateDir: dir, platform: "win32" } }), 1)
-  assert.match(win.out.stderr, /sessions_whoami_platform/u)
+  assert.match(win.out.stderr, /sessions-whoami-platform/u)
   const here = capture()
   assert.equal(await runSessionsCli({ argv: ["whoami", "--hint", "x"], io: here.io, deps: { stateDir: dir, platform: "linux", self: { pid: 5, parentOf: () => 1, exists: existsSync, list: readdirSync } } }), 0)
   assert.deepEqual(JSON.parse(here.out.stdout), { ids: [], id: null })
@@ -274,7 +274,7 @@ test("a missing session-state folder is named, and the sessions.js script runs e
   assert.equal(run("whoami", "--hint", "nothing like it").status, process.platform === "win32" ? 1 : 0)
   const send = run("send", A, "hello there friend", "--from", "none")
   assert.equal(send.status, 1)
-  assert.match(send.stderr, /sessions_app_socket/u)
+  assert.match(send.stderr, /sessions-app-socket/u)
 })
 
 test("the helpers cope with what a real machine leaves lying around", async () => {

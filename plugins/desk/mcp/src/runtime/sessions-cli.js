@@ -229,7 +229,7 @@ async function seenWithin(seen, waitMs, { sleep, now }) {
 async function runSend({ ref, message, from: fromFlag, asUser, waitMs, script, deps }) {
   const target = resolveSession(deps.stateDir, ref)
   if (target.reason !== undefined) {
-    throw failure("sessions_target", `cannot send to ${JSON.stringify(ref)}`, target.reason, "run sessions.js tail <id or name> to check the session, or ask the person which one is meant", "pass the full session id")
+    throw failure("sessions-target", `cannot send to ${JSON.stringify(ref)}`, target.reason, "run sessions.js tail <id or name> to check the session, or ask the person which one is meant", "pass the full session id")
   }
   const nonce = deps.nonce()
   let prompt = message
@@ -244,13 +244,13 @@ async function runSend({ ref, message, from: fromFlag, asUser, waitMs, script, d
   const before = new Set(tailMessages(readHistoryTail(deps.stateDir, target.id)?.text ?? "", 20).map((entry) => entry.at))
   const socket = deps.socket()
   if (socket.reason !== undefined) {
-    throw failure("sessions_app_socket", "cannot reach the GitHub Copilot app", socket.reason, "check that the app is open, then run sessions.js tail on the target to see whether the message arrived another way", "start the app and run the same command again")
+    throw failure("sessions-app-socket", "cannot reach the GitHub Copilot app", socket.reason, "check that the app is open, then run sessions.js tail on the target to see whether the message arrived another way", "start the app and run the same command again")
   }
   const result = await deps.send({ id: target.id, prompt, socket })
   const matches = (entry) => entry.role === "user" && (asUser ? entry.text.trim() === message.trim().slice(0, MESSAGE_CHARS) && !before.has(entry.at) : entry.text.includes(`[Message ${nonce} `))
   const delivered = result.accepted && (await seenWithin(() => tailMessages(readHistoryTail(deps.stateDir, target.id)?.text ?? "", 20).some(matches), waitMs, deps))
   if (!result.accepted) {
-    throw failure("sessions_send_refused", `the app did not accept the message for ${target.id}`, result.error ?? `the app answered ${result.reply}; the session may be archived or not a Copilot app session`, `run sessions.js tail ${target.id} to see the session`, "pass the id of a session that is open in the app")
+    throw failure("sessions-send-refused", `the app did not accept the message for ${target.id}`, result.error ?? `the app answered ${result.reply}; the session may be archived or not a Copilot app session`, `run sessions.js tail ${target.id} to see the session`, "pass the id of a session that is open in the app")
   }
   const note = delivered ? undefined : `The app accepted the message but it was not in the history after ${waitMs / 1000} s. Read it with sessions.js tail ${target.id} before sending again, so it is not sent twice.`
   return { to: target.id, from: sender, nonce: asUser ? null : nonce, accepted: true, delivered, reply: result.reply, ...(note === undefined ? {} : { note }) }
@@ -267,17 +267,17 @@ function sessionsCli({ script, deps, overrides }) {
     commands: [
       command("whoami", { readOnly: true, summary: "Print the session this command runs in. With several sessions in one runtime, --hint <text from your own command> picks yours.", flags: { hint: { type: "string", description: "Text from your own command line, which is in your session's history." } } }, (input) => {
         if (deps.platform === "win32" && overrides.self === undefined) {
-          throw failure("sessions_whoami_platform", "whoami cannot walk process parents here", "this command reads the process tree with ps, which Windows does not have", "read your own session id from the session folder name or the app", "pass --from <your session id> to send instead")
+          throw failure("sessions-whoami-platform", "whoami cannot walk process parents here", "this command reads the process tree with ps, which Windows does not have", "read your own session id from the session folder name or the app", "pass --from <your session id> to send instead")
         }
         return whoAmI(deps.stateDir, input.hint ?? null, deps.self)
       }),
       command("tail", { readOnly: true, summary: "Print the last <count> (default 6) user and assistant messages of a session.", args: [SESSION, { name: "count", description: "How many messages, a positive whole number." }] }, (input) => {
         const count = input.count === undefined ? 6 : Number(input.count)
-        if (!Number.isInteger(count) || count < 1) throw new AxError({ code: "sessions_tail_count", exit: 2, thing: "tail", problem: `the count must be a positive whole number, not ${JSON.stringify(input.count)}`, fix: "run sessions tail <session> [<count>]" })
+        if (!Number.isInteger(count) || count < 1) throw new AxError({ code: "sessions-tail-count", exit: 2, thing: "tail", problem: `the count must be a positive whole number, not ${JSON.stringify(input.count)}`, fix: "run sessions tail <session> [<count>]" })
         const target = resolveSession(deps.stateDir, input.session)
         const history = target.reason !== undefined ? null : readHistoryTail(deps.stateDir, target.id)
         if (target.reason !== undefined || history === null) {
-          throw failure("sessions_tail_target", `cannot read ${JSON.stringify(input.session)}`, target.reason ?? `session ${target.id} has no events.jsonl here, so it is on another machine or has been removed`, "check the id or name, or run the command on the machine that hosts the session", "pass the full session id")
+          throw failure("sessions-tail-target", `cannot read ${JSON.stringify(input.session)}`, target.reason ?? `session ${target.id} has no events.jsonl here, so it is on another machine or has been removed`, "check the id or name, or run the command on the machine that hosts the session", "pass the full session id")
         }
         return { id: target.id, name: nameOf(deps.stateDir, target.id), last_written: history.mtime, messages: tailMessages(history.text, count) }
       }),
