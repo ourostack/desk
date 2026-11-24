@@ -1,5 +1,15 @@
 # desk plugin — changelog
 
+## 3.2.520 — 2026-11-24
+
+### A session can write cards in a Crew desk, and a progress log no longer needs `content_home`
+
+The card tools' `desk` field now reaches a Crew desk registered on this machine and writes the card as the member this machine's GitHub sign-in is on that desk's roster, so a session homed elsewhere no longer has to open a session there to record progress. If no member resolves, the refusal says so and what to do.
+
+A `task_update` that only records progress (`log`, `child_session`) now declares `content_home` as coordination and current for itself when the repository requires one and the call left it out. Other updates still have to declare it.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.519 — 2026-11-24
 
 The card commit guard no longer names a recovery script from a source mirror. A mirror has no `bootstrap.cjs`, so the shell command in the refusal always failed with `transport_closed`. The guard now names the script only when the plugin's `bootstrap.cjs` sits beside it, and falls back to the plugin folder path otherwise.
