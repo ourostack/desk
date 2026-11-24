@@ -69,6 +69,22 @@ export function publicationRecovery(root, platform = process.platform) {
   return `node ${commandArgument(script, platform)} --root ${commandArgument(root, platform)}`
 }
 
+const QUOTA_REFUSAL = /rate limit|quota|calls left|secondary rate|HTTP 429/iu
+const AUTH_REFUSAL = /gh auth|auth login|not logged in|authenticat|bad credentials|HTTP 401/iu
+
+// Names the cause gh reported: a quota refusal is shown (its first line, redacted) because waiting fixes it, auth only when gh says so,
+// and any other failure leaves subprocess output out, which can contain credentials.
+function ghFailure(args, result, host) {
+  const what = `GitHub CLI ${args[0]} ${args[1]} failed (exit ${result.status ?? "timeout"})`
+  const stderr = String(result.stderr ?? "")
+  if (QUOTA_REFUSAL.test(stderr)) {
+    const line = redactCredentialLikeText(stderr.split("\n").find((text) => text.trim() !== "").trim()).slice(0, 300)
+    return Object.assign(new Error(`Wait for the GitHub API quota to recover, then try again: ${what} because the GitHub API quota is low; the account's auth is not the problem. gh said: ${line}`), { code: "pr_publication_wait_for_the_github_api_quota" })
+  }
+  if (AUTH_REFUSAL.test(stderr)) return Object.assign(new Error(`Check gh auth status, then try again: ${what}; check gh auth status --hostname ${host}`), { code: "pr_publication_check_gh_auth_status_then" })
+  return Object.assign(new Error(`Run it again: ${what}; run the same gh command by hand to see why`), { code: "pr_publication_run_it_again_github_cli_failed" })
+}
+
 /** Publishes one immutable candidate. No upstream ref is pushed; only GitHub's exact-head merge endpoint can advance it. */
 export function publishPullRequest({ git, spawnGit, root, upstream, head, onto, policy, clock = CLOCK, track }) {
   // Both candidates must be object ids: a head or base that was never read would build a branch name, and a command, with nothing in them.
@@ -88,10 +104,7 @@ export function publishPullRequest({ git, spawnGit, root, upstream, head, onto, 
   const ghEnv = spawnGit === spawnSync ? ghEnvFor({ host: repo.host, owner, repo: repoName, env: process.env, spawn: spawnSync }) : process.env
   const gh = (args, json = true) => {
     const result = spawnGit("gh", args, { cwd: root, encoding: "utf8", windowsHide: true, timeout: 60_000, env: ghEnv })
-    if (result.status !== 0) {
-      // Do not echo arbitrary subprocess output, which can contain credentials.
-      throw Object.assign(new Error(`Check gh auth status, then try again: GitHub CLI ${args[0]} ${args[1]} failed (exit ${result.status ?? "timeout"}); check gh auth status --hostname ${repo.host}`), { code: "pr_publication_check_gh_auth_status_then" })
-    }
+    if (result.status !== 0) throw ghFailure(args, result, repo.host)
     if (!json) return result.stdout
     try { return JSON.parse(result.stdout) } catch { throw Object.assign(new Error("Run it again: GitHub CLI returned invalid publication JSON"), { code: "pr_publication_run_it_again_github_cli" }) }
   }

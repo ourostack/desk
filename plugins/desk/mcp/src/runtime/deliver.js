@@ -299,6 +299,20 @@ export function replay({ git, spawnGit, paths, onto, commits, prefix }) {
   return { head: wt(["rev-parse", "HEAD"]).stdout.trim(), replayed, skipped }
 }
 
+// A refusal that is neither the network, the credentials, a timeout nor the remote having moved on is a hook or a remote rule.
+const refusedByHook = (pushed) => classifyPullFailure({ stderr: pushed.stderr, timedOut: pushed.status === null }) === "other" && !/\[rejected\]/u.test(pushed.stderr)
+
+// Pushes the rebuilt commit from a full checkout of it, so a pre-push hook sees the tree that would land. Returns `fallback`, the
+// first push's result, when that checkout cannot be made.
+function pushFromCandidate({ git, spawnGit, paths, upstream, built, onto, fallback }) {
+  removeWorktree(git, paths)
+  const added = git(["-c", `core.hooksPath=${paths.hooks}`, "worktree", "add", "--detach", "--force", "--no-checkout", paths.tree, built.head], CHECKOUT_TIMEOUT_MS)
+  if (added.status !== 0) return fallback
+  const inTree = runner(spawnGit, paths.tree)
+  if (inTree(["-c", `core.hooksPath=${paths.hooks}`, "read-tree", "-mu", "HEAD"], CHECKOUT_TIMEOUT_MS).status !== 0) return fallback
+  return inTree(["push", "--quiet", upstream.remote, `${built.head}:${upstream.merge}`], NETWORK_TIMEOUT_MS, lfsSkipEnv(git, onto, built.head))
+}
+
 export function upstreamOf(git) {
   const branch = git(["symbolic-ref", "-q", "--short", "HEAD"]).stdout.trim()
   const remote = git(["config", `branch.${branch}.remote`]).stdout.trim()
@@ -390,7 +404,12 @@ export function deliver({ root, env = process.env, spawnGit = spawnSync, deliver
         const recovery = error.message.includes("Fix:") ? "" : `. Fix: run ${publicationRecovery(root)}`
         return { state: "failed", reason: "publication_blocked", error: error.message + recovery, publication: error.publication ?? null, delivered: [], skipped: [] }
       }
-    } else pushed = built.head === onto ? { status: 0 } : git(["push", "--quiet", upstream.remote, `${built.head}:${upstream.merge}`], NETWORK_TIMEOUT_MS, lfsSkipEnv(git, onto, built.head))
+    } else {
+      pushed = built.head === onto ? { status: 0 } : git(["push", "--quiet", upstream.remote, `${built.head}:${upstream.merge}`], NETWORK_TIMEOUT_MS, lfsSkipEnv(git, onto, built.head))
+      // A repository's own pre-push hook tests the tree it runs in. After a replay that tree is the shared checkout, which has not
+      // received the commits already on the remote, so it can refuse a push the rebuilt tree would pass (#1680).
+      if (pushed.status !== 0 && !fastForward && refusedByHook(pushed)) pushed = pushFromCandidate({ git, spawnGit, paths, upstream, built, onto, fallback: pushed })
+    }
     cleanup()
     if (pushed.status === 0) {
       git(["update-ref", upstream.tracking, target])

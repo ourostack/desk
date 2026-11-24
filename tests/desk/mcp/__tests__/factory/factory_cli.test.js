@@ -33,6 +33,7 @@ import {
   runEvaluateAcceptCommand,
   runEvaluateCommand,
   runJobLinkCommand,
+  outcome,
   runStatusCommand,
 } from "../../../../../plugins/desk/mcp/scripts/factory.js"
 import { jobId } from "../../../../../plugins/desk/mcp/src/factory/binding.js"
@@ -534,6 +535,8 @@ test("build writes the deterministic report tree and job-link returns the accept
   })
   await refused(["build", "--store", store])
   await refused(["job-link", "--store", "ourostack/factory"])
+  const bad = await refused(["job-link", "--store", "not a store", "--desk-remote", "git@github.com:OuroStack/Desk.git", "--track", "factory", "--slug", "store-pipeline"], env)
+  assert.match(bad, /Pass store as owner\/repo/u)
 }))
 
 test("job-link --this-machine names where this machine's sessions are reported: the plain job on a private desk, the keyed one elsewhere", () => scratch(async (env) => {
@@ -1164,11 +1167,19 @@ test("flush and finalize are advertised, so the end-of-turn hook starts finalize
 test("flush --store runs one delivery attempt through the injected runner and prints its stable code", () => scratch(async (env) => {
   let output = ""
   const runner = () => assert.fail("no consent, no gh")
-  assert.equal(await main({ argv: ["flush", "--store", "ourostack/factory"], env, runner, write: (text) => { output += text }, logError: () => assert.fail("flush must succeed") }), 0)
+  assert.equal(await main({ argv: ["flush", "--store", "ourostack/factory"], env, runner, write: (text) => { output += text }, logError: () => {} }), 1, "a machine that has not opted in is a refusal")
   assert.deepEqual(JSON.parse(output), { result: "not_opted_in" })
   assert.deepEqual(await runFlushCommand({ store: "ourostack/factory" }, { env }), { result: "not_opted_in" })
   for (const argv of [[], ["--store"], ["--store", "a/b", "--other", "x"], ["--other", "x"]]) await refused(["flush", ...argv], env)
 }))
+
+test("a refusal exits 1: not opted in, locked or busy, alone or on any finalized job", () => {
+  assert.equal(outcome({ result: "delivered" }), "ok")
+  assert.equal(outcome({ ok: false, result: "x" }), "error")
+  for (const result of ["not_opted_in", "locked", "busy"]) assert.equal(outcome({ result }), "error")
+  assert.equal(outcome({ jobs: { a: { result: "retained" }, b: { result: "locked" } } }), "error")
+  assert.equal(outcome({ jobs: { a: { result: "retained" } } }), "ok")
+})
 
 test("finalize takes one to eight distinct jobs and reports each job's outcome", () => scratch(async (env) => {
   const a = "a".repeat(32)

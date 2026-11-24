@@ -873,6 +873,7 @@ export async function pollRelays({ paths, drainFiles, connect, now, signedIn = (
         if (login) state.resolvedAccount = login
       } catch (error) {
         state.lastError = error.message
+        keepCode(state, error)
         state.lastPollAt = new Date(now).toISOString()
         return
       }
@@ -901,8 +902,10 @@ export async function pollRelays({ paths, drainFiles, connect, now, signedIn = (
       forget(state, ctx.touched)
       state.lastOkAt = new Date(now).toISOString()
       delete state.lastError
+      delete state.lastErrorCode
     } catch (error) {
       state.lastError = error.message
+      keepCode(state, error)
       // A refusal means the remembered account cannot reach the repository (any more): choose again next poll.
       if (state.resolvedAccount && [401, 403, 404].includes(error.status)) delete state.resolvedAccount
     }
@@ -915,8 +918,14 @@ export async function pollRelays({ paths, drainFiles, connect, now, signedIn = (
   const apis = await Promise.all([...connections.values()].map((connection) => connection.catch(() => null)))
   const calls = apis.reduce((sum, api) => sum + (api ? api.calls().total : 0), 0)
   const spent = relays.reduce((sum, relay) => sum + (states[relay.name].lastPoll?.at === new Date(now).toISOString() ? states[relay.name].lastPoll.counted : 0), 0)
-  const errors = relays.filter((relay) => states[relay.name].lastError).map((relay) => ({ relay: relay.name, error: states[relay.name].lastError }))
+  const errors = relays.filter((relay) => states[relay.name].lastError).map((relay) => ({ relay: relay.name, error: states[relay.name].lastError, ...(states[relay.name].lastErrorCode ? { code: states[relay.name].lastErrorCode } : {}) }))
   return { at: new Date(now).toISOString(), wakes: [], errors, calls, spent, status: relayStatusLines(relays, states, now) }
+}
+
+/** Keep the failure's stable code beside its text, so a runner can branch on it. */
+function keepCode(state, error) {
+  if (typeof error.code === "string") state.lastErrorCode = error.code
+  else delete state.lastErrorCode
 }
 
 // ── Visibility ──

@@ -215,6 +215,19 @@ test("dispatch: a 304 costs nothing and changes nothing, across a restart too, a
   assert.equal(Object.values(w.state(DISPATCH.name).cache).find((entry) => Array.isArray(entry.value)).value.length, 2, "the answer's meaning is kept next to its tag")
 })
 
+test("a relay failure that carries a stable code keeps it beside its text until the next good poll", async () => {
+  const w = await setup([IMMEDIATE])
+  w.world.on("GET", runsRoute, () => { throw Object.assign(new Error("no token"), { code: "relay_no_token" }) })
+  const failed = await w.poll(NOW)
+  assert.deepEqual(failed.errors, [{ relay: DISPATCH.name, error: "no token", code: "relay_no_token" }])
+  w.world.on("GET", runsRoute, () => { throw new Error("plain") })
+  assert.equal("code" in (await w.poll(NOW + 10 * MIN)).errors[0], false)
+  w.world.on("GET", runsRoute, () => ({ workflow_runs: [] }))
+  w.world.on("GET", /\/repos\/o\/pages$/u, () => ({ default_branch: "main" }))
+  assert.deepEqual((await w.poll(NOW + 20 * MIN)).errors, [])
+  assert.equal(w.state(DISPATCH.name).lastErrorCode, undefined)
+})
+
 test("dispatch: the handled runs survive a restart, so nothing fires again, and a refused fire is kept for a retry", async () => {
   const w = await setup([IMMEDIATE])
   const runs = [run(1)]

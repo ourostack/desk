@@ -562,7 +562,7 @@
       "when": "From a startup hook, to learn which desk Desk's MCP server would bind here, or to print the startup and boot-check lines",
       "effect": "consequential",
       "errors": [
-        { "code": "desk-root-not-found", "means": "No source names a desk, so root is null and the error and tried fields list every path looked at.", "fix": "Bind a desk, for example by setting $DESK or saving a binding, then run it again." }
+        { "code": "desk-root-not-found", "means": "No source names a desk, so root is null, code is desk-root-not-found, and the error and tried fields list every path looked at; the exit status stays 0 so a startup hook carries on.", "fix": "Bind a desk, for example by setting $DESK or saving a binding, then run it again." }
       ],
       "confirm": "With --boot-checks this may start workspace repairs and the detached Desk-problem filer, which can open a public ourostack/desk issue; go ahead?"
     },

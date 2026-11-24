@@ -444,8 +444,11 @@ export async function pollDrain(drain, states, { connect, now, desk }) {
     if (!listed.untouched) await recordChanges(api, drain, state, listed, { now, desk })
     state.lastOkAt = new Date(now).toISOString()
     delete state.lastError
+    delete state.lastErrorCode
   } catch (error) {
     state.lastError = error.message
+    if (typeof error.code === "string") state.lastErrorCode = error.code
+    else delete state.lastErrorCode
   }
   const quota = api?.quota?.()
   if (quota) state.quota = quota
@@ -569,7 +572,7 @@ export async function pollDrains({ paths, connect, now, ackCommand, ackFlags = [
     const id = wakeId(drain.repo, events)
     return { id, repo: drain.repo, session: sessionOf(drain, states[drain.repo]), message: wakeMessage(drain.repo, events), replaces: wakePrefix(drain.repo), events, done: [...ackCommand, "ack", "--repo", drain.repo, "--wake", id, ...ackFlags] }
   })
-  const errors = drains.filter((drain) => states[drain.repo].lastError).map((drain) => ({ repo: drain.repo, error: states[drain.repo].lastError }))
+  const errors = drains.filter((drain) => states[drain.repo].lastError).map((drain) => ({ repo: drain.repo, error: states[drain.repo].lastError, ...(states[drain.repo].lastErrorCode ? { code: states[drain.repo].lastErrorCode } : {}) }))
   const calls = drains.reduce((sum, drain) => sum + states[drain.repo].calls.total, 0)
   return { at: new Date(now).toISOString(), wakes, errors, calls, status: drainStatusLines(drains, states, now) }
 }

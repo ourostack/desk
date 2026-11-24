@@ -7,6 +7,7 @@ import { createRequire } from "node:module"
 import { PassThrough } from "node:stream"
 import * as path from "node:path"
 import { mkdirSync, mkdtempSync, readFileSync, renameSync, writeFileSync } from "node:fs"
+import { removeTreeSync } from "../_remove_tree.js"
 import { tmpdir } from "node:os"
 import { bootstrapPath } from "./_mcp_handshake.js"
 
@@ -593,7 +594,7 @@ test("the idle proxy starts each new server from the chosen Desk, keeps a plugin
   const run = (env) => runIdleProxy({
     node: "/node", indexFile: "/own/mcp/index.js", args: ["--root", "/d"], idleMs: IDLE, stdin, stdout: { write() {} }, stderr: { write: (t) => logs.push(t) },
     exit() {}, signals: new EventEmitter(), kill() {}, setTimer: () => 1, clearTimer() {}, env,
-    chooseIndex: () => { if (choice instanceof Error) throw choice; return choice },
+    exists: () => true, chooseIndex: () => { if (choice instanceof Error) throw choice; return choice },
     spawn: (...call) => { calls.push(call); return Object.assign(new EventEmitter(), { stdin: new EventEmitter(), stdout: new PassThrough(), kill() {} }) },
   })
   run({})
@@ -603,13 +604,58 @@ test("the idle proxy starts each new server from the chosen Desk, keeps a plugin
   run({ DESK_PLUGIN_ROOT: "/own" })
   assert.equal(calls[1][2].env.DESK_PLUGIN_ROOT, "/new", "the root this copy would have used moves with it")
   run({ DESK_PLUGIN_ROOT: "/pinned" })
-  assert.equal(calls[2][2].env.DESK_PLUGIN_ROOT, "/pinned")
+  assert.equal(calls[2][2].env.DESK_PLUGIN_ROOT, "/pinned", "a root the host set that exists stays")
   choice = null
   run({})
   assert.equal(calls[3][1][0], "/own/mcp/index.js")
   choice = new Error("scan failed")
   run({})
   assert.equal(calls[4][1][0], "/own/mcp/index.js")
+})
+
+test("a session whose own Desk folder was removed keeps working: the next server runs the newest installed copy of the same Desk", () => {
+  const s = sessions({ own: { version: "3.2.390", abis: ["127"] }, a: { version: "3.2.480", abis: ["127"] }, b: { version: "3.2.495", abis: ["127"] }, other: { version: "3.2.499", plugin: { repository: "https://example.com/fork" } } })
+  const own = bootstrap.readOwn(s.mcp("own"), process.platform, process.arch)
+  removeTreeSync(path.dirname(s.mcp("own")))
+  const ask = (extra) => bootstrap.newestDesk({ mcpRoot: s.mcp("own"), current: NODE, platform: process.platform, arch: process.arch, scanRoot: s.scanRoot, ...extra })
+  assert.equal(ask({}), null, "with no record of what it was, it cannot tell which Desk to follow")
+  assert.equal(ask({ own }).version, "3.2.495")
+  removeTreeSync(path.dirname(s.mcp("b")))
+  removeTreeSync(path.dirname(s.mcp("a")))
+  assert.equal(ask({ own }), null, "nothing installed is left to follow")
+})
+
+test("a copy in a <plugin>/<version> folder, as a host's plugin cache keeps them, follows its sibling versions after its own is pruned", () => {
+  const cache = mkdtempSync(path.join(tmpdir(), "desk-cache-"))
+  const install = (version) => {
+    const root = path.join(cache, version)
+    mkdirSync(path.join(root, "mcp"), { recursive: true })
+    writeFileSync(path.join(root, "plugin.json"), JSON.stringify({ name: "desk", repository: "https://github.com/ourostack/desk", version }))
+    writeFileSync(path.join(root, "mcp", "package.json"), JSON.stringify(BASE_PACKAGE))
+    writeFileSync(path.join(root, "mcp", "index.js"), "")
+    return path.join(root, "mcp")
+  }
+  const old = install("3.2.390")
+  install("3.2.480")
+  install("3.2.495")
+  mkdirSync(path.join(cache, "not-a-version"))
+  const ask = (extra) => bootstrap.newestDesk({ mcpRoot: old, current: NODE, platform: process.platform, arch: process.arch, ...extra })
+  assert.equal(ask({}).version, "3.2.495", "a live copy follows the newest sibling too")
+  const own = bootstrap.readOwn(old, process.platform, process.arch)
+  removeTreeSync(path.dirname(old))
+  assert.equal(ask({ own }).pluginRoot, path.join(cache, "3.2.495"))
+  assert.equal(bootstrap.newestDesk({ mcpRoot: path.join(cache, "plain", "mcp"), current: NODE, platform: process.platform, arch: process.arch, own }), null, "a folder that is neither layout is left alone")
+})
+
+test("the idle proxy replaces a plugin root the host set when that folder no longer exists", () => {
+  const calls = []
+  runIdleProxy({
+    node: "/node", indexFile: "/own/mcp/index.js", args: [], idleMs: IDLE, stdin: new PassThrough(), stdout: { write() {} }, stderr: { write() {} },
+    exit() {}, signals: new EventEmitter(), kill() {}, setTimer: () => 1, clearTimer() {}, env: { DESK_PLUGIN_ROOT: "/gone" }, exists: () => false,
+    chooseIndex: () => ({ indexFile: "/new/mcp/index.js", pluginRoot: "/new", version: "3.2.495" }),
+    spawn: (...call) => { calls.push(call); return Object.assign(new EventEmitter(), { stdin: new EventEmitter(), stdout: new PassThrough(), kill() {} }) },
+  })
+  assert.equal(calls[0][2].env.DESK_PLUGIN_ROOT, "/new")
 })
 
 test("tool protocol 1 promises every tool the host may have cached: removing or renaming one needs a new protocol number in mcp/package.json", async () => {

@@ -17,7 +17,7 @@ import { tmpdir } from "node:os"
 import path from "node:path"
 import { strict as assert } from "node:assert"
 
-import { runBootChecks } from "../../../../../plugins/desk/hooks/lib/boot-checks.cjs"
+import { main, runBootChecks } from "../../../../../plugins/desk/hooks/lib/boot-checks.cjs"
 import { removeTreeSync } from "../_remove_tree.js"
 // Every call gets its own throwaway HOME, so the filing throttle's stamp files never land under the process HOME and a rerun within the hour is never "already queued".
 const tempHomes = []
@@ -158,4 +158,19 @@ test("the error-skip tests never write the filing throttle under the process HOM
   const { existsSync } = await import("node:fs")
   assert.ok(existsSync(path.join(env.XDG_STATE_HOME, "ouroboros-skills", "desk")), "the throttle stamp lands under the test's own state dir")
   assert.equal(process.env.HOME, before)
+})
+
+test("a failed spawned run prints its error under the script's own name, whichever command it was", async () => {
+  const written = []
+  const write = process.stderr.write
+  const before = process.exitCode
+  process.stderr.write = (text) => { written.push(text); return true }
+  try {
+    main(["--fast-forward"])
+    await new Promise((resolve) => setTimeout(resolve, 50))
+  } finally {
+    process.stderr.write = write
+    process.exitCode = before
+  }
+  assert.match(written.join(""), /^boot-checks: usage: boot-checks\.cjs /u)
 })

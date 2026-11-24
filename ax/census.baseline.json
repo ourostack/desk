@@ -1,8 +1,6 @@
 {
   "census": "census/1",
   "gaps": [
-    "cli:resolve-desk-root",
-    "cli:session-boot",
     "hook:desk copilot postToolUse copilot-intake-context.cjs",
     "hook:desk copilot postToolUse copilot-skill-current.cjs",
     "hook:desk copilot preToolUse copilot-durable-files.cjs",

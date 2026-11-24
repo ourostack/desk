@@ -289,10 +289,10 @@ test("a commit the repository's hooks refuse is reported, and the clone is put b
   assert.equal(git(repo.clone, ["status", "--porcelain"]), "")
 })
 
-test("a folder that is not a Git clone is refused", async () => {
+test("a folder that is not a Git clone says not_git", async () => {
   const dir = await mkTempRoot("crew-setup-plain-")
   const result = await startWorkspace({ repo: dir })
-  assert.equal(result.state, "refused")
+  assert.equal(result.state, "not_git")
   assert.match(result.message, /is not a Git clone/u)
 })
 

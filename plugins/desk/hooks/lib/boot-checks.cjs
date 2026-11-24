@@ -630,7 +630,7 @@ function main(argv = process.argv.slice(2)) {
         }))
         : Promise.reject(new Error("usage: boot-checks.cjs --compatible <script> [args] | --fast-forward <desk> | --repair <desk> | --ack <desk> <id> <digest> <canonical-evidence> | --revoke <common-git-dir> <worktree> <branch-ref> <owner>"));
   run.then((result) => process.stdout.write(`${JSON.stringify(result)}\n`)).catch((error) => {
-    process.stderr.write(`workspace-tidy: ${oneLine(error.message)}\n`);
+    process.stderr.write(`boot-checks: ${oneLine(error.message)}\n`);
     process.exitCode = 1;
   });
 }
