@@ -58,6 +58,7 @@
     {"id": "superpowers-cli-debugging", "when": "Finding which single test file leaves an unwanted file or folder behind, by running each test alone"},
     {"id": "hosted-cli-credentials", "when": "Inside a hosted Desk child, getting GitHub access for Git or gh from the gateway's token socket instead of a stored secret"},
     {"id": "hosted-cli-provision", "when": "Creating or reconciling hosted Desk's Azure Container Apps, their secrets, domains and GitHub App from an operator's az sign-in"},
+    {"id": "hosted-cli-servers", "when": "Starting hosted Desk's two long-running servers, the gateway and the hooks receiver, from their container environment"},
     {"id": "hosted-cli-identity", "when": "Building, rotating and checking the Ouro tenant's sign-in pieces (Entra apps, Key Vault secrets, Apple keys) for hosted Desk"},
     {"id": "hosted-gateway", "when": "Hosted Desk's public HTTPS gateway: remote MCP clients reach their account's tools there after an OAuth sign-in in the browser"},
     {"id": "hosted-hooks-receiver", "when": "Hosted Desk's webhook receiver: outside senders post signed events, and a signed-in account manages its endpoints and pending deliveries"},

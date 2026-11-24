@@ -16,19 +16,22 @@ export const HOOKS_APP = "ouro-desk-hooks";
 // From the gateway, unchanged: who may manage hooks, and the Table Storage account and identity that hold them.
 export const COPIED_ENV = ["DESK_GITHUB_ACCOUNTS", "DESK_GITHUB_LOGINS", "DESK_ACCOUNTS_ENDPOINT", "AZURE_CLIENT_ID"];
 
+/** An Error carrying the stable `code` the command prints before its message. */
+const coded = (code, message) => Object.assign(new Error(message), { code });
+
 const envOf = (app) => app.properties.template.containers[0].env ?? [];
 
 export function hooksAppSpec({ gateway, image, publicUrl, clientKey }) {
   const env = new Map(envOf(gateway).filter((entry) => entry.value).map((entry) => [entry.name, entry.value]));
-  for (const name of COPIED_ENV) if (!env.get(name)) throw new Error(`the gateway has no ${name}; turn on Ouro sign-in (hosted/README.md) before provisioning the hooks receiver`);
-  if (!envOf(gateway).some((entry) => entry.name === "DESK_CLIENT_KEY" && entry.secretRef)) throw new Error("the gateway has no DESK_CLIENT_KEY secret to share with the hooks receiver");
+  for (const name of COPIED_ENV) if (!env.get(name)) throw coded("gateway-incomplete", `the gateway has no ${name}; turn on Ouro sign-in (hosted/README.md) before provisioning the hooks receiver`);
+  if (!envOf(gateway).some((entry) => entry.name === "DESK_CLIENT_KEY" && entry.secretRef)) throw coded("gateway-incomplete", "the gateway has no DESK_CLIENT_KEY secret to share with the hooks receiver");
   const identities = Object.entries(gateway.identity?.userAssignedIdentities ?? {});
   const store = identities.find(([, value]) => value.clientId === env.get("AZURE_CLIENT_ID"));
-  if (!store) throw new Error("none of the gateway's identities has AZURE_CLIENT_ID's client id");
+  if (!store) throw coded("gateway-incomplete", "none of the gateway's identities has AZURE_CLIENT_ID's client id");
   const registry = gateway.properties.configuration.registries?.[0];
-  if (!registry?.identity) throw new Error("the gateway pulls its image without an identity; the hooks receiver needs one");
-  if (!/^https:\/\/[^/\s]+$/.test(publicUrl)) throw new Error("--public-url must be an https origin");
-  if (typeof clientKey !== "string" || clientKey === "" || /\s/.test(clientKey)) throw new Error("the client key file is empty or holds whitespace");
+  if (!registry?.identity) throw coded("gateway-incomplete", "the gateway pulls its image without an identity; the hooks receiver needs one");
+  if (!/^https:\/\/[^/\s]+$/.test(publicUrl)) throw coded("bad-public-url", "--public-url must be an https origin");
+  if (typeof clientKey !== "string" || clientKey === "" || /\s/.test(clientKey)) throw coded("bad-client-key", "the client key file is empty or holds whitespace");
   const probe = (type, extra) => ({ type, httpGet: { path: "/healthz", port: 8080 }, ...extra });
   return {
     name: HOOKS_APP,
@@ -98,7 +101,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   try {
     main(process.argv.slice(2));
   } catch (error) {
-    process.stderr.write(`${error.message}\n`);
+    process.stderr.write(`${error.code ?? "failed"}: ${error.message}\n`);
     process.exitCode = 1;
   }
 }

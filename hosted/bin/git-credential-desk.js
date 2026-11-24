@@ -21,6 +21,7 @@ try {
   const token = await requestToken();
   process.stdout.write(`username=x-access-token\npassword=${token}\n`);
 } catch (error) {
-  process.stderr.write(`git-credential-desk: ${error.message}\n`);
+  const code = "token-failed";
+  process.stderr.write(`git-credential-desk: ${code}: ${error.message}\n`);
   process.exit(1);
 }

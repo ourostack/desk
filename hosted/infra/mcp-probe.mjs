@@ -26,6 +26,9 @@ import { auth, discoverOAuthServerInfo, refreshAuthorization, selectResourceURL 
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 
+// The stable codes its stderr lines start with.
+const [USAGE, NO_PROBE, REFRESH_REFUSED, FAILED] = ["usage", "no-probe", "refresh-refused", "failed"];
+
 export const tokenFile = (home, name) => join(home, ".ouro", `probe-${name}.json`);
 
 const NAME = /^[a-z0-9][a-z0-9-]{0,62}$/;
@@ -164,13 +167,13 @@ export async function main(argv, { home = homedir(), stdout = (s) => console.log
       options: { url: { type: "string" }, name: { type: "string" }, card: { type: "string" }, note: { type: "string" } },
     });
   } catch (error) {
-    stderr(error.message);
+    stderr(`${USAGE}: ${error.message}`);
     return 2;
   }
   const [command] = parsed.positionals;
   const { url, name, card, note } = parsed.values;
   if (!["connect", "status", "task-update"].includes(command) || !name || !NAME.test(name)) {
-    stderr("usage: mcp-probe.mjs connect --url <mcp url> --name <n> | status --name <n> | task-update --name <n> --card <track>/<slug> [--note <text>]");
+    stderr(`${USAGE}: mcp-probe.mjs connect --url <mcp url> --name <n> | status --name <n> | task-update --name <n> --card <track>/<slug> [--note <text>]`);
     return 2;
   }
   mkdirSync(join(home, ".ouro"), { recursive: true, mode: 0o700 });
@@ -178,7 +181,7 @@ export async function main(argv, { home = homedir(), stdout = (s) => console.log
   try {
     if (command === "connect") {
       if (!url) {
-        stderr("connect needs --url <mcp url>");
+        stderr(`${USAGE}: connect needs --url <mcp url>`);
         return 2;
       }
       await connect({ url, file, io, fetchFn, opener });
@@ -186,14 +189,14 @@ export async function main(argv, { home = homedir(), stdout = (s) => console.log
     }
     const saved = load(file);
     if (!saved?.tokens?.refresh_token) {
-      stderr(`no probe ${name} in ${file}; run connect --url <mcp url> --name ${name} first`);
+      stderr(`${NO_PROBE}: no probe ${name} in ${file}; run connect --url <mcp url> --name ${name} first`);
       return 1;
     }
     let tokens;
     try {
       tokens = await refresh(saved, fetchFn);
     } catch (error) {
-      stderr(`refresh refused: ${describe(error)}`);
+      stderr(`${REFRESH_REFUSED}: ${describe(error)}`);
       return 1;
     }
     saveAtomically(file, { ...saved, tokens, refreshedAt: new Date().toISOString() });
@@ -204,7 +207,7 @@ export async function main(argv, { home = homedir(), stdout = (s) => console.log
     }
     const [track, slug, extra] = (card ?? "").split("/");
     if (!track || !slug || extra !== undefined) {
-      stderr("task-update needs --card <track>/<slug>");
+      stderr(`${USAGE}: task-update needs --card <track>/<slug>`);
       return 2;
     }
     const args = { track, slug, note: note ?? `probe ${name} at ${new Date().toISOString()}` };
@@ -212,7 +215,7 @@ export async function main(argv, { home = homedir(), stdout = (s) => console.log
     stdout(`refreshed; task_update ${result.isError ? "returned an error" : "ok"}: ${resultText(result)}`);
     return result.isError ? 1 : 0;
   } catch (error) {
-    stderr(`failed: ${describe(error)}`);
+    stderr(`${FAILED}: ${describe(error)}`);
     return 1;
   }
 }

@@ -76,13 +76,16 @@ export function manifestFormPage({ org, manifest, state }) {
   );
 }
 
+/** An Error carrying the stable `code` the command prints before its message. */
+const coded = (code, message) => Object.assign(new Error(message), { code });
+
 export async function convertManifestCode(code, { fetch = globalThis.fetch } = {}) {
-  if (!/^[\w-]+$/.test(code ?? "")) throw new Error("GitHub sent back no usable code.");
+  if (!/^[\w-]+$/.test(code ?? "")) throw coded("github-refused", "GitHub sent back no usable code.");
   const response = await fetch(`https://api.github.com/app-manifests/${code}/conversions`, {
     method: "POST",
     headers: { accept: "application/vnd.github+json", "user-agent": "ouro-desk-hosted", "x-github-api-version": "2022-11-28" },
   });
-  if (!response.ok) throw new Error(`GitHub answered ${response.status} to the manifest conversion.`);
+  if (!response.ok) throw coded("github-refused", `GitHub answered ${response.status} to the manifest conversion.`);
   return response.json();
 }
 
@@ -91,7 +94,7 @@ export function secretsFromConversion(conversion) {
   return APP_SECRETS.map((name, index) => {
     const value = values[index];
     if (value === undefined || value === null || String(value).trim() === "") {
-      throw new Error(`GitHub's conversion is missing the field for ${name} (id, client_id, client_secret, pem).`);
+      throw coded("github-refused", `GitHub's conversion is missing the field for ${name} (id, client_id, client_secret, pem).`);
     }
     return { name, value: String(value) };
   });
@@ -102,7 +105,7 @@ export function secretsFromConversion(conversion) {
 function runCommand(command, args) {
   return new Promise((resolve, reject) => {
     execFile(command, args, { encoding: "utf8", maxBuffer: 16 * 1024 * 1024 }, (error, stdout, stderr) => {
-      if (error) reject(new Error(`${[command, ...args.slice(0, 3)].join(" ")} failed: ${stderr.trim() || `exit ${error.code}`}`));
+      if (error) reject(coded("command-failed", `${[command, ...args.slice(0, 3)].join(" ")} failed: ${stderr.trim() || `exit ${error.code}`}`));
       else resolve(stdout);
     });
   });
@@ -117,7 +120,7 @@ export async function setSecrets({ secrets, run = runCommand, ...target }) {
 // Secrets reach a container's environment and volumes only when it starts.
 export async function restartRevision({ run = runCommand, ...target }) {
   const revision = (await run("az", ["containerapp", "show", ...azTarget(target), "--query", "properties.latestReadyRevisionName", "--output", "tsv"])).trim();
-  if (!revision) throw new Error(`${target.app} has no ready revision to restart; it reads the secrets when its next revision starts.`);
+  if (!revision) throw coded("no-ready-revision", `${target.app} has no ready revision to restart; it reads the secrets when its next revision starts.`);
   await run("az", ["containerapp", "revision", "restart", ...azTarget(target), "--revision", revision, "--output", "none"]);
 }
 
@@ -133,8 +136,8 @@ export async function waitForInstallation({ conversion, repo, fetch = globalThis
       headers: { accept: "application/vnd.github+json", authorization: `Bearer ${jwt}`, "user-agent": "ouro-desk-hosted", "x-github-api-version": "2022-11-28" },
     });
     if (response.ok) return;
-    if (response.status !== 404) throw new Error(`GitHub answered ${response.status} when asked for the App's installation on ${repo}.`);
-    if (now() >= deadline) throw new Error(`The App was not installed on ${repo} within ${Math.round(timeoutMs / 60_000)} minutes.`);
+    if (response.status !== 404) throw coded("github-refused", `GitHub answered ${response.status} when asked for the App's installation on ${repo}.`);
+    if (now() >= deadline) throw coded("install-timeout", `The App was not installed on ${repo} within ${Math.round(timeoutMs / 60_000)} minutes.`);
     await sleep(5000);
   }
 }
@@ -217,7 +220,7 @@ async function main() {
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   main().catch((error) => {
-    process.stderr.write(`create-github-app: ${error.message}\n`);
+    process.stderr.write(`create-github-app: ${error.code ?? "failed"}: ${error.message}\n`);
     process.exit(1);
   });
 }
