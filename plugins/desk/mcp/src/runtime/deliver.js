@@ -440,8 +440,9 @@ function stageIdenticalTracked(git, target, stderr) {
     const file = match[1]
     const incoming = git(["rev-parse", "--verify", "--quiet", `${target}:${file}`]).stdout.trim()
     const local = git(["hash-object", "--", path.join(top, file)]).stdout.trim()
-    if (incoming === "" || incoming !== local) continue
-    if (git(["add", "--", path.join(top, file)]).status === 0) staged += 1
+    if (incoming !== local) continue
+    git(["add", "--", path.join(top, file)])
+    staged += 1
   }
   return staged
 }
