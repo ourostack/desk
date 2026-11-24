@@ -883,3 +883,44 @@ test("the push worker delivers a commit that arrived during the fetch on its nex
   assert.equal(bare(origin, ["show", "main:tasks/during.md"]), "during\n")
   assert.equal(readSyncStatus({ root: desk, env: process.env }).blocked, false)
 })
+
+test("a pre-push hook tests the rebuilt tree that lands, not the shared checkout that has not caught up yet (#1680)", async () => {
+  const { origin, desk, elsewhere } = await mkShared()
+  await commit(elsewhere, "notes/shared.md", "trimmed\n", "trim shared notes")
+  git(elsewhere, ["push", "-q", "origin", "main"])
+  const hook = path.join(desk, ".git", "hooks", "pre-push")
+  writeFileSync(hook, "#!/bin/sh\ngrep -q trimmed notes/shared.md || { echo 'notes are over budget' >&2; exit 1; }\n", { mode: 0o755 })
+  await commit(desk, "tasks/other.md", card({ status: "doing", updated: "2026-10-28T21:04:00Z", progress: ["new card"] }), "desk: card update")
+
+  const result = deliver({ root: desk })
+
+  assert.equal(result.state, "delivered", JSON.stringify(result))
+  assert.ok(subjectsOnOrigin(origin).includes("desk: card update"))
+})
+
+test("a hook that refuses the rebuilt tree too still reports the push as rejected (#1680)", async () => {
+  const { origin, desk, elsewhere } = await mkShared()
+  await commit(elsewhere, "notes/shared.md", "trimmed\n", "trim shared notes")
+  git(elsewhere, ["push", "-q", "origin", "main"])
+  writeFileSync(path.join(desk, ".git", "hooks", "pre-push"), "#!/bin/sh\nexit 1\n", { mode: 0o755 })
+  await commit(desk, "tasks/other.md", card({ status: "doing", updated: "2026-10-28T21:04:00Z", progress: ["new card"] }), "desk: card update")
+
+  const result = deliver({ root: desk })
+
+  assert.equal(result.reason, "push_rejected", JSON.stringify(result))
+  assert.equal(subjectsOnOrigin(origin).includes("desk: card update"), false)
+})
+
+test("when the full checkout of the rebuilt tree cannot be made, the hook's refusal is what is reported (#1680)", async () => {
+  for (const step of ["add", "read-tree"]) {
+    const { desk, elsewhere } = await mkShared()
+    await commit(elsewhere, "notes/shared.md", "trimmed\n", "trim shared notes")
+    git(elsewhere, ["push", "-q", "origin", "main"])
+    writeFileSync(path.join(desk, ".git", "hooks", "pre-push"), "#!/bin/sh\nexit 1\n", { mode: 0o755 })
+    await commit(desk, "tasks/other.md", card({ status: "doing", updated: "2026-10-28T21:04:00Z", progress: ["new card"] }), "desk: card update")
+    let seen = 0
+    const broken = intercept((args) => args.includes(step) && (step === "add" ? args.includes("worktree") : true) && ++seen === 2, () => ({ status: 128, stdout: "", stderr: "fatal: boom\n" }))
+
+    assert.equal(deliver({ root: desk, spawnGit: broken }).reason, "push_rejected", step)
+  }
+})
