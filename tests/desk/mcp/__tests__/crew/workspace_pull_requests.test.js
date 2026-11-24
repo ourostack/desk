@@ -9,7 +9,7 @@ import { strict as assert } from "node:assert"
 import { appendFileSync, readFileSync, writeFileSync } from "node:fs"
 import * as path from "node:path"
 import { spawnSync } from "node:child_process"
-import { CIT_SHAPED, ORIGIN, bareGit, fakeGh, git, mainFiles, noWait, onMain, plantPullRequest, startedTeamRepo, teamRepo } from "./_fixtures.js"
+import { CIT_SHAPED, ORIGIN, bareGit, fakeGh, git, mainFiles, noWait, onMain, plantPullRequest, pushFromElsewhere, startedTeamRepo, teamRepo } from "./_fixtures.js"
 import { crewStatus, joinWorkspace, startWorkspace } from "../../../../../plugins/desk/mcp/src/crew/workspace.js"
 
 const NOW = () => 1767225600000
@@ -345,4 +345,71 @@ test("a reused join pull request whose row another machine landed meanwhile is c
   assert.equal(second.alias, "bob2")
   assert.equal(fake.state.prs.find((pr) => pr.url === first.pr).open, false)
   assert.equal(creates(fake).length, 1)
+})
+
+test("a join into a workspace whose .desk/publication.json requires pull requests lands the desk through one too, never by push", async () => {
+  const repo = await started()
+  await pushFromElsewhere(repo, { ".desk/publication.json": "{\"schema_version\":1,\"mode\":\"pull-request\",\"required_checks\":[\"ci\"]}\n" })
+  const fake = fakeGh(repo.bare)
+  const bob = memberClone(repo, "bob")
+  const result = await joinWorkspace({ repo: bob.clone, spawnGit: repo.spawnGit, gh: fake.gh, identity: "bob_example", alias: "bob", wait: noWait, now: NOW, apply: true })
+  assert.equal(result.state, "joined", result.message)
+  assert.equal(creates(fake).length, 2)
+  assert.match(result.deskPr, /\/pull\/\d+$/u)
+  assert.ok(mainFiles(repo.bare).includes("desks/bob/AGENTS.md"))
+  assert.match(onMain(repo.bare, "_meta/desks.md"), /\| bob \| bob_example \|/u)
+  assert.equal((await crewStatus({ repo: memberClone(repo, "check").clone, identity: "bob_example" })).member.alias, "bob")
+})
+
+const PR_ONLY = { ".desk/publication.json": "{\"schema_version\":1,\"mode\":\"pull-request\",\"required_checks\":[\"ci\"]}\n" }
+
+test("a desk pull request still waiting on review leaves the join not joined, and a rerun finishes it once merged", async () => {
+  const repo = await started()
+  await pushFromElsewhere(repo, PR_ONLY)
+  const fake = reviewed(repo.bare)
+  const bob = memberClone(repo, "bob")
+  const join = () => joinWorkspace({ repo: bob.clone, spawnGit: repo.spawnGit, gh: fake.gh, identity: "bob_example", alias: "bob", wait: noWait, now: NOW, apply: true })
+  const pending = await join()
+  assert.equal(pending.state, "pr_open", pending.message)
+  assert.match(pending.message, /Not joined yet: desks\/bob\/ is not in main yet, and /u)
+  assert.ok(!mainFiles(repo.bare).includes("desks/bob/AGENTS.md"))
+  fake.review.done = true
+  const done = await join()
+  assert.equal(done.state, "joined", done.message)
+  assert.ok(mainFiles(repo.bare).includes("desks/bob/AGENTS.md"))
+})
+
+test("a desk pull request GitHub merged but whose fetch afterwards failed reports the desk as in, with the roster row still to add", async () => {
+  const repo = await started()
+  await pushFromElsewhere(repo, PR_ONLY)
+  let failNext = false
+  const flaky = (cmd, args, options) => {
+    if (failNext && args.includes("fetch")) {
+      failNext = false
+      return { status: 128, stdout: "", stderr: "fatal: unable to access: Could not resolve host" }
+    }
+    return repo.spawnGit(cmd, args, options)
+  }
+  const fake = fakeGh(repo.bare)
+  const gh = async (args, options) => {
+    const answer = await fake.gh(args, options)
+    if (args[0] === "pr" && args[1] === "merge" && answer.code === 0) failNext = true
+    return answer
+  }
+  const bob = memberClone(repo, "bob")
+  const result = await joinWorkspace({ repo: bob.clone, spawnGit: flaky, gh, identity: "bob_example", alias: "bob", wait: noWait, now: NOW, apply: true })
+  assert.equal(result.state, "joined")
+  assert.equal(result.confirmed, false)
+  assert.match(result.message, /The desk is in: GitHub merged/u)
+  assert.ok(mainFiles(repo.bare).includes("desks/bob/AGENTS.md"))
+})
+
+test("a publication.json that cannot be read is treated as requiring pull requests, never pushed past", async () => {
+  const repo = await started()
+  await pushFromElsewhere(repo, { ".desk/publication.json": "{not json" })
+  const fake = fakeGh(repo.bare)
+  const bob = memberClone(repo, "bob")
+  const result = await joinWorkspace({ repo: bob.clone, spawnGit: repo.spawnGit, gh: fake.gh, identity: "bob_example", alias: "bob", wait: noWait, now: NOW, apply: true })
+  assert.equal(result.state, "joined", result.message)
+  assert.match(result.deskPr, /\/pull\/\d+$/u)
 })

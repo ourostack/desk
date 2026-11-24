@@ -684,6 +684,18 @@ async function landByPush({ git, base, write, message, created }) {
   }
 }
 
+// Whether the default branch publishes only through pull requests: it carries a .desk/publication.json (one this
+// reader cannot parse counts too, the safe side). A push to such a branch is refused by the team's own guard.
+function pullRequestOnly(git, base) {
+  const read = git(["show", `origin/${base}:.desk/publication.json`])
+  if (!read.ok) return false
+  try {
+    return JSON.parse(read.stdout)?.mode === "pull-request"
+  } catch {
+    return true
+  }
+}
+
 const prView = async (hub, url) => ghJson(await hub(["pr", "view", url, "--json", "state,mergeable,mergeStateStatus,mergeCommit"]))
 
 /**
@@ -1198,8 +1210,22 @@ export async function joinWorkspace({ repo, identity, alias, adoptExisting, appl
         writeFiles(top, Object.fromEntries(missing.map((rel) => [`${desk}/${rel}`, render(readFileSync(path.join(top, ...TEMPLATE.split("/"), ...rel.split("/")), "utf8"), member)])), created)
         return missing.map((rel) => `${desk}/${rel}`)
       }
-      // The member's own desk: they are its only writer, so it goes straight to the default branch.
-      await landByPush({ git, base: checkout.base, write: writeDesk, message: `Crew: ${adopting ? "adopt" : "add"} ${alias}'s desk\n\n${IDENTITY_TRAILER}: ${identity}${adopting ? `\n${ADOPTION_TRAILER}: ${desk}` : ""}`, created })
+      const deskMessage = `Crew: ${adopting ? "adopt" : "add"} ${alias}'s desk`
+      if (pullRequestOnly(git, checkout.base)) {
+        // The team's .desk/publication.json requires a pull request for every write to the default branch, so the desk goes through one too.
+        const deskPrefix = `crew/join-desk-${alias}-`
+        const deskBody = `${deskMessage}.\n\nOpened by Crew's crew.js. It is merged at once: this team publishes through pull requests, and the desk's only writer is its owner.\n\n${IDENTITY_TRAILER}: ${identity}${adopting ? `\n${ADOPTION_TRAILER}: ${desk}` : ""}`
+        const deskReuse = adopting ? undefined : await openPullRequest(checkout.hub, status.origin, { account: result.account, base: checkout.base, branch: new RegExp(`^${escaped(deskPrefix)}[0-9a-z]+$`, "u"), identity, paths: files })
+        const landedDesk = await landByPullRequest({ git, base: checkout.base, origin: status.origin, write: writeDesk, message: deskMessage, body: deskBody, prefix: deskPrefix, stamp: now(), hub: checkout.hub, wait, result, reuse: deskReuse, created })
+        if (landedDesk.open !== undefined) return openResult(result, landedDesk, checkout.base, `Not joined yet: ${desk}/ is not in ${checkout.base} yet, and `)
+        if (landedDesk.unfetched !== undefined) return unconfirmedResult(result, landedDesk, "joined", "The desk is in", "Run join again to add the roster row.")
+        result.deskPr = result.pr
+        delete result.pr
+        delete result.reused
+      } else {
+        // The member's own desk: they are its only writer, so it goes straight to the default branch.
+        await landByPush({ git, base: checkout.base, write: writeDesk, message: `${deskMessage}\n\n${IDENTITY_TRAILER}: ${identity}${adopting ? `\n${ADOPTION_TRAILER}: ${desk}` : ""}`, created })
+      }
       deskPushed = true
     }
     if (adopting) expected[desk] = git(["rev-parse", "--verify", `HEAD:${desk}`]).stdout
