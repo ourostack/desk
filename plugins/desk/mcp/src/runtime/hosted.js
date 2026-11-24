@@ -45,7 +45,8 @@ export function hostedRefusal(name, input, env) {
   return reason === undefined ? null : { status: "refused", code: "hosted_unavailable", tool: name, reason }
 }
 
-const READ_ONLY = new Set(["desk_search", "desk_recall", "desk_status", "desk_skill"])
+// task_focus writes nothing: it only sets which task this session works on.
+const READ_ONLY = new Set(["desk_search", "desk_recall", "desk_status", "desk_skill", "task_focus"])
 // Tools that can remove or overwrite what was there: archive relocates a task and desk_save replaces files.
 const DESTRUCTIVE = new Set(["task_archive", "desk_save"])
 
