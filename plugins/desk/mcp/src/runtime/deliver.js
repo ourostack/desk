@@ -447,16 +447,18 @@ function followsUpstream({ git, upstream, head, target }) {
  * an untracked file in the way, leaves the checkout where it was (`behind`), naming what stopped it.
  */
 function catchUp({ git, upstream, head, target }) {
+  // Moving the checkout writes its files, so Git LFS must smudge them: with the skip on, a changed LFS file would land as its pointer.
+  const smudge = { GIT_LFS_SKIP_SMUDGE: "0" }
   const now = git(["rev-parse", "HEAD"]).stdout.trim()
   if (now === target) return { state: "current" }
   if (now !== head) return { state: "behind", reason: "moved" }
   // Git's index may hold stale file stamps, and refreshing them stats every file; do it only when the move is refused for them.
-  let moved = git(["read-tree", "-m", "-u", head, target], CHECKOUT_TIMEOUT_MS)
+  let moved = git(["read-tree", "-m", "-u", head, target], CHECKOUT_TIMEOUT_MS, smudge)
   if (moved.status !== 0 && /not uptodate/u.test(moved.stderr)) {
     git(["update-index", "-q", "--refresh"])
-    moved = git(["read-tree", "-m", "-u", head, target], CHECKOUT_TIMEOUT_MS)
+    moved = git(["read-tree", "-m", "-u", head, target], CHECKOUT_TIMEOUT_MS, smudge)
   }
-  if (moved.status !== 0 && removeIdenticalUntracked(git, target, moved.stderr) > 0) moved = git(["read-tree", "-m", "-u", head, target], CHECKOUT_TIMEOUT_MS)
+  if (moved.status !== 0 && removeIdenticalUntracked(git, target, moved.stderr) > 0) moved = git(["read-tree", "-m", "-u", head, target], CHECKOUT_TIMEOUT_MS, smudge)
   if (moved.status !== 0) {
     const named = [...moved.stderr.matchAll(/^(?:error: )?Entry '(.+)' (?:not uptodate|would be overwritten)/gmu)].map((match) => match[1])
     return { state: "behind", reason: "local_changes", paths: [...new Set([...named, ...namedUntrackedPaths(moved.stderr)])] }
@@ -464,6 +466,6 @@ function catchUp({ git, upstream, head, target }) {
   // Through HEAD, so the move is in HEAD's reflog as well as the branch's; the old value makes it a compare-and-swap.
   if (git(["update-ref", "-m", "desk: catch up with delivered commits", "HEAD", target, head]).status === 0) return { state: "caught_up" }
   // Another commit landed in the moment between: put the files back to match the branch as it now is.
-  git(["read-tree", "-m", "-u", target, "HEAD"], CHECKOUT_TIMEOUT_MS)
+  git(["read-tree", "-m", "-u", target, "HEAD"], CHECKOUT_TIMEOUT_MS, smudge)
   return { state: "behind", reason: "moved" }
 }
