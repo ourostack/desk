@@ -29,8 +29,6 @@ const GONE_MS = 30 * 24 * 3_600_000
 const LOCK_STALE_MS = 15 * 60_000
 const MAX_TITLES = 20
 const PAGE = 100
-/** An issue's edit history is read this many pages deep at most (100 edits each); a longer one is not proof, so the change is news. */
-const EDIT_PAGES = 50
 const EDITS_QUERY = "query($owner: String!, $name: String!, $number: Int!, $after: String) { repository(owner: $owner, name: $name) { issue(number: $number) { title body updatedAt userContentEdits(first: 100, after: $after) { pageInfo { hasNextPage endCursor } nodes { editedAt deletedAt editor { __typename login } } } } } }"
 /** A full listing of the open issues is read again this often; between them only issues updated since the last change are read. */
 const FULL_SYNC_MS = 3_600_000
@@ -358,11 +356,15 @@ const duringTurn = (event, login, turns) => {
   return event.actor?.login?.toLowerCase() === login.toLowerCase() && turns.some((from) => at >= from - TURN_LEAD_MS && at <= from + TURN_MS)
 }
 
-/** What made a reopen or a label change news, or null: a label outside the drain's namespace, ignored list and ignored patterns, or a reopen that is not the drain claiming the issue (its own `drain:` label change within a minute). A label applied within a minute of the issue being opened was part of filing it, and the "new issue" wake shows it. A label or reopen by the polling account during the drain's turn is its own work. Closes, assignments and mentions are not news. */
+/** What made a reopen or a label change news, or null: a label outside the drain's namespace, ignored list and ignored patterns, a reopen that is not the drain claiming the issue, or an assignment change (assigned or unassigned) outside the drain's turn (its own `drain:` label change within a minute). A label or assignee applied within a minute of the issue being opened was part of filing it, and the "new issue" wake shows it. A label, reopen or assignment change by the polling account during the drain's turn is its own work. Closes and mentions are not news. */
 function newsEvent(event, rules, claims, login, openedAt) {
   if (event.event === "reopened") {
     const own = event.actor?.login?.toLowerCase() === login.toLowerCase() && claims.some((claim) => claim.actor?.login?.toLowerCase() === login.toLowerCase() && Math.abs(Date.parse(claim.created_at) - Date.parse(event.created_at)) <= CLAIM_SLACK_MS)
     return own || duringTurn(event, login, rules.turns) ? null : "reopened"
+  }
+  if (event.event === "assigned" || event.event === "unassigned") {
+    if (event.event === "assigned" && Date.parse(event.created_at) <= openedAt + OPENING_LABEL_MS) return null
+    return duringTurn(event, login, rules.turns) ? null : `${event.event} ${event.assignee?.login ?? "nobody"}`
   }
   if (event.event !== "labeled" && event.event !== "unlabeled") return null
   if (event.event === "labeled" && Date.parse(event.created_at) <= openedAt + OPENING_LABEL_MS) return null
@@ -814,7 +816,9 @@ export async function connectGithub(account, { spawn = spawnSync, fetchImpl = fe
     const edits = []
     let snapshot = null
     let after = null
-    for (let page = 1; page <= EDIT_PAGES; page++) {
+    const cursors = new Set()
+    // Read to the end however long the history is: no order is assumed, so no page can be skipped. A cursor that repeats can never end.
+    for (;;) {
       const found = (await graphql(EDITS_QUERY, { owner, name, number, after })).repository?.issue
       if (!found) return null
       const current = { title: found.title, body: found.body, updatedAt: found.updatedAt }
@@ -825,9 +829,9 @@ export async function connectGithub(account, { spawn = spawnSync, fetchImpl = fe
       edits.push(...connection.nodes.map((node) => ({ editedAt: node?.editedAt ?? null, deletedAt: node?.deletedAt ?? null, editor: node?.editor ? { type: node.editor.__typename ?? null, login: node.editor.login ?? null } : null })))
       if (!connection.pageInfo.hasNextPage) return { ...snapshot, edits, complete: true }
       after = connection.pageInfo.endCursor
-      if (typeof after !== "string") return { ...snapshot, edits, complete: false }
+      if (typeof after !== "string" || cursors.has(after)) return { ...snapshot, edits, complete: false }
+      cursors.add(after)
     }
-    return { ...snapshot, edits, complete: false }
   }
   // Who the token really is decides which comments are the drain's own, so each drain's account is resolved from the token that polls its repository.
   const login = knownLogin || (await get("/user").then(({ body }) => String(body.login ?? ""), () => "")) || account || ""
