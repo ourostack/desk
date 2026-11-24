@@ -1,0 +1,1 @@
+The `sessions` command's error codes are now kebab-case (`sessions-target`, `sessions-app-socket`, `sessions-send-refused`, `sessions-whoami-platform`, `sessions-tail-count`, `sessions-tail-target`), matching its census cards and the other runtime commands; they were snake_case.
