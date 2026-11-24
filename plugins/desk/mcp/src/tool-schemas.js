@@ -117,6 +117,7 @@ const TASK_PROGRESS = {
   next_step: text("Replaces the card's `**Next step:**` paragraph."),
 }
 
+const CHILD_SESSION = text("The session id of a child you delegated this work to, written as a `Child session:` line at the top of the `log` entry (pass `log` too), so a drain or coordinator can find who owns the work. Read your own child's id from the host that started it.")
 const TASK_LOG = text("A dated entry for the task's `log.md` beside its card, the place for rulings, decisions and where the evidence is. Cheap to repeat: entries written close together share one commit and one push, and a call never waits on a publication still running.")
 
 const REPLACE_SECTION = {
@@ -208,7 +209,7 @@ const HAND_WRITTEN_INPUT_SCHEMAS = Object.freeze({
     origin_note: text("When the agent started the task: one line on what it noticed."),
     steps: { type: "array", items: STEP, description: "The outcome's steps, in order, written as the card's `## Steps` table. A new step needs `id`, `repo` and `depends_on`." },
   }, ["track", "slug", "title"]),
-  task_update: schema({ ...TASK_TARGET, status: text("Shorthand for `frontmatter.status`: one of drafting, processing, validating, collaborating, paused, blocked, done, cancelled. Moving to `done` needs `evidence`."), ...CARD_UPDATE, ...TASK_PROGRESS, evidence: TASK_DONE_EVIDENCE, repos_removed_reason: REPOS_REMOVED_REASON, return_reason: RETURN_REASON, step: STEP, resource: RESOURCE, resources: { type: "array", items: RESOURCE, description: "Several `resource` rows in one call, written and committed once, in order after `resource` when both are given; use it for a cleanup of many worktrees or branches. Any bad row refuses the whole call." }, desk: SIBLING_DESK, display_label: DISPLAY_LABEL, replace_section: REPLACE_SECTION, log: TASK_LOG, content_home: CONTENT_HOME, ...TASK_MOVE }, []),
+  task_update: schema({ ...TASK_TARGET, status: text("Shorthand for `frontmatter.status`: one of drafting, processing, validating, collaborating, paused, blocked, done, cancelled. Moving to `done` needs `evidence`."), ...CARD_UPDATE, ...TASK_PROGRESS, evidence: TASK_DONE_EVIDENCE, repos_removed_reason: REPOS_REMOVED_REASON, return_reason: RETURN_REASON, step: STEP, resource: RESOURCE, resources: { type: "array", items: RESOURCE, description: "Several `resource` rows in one call, written and committed once, in order after `resource` when both are given; use it for a cleanup of many worktrees or branches. Any bad row refuses the whole call." }, desk: SIBLING_DESK, display_label: DISPLAY_LABEL, replace_section: REPLACE_SECTION, log: TASK_LOG, child_session: CHILD_SESSION, content_home: CONTENT_HOME, ...TASK_MOVE }, []),
   task_archive: schema({ ...TASK_TARGET, desk: SIBLING_DESK, evidence: TASK_DONE_EVIDENCE, outcome: TASK_ARCHIVE_OUTCOME }, ["track", "slug"]),
   task_signoff: schema({
     desk: SIBLING_DESK,
