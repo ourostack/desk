@@ -1,0 +1,1 @@
+`desk_save` no longer fails a whole save because one listed path is not known to Git, such as an ignored generated log. It commits the paths that changed and names the rest in `unchanged_paths` in its answer.

@@ -397,3 +397,17 @@ test("desk_save rejects malformed input without touching the working tree", asyn
 
   assert.equal(gitStatus(root).trim(), "?? notes.md", "no rejected call staged or committed anything")
 })
+
+test("desk_save commits the listed paths that changed and reports an ignored generated path instead of failing on it", async () => {
+  const root = await mkTempDeskRoot()
+  initGit(root)
+  await fs.writeFile(path.join(root, ".gitignore"), "*.log\n", "utf8")
+  spawnSync("git", ["-C", root, "add", ".gitignore"])
+  spawnSync("git", ["-C", root, "commit", "-q", "-m", "init"])
+  await fs.writeFile(path.join(root, "notes.md"), "Notes.\n", "utf8")
+  await fs.writeFile(path.join(root, "report.log"), "generated\n", "utf8")
+  const result = await desk_save({ deskRoot: root, input: { paths: ["notes.md", "report.log"], message: "save notes" }, schedulePush: () => {} })
+  assert.equal(result.status, "committed")
+  assert.deepEqual(lastCommitFiles(root), ["notes.md"])
+  assert.deepEqual(result.unchanged_paths, ["report.log"])
+})
