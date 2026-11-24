@@ -1,4 +1,6 @@
+import { spawnSync } from "node:child_process"
 import { fileURLToPath } from "node:url"
+import { ghEnvFor } from "./remote-identity.js"
 import { shellQuote } from "../util/shell-quote.js"
 import { redactCredentialLikeText } from "../util/redact.js"
 
@@ -80,8 +82,11 @@ export function publishPullRequest({ git, spawnGit, root, upstream, head, onto, 
   const repo = repository(remote.stdout.trim())
   const base = upstream.merge.replace(/^refs\/heads\//u, "")
   const branch = `desk/publish/${head}`
+  // `spawnGit` is a test seam over `spawnSync`; only the real one asks which account can reach the repository.
+  const [owner, repoName] = repo.name.split("/")
+  const ghEnv = spawnGit === spawnSync ? ghEnvFor({ host: repo.host, owner, repo: repoName, env: process.env, spawn: spawnSync }) : process.env
   const gh = (args, json = true) => {
-    const result = spawnGit("gh", args, { cwd: root, encoding: "utf8", windowsHide: true, timeout: 60_000, env: process.env })
+    const result = spawnGit("gh", args, { cwd: root, encoding: "utf8", windowsHide: true, timeout: 60_000, env: ghEnv })
     if (result.status !== 0) {
       // Do not echo arbitrary subprocess output, which can contain credentials.
       throw Object.assign(new Error(`Check gh auth status, then try again: GitHub CLI ${args[0]} ${args[1]} failed (exit ${result.status ?? "timeout"}); check gh auth status --hostname ${repo.host}`), { code: "pr_publication_check_gh_auth_status_then" })
