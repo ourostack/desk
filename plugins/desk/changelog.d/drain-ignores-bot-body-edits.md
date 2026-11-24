@@ -1,1 +1,0 @@
-The issue-drain poller no longer wakes a drain when a bot rewrites the body of its own issue, such as a delivery-health table refreshed every few minutes. A bot issue that is new, a human edit, a comment, a label or a state change still wakes it.
