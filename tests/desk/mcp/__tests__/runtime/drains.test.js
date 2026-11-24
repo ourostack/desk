@@ -209,6 +209,18 @@ for (const [name, label, minutes, woken] of [
   })
 }
 
+test("a bot rewriting the body of its own issue does not wake the drain, but a new bot issue and a human edit still do", async () => {
+  const bot = (number, updated_at, body) => ({ ...issue(number, updated_at, `Issue ${number}`, body), user: { login: "github-actions[bot]", type: "Bot" } })
+  const w = await world([bot(1, T(0), "health: 1"), issue(2, T(0))])
+  await w.poll()
+  w.issues.splice(0, 2, bot(1, T(5), "health: 2"), issue(2, T(5), "Issue 2", "edited"))
+  await w.poll()
+  assert.deepEqual(w.sent, [[DRAIN.session, "New or changed issues in acme/widgets: #2 Issue 2 (title or body edited). Drain them."]])
+  w.issues.push(bot(3, T(6), "health: 1"))
+  await w.poll()
+  assert.match(w.sent.at(-1)[1], /#3 Issue 3 \(new issue\)/u)
+})
+
 test("never wakes for a closed issue the drain handled, and drops its waiting event", async () => {
   const w = await world([issue(1, T(0)), issue(2, T(0))])
   await w.poll()
