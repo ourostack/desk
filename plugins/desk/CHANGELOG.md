@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.493 — 2026-11-24
+
+Desk's MCP server now vendors Ouro UI v1.3.503, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.492 — 2026-11-24
 
 Every pull request now passes the Tim check before it reaches GitHub or a reviewer, and the rules it checks are Desk's own. They adapt [Tim Clem's Copilot instructions](https://github.com/tclem/dotfiles/tree/main/copilot), without his AI signature:
