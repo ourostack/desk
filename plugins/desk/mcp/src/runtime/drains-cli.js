@@ -182,7 +182,7 @@ function drainsCli({ script, env, now, connect, listProcesses, signedIn, fetchHo
         try {
           processes = listProcesses()
         } catch (error) {
-          throw new AxError({ code: "process-list-failed", exit: 1, thing: "runtimes status", problem: `ps could not list this host's processes: ${error.message}`, fix: "Run ps -axo pid=,command= yourself to see why it fails, then run runtimes status again." })
+          throw new AxError({ code: "process-list-failed", exit: 1, thing: "runtimes status", problem: `ps could not list this host's processes, probably because ps is missing or blocked here (${error.message})`, fix: "Run ps -axo pid=,command= yourself to see why it fails, then run runtimes status again." })
         }
         return { status: pluginlessRuntimeLines(findPluginlessRuntimes(processes)) }
       }),
