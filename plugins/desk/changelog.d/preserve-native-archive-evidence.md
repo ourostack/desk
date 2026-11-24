@@ -1,1 +1,0 @@
-Windows CI retains archive-handoff receipts and finite identity observations in separate files, so a later identity fixture cannot overwrite the earlier archive failure evidence. This does not change native readiness timeouts or fix their unresolved timing cause.

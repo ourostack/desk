@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.497 — 2026-11-24
+
+Windows CI retains archive-handoff receipts and finite identity observations in separate files, so a later identity fixture cannot overwrite the earlier archive failure evidence. This does not change native readiness timeouts or fix their unresolved timing cause.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.496 — 2026-11-24
 
 ### Publication runs `gh` as the account that can reach the repository
