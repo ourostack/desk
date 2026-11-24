@@ -1,1 +1,0 @@
-Save PRs now attach the merge-when-green label through GitHub's REST API after their checks pass, including when GraphQL PR edits are refused. Desk confirms the label response and reports both delivery failures if neither labelling nor its exact-head merge succeeds.

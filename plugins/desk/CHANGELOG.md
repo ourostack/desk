@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.489 — 2026-11-24
+
+Save PRs now attach the merge-when-green label through GitHub's REST API after their checks pass, including when GraphQL PR edits are refused. Desk confirms the label response and reports both delivery failures if neither labelling nor its exact-head merge succeeds.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.488 — 2026-11-24
 
 Desk's MCP server now vendors Ouro UI v1.3.501, moved by Ouro Current.
