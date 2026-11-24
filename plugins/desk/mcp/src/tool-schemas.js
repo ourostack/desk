@@ -30,7 +30,7 @@ const TASK_TARGET = {
   slug: text("The task folder name."),
 }
 
-const SIBLING_DESK = text("Write the task in another desk registered on this machine instead of this session's desk: its name, repo or absolute folder as desk_status lists it under machine_desks. A desk that is not registered, or a Crew desk, is refused and nothing is written; the answer carries `desk_root`.")
+const SIBLING_DESK = text("Write the task in another desk registered on this machine instead of this session's desk: its name, repo or absolute folder as desk_status lists it under machine_desks. A desk that is not registered is refused and nothing is written. In a Crew desk the card is written as the member this machine's GitHub sign-in resolves to on that desk's roster; no member means a refusal. The answer carries `desk_root`.")
 
 const DISPLAY_LABEL = text("Optional short description of the focused task, at most 72 characters; never paths, URLs, emails or credentials. Unsafe labels are ignored.")
 
