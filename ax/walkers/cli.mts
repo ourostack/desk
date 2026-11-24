@@ -26,7 +26,9 @@
 // isn't a word, `-`, `.`, `:` or `/` character (a trailing `.` or `:` dropped), so the script prints the code, as in
 // `code: the sentence`, on its error line. The one exemption: a
 // door whose file is a `generatedPath` in the root's `upstream-sources.lock.json` is Superpowers' locked copy, which
-// this repo can't edit, so its codes are not checked until upstream prints them (obra/superpowers#2729 tracks that).
+// this repo can't edit, so its codes are not checked until upstream prints them (obra/superpowers#2729 tracks that), and a
+// card there with `effect: read` stands as its own read-only evidence, as the file can't carry `ax: read-only`. This holds for
+// a script of any language.
 // A code counts as raised as written or with its hyphens as underscores. Read-only evidence is the kit's `readOnly:
 // true` on the command. A hand-written script declares itself read-only with a comment line that reads exactly
 // `ax: read-only`, alone or followed by a space, `.` or `;` and the reason, in the comments before its first code (a
@@ -493,12 +495,14 @@ export async function walk(opts: WalkerOptions): Promise<WalkResult> {
     const card = byId.get(d.id) ?? null;
     let raises: string[] | undefined;
     const script = SCRIPT.test(d.file);
-    if (card && Array.isArray(card.errors) && (script || !locked.has(d.file))) {
+    if (card && Array.isArray(card.errors) && !locked.has(d.file)) {
       const own = script ? raisedIn(resolve(opts.root, d.file)) : wordsIn(resolve(opts.root, d.file));
       const has = (code: string) => own.has(code) || own.has(code.replaceAll("-", "_"));
       raises = card.errors.map((e) => e?.code).filter((code): code is string => typeof code === "string" && has(code));
     }
-    doors.push({ ...d, card, evidence: { ...(readOnly ? { readOnly: true } : {}), ...(raises ? { raises } : {}) } });
+    // A locked file can't carry `ax: read-only`, so its card's own `effect: read` stands as the evidence.
+    const lockedRead = locked.has(d.file) && card?.effect === "read";
+    doors.push({ ...d, card, evidence: { ...(readOnly || lockedRead ? { readOnly: true } : {}), ...(raises ? { raises } : {}) } });
   }
   for (const id of byId.keys()) if (!seen.has(id)) errors.push(`${id}: a card in ${opts.cards} for a command the walker doesn't find under ${opts.source}. Fix: remove the card, or fix its id.`);
   return { doors, errors, unwalked };

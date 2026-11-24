@@ -92,7 +92,7 @@ test("falls back to the last good path when the cache cannot be read, and logs o
     assert.equal(r.status, 0)
     assert.deepEqual(r.calls[0].slice(0, 2), ["/node", [script, "poll"]])
     assert.equal(r.err.length, 1)
-    assert.ok(r.err[0].startsWith("2026-11-13T22:00:00.000Z could not resolve the released Desk ("), r.err[0])
+    assert.ok(r.err[0].startsWith("2026-11-13T22:00:00.000Z release-unresolved: could not resolve the released Desk ("), r.err[0])
     assert.ok(r.err[0].endsWith(`); using the last good path ${script}\n`), r.err[0])
   }
   assert.equal(readFileSync(first.log, "utf8").split("\n").filter(Boolean).length, 2)
@@ -231,7 +231,7 @@ test("when GitHub cannot be asked, the own copy runs and one line says so; a bro
   assert.equal(r.status, 0)
   assert.equal(r.calls[0][2].env.DESK_DRAINS_RELEASE, sha)
   assert.equal(r.err.length, 1)
-  assert.ok(r.err[0].endsWith(`could not fetch the released Desk (could not resolve host); using the copy from ${sha.slice(0, 8)}\n`), r.err[0])
+  assert.ok(r.err[0].endsWith(`fetch-failed: could not fetch the released Desk (could not resolve host); using the copy from ${sha.slice(0, 8)}\n`), r.err[0])
   assert.equal(readFileSync(r.log, "utf8"), r.err[0])
   // A clone that git cannot read is replaced.
   const clone = path.join(path.dirname(r.log), "desk-release")
@@ -272,7 +272,7 @@ test("a release branch without the script is not run; the Agency cache is", asyn
   // With the cache gone too, the line has only the cache's reason: the fetch itself worked.
   const broken = run(root, path.join(root, "nope"), { env: { DESK_DRAINS_RELEASE_URL: repo }, git: undefined })
   assert.equal(broken.status, 0)
-  assert.match(broken.err[0], /could not resolve the released Desk \(ENOENT/u)
+  assert.match(broken.err[0], /release-unresolved: could not resolve the released Desk \(ENOENT/u)
 })
 
 test("a git that cannot find git-remote-https is retried with the helper directory beside a git on PATH, then without GIT_EXEC_PATH", () => {
@@ -442,7 +442,7 @@ test("an existing pre-snapshot clone migrates offline without claiming a success
   assert.equal(migrated.status, 0)
   assert.equal(migrated.calls[0][2].env.DESK_DRAINS_RELEASE, sha)
   assert.equal(readFileSync(migrated.calls[0][1][0], "utf8"), "// 3.2.122\n")
-  assert.match(migrated.err[0], /could not fetch the released Desk \(offline\); using the copy/u)
+  assert.match(migrated.err[0], /fetch-failed: could not fetch the released Desk \(offline\); using the copy/u)
 })
 
 test("a failed snapshot publication preserves the previous complete release and reports the failure", async () => {
@@ -473,7 +473,7 @@ test("a failed snapshot publication preserves the previous complete release and 
   assert.equal(failed.status, 0, failed.err.join(""))
   assert.equal(failed.calls[0][2].env.DESK_DRAINS_RELEASE, first)
   assert.equal(readFileSync(failed.calls[0][1][0], "utf8"), "// 3.2.122\n")
-  assert.match(failed.err[0], /could not fetch the released Desk \(ENOENT/u)
+  assert.match(failed.err[0], /fetch-failed: could not fetch the released Desk \(ENOENT/u)
   assert.equal(readFileSync(path.join(dir, "last-fetch"), "utf8"), first)
   assert.equal(existsSync(path.join(dir, "releases", `${second}.${process.pid}.tmp`)), false)
   const recovered = run(root, path.join(root, "none"), { env, git: undefined })

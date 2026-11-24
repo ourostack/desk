@@ -577,7 +577,11 @@ export async function runMigrationCli({ argv, env = process.env, io, pluginRoot,
         output: "{ roots: string[] }",
         flags: { engine: { type: "string", placeholder: "<engine>", description: "The agent engine whose plugin folders to list (copilot)." } },
         text: (result) => result.roots.map((root) => `${root}\n`).join(""),
-        run: (input) => ({ roots: agencyMigrationRoots({ home, engine: input.engine ?? "copilot" }) }),
+        run: (input) => {
+          const engine = input.engine ?? "copilot"
+          if (!["copilot", "claude"].includes(engine)) throw new AxError({ code: "unknown-engine", exit: 2, thing: "roots --engine", problem: `${engine} is not an agent engine Agency caches plugins for`, fix: "migrations roots --engine copilot, or --engine claude" })
+          return { roots: agencyMigrationRoots({ home, engine }) }
+        },
       }),
     ],
   })
