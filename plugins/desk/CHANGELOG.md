@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.516 — 2026-11-24
+
+Desk's MCP server now vendors Ouro UI v1.3.519, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.515 — 2026-11-24
 
 The [pull request visual-proof checker](skills/pr-surface-hygiene/check-visual-proof.cjs) now rejects image URLs that depend on a viewer's repository sign-in or expire within minutes: `github.com/.../blob/` and `/raw/`, `raw.githubusercontent.com`, `githubusercontent.com` URLs with a `token` or `jwt` parameter, and `private-user-images.githubusercontent.com`. Canonical `github.com/user-attachments/assets/...` URLs still pass. The check judges URL syntax only; it is not evidence that any client, mobile or Teams included, renders an image.
