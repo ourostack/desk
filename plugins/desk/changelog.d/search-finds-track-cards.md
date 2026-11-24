@@ -1,0 +1,1 @@
+`desk_search` now finds tracks. A track's `track.md` is indexed as kind `track`, so `filters: {kind: "track"}` lists the desk's tracks, including a track with no tasks, and a search for a track's title or scope line finds its card.
