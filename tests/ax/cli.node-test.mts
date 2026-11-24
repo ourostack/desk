@@ -73,14 +73,25 @@ test("a command or CLI the walker can't follow is an unwalked gap", async () => 
   );
 });
 
-test("a card's codes count as raised when the door's file or a module it imports (transitively) holds them, hyphens or underscores, never an unimported folder; a shell script claims none", async () => {
+test("a card's codes count as raised when the door's file or a module it imports (transitively) holds them, hyphens or underscores, never an unimported folder; a shell script claims what it prints", async () => {
   const { doors, errors } = await walk(options("plug", { cards: at("cards.json") }));
   const by = (id: string) => doors.find((d) => d.id === id)!;
   assert.deepEqual(by("cli:tasks add").evidence, { raises: ["slug-invalid", "chain-code"] });
   assert.equal(by("cli:tasks add").card?.group, "g");
   assert.deepEqual(by("cli:session-boot").evidence, { readOnly: true, raises: ["raised-here"] });
-  assert.deepEqual(by("cli:" + at("plug/scripts/task-done")).evidence, {});
+  assert.deepEqual(by("cli:" + at("plug/scripts/task-done")).evidence, { raises: [] });
   assert.deepEqual(errors, [`cli:gone: a card in ${at("cards.json")} for a command the walker doesn't find under ${at("plug")}. Fix: remove the card, or fix its id.`]);
+});
+
+test("a shell door's codes are read from its text; a file the lock file lists as locked upstream is exempt, and a root without a lock file exempts nothing", async () => {
+  const root = join(ROOT, FIX, "locked");
+  const run = (r: string, source: string, cards: string) => walk({ product: "desk", module: "", source, root: r, cards });
+  const { doors, errors } = await run(root, "src", "cards.json");
+  assert.deepEqual(errors, []);
+  assert.deepEqual(doors.find((d) => d.id === "cli:src/theirs.sh")!.evidence, {});
+  assert.deepEqual(doors.find((d) => d.id === "cli:src/ours.sh")!.evidence, { raises: ["bad-input"] });
+  const bare = await run(join(root, "src"), ".", "../cards-bare.json");
+  assert.deepEqual(bare.doors.find((d) => d.id === "cli:theirs.sh")!.evidence, { raises: [] });
 });
 
 test("a door found twice, a card without an id and an unreadable sidecar are census errors", async () => {
