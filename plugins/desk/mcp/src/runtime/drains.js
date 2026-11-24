@@ -242,7 +242,7 @@ const unavailable = (lockFile, error) => lockProblem("desk_drains_lock_unavailab
  * lock is a plain file: it is never replaced, because replacing it by name cannot be made safe against that Desk's own takeover.
  * `onStep` is a test seam called at "staging" (the sibling exists, the owner file is not written), "staged" and "inspected".
  */
-export function acquireDrainLock(lockFile, { alive = processAlive, onStep = () => {} } = {}) {
+export function acquireDrainLock(lockFile, { alive = processAlive, onStep = () => {}, rename = renameSync } = {}) {
   const dir = path.dirname(lockFile)
   const base = path.basename(lockFile)
   sweepStaging(dir, base, alive)
@@ -252,15 +252,22 @@ export function acquireDrainLock(lockFile, { alive = processAlive, onStep = () =
     const owner = path.join(staging, `owner-${token}`)
     let renamed = false
     try {
-      mkdirSync(staging)
-      onStep("staging")
-      writeFileSync(owner, `${process.pid}\n`)
-      onStep("staged")
-      renameSync(staging, lockFile)
-      renamed = true
-    } catch (error) {
-      if (error.code === "ENOTDIR") throw legacyLock(lockFile)
-      if (!["ENOTEMPTY", "EEXIST"].includes(error.code)) throw unavailable(lockFile, error)
+      try {
+        mkdirSync(staging)
+        onStep("staging")
+        writeFileSync(owner, `${process.pid}\n`)
+        onStep("staged")
+      } catch (error) {
+        throw unavailable(lockFile, error)
+      }
+      try {
+        rename(staging, lockFile)
+        renamed = true
+      } catch (error) {
+        // Platforms name an occupied target differently (POSIX ENOTEMPTY, ENOTDIR, EEXIST; Windows EPERM), so the error code is not
+        // trusted: the target itself is inspected next. Only a rename that failed with nothing in the way is a failure to use the lock.
+        if (!existsAt(lockFile)) throw unavailable(lockFile, error)
+      }
     } finally {
       if (!renamed) removeStaging(staging)
     }
@@ -268,6 +275,16 @@ export function acquireDrainLock(lockFile, { alive = processAlive, onStep = () =
     retireDeadOwner(lockFile, alive, onStep)
   }
   throw busy(lockFile, "another poll, which started while this one looked,")
+}
+
+function existsAt(target) {
+  try {
+    lstatSync(target)
+    return true
+  } catch (error) {
+    if (error.code === "ENOENT") return false
+    throw unavailable(target, error)
+  }
 }
 
 function legacyLock(lockFile) {

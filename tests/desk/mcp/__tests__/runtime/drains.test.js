@@ -2266,6 +2266,47 @@ test("a lock that cannot be used for another reason than an owner names the erro
   }
 })
 
+test("a platform that reports an occupied lock with another error code (Windows: EPERM) is judged by inspecting the lock, not by the code", () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "desk-drains-"))
+  try {
+    const lock = path.join(dir, "poll.lock")
+    // Windows semantics: a rename onto any existing target fails with EPERM (or EEXIST), whatever it holds.
+    const windows = (code) => (from, to) => {
+      if (existsSync(to)) throw Object.assign(new Error(`${code}: rename`), { code })
+      renameSync(from, to)
+    }
+    const options = (code) => ({ alive: liveExceptDead, rename: windows(code) })
+    for (const code of ["EPERM", "EEXIST", "EACCES"]) {
+      const live = plant(lock, process.pid)
+      assert.throws(() => acquireDrainLock(lock, options(code)), (error) => /desk_drains_busy/u.test(error.message) && !/unavailable/u.test(error.message), `${code} live`)
+      assert.deepEqual(ownerFiles(lock), [live])
+      unlinkSync(path.join(lock, live))
+      rmdirSync(lock)
+      plant(lock, DEAD)
+      acquireDrainLock(lock, options(code))()
+      assert.deepEqual(readdirSync(dir), [], `${code} dead owner recovered`)
+      mkdirSync(lock)
+      acquireDrainLock(lock, options(code))()
+      assert.deepEqual(readdirSync(dir), [], `${code} empty lock recovered`)
+      writeFileSync(lock, `${DEAD}`)
+      assert.throws(() => acquireDrainLock(lock, options(code)), /desk_drains_lock_legacy/u, `${code} file`)
+      assert.equal(readFileSync(lock, "utf8"), `${DEAD}`)
+      rmSync(lock)
+      mkdirSync(lock)
+      writeFileSync(path.join(lock, "stranger"), "x")
+      assert.throws(() => acquireDrainLock(lock, options(code)), /desk_drains_lock_unrecognized/u, `${code} unknown`)
+      rmSync(lock, { recursive: true })
+      assert.equal(readdirSync(dir).length, 0, `${code} staging removed`)
+    }
+    // A real permission failure has nothing in the way, so it is named, not called busy.
+    const denied = () => { throw Object.assign(new Error("EPERM: rename"), { code: "EPERM" }) }
+    assert.throws(() => acquireDrainLock(lock, { rename: denied }), (error) => /desk_drains_lock_unavailable/u.test(error.message) && /EPERM/u.test(error.message) && !/still working/u.test(error.message))
+    assert.deepEqual(readdirSync(dir), [], "its staging is removed")
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
 test("the file system does what the lock relies on, and an earlier Desk's file-only operations fail closed on the directory", { skip: process.platform === "win32" && "the lock's behaviour on Windows is not verified" }, async () => {
   const dir = await mkTempRoot("desk-drains-")
   const made = (name, file = "x") => { mkdirSync(path.join(dir, name)); writeFileSync(path.join(dir, name, "f"), file); return path.join(dir, name) }
