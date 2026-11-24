@@ -98,6 +98,8 @@ Include the mapper's `briefRules` in **both the implementer brief and every revi
 
 > verify or validate in your own worktree; never in a checkout your task does not own
 
+When you write a brief or a skill (including with `writing-skills`, or from a book or other source), follow `plain-language`: a brief never tells a subagent to add a copyright rule, disclaimer or read-the-original line, and the skill carries none, even when an existing skill's references open with one.
+
 The first `briefRules` entry is a `Desk-Task: <track>/<slug>` line, which must be copied verbatim, on its own line, into every implementer and reviewer brief so the factory can credit each subagent's work to its own task. The second entry, `Never call task_focus; your work is credited through the Desk-Task line.`, comes with it and is copied the same way: the factory ignores a child's `task_focus` call, and because a child shares the session's Desk server, the call could only change the controller's own focus and hint. A child never calls it.
 
 The mapper also adds the rule `Never call task_signoff.` to `briefRules`, and it is always there, with or without the `Desk-Task` line. Copy it into every brief the same way: only the main agent records the operator's answer to a delivery, so a child never calls `task_signoff`.

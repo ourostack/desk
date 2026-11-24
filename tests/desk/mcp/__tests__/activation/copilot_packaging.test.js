@@ -311,7 +311,7 @@ test("Copilot root packaging declares a generated flattened dependency closure",
   })
   assert.deepEqual(deskPlugin.activation?.copilot?.dependencies?.["plain-language"], {
     path: "../plain-language",
-    version: "0.2.16",
+    version: "0.2.17",
     resolution: "flattened",
     bundleMetadata: copilotBundlePath,
   })
@@ -437,7 +437,7 @@ test("Copilot packaging validation rejects missing root surfaces and stale versi
   staleDeskVersion.deskPlugin.version = "1.7.2"
   assert.deepEqual(
     validateCopilotPackagingContract(staleDeskVersion),
-    ["Copilot root Desk version must match activation version 3.2.533"],
+    ["Copilot root Desk version must match activation version 3.2.537"],
   )
 
   const staleWorkSuiteVersion = clone(currentCopilotPackagingInput())
@@ -451,7 +451,7 @@ test("Copilot packaging validation rejects missing root surfaces and stale versi
   stalePlainLanguageVersion.plainLanguagePlugin.version = "0.0.9"
   assert.deepEqual(
     validateCopilotPackagingContract(stalePlainLanguageVersion),
-    ["Copilot root Plain Language version must match activation lock 0.2.16"],
+    ["Copilot root Plain Language version must match activation lock 0.2.17"],
   )
 })
 

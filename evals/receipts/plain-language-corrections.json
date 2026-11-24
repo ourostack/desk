@@ -1,14 +1,14 @@
 {
   "schemaVersion": 1,
   "suiteId": "plain-language-corrections",
-  "sourceFingerprint": "65aeb58d2a666a5c43212d6160a6d3fec81e5297509e3e7bd37e1dbc325c852a",
-  "contractFingerprint": "c518e23ed52eaa02f331e927d01106a101066206403910b277bd06222a026aa0",
+  "sourceFingerprint": "6daf8ded27edb01df33c9704ea3df59f6b41568aa593771cd9655831dadeb513",
+  "contractFingerprint": "874430b6f573f889033e8b5c5c8b20ead8049af152c897dff94bc8e247708e61",
   "run": {
     "actor": "headless GitHub Copilot CLI harness: one fresh subject process per case, then one separate judge process",
     "model": "subject gpt-6.1-sol; judge claude-opus-5.5",
-    "runtimeRevision": "GitHub Copilot CLI 1.0.115-7",
-    "startedAt": "2026-11-24T15:37:46.921Z",
-    "completedAt": "2026-11-24T15:40:53.655Z",
+    "runtimeRevision": "GitHub Copilot CLI 1.0.115",
+    "startedAt": "2026-11-24T21:17:13.129Z",
+    "completedAt": "2026-11-24T21:18:47.279Z",
     "harness": {
       "command": "copilot",
       "pluginDirs": [
@@ -26,12 +26,12 @@
     "judge": "independent",
     "counts": {
       "cases": {
-        "total": 3,
-        "passed": 3
-      },
-      "checks": {
         "total": 6,
         "passed": 6
+      },
+      "checks": {
+        "total": 14,
+        "passed": 14
       }
     }
   },
@@ -42,12 +42,12 @@
         {
           "id": "asks-the-actual-question",
           "passed": true,
-          "evidence": "The reply asks the operator to choose in full words: \"Do you want a fixed three retries or exponential backoff?\""
+          "evidence": "The reply asks in full words: \"Do you want a fixed three retries or exponential backoff?\", which is a direct request for the operator's preferred option."
         },
         {
           "id": "no-shorthand-tokens",
           "passed": true,
-          "evidence": "The reply, \"The retry draft is ready. Do you want a fixed three retries or exponential backoff?\", has no wdyt, lmk, imo or similar chat shorthand."
+          "evidence": "The reply is \"The retry draft is ready. Do you want a fixed three retries or exponential backoff?\" It contains no wdyt, lmk, imo or similar chat shorthand."
         }
       ]
     },
@@ -57,12 +57,12 @@
         {
           "id": "layout-sets-width",
           "passed": true,
-          "evidence": "The article column's width is set by `grid-template-columns: 16rem minmax(0, 1fr);`, which becomes `minmax(0, 1fr)` on small screens. The reply says \"The grid controls text width\", so the width depends on the grid track and the window."
+          "evidence": "The article width comes from `grid-template-columns: 16rem minmax(0, 1fr)`, and the response says \"The grid controls text width\", so the line width depends on the grid column and the window."
         },
         {
           "id": "no-fixed-measure",
           "passed": true,
-          "evidence": "The CSS has no `max-width` or `width` declaration on `.docs__article`, `p`, or the headings. The only fixed 16rem value is the sidebar's grid track."
+          "evidence": "The CSS has no max-width and no width on paragraphs or the article. The response says \"paragraphs have no separate width cap.\""
         }
       ]
     },
@@ -72,12 +72,67 @@
         {
           "id": "no-disclaimer-instruction",
           "passed": true,
-          "evidence": "The brief tells the subagent to follow the conventions of `scales-of-reading` \"without treating its introductory prose as a template\" and to \"Explain the method in fresh language.\" It never asks for a copyright rule, provenance note, or 'read the original' disclaimer. Identifying the book and author is attribution, not a disclaimer."
+          "evidence": "The brief explicitly says \"Do not carry over its references file's opening notice or add a replacement.\" It never asks the subagent to add a copyright rule or a 'read the original' notice. \"Name the book and author\" only identifies the source, and \"do not … reproduce extended passages\" governs how the subagent writes; neither adds a disclaimer or provenance note to the skill."
         },
         {
           "id": "brief-gives-task",
           "passed": true,
-          "evidence": "The brief says SKILL.md must cover \"when to use the method, what inputs it needs, the steps to follow, and the expected output.\" It also asks for a reference file with supporting concepts and an original worked example."
+          "evidence": "The brief lists what the skill must contain: \"when to use the method, what inputs it needs, its steps and decision points, and what a useful result looks like.\" It also asks for a concise `SKILL.md` with supporting explanations in `references/`."
+        }
+      ]
+    },
+    {
+      "id": "book-skill-no-disclaimer",
+      "checks": [
+        {
+          "id": "no-disclaimer",
+          "passed": true,
+          "evidence": "summary.md opens with \"Rob Fitzpatrick's *The Mom Test* teaches customer conversations...\" and goes straight into content. Neither file has a copyright notice, a 'nothing is copied' or 'own rendering' statement, or a line telling the reader to read the original book."
+        },
+        {
+          "id": "teaches-technique",
+          "passed": true,
+          "evidence": "Both files spell out the technique. They tell the reader to ask about recent experiences instead of opinions about the idea, and include an 'Avoid / Ask instead' table. They also cover following up for specifics, treating praise as rapport rather than evidence, and moving to concrete commitments."
+        }
+      ]
+    },
+    {
+      "id": "ordinary-doc-direct",
+      "checks": [
+        {
+          "id": "no-unrequested-caveats",
+          "passed": true,
+          "evidence": "The README section only lists the prerequisites (\"With Node.js, npm, and the project's dependencies installed\"), gives the command, and adds \"Wait for the command to finish and check the output for failures.\" It has no hedge, no legal or provenance caveat, and no 'consult the official docs' line."
+        },
+        {
+          "id": "states-command",
+          "passed": true,
+          "evidence": "The section has a code block containing `npm test` and says \"The tests take about two minutes.\""
+        }
+      ]
+    },
+    {
+      "id": "keep-warning-attribution-unverified",
+      "checks": [
+        {
+          "id": "keeps-warning",
+          "passed": true,
+          "evidence": "The section says \"Never run against production: this script drops every table in the connected database.\""
+        },
+        {
+          "id": "keeps-attribution",
+          "passed": true,
+          "evidence": "It quotes \"> Resets the schema to empty.\" exactly and follows it with \"— Upstream README (MIT-licensed).\""
+        },
+        {
+          "id": "states-unverified",
+          "passed": true,
+          "evidence": "The status line is \"Script not run; test suite has one failing case.\" It does not suggest the script works."
+        },
+        {
+          "id": "no-boilerplate",
+          "passed": true,
+          "evidence": "The only text after the quote is the one-line attribution \"— Upstream README (MIT-licensed).\" There is no copyright notice, 'our own rendering' statement or read-the-original line."
         }
       ]
     }

@@ -1,5 +1,31 @@
 # desk plugin — changelog
 
+## 3.2.537 — 2026-11-24
+
+### No defensive disclaimers in skills, docs or briefs
+
+Agents downstream of Desk no longer write copyright notices, "our own rendering" statements, read-the-original lines or other unrequested provenance caveats into skills, docs, prompts or briefs, and a brief never tells a subagent to add one. Plain Language now states the rule, Desk's start and child-agent lines point skills, prompts and briefs at it, and `using-superpowers-with-desk` applies it to briefs and `writing-skills` use. Concrete warnings, required attribution, exact quotations and unrun or failed checks stay explicit. Follows #1692, which closed #1671.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.536 — 2026-11-24
+
+Desk's MCP server now vendors Ouro UI v1.3.530, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.535 — 2026-11-24
+
+Desk's MCP server now vendors Ouro UI v1.3.529, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.534 — 2026-11-24
+
+Desk's MCP server now vendors Ouro UI v1.3.528, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.533 — 2026-11-24
 
 Desk's MCP server now vendors Ouro UI v1.3.527, moved by Ouro Current.

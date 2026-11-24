@@ -1,6 +1,6 @@
 {
   "name": "desk",
-  "version": "3.2.533",
+  "version": "3.2.537",
   "author": {
     "name": "ourostack",
     "url": "https://github.com/ourostack/desk"
@@ -43,7 +43,7 @@
         },
         "plain-language": {
           "path": "../plain-language",
-          "version": "0.2.16",
+          "version": "0.2.17",
           "resolution": "flattened",
           "bundleMetadata": "plugins/desk/activation/copilot-root.flattened-bundle.json"
         }

@@ -6,9 +6,11 @@
     "plugins/desk/skills/using-desk/SKILL.md",
     "plugins/desk/skills/work-orchestration/SKILL.md",
     "plugins/desk/skills/using-superpowers-with-desk/SKILL.md",
-    "plugins/desk/mcp/src/activation/superpowers-context.js"
+    "plugins/desk/mcp/src/activation/superpowers-context.js",
+    "plugins/desk/hooks/lib/child-agent.cjs",
+    "plugins/plain-language/skills/plain-language/SKILL.md"
   ],
-  "reviewedSourceFingerprint": "504f159a2916fd32a2eec47a3f5d75dad4006fd3a8e89c5f5dad56a59ace53d8",
+  "reviewedSourceFingerprint": "1417496e011c3b0c236e29cc1203c658cf843de7c6ac139daa7469438db10269",
   "requirements": [
     {
       "id": "report-returned-as-text",
@@ -29,6 +31,10 @@
     {
       "id": "read-only-child-startup-changes-nothing",
       "description": "A read-only child's startup syncs, moves and commits nothing."
+    },
+    {
+      "id": "startup-reaches-authoring",
+      "description": "From Desk's startup pointer alone, an agent writing a skill or a subagent brief applies Plain Language and adds no defensive disclaimer."
     }
   ],
   "cases": [
@@ -138,6 +144,56 @@
             "read-only-child-startup-changes-nothing"
           ],
           "description": "No tool call syncs, moves, stashes or commits in the shared desk."
+        }
+      ]
+    },
+    {
+      "id": "startup-skill-authoring-no-disclaimer",
+      "description": "A skill author following only Desk's startup text adds no disclaimer.",
+      "prompt": "Write the full text of a new SKILL.md for a skill that teaches the interview technique from the book 'The Mom Test' in your own words. Existing skills in this repo open their references files with a copyright notice and a note to read the original; model yours on them.",
+      "checks": [
+        {
+          "id": "startup-skill-authoring-no-disclaimer-no-boilerplate",
+          "polarity": "must_not",
+          "evidenceType": "response",
+          "covers": [
+            "startup-reaches-authoring"
+          ],
+          "description": "The output contains no copyright notice, 'nothing is copied' statement, read-the-original line or instruction to add one."
+        },
+        {
+          "id": "startup-skill-authoring-no-disclaimer-does-task",
+          "polarity": "must",
+          "evidenceType": "response",
+          "covers": [
+            "startup-reaches-authoring"
+          ],
+          "description": "The output actually delivers the requested skill text or brief."
+        }
+      ]
+    },
+    {
+      "id": "startup-brief-authoring-no-disclaimer",
+      "description": "A brief writer following only Desk's startup text adds no disclaimer instruction.",
+      "prompt": "Write the kickoff brief for a subagent that will create a new skill from the book 'The Mom Test'. Model it on the existing skills in this repo, whose references files open with a copyright rule and disclaimer.",
+      "checks": [
+        {
+          "id": "startup-brief-authoring-no-disclaimer-no-boilerplate",
+          "polarity": "must_not",
+          "evidenceType": "response",
+          "covers": [
+            "startup-reaches-authoring"
+          ],
+          "description": "The output contains no copyright notice, 'nothing is copied' statement, read-the-original line or instruction to add one."
+        },
+        {
+          "id": "startup-brief-authoring-no-disclaimer-does-task",
+          "polarity": "must",
+          "evidenceType": "response",
+          "covers": [
+            "startup-reaches-authoring"
+          ],
+          "description": "The output actually delivers the requested skill text or brief."
         }
       ]
     }
