@@ -173,21 +173,25 @@ jobs:
           if-no-files-found: warn
           overwrite: true
 
-      - name: Keep bounded owned archive race observations when present
+      - name: Keep bounded owned archive observations when present
         id: keep-archive-race
-        if: ${{ always() && hashFiles('windows-archive-race-observations.json') != '' }}
+        if: ${{ always() && (hashFiles('windows-archive-race-observations.json') != '' || hashFiles('windows-archive-identity-observations.json') != '') }}
         continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: windows-archive-race-${{ matrix.mode }}-shard-${{ matrix.shard }}-attempt-${{ github.run_attempt }}
-          path: windows-archive-race-observations.json
+          path: |
+            windows-archive-race-observations.json
+            windows-archive-identity-observations.json
           if-no-files-found: error
-      - name: Keep bounded owned archive race observations when present (retry)
-        if: ${{ always() && hashFiles('windows-archive-race-observations.json') != '' && steps.keep-archive-race.outcome == 'failure' }}
+      - name: Keep bounded owned archive observations when present (retry)
+        if: ${{ always() && (hashFiles('windows-archive-race-observations.json') != '' || hashFiles('windows-archive-identity-observations.json') != '') && steps.keep-archive-race.outcome == 'failure' }}
         uses: actions/upload-artifact@v4
         with:
           name: windows-archive-race-${{ matrix.mode }}-shard-${{ matrix.shard }}-attempt-${{ github.run_attempt }}
-          path: windows-archive-race-observations.json
+          path: |
+            windows-archive-race-observations.json
+            windows-archive-identity-observations.json
           if-no-files-found: error
           overwrite: true
 

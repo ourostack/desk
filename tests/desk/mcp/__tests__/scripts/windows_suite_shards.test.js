@@ -19,6 +19,30 @@ const testsRoot = path.resolve(scripts, "..", "..", "tests", "desk", "mcp", "__t
 
 const table = { defaultSeconds: 10, files: { "big.test.js": 100, "mid1.test.js": 50, "mid2.test.js": 50, "small.test.js": 5 } }
 
+test("archive handoff and identity observations cannot overwrite each other and both survive artifact collection", async () => {
+  const handoffFile = path.join(testsRoot, "tools", "archive_handoff_qualification.test.js")
+  const handoffSource = readFileSync(handoffFile, "utf8")
+  const handoffTarget = handoffSource.match(/new URL\("([^"]+windows-archive-race-observations\.json)"/u)
+  assert.ok(handoffTarget, "the handoff producer must declare its artifact destination")
+  const handoffPath = fileURLToPath(new URL(handoffTarget[1], pathToFileURL(handoffFile)))
+  const { identityArtifactPath } = await import(pathToFileURL(path.join(testsRoot, "tools", "_windows_archive_identity.mjs")).href)
+  const identityPath = identityArtifactPath()
+  assert.notEqual(identityPath, handoffPath, "a later identity fixture must not replace the earlier handoff receipts")
+  const workflow = load(readFileSync(path.join(scripts, "..", "workflows", "desk-windows-suite.yml"), "utf8"))
+  const uploads = workflow.jobs["windows-suite"].steps.filter(step =>
+    step.uses === "actions/upload-artifact@v4" && step.with.name.startsWith("windows-archive-race-"))
+  assert.equal(uploads.length, 2, "primary and retry uploads must retain both producers")
+  for (const step of uploads) {
+    assert.deepEqual(step.with.path.trim().split(/\s+/u).sort(),
+      [path.basename(handoffPath), path.basename(identityPath)].sort())
+    for (const file of [handoffPath, identityPath]) {
+      assert.ok(step.if.includes(`hashFiles('${path.basename(file)}') != ''`), "either producer can create the artifact")
+    }
+    assert.match(step.if, /\|\|/u)
+    assert.ok(step.with.name.includes("github.run_attempt"), "a retry cannot overwrite the original attempt")
+  }
+})
+
 test("the heaviest file goes first to the lightest shard, ties go by name and then the lowest shard", () => {
   const plan = assignShards(["small.test.js", "mid2.test.js", "big.test.js", "mid1.test.js"], 2, table)
   // big (100) -> shard 1; mid1 (50) -> shard 2; mid2 (50) -> shard 2 (50 < 100); small (5) -> shard 1 (a 100 to 100 tie goes to the lowest shard).
