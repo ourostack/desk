@@ -69,7 +69,7 @@ function fakeGh(origin, options = {}) {
       return spawnSync(command, args, spawnOptions)
     }
     assert.equal(command, "gh")
-    if (options.authFailed) return { status: 1, stdout: "", stderr: "" }
+    if (options.authFailed) return { status: 1, stdout: "", stderr: "To get started with GitHub CLI, please run:  gh auth login" }
     calls.push(args)
     const ok = (value) => ({ status: 0, stdout: typeof value === "string" ? value : JSON.stringify(value) })
     const main = () => git(origin, ["rev-parse", "refs/heads/main"])
