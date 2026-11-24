@@ -3578,3 +3578,26 @@ test("an enterprise SSO page's Continue is pressed once, and the reply says whet
     } finally { void original; await adapter.close() }
   }
 })
+
+test("an SSO page that never leaves after Continue is reported as stalled, and a Continue that cannot be pressed adds no SSO report", async () => {
+  const stuck = fakeDriver({ packet: buttonSnapshot("Continue") })
+  stuck.page.url = () => "https://github.com/enterprises/example/sso"
+  const stuckAdapter = adapterFor(stuck, await mkTempRoot("auth-sso-stalled-"), 8000)
+  try {
+    const reply = await stuckAdapter.call(["goto", "https://github.com/enterprises/example/sso"])
+    assert.equal(reply.sso.state, "stalled")
+    assert.match(reply.sso.keepWorking, /press Continue once more/u)
+    assert.equal(clicks(stuck), 1, "Continue is pressed once, not retried")
+  } finally { await stuckAdapter.close() }
+
+  const refused = fakeDriver({ packet: buttonSnapshot("Continue") })
+  refused.page.url = () => "https://github.com/enterprises/example/sso"
+  for (const handle of refused.handles.values()) handle.click = async () => { throw new Error(PASSWORD) }
+  const refusedAdapter = adapterFor(refused, await mkTempRoot("auth-sso-refused-"), 8000)
+  try {
+    const reply = await refusedAdapter.call(["goto", "https://github.com/enterprises/example/sso"])
+    assert.equal(reply.sso, undefined, "no SSO state is claimed when Continue was never pressed")
+    assert.equal(JSON.stringify(reply).includes(PASSWORD), false)
+    assert.equal(clicks(refused), 0)
+  } finally { await refusedAdapter.close() }
+})

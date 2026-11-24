@@ -37,13 +37,12 @@ function continueIn(tree) {
 }
 
 // `state` is "renewed" (back on GitHub), "needs_person" (Entra asked for a sign-in) or "stalled" (neither).
-function report(state, queued) {
+function report(state) {
   if (state === "renewed") return { state: state, note: "desk-web pressed the enterprise SSO page's Continue; Entra renewed the session without a person and GitHub returned to the page." };
   if (state === "needs_person") {
     return {
       state: state,
-      note: "desk-web pressed the enterprise SSO page's Continue, but Entra did not accept this profile copy's session and asked to sign in. That needs the person once (a sign-in or MFA in their own browser); desk-web never types a password or copies a token." +
-        (queued ? " The step is queued in the morning sign-in list." : ""),
+      note: "desk-web pressed the enterprise SSO page's Continue, but Entra did not accept this profile copy's session and asked to sign in. That needs the person once (a sign-in or MFA in their own browser); desk-web never types a password or copies a token.",
       keepWorking: "work on pages that do not need the enterprise account, or read the same content through the API; after the person signs in, open a new context with browser_context so the copy has it"
     };
   }
