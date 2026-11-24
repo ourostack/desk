@@ -137,6 +137,15 @@ function holdsOnlyDeskWrites(root, head, admission) {
   return listed.stdout.split("\n").filter(Boolean).map((line) => line.trim().split(/\s+/u)).every(([sha, ...parents]) => delivered.has(sha) || (parents.length === 1 && made.has(sha)))
 }
 
+// True when every file HEAD changed since it left the base's history already has HEAD's bytes in the base, as after a squash merge of a branch that HEAD still holds as separate commits.
+function holdsNothingUnpublished(root, head, base) {
+  const fork = git(root, ["merge-base", head, base])
+  if (fork.status !== 0) return false
+  const changed = git(root, ["diff", "--name-only", "-z", fork.stdout.trim(), head])
+  const paths = changed.stdout.split("\0").filter(Boolean)
+  return git(root, ["diff", "--quiet", head, base, "--", ...paths]).status === 0
+}
+
 // The policy file's digest at a commit never changes.
 const headPolicies = new Map()
 
@@ -161,6 +170,11 @@ export function assertPublishedContentBase(root, admission, tool) {
     return
   }
   if (holdsOnlyDeskWrites(root, tip, admission)) return
+  if (holdsNothingUnpublished(root, tip, admission.policy_commit)) {
+    // A squash or rebase merge published these commits as new ones, so the checkout never became an ancestor of the base: it holds no bytes the base lacks, and is moved onto the base, keeping any local edits.
+    git(root, ["reset", "--keep", "-q", admission.policy_commit])
+    return
+  }
   throw new Error(deskFailure({
     code: "content_home_unpublished_base",
     thing: `${tool}: content_home_unpublished_base`,

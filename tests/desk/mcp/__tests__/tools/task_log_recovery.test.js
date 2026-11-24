@@ -242,6 +242,23 @@ test("a commit made by hand is held when the receipt predates policy digests, wh
   assert.throws(() => assertPublishedContentBase(root, { policy_commit: base, policy_sha256: sha }, "task_update"), /content_home_unpublished_base/u)
 })
 
+test("commits whose bytes a squash merge already put on the base are moved onto the base", async (t) => {
+  const { root, base } = await aheadOfBase(t)
+  await fs.writeFile(path.join(root, "held.md"), "Held.\nMore.\n")
+  git(root, ["commit", "-qam", "Held again"])
+  const held = git(root, ["rev-parse", "HEAD"])
+  git(root, ["checkout", "-q", "--detach", base])
+  await fs.writeFile(path.join(root, "held.md"), "Held.\nMore.\n")
+  git(root, ["add", "held.md"])
+  git(root, ["commit", "-qm", "Squashed"])
+  const squashed = git(root, ["rev-parse", "HEAD"])
+  git(root, ["checkout", "-q", "-B", "main", held])
+  await fs.writeFile(path.join(root, "local.md"), "Mine.\n")
+  assertPublishedContentBase(root, { policy_commit: squashed, policy_sha256: policySha(root) }, "task_update")
+  assert.equal(git(root, ["rev-parse", "HEAD"]), squashed)
+  assert.equal(await fs.readFile(path.join(root, "local.md"), "utf8"), "Mine.\n")
+})
+
 test("a base that cannot be read at all is named, and no admission means no check", async (t) => {
   const root = await fixture(t)
   assert.equal(assertPublishedContentBase(root, null, "task_update"), undefined)
