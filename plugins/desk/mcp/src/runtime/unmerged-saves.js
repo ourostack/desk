@@ -148,7 +148,9 @@ export function repositoryOf(args) {
 }
 
 function ghRun(spawnGit, root, args) {
+  /* istanbul ignore next -- only the real spawnSync asks gh which account can reach the repository; tests inject a fake. */
   const repo = spawnGit === spawnSync ? repositoryOf(args) : null
+  /* istanbul ignore next -- see above. */
   const env = repo === null ? process.env : ghEnvFor({ ...repo, env: process.env, spawn: spawnSync })
   const result = spawnGit("gh", args, { cwd: root, encoding: "utf8", windowsHide: true, timeout: NETWORK_TIMEOUT_MS, env })
   return { status: result.status, stdout: typeof result.stdout === "string" ? result.stdout : "" }

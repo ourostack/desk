@@ -84,6 +84,7 @@ export function publishPullRequest({ git, spawnGit, root, upstream, head, onto, 
   const branch = `desk/publish/${head}`
   // `spawnGit` is a test seam over `spawnSync`; only the real one asks which account can reach the repository.
   const [owner, repoName] = repo.name.split("/")
+  /* istanbul ignore next -- only the real spawnSync asks gh which account can reach the repository; tests inject a fake. */
   const ghEnv = spawnGit === spawnSync ? ghEnvFor({ host: repo.host, owner, repo: repoName, env: process.env, spawn: spawnSync }) : process.env
   const gh = (args, json = true) => {
     const result = spawnGit("gh", args, { cwd: root, encoding: "utf8", windowsHide: true, timeout: 60_000, env: ghEnv })

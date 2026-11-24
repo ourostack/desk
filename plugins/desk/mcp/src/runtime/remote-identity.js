@@ -106,6 +106,7 @@ function canUse({ host, login, owner, repo, push, env, spawn, cache, now }) {
  * runs under. When no token variable is set and a signed-in account can push to the repository (else read it), the result
  * carries that account's token for `gh`; otherwise it is `env` itself.
  */
+/* istanbul ignore next -- the defaults are the real cache and clock; tests inject both. */
 export function ghEnvFor({ host, owner, repo, env, spawn, cache = lookupCache, now = Date.now }) {
   if (TOKEN_VARIABLES.some((name) => name !== "GH_HOST" && (env[name] ?? "") !== "")) return env
   if (!HOST.test(host) || !LOGIN.test(owner) || !REPO.test(repo)) return env
