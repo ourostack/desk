@@ -70,6 +70,10 @@ export function createDeepHealth({ discovery, store, accountIds = [], ttlMs = DE
   };
 }
 
+// The routes that write nothing, which test/read-only-routes.test.js proves by serving each one with every store
+// recording its calls. The census reads this list as their read-only evidence.
+export const READ_ONLY_ROUTES = ["USE /assets", "GET /favicon.svg", "GET /healthz", "GET /healthz/deep", "ALL /authorize", "ALL /oauth/consent"];
+
 // `unavailable`, when set, is the reason the gateway cannot sign anyone in
 // or start Desk yet: /authorize and /mcp answer 503 with it while the rest
 // (health, metadata) keeps working.
