@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs"
+import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs"
 import { fork, spawnSync } from "node:child_process"
 import { PassThrough } from "node:stream"
 import { pathToFileURL } from "node:url"
@@ -11,6 +11,7 @@ import { runInWorker } from "../../../../../plugins/desk/mcp/src/runtime/admissi
 import { copilotSessionFile, recordCopilotSession } from "../../../../../plugins/desk/mcp/src/runtime/copilot-session.js"
 import { lastStartRootKey } from "../../../../../plugins/desk/mcp/src/runtime/last-start.js"
 import { mkTempRoot } from "../_temp_roots.js"
+import { createStatusDiagnostics } from "./_status_diagnostics.js"
 
 let sequence = 0
 const update = { track: "work", slug: "one", status: "processing" }
@@ -53,6 +54,7 @@ function binding(file, root, extra = {}) {
 }
 
 async function fixture(t, { explicit = false, person = null, capturedFolder = false, sessionRoot = false } = {}) {
+  const diagnostics = createStatusDiagnostics({ enabled: process.env.DESK_STATUS_DIAGNOSTICS === "1" })
   const base = await mkTempRoot("late-workspace-")
   const home = path.join(base, "home")
   const a = desk(path.join(home, "desk"), person)
@@ -89,13 +91,18 @@ async function fixture(t, { explicit = false, person = null, capturedFolder = fa
   })
   const rpc = (method, params) => new Promise((resolve, reject) => {
     const requestId = ++id
+    const measured = diagnostics.enabled && method === "tools/call" && params?.name === "desk_status"
+    if (measured) diagnostics.start(requestId)
     const deadline = setTimeout(() => reject(new Error(`${method} did not answer`)), RPC_DEADLINE_MS)
     waiting.set(requestId, (result) => {
       clearTimeout(deadline)
       waiting.delete(requestId)
+      if (measured) diagnostics.finish(requestId)
       resolve(result)
     })
-    input.write(`${JSON.stringify({ jsonrpc: "2.0", id: requestId, method, params })}\n`)
+    const send = () => input.write(`${JSON.stringify({ jsonrpc: "2.0", id: requestId, method, params })}\n`)
+    if (measured) diagnostics.run(requestId, send)
+    else send()
   })
   const focuses = []
   const connectedRoots = []
@@ -137,15 +144,33 @@ async function fixture(t, { explicit = false, person = null, capturedFolder = fa
       callTool: async (options) => {
         dispatchTrace.push({ name: options.name, root: options.deskRoot, person: options.person })
         focuses.push(options.statusContext.focus)
-        return server.callTool(options)
+        return diagnostics.enabled && options.name === "desk_status"
+          ? diagnostics.stage("runtime_detail", () => server.callTool({
+            ...options, statusContext: { ...options.statusContext, statusStages: (name, operation) => diagnostics.stage(name, operation) },
+          }))
+          : server.callTool(options)
       },
     }),
   })
+  if (diagnostics.enabled) {
+    const callTool = handle.session.callTool
+    handle.session.callTool = (request) => request.name === "desk_status"
+      ? diagnostics.stage("session_dispatch", () => callTool(request))
+      : callTool(request)
+  }
   t.after(async () => {
     // An idle wait joins only the current attempt; shutdown stops queued work too.
     input.end()
-    await handle.closed
-    assert.equal(handle.admission.running, false)
+    try {
+      await handle.closed
+      assert.equal(handle.admission.running, false)
+    } finally {
+      if (diagnostics.enabled) {
+        const line = JSON.stringify({ scenario: t.name, ...diagnostics.snapshot() })
+        if (process.env.DESK_STATUS_DIAGNOSTICS_OUTPUT) appendFileSync(process.env.DESK_STATUS_DIAGNOSTICS_OUTPUT, `${line}\n`)
+        else t.diagnostic(line)
+      }
+    }
   })
   await rpc("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "late-context-fixture", version: "1" } })
   await rpc("tools/list", {})
@@ -196,7 +221,7 @@ async function fixture(t, { explicit = false, person = null, capturedFolder = fa
     }
     assert.fail("runtime status detail did not arrive")
   }
-  return { a, b, base, cwd, env, handle, call, rpc, associate, config, card, connectedRoots, status, focuses,
+  return { a, b, base, cwd, env, handle, call, rpc, associate, config, card, connectedRoots, status, focuses, diagnostics,
     resolutionTrace, dispatchTrace, holdNextResolution: async () => {
       await handle.admission.idle({ waitMs: 15000 })
       hold = true
@@ -347,6 +372,15 @@ for (const failure of ["removed", "untrusted", "unreadable"]) {
     assert.equal(f.handle.session.context.root.root, f.b)
     assert.equal(f.handle.session.context.root.source, "activation-config")
     await f.status()
+    if (failure === "unreadable" && f.diagnostics.enabled) {
+      const trace = f.diagnostics.snapshot()
+      const requestIds = new Set(trace.requests.map((entry) => entry.requestId))
+      assert.ok(trace.stages.length > 0, "measured RPC must reach the session/runtime seams")
+      for (const entry of trace.stages) assert.ok(requestIds.has(entry.requestId), JSON.stringify(entry))
+      for (const stage of ["session_dispatch", "runtime_detail", "root_inspection", "search_status", "active_tasks", "factory_status", "sync_status", "reader_close"]) {
+        assert.ok(trace.stages.some((entry) => entry.stage === stage && entry.endMs !== null), `missing completed ${stage}`)
+      }
+    }
     // An admission that read B's association before the loss may still start B's search engine after it, so it settles first.
     await f.handle.admission.idle({ waitMs: 15000 })
     const heads = [f.a, f.b].map((root) => git(root, "rev-parse", "HEAD"))

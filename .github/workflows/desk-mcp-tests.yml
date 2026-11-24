@@ -273,11 +273,14 @@ jobs:
         env:
           DESK_COVERAGE_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before }}
           SHARD: ${{ matrix.shard }}/${{ strategy.job-total }}
+          DESK_STATUS_DIAGNOSTICS: "1"
+          DESK_STATUS_DIAGNOSTICS_OUTPUT: ${{ runner.temp }}/desk-coverage-shard/status-request-diagnostics.jsonl
         # A shard that has not finished after 7 minutes (the step takes about 2 to 3) is stuck, not slow. The
         # shard runs in its own process group so the watchdog can stop exactly it and everything it started: it prints
         # what is still running (the deepest node process names the test file that is not finishing), then signals
         # that group and no other process. A stopped shard exits non-zero, so the run fails there with output.
         run: |
+          mkdir -p "$RUNNER_TEMP/desk-coverage-shard"
           setsid npm run test:coverage -- --shard "$SHARD" --output "$RUNNER_TEMP/desk-coverage-shard" &
           shard=$!
           (
