@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.490 — 2026-11-24
+
+[`work-orchestration`](skills/work-orchestration/SKILL.md) now sends an agent that needs a session on another of the operator's machines to SSH over their tailnet: read the session there, send input the way that session takes it, or open a GitHub issue its watchdog reads. Agency Hub is the last resort, because it failed to deliver messages to a session with no Hub inbox. [Sessions on this machine](docs/sessions.md) says the same for `sessions.js`.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.489 — 2026-11-24
 
 Save PRs now attach the merge-when-green label through GitHub's REST API after their checks pass, including when GraphQL PR edits are refused. Desk confirms the label response and reports both delivery failures if neither labelling nor its exact-head merge succeeds.
