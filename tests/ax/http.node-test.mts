@@ -43,6 +43,6 @@ test("a source with no express app, or an app with no routes, is a census error"
 
 test("a card's codes count as raised when the file holds them outside error cards; a card with no route is an error", async () => {
   const { doors, errors } = await walk(options({ cards: at("cards.json") }));
-  assert.deepEqual(doors.find((d) => d.id === "http:gw POST /hooks/:id")!.evidence, { raises: ["hook-not-found"] });
+  assert.deepEqual(doors.find((d) => d.id === "http:gw POST /hooks/:id")!.evidence, { raises: ["hook-not-found", "from-imported-page"] });
   assert.deepEqual(errors, [`http:gw GET /gone: a card in ${at("cards.json")} for a route the walker doesn't find in ${at("app.js")}. Fix: remove the card, or fix its id.`]);
 });

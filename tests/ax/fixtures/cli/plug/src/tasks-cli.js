@@ -25,3 +25,6 @@ export function tasksCli(engine) {
 
 // A shared read-only def spread into commands, as drains-cli.js does; a later key overrides the spread.
 const READ = { effect: "private", readOnly: true }
+
+import "./slug"
+import "./missing.js"
