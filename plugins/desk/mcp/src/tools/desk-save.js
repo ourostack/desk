@@ -351,7 +351,7 @@ async function saveDesk({ deskRoot, input, person = null, env = process.env, spa
   }
   // A listed path with no change and no staged change (an ignored generated file, say) is not known to Git, and `git commit -- <it>`
   // would refuse the whole commit with a pathspec error; it is left out and named in the answer.
-  const changed = paths.filter((p) => unstaged.includes(p) || (stagedChanges(deskRoot, [p], spawnGit)?.length ?? 0) > 0)
+  const changed = paths.filter((p, i) => unstaged.includes(p) || everything.some((change) => change.paths.some((q) => q === listed[i] || q.startsWith(`${listed[i]}/`))))
   const unchanged = paths.filter((p) => !changed.includes(p))
   const committed = commitPaths(deskRoot, changed, message, spawnGit, undefined, { keepLocal: true })
   if (!committed.ok) {
