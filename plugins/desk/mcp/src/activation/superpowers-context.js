@@ -74,6 +74,14 @@ export function reportRule(implementationReportPath, reviewReportPath) {
   return `Return your report as text in your final reply; do not write it to a file, because some hosts refuse a subagent's file write. The coordinator saves your reply at ${implementationReportPath} (implementer) or ${reviewReportPath} (reviewer).`
 }
 
+// An orphaned pull request has no findable owner unless it names the session that opened it. The child reads its own id from its
+// environment; the coordinator's id is written into the rule here, because the child cannot look it up.
+export function sessionRule(env) {
+  const parent = (env.COPILOT_AGENT_SESSION_ID ?? env.AGENCY_SESSION_ID ?? "").replace(/[^\x21-\x7e]/gu, "")
+  const parentLine = parent === "" ? "" : ` and \`Desk-Parent-Session: ${parent}\``
+  return `Name yourself on every pull request you open: put \`Desk-Session: <your session id>\`${parentLine} on their own lines in the pull-request body, beside any Desk-Task line. Read your id from COPILOT_AGENT_SESSION_ID, else AGENCY_SESSION_ID; if neither is set, write \`Desk-Session: unknown\`. When you hand work to a child of your own, give it the same rule with your id as its parent.`
+}
+
 // Two children sharing one scratchpad both wrote pr-body.md and one published the other's text as a live pull request body.
 export function scratchRule(name) {
   return `Write scratch and pull-request bodies only under a folder named for your task, node and attempt (\`${name}\`, made under the session scratchpad or with mktemp), never at the scratchpad's root, and use a uniquely named body file there (\`${name}/pr-body-${name}.md\`); pass that exact path to \`gh pr create\` or \`gh pr edit\` with --body-file.`
@@ -210,6 +218,7 @@ export async function resolveSuperpowersContext(input) {
       // work-orchestration's scratch sentence, verbatim: a reviewer dispatched from a review skill never reads that skill.
       "Write down the exact path of everything you create when you create it. Delete only those paths, each by that exact path written out in full in the delete command, never through a shell variable or a command substitution; leave anything else in place and list it in your return.",
       "on return list every created worktree and branch, its exact repository/path/ref, current state, owner and verified disposition in the mapped Resources record; close out only exact-owned safe resources through desk:git-hygiene",
+      sessionRule(process.env),
       VISUAL_PROOF_RULE,
     ],
     cleanupPaths: [],

@@ -1,4 +1,4 @@
-import { authorityRule, reportRule, scratchRule } from "../../../../../plugins/desk/mcp/src/activation/superpowers-context.js"
+import { authorityRule, reportRule, scratchRule, sessionRule } from "../../../../../plugins/desk/mcp/src/activation/superpowers-context.js"
 import { test, beforeEach, afterEach } from "node:test"
 import { strict as assert } from "node:assert"
 import * as path from "node:path"
@@ -98,6 +98,7 @@ test("Superpowers context prints exact paths without introducing a second progre
       "verify or validate in your own worktree; never in a checkout your task does not own",
       "Write down the exact path of everything you create when you create it. Delete only those paths, each by that exact path written out in full in the delete command, never through a shell variable or a command substitution; leave anything else in place and list it in your return.",
       "on return list every created worktree and branch, its exact repository/path/ref, current state, owner and verified disposition in the mapped Resources record; close out only exact-owned safe resources through desk:git-hygiene",
+      sessionRule(process.env),
       "Capture visual proof as you go: whenever the work touches something a person sees (a screen, a setting before and after, an agent's reply, a refusal, an error, a result), save bounded screenshots, never secrets or private content, into your own folder `evidence/<brief name>/` beside your brief file, named after the brief file without its extension (or, when the brief is not a file, `evidence/<a short name for your assignment>/` in the task's desk folder), so children whose briefs share a folder never overwrite each other's files, and return an Evidence list beside Resources that names each file and what it shows, or says why nothing was visible. A brief's silence never waives this.",
     ],
     cleanupPaths: [],
@@ -558,7 +559,7 @@ test("a task path that is not exactly track and slug omits the Desk-Task rule an
     const { briefRules } = await resolve(moved)
     assert.equal(briefRules.some((rule) => rule.startsWith("Desk-Task:")), false, segments.join("/"))
     assert.equal(briefRules.some((rule) => rule.includes("task_focus")), false, segments.join("/"))
-    assert.equal(briefRules.length, 8)
+    assert.equal(briefRules.length, 9)
   }
 })
 
@@ -640,4 +641,12 @@ test("a write brief quotes the operator's go with its scope, as relayed, and kee
   assert.match(rule, /never overrides a managed tool safeguard/u)
   await assert.rejects(resolve(context({ goQuote: "go" })), /together/u)
   await assert.rejects(resolve(context({ goQuote: " ", goScope: "x" })), /short non-empty string/u)
+})
+
+test("sessionRule names the coordinator's session when the environment has one, and says so when not", () => {
+  assert.match(sessionRule({ COPILOT_AGENT_SESSION_ID: "abc-123" }), /`Desk-Session: <your session id>` and `Desk-Parent-Session: abc-123` on their own lines/u)
+  assert.match(sessionRule({ AGENCY_SESSION_ID: "xyz" }), /Desk-Parent-Session: xyz/u)
+  const none = sessionRule({})
+  assert.equal(none.includes("Desk-Parent-Session"), false)
+  assert.match(none, /Desk-Session: unknown/u)
 })
