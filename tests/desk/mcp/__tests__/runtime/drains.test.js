@@ -3,7 +3,7 @@
 import assert from "node:assert/strict"
 import { createHash } from "node:crypto"
 import { spawnSync } from "node:child_process"
-import { promises as fs, mkdirSync, readFileSync, utimesSync, writeFileSync } from "node:fs"
+import { promises as fs, mkdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs"
 import path from "node:path"
 import { test } from "node:test"
 import { fileURLToPath } from "node:url"
@@ -951,7 +951,7 @@ test("a failure on the very first poll leaves the drain unseeded, so the next go
   matches(w.state(), { seeded: true, openCount: 1 })
 })
 
-test("a failure while reading comments leaves the markers where they were", async () => {
+test("a failure while reading one issue's comments leaves that issue's marker where it was, tells the poll's status and lets the other issues go on", async () => {
   const w = await world([issue(1, "2026-11-13T01:00:00Z"), issue(2, "2026-11-13T01:00:00Z")])
   await w.poll()
   w.issues.splice(0, 2, issue(1, "2026-11-13T02:00:00Z"), issue(2, "2026-11-13T02:00:00Z"))
@@ -960,11 +960,16 @@ test("a failure while reading comments leaves the markers where they were", asyn
     if (calls++ === 0) throw new Error("GitHub answered HTTP 403")
     return [{ id: 1, body: "me too", updated_at: "2026-11-13T02:00:00Z", user: { login: "someone" } }]
   }
-  await w.poll()
-  assert.deepEqual(w.sent, [])
-  assert.deepEqual(w.state().seen, { 1: { updatedAt: "2026-11-13T01:00:00Z", digest: w.state().seen["1"].digest, title: "Issue 1" }, 2: { updatedAt: "2026-11-13T01:00:00Z", digest: w.state().seen["2"].digest, title: "Issue 2" } })
-  await w.poll()
-  assert.equal(w.sent.length, 1)
+  let out = await w.poll()
+  assert.equal(w.sent.length, 1, "the other issue was judged and woken in the same poll")
+  assert.match(w.sent[0][1], /#2 Issue 2 \(comment 1 by someone\)/u)
+  assert.deepEqual(out.errors, [{ repo: DRAIN.repo, code: "drains_issues_deferred", error: "Wait for the next poll: 1 issue(s) were left for it: #1 (GitHub answered HTTP 403)" }])
+  assert.equal(w.state().seen["1"].updatedAt, "2026-11-13T01:00:00Z")
+  assert.equal(w.state().seen["2"].updatedAt, "2026-11-13T02:00:00Z")
+  out = await w.poll()
+  assert.equal(w.sent.length, 2)
+  assert.match(w.sent[1][1], /#1 Issue 1/u)
+  assert.deepEqual(out.errors, [])
 })
 
 test("keeps recorded events when the wake is refused, then sends them with the next poll's changes in one message", async () => {
@@ -1118,37 +1123,6 @@ test("state and config live in Desk's state folder, from XDG_STATE_HOME or the h
   assert.ok(drainsHome().endsWith(path.join("ouroboros-skills", "desk", "drains")))
   assert.equal(drainPaths().config, path.join(drainsHome(), "config.json"))
   assert.deepEqual(drainPaths({ env: { XDG_STATE_HOME: "/x" } }), { config: path.join("/x", "ouroboros-skills", "desk", "drains", "config.json"), state: path.join("/x", "ouroboros-skills", "desk", "drains", "state.json"), lock: path.join("/x", "ouroboros-skills", "desk", "drains", "poll.lock") })
-})
-
-test("the lock refuses a second live owner, takes over an abandoned or stale one and is released afterwards", async () => {
-  const dir = await mkTempRoot("desk-drains-")
-  const lock = path.join(dir, "poll.lock")
-  assert.equal(await withDrainLock(lock, async () => "done"), "done")
-  assert.throws(() => readFileSync(lock), { code: "ENOENT" })
-  await assert.rejects(withDrainLock(lock, () => withDrainLock(lock, () => "inner")), /process \d+ holds .* and is still working/u)
-  assert.throws(() => readFileSync(lock), { code: "ENOENT" })
-  writeFileSync(lock, "999999")
-  assert.equal(await withDrainLock(lock, () => "took over", { alive: () => false }), "took over")
-  writeFileSync(lock, String(spawnSync(process.execPath, ["-e", ""]).pid))
-  assert.equal(await withDrainLock(lock, () => "dead owner"), "dead owner")
-  writeFileSync(lock, String(process.pid))
-  const old = new Date(Date.now() - 3_600_000)
-  utimesSync(lock, old, old)
-  assert.equal(await withDrainLock(lock, () => "stale", { now: Date.now() }), "stale")
-  writeFileSync(lock, "not a pid")
-  assert.equal(await withDrainLock(lock, () => "garbage"), "garbage")
-  await assert.rejects(withDrainLock(lock, () => { throw new Error("work failed") }), /work failed/u)
-  await fs.mkdir(path.join(dir, "dir.lock"))
-  await assert.rejects(withDrainLock(path.join(dir, "dir.lock"), () => "never"))
-  assert.throws(() => readFileSync(lock), { code: "ENOENT" })
-  writeFileSync(lock, "999999")
-  await assert.rejects(withDrainLock(lock, () => "never", { alive: () => true }), /holds .* and is still working/u)
-  await fs.rm(lock)
-})
-
-test("a lock that cannot be created for another reason than an existing owner is reported as it is", async () => {
-  const dir = await mkTempRoot("desk-drains-")
-  await assert.rejects(withDrainLock(path.join(dir, `${"x".repeat(400)}.lock`), () => "x"), (error) => error.code !== "EEXIST")
 })
 
 const response = (body, { status = 200, link = null, headers = {} } = {}) => ({ ok: status < 400, status, json: async () => body, text: async () => JSON.stringify(body), headers: { get: (name) => (name === "link" ? link : headers[name] ?? null), has: (name) => name in headers } })
@@ -1759,211 +1733,359 @@ test("a failed successor start keeps its reason when the next wake is refused as
   assert.match(w.state().targetGone.error, /starting its successor failed: no project/u)
 })
 
-// Bot body edits: the fake GitHub answers `issueEdits` from `w.history[number]`, the complete edit history the real adapter reads.
-const editBy = (editedAt, login, type = "Bot", extra = {}) => ({ editedAt, deletedAt: null, editor: login === null ? null : { login, type }, ...extra })
-async function editsWorld(issues, options) {
-  const w = await world(issues, options)
-  w.history = {}
-  w.asked = []
-  w.api.issueEdits = async (repo, number) => {
-    w.asked.push([repo, number])
-    const made = w.history[number]
-    if (made instanceof Error) throw made
+// Bot body edits. The fake GitHub keeps one edit history per issue in `w.hist[number]`, answers `editPage` one page at a time in
+// either order and keeps the GraphQL quota in virtual windows of an hour: nothing sleeps and no real quota is spent.
+const BOT = "github-actions[bot]"
+const iso = (ms) => new Date(ms).toISOString().replace(/\.\d{3}Z$/u, "Z")
+const LONG_AGO = Date.parse("2026-01-01T00:00:00Z")
+const botEdit = (id, editedAt) => ({ id, editedAt, deletedAt: null, editor: { type: "Bot", login: BOT } })
+const personEdit = (id, editedAt) => ({ id, editedAt, deletedAt: null, editor: { type: "User", login: "ari" } })
+
+/** `count` old bot edits, made long before any poll and made up as they are asked for, then the `extra` edits that arrive. */
+const history = (count, { order = "asc", extra = [] } = {}) => ({
+  count, order, extra,
+  get total() { return this.count + this.extra.length },
+  at(index) { return index < this.count ? botEdit(`o${index}`, iso(LONG_AGO + index * 1000)) : this.extra[index - this.count] },
+})
+
+/** The page of up to 100 edits that follows `cursor` in a direction; a cursor is the position of the last edit of the page before it, so it stays valid as edits arrive. */
+function pageOf(h, { backward, cursor }) {
+  const step = (backward ? -1 : 1) * (h.order === "asc" ? 1 : -1)
+  let index = cursor === null ? (step > 0 ? 0 : h.total - 1) : Number(cursor.slice(1)) + step
+  const nodes = []
+  let last = null
+  while (nodes.length < 100 && index >= 0 && index < h.total) {
+    nodes.push(h.at(index))
+    last = index
+    index += step
+  }
+  return { nodes, hasMore: index >= 0 && index < h.total, cursor: `c${last}` }
+}
+
+async function editsWorld(issues, { limit = 5000 } = {}) {
+  const w = await deltaWorld(issues)
+  w.delta = async () => ({ issues: w.issues, etag: '"t"' })
+  w.hist = {}
+  w.reads = []
+  w.clock = NOW
+  w.window = { limit, remaining: limit, reset: Math.floor(NOW / 1000) + 3600 }
+  const refresh = () => {
+    if (w.clock < w.window.reset * 1000) return
+    w.window.remaining = w.window.limit
+    w.window.reset = Math.floor(w.clock / 1000) + 3600
+  }
+  w.api.graphqlQuota = () => { refresh(); return { ...w.window, at: iso(w.clock) } }
+  w.api.graphqlCost = () => 1
+  w.api.editPage = async (repo, number, { backward = false, cursor = null } = {}) => {
+    refresh()
+    w.reads.push({ number, backward, cursor })
+    if (w.window.remaining <= 0) throw Object.assign(new Error("Wait for the quota to reset: GraphQL limit used up"), { code: "drains_rate_limited" })
+    w.window.remaining -= 1
+    const h = w.hist[number]
+    if (h instanceof Error) throw h
     const found = w.issues.find((item) => item.number === number)
-    return typeof made === "function" ? made(found) : { title: found.title, body: found.body, updatedAt: found.updated_at, complete: true, edits: made ?? [] }
+    const page = h.page ? h.page({ backward, cursor }) : pageOf(h, { backward, cursor })
+    return { updatedAt: h.stamp ?? found.updated_at, total: h.total, edits: page.nodes, hasMore: page.hasMore, cursor: page.cursor }
+  }
+  const poll = w.poll
+  w.poll = async (at = NOW) => { w.clock = at; return poll(at) }
+  /** The issue's body changes at `at`, with an `edit` to show for it (or none). */
+  w.change = (number, at, edit) => {
+    if (edit) w.hist[number].extra.push(edit)
+    const index = w.issues.findIndex((item) => item.number === number)
+    w.issues[index] = { ...w.issues[index], updated_at: iso(at), body: `health: ${at}` }
   }
   return w
 }
-const BOT = "github-actions[bot]"
 
-test("an issue whose body only bots edited since the last poll wakes nobody, whoever created it, and the marker advances", async () => {
-  const w = await editsWorld([issue(1, T(0), "Health", "health: 1"), { ...issue(2, T(0), "Mine", "m1"), user: { login: BOT, type: "Bot" } }])
-  await w.poll()
-  w.issues.splice(0, 2, issue(1, T(5), "Health", "health: 2"), { ...issue(2, T(5), "Mine", "m2"), user: { login: BOT, type: "Bot" } })
-  w.history[1] = [editBy(T(0), "someone"), editBy(T(5), BOT), editBy(T(5), "other-app[bot]")]
-  w.history[2] = [editBy(T(4), BOT)]
-  await w.poll()
-  assert.deepEqual(w.sent, [])
-  assert.equal(w.state().seen["1"].updatedAt, T(5))
-  assert.equal(w.state().seen["1"].title, "Health")
-  assert.deepEqual(w.state().pending, [])
-})
+const ISSUE = () => issue(1, T(0), "Health", "health: 0")
 
-test("a body edit stays news unless every edit since the last poll is a bot's: a person, a person before a bot, a person after one, an unknown or deleted edit, a title change, no edit at all", async () => {
-  const cases = [
-    ["a person", [editBy(T(5), "ari", "User")]],
-    ["a bot-created issue edited by a person", [editBy(T(0), BOT), editBy(T(4), "ari", "User")]],
-    ["a person, then a bot in the same interval", [editBy(T(3), "ari", "User"), editBy(T(5), BOT)]],
-    ["a bot, then a person", [editBy(T(3), BOT), editBy(T(5), "ari", "User")]],
-    ["a person at the same second as the last poll", [editBy(T(0), "ari", "User"), editBy(T(5), BOT)]],
-    ["an edit whose editor is gone", [editBy(T(3), null), editBy(T(5), BOT)]],
-    ["a deleted edit", [editBy(T(3), BOT, "Bot", { deletedAt: T(4) }), editBy(T(5), BOT)]],
-    ["an edit with no time", [editBy(null, BOT)]],
-    ["an editor with no type or login", [{ editedAt: T(5), deletedAt: null, editor: { login: null, type: null } }]],
-    ["no edit in the interval", [editBy("2026-11-13T00:59:00Z", BOT)]],
-  ]
-  for (const [name, edits] of cases) {
-    const w = await editsWorld([issue(1, T(0), "Health", "health: 1")])
+test("a history of 5,001 pages (500,100 edits) is read across quota windows from where it stopped, while a bot rewrites the body every six minutes: no restart, no wake, and the next change costs a page or two", async () => {
+  for (const order of ["asc", "desc"]) {
+    const w = await editsWorld([ISSUE()])
+    w.hist[1] = history(500_100, { order })
     await w.poll()
-    w.issues[0] = issue(1, T(5), "Health", "health: 2")
-    w.history[1] = edits
-    await w.poll()
-    assert.equal(w.sent.length, 1, name)
-    assert.match(w.sent[0][1], /#1 Health \(title or body edited\)/u, name)
+    const wakes = []
+    for (let k = 1; k <= 14; k++) {
+      const at = NOW + k * 360_000
+      w.change(1, at, botEdit(`n${k}`, iso(at)))
+      wakes.push(...(await w.poll(at)).wakes)
+      if (k < 10) {
+        assert.ok(w.state().scans[1], `${order}: still reading at poll ${k}`)
+        assert.match(w.state().lastError, /were left for it/u)
+        assert.equal(w.state().lastErrorCode, "drains_rate_limited")
+        assert.equal(w.state().seen[1].updatedAt, T(0), "the marker stays while the scan is open")
+        assert.equal(w.state().etag, undefined, "no 304 for a list with a change still being read")
+      }
+      if (k === 9) {
+        assert.equal(w.reads.filter((read) => !read.backward && read.cursor === null).length, 1, `${order}: the history was started once`)
+        assert.ok(w.reads.length <= 5000 - 25, "the reserve of the quota is kept")
+      }
+    }
+    assert.deepEqual(wakes, [], order)
+    assert.equal(w.state().scans[1], undefined)
+    assert.equal(w.state().lastError, undefined)
+    assert.equal(w.state().seen[1].edits.total, 500_114)
+    assert.ok(w.reads.length <= 5002 + 10 + 4 * 2 + 2, `${order}: ${w.reads.length} pages read in all, about one pass`)
   }
 })
 
-test("a bot edit is not proof when the history is incomplete, the snapshot is not the issue the poll listed, the title moved, the record is from before titles were kept, or there is no history reader", async () => {
-  const bots = [editBy(T(5), BOT)]
-  const cases = [
-    ["an incomplete history", (found) => ({ title: found.title, body: found.body, updatedAt: found.updated_at, complete: false, edits: bots })],
-    ["a newer update than listed", (found) => ({ title: found.title, body: found.body, updatedAt: T(9), complete: true, edits: bots })],
-    ["a different body than listed", (found) => ({ title: found.title, body: "raced", updatedAt: found.updated_at, complete: true, edits: bots })],
-    ["a different title than listed", (found) => ({ title: "raced", body: found.body, updatedAt: found.updated_at, complete: true, edits: bots })],
-    ["an issue the history cannot find", () => null],
-  ]
-  for (const [name, answer] of cases) {
-    const w = await editsWorld([issue(1, T(0), "Health", "health: 1")])
+test("a person's edit among a bot's changes is not hidden by them, however long the scan takes: one wake, when the scan reaches it", async () => {
+  for (const order of ["asc", "desc"]) {
+    const w = await editsWorld([ISSUE()])
+    w.hist[1] = history(500_100, { order })
     await w.poll()
-    w.issues[0] = issue(1, T(5), "Health", "health: 2")
-    w.history[1] = answer
-    await w.poll()
-    assert.equal(w.sent.length, 1, name)
+    const wakes = []
+    for (let k = 1; k <= 10; k++) {
+      const at = NOW + k * 360_000
+      w.change(1, at, k === 5 ? personEdit("human", iso(at)) : botEdit(`n${k}`, iso(at)))
+      wakes.push(...(await w.poll(at)).wakes)
+      if (k < 10) assert.deepEqual(wakes, [], `${order}: nothing woke while the scan was reading (poll ${k})`)
+    }
+    assert.equal(wakes.length, 1, order)
+    assert.deepEqual(wakes[0].events.map((event) => event.why), ["title or body edited"])
+    assert.equal(w.state().scans[1], undefined)
   }
-  const retitled = await editsWorld([issue(1, T(0), "Health", "health: 1")])
-  await retitled.poll()
-  retitled.issues[0] = issue(1, T(5), "Health, renamed", "health: 2")
-  retitled.history[1] = bots
-  await retitled.poll()
-  assert.equal(retitled.sent.length, 1, "a title change is not a bot-only body edit")
-  const legacy = await editsWorld([issue(1, T(0), "Health", "health: 1")])
+})
+
+test("scans that outnumber the pages the quota allows take turns, so none is starved and each finishes", async () => {
+  const w = await editsWorld([issue(1, T(0), "A"), issue(2, T(0), "B"), issue(3, T(0), "C")], { limit: 25 + 1 + 450 })
+  for (const n of [1, 2, 3]) w.hist[n] = history(40_000)
+  await w.poll()
+  for (const n of [1, 2, 3]) w.change(n, NOW + 3_600_000, botEdit(`n${n}`, iso(NOW + 3_600_000)))
+  await w.poll(NOW + 3_600_000)
+  const progress = [1, 2, 3].map((n) => w.state().scans[n].fwd.pages)
+  assert.ok(Math.max(...progress) - Math.min(...progress) <= 1, `evenly served: ${progress}`)
+  assert.equal(progress.reduce((a, b) => a + b), 450)
+  await w.poll(NOW + 7_200_000)
+  await w.poll(NOW + 10_800_000)
+  const out = await w.poll(NOW + 14_400_000)
+  assert.deepEqual(out.wakes, [])
+  assert.deepEqual(w.state().scans, {})
+  for (const n of [1, 2, 3]) assert.equal(w.state().seen[n].edits.total, 40_001)
+})
+
+test("a cheap issue a person edited is woken in the first poll, whatever an expensive scan or a failing read beside it does, and a new issue is not held back", async () => {
+  for (const failure of ["quota", "network"]) {
+    const w = await editsWorld([issue(1, T(0), "Big"), issue(2, T(0), "Small")], { limit: failure === "quota" ? 60 : 5000 })
+    w.hist[1] = failure === "quota" ? history(500_100) : Object.assign(new Error("Check gh auth status, then try again: GitHub answered HTTP 502 for /graphql"), { code: "drains_check_gh_auth_status_then" })
+    w.hist[2] = history(2)
+    await w.poll()
+    if (failure === "network") w.hist[1] = Object.assign(new Error("Check gh auth status, then try again: GitHub answered HTTP 502 for /graphql"), { code: "drains_check_gh_auth_status_then" })
+    const big = w.hist[1]
+    if (failure === "quota") w.change(1, NOW + 360_000, botEdit("n1", iso(NOW + 360_000)))
+    else w.issues[0] = { ...w.issues[0], updated_at: iso(NOW + 360_000), body: "health: 1" }
+    w.change(2, NOW + 360_000, personEdit("human", iso(NOW + 360_000)))
+    w.issues.push(issue(3, iso(NOW + 360_000), "Fresh"))
+    const out = await w.poll(NOW + 360_000)
+    assert.deepEqual(out.wakes[0].events.map((event) => `${event.number} ${event.why}`).sort(), ["2 title or body edited", "3 new issue"], failure)
+    assert.equal(w.state().seen[1].updatedAt, T(0), "the expensive issue keeps its marker")
+    assert.equal(w.state().etag, undefined)
+    assert.equal(out.errors.length, 1)
+    assert.match(out.errors[0].error, /1 issue\(s\) were left for it: #1/u)
+    assert.equal(w.state().lastErrorCode, failure === "quota" ? "drains_rate_limited" : "drains_check_gh_auth_status_then")
+    assert.deepEqual(w.state().pending, [])
+    if (failure === "network") {
+      w.hist[1] = history(3)
+      w.change(1, NOW + 720_000, botEdit("n1", iso(NOW + 720_000)))
+      const again = await w.poll(NOW + 720_000)
+      assert.deepEqual(again.wakes, [], "the issue that could not be read is judged on the next poll, and a bot's edit is quiet")
+      assert.deepEqual(again.errors, [])
+      assert.equal(w.state().seen[1].updatedAt, iso(NOW + 720_000))
+    }
+    void big
+  }
+})
+
+test("a failed read alone wakes nobody, and keeps the marker, and lists the issue again next poll", async () => {
+  const w = await editsWorld([ISSUE()])
+  w.hist[1] = history(3)
+  await w.poll()
+  w.hist[1] = Object.assign(new Error("Check gh auth status, then try again: GitHub answered HTTP 401 for /graphql"), { code: "drains_check_gh_auth_status_then" })
+  w.issues[0] = { ...w.issues[0], updated_at: T(5), body: "health: 2" }
+  const out = await w.poll(NOW + 360_000)
+  assert.deepEqual(out.wakes, [])
+  assert.deepEqual(out.errors, [{ repo: DRAIN.repo, code: "drains_check_gh_auth_status_then", error: "Wait for the next poll: 1 issue(s) were left for it: #1 (Check gh auth status, then try again: GitHub answered HTTP 401 for /graphql)" }])
+  assert.equal(w.state().seen[1].updatedAt, T(0))
+  assert.equal(w.state().cursor, T(5), "the next poll lists the issue again: the cursor is held at its change")
+})
+
+test("a history whose cursors cycle, across polls, or that stands still is refused as news, never read for ever", async () => {
+  const cycling = async (cursors) => {
+    const w = await editsWorld([ISSUE()], { limit: 25 + 1 + 2 })
+    w.hist[1] = Object.assign(history(250), { page: ({ cursor }) => ({ nodes: Array.from({ length: 100 }, (_, i) => botEdit(`${cursor}-${i}`, iso(LONG_AGO + i * 1000))), hasMore: true, cursor: cursors(cursor) }) })
+    await w.poll()
+    w.change(1, NOW + 360_000, null)
+    return w
+  }
+  const w = await cycling((cursor) => (cursor === "a" ? "b" : "a"))
+  let out = await w.poll(NOW + 360_000)
+  assert.deepEqual(out.wakes, [])
+  assert.equal(w.state().scans[1].fwd.pages, 2, "two pages of the quota were read, the cursor is kept")
+  out = await w.poll(NOW + 3_960_000)
+  assert.equal(out.wakes.length, 1, "the third and fourth page went round: the scan ends, as news")
+  assert.deepEqual(out.wakes[0].events.map((event) => event.why), ["title or body edited"])
+  assert.equal(w.state().scans[1], undefined)
+  const still = await cycling((cursor) => cursor ?? "a")
+  out = await still.poll(NOW + 360_000)
+  assert.equal(out.wakes.length, 1, "a cursor that does not move is news")
+})
+
+test("once an issue has a baseline, the next bot edit costs one or two pages in either order and wakes nobody", async () => {
+  for (const order of ["asc", "desc"]) {
+    const w = await editsWorld([ISSUE()])
+    w.hist[1] = history(250, { order })
+    await w.poll()
+    w.change(1, NOW + 360_000, botEdit("n1", iso(NOW + 360_000)))
+    assert.deepEqual((await w.poll(NOW + 360_000)).wakes, [])
+    assert.deepEqual({ ...w.state().seen[1].edits, tail: undefined }, { total: 251, at: iso(NOW + 360_000), tail: undefined })
+    const before = w.reads.length
+    w.change(1, NOW + 720_000, botEdit("n2", iso(NOW + 720_000)))
+    assert.deepEqual((await w.poll(NOW + 720_000)).wakes, [])
+    assert.ok(w.reads.length - before <= 2, `${order}: ${w.reads.length - before} pages`)
+    assert.equal(w.state().seen[1].edits.total, 252)
+    w.change(1, NOW + 1_080_000, personEdit("human", iso(NOW + 1_080_000)))
+    assert.equal((await w.poll(NOW + 1_080_000)).wakes.length, 1, `${order}: a person's edit after the baseline wakes`)
+  }
+})
+
+test("a history that lags the issue is read again next poll and settles then; the issue is not woken for the lag", async () => {
+  const w = await editsWorld([ISSUE()])
+  w.hist[1] = history(3)
+  await w.poll()
+  w.change(1, NOW + 360_000, botEdit("n1", iso(NOW + 360_000)))
+  w.hist[1].stamp = T(0)
+  let out = await w.poll(NOW + 360_000)
+  assert.deepEqual(out.wakes, [])
+  assert.match(out.errors[0].error, /were left for it: #1 \(Wait for the next poll: GitHub's edit history is behind the issue/u)
+  assert.equal(w.state().seen[1].updatedAt, T(0))
+  w.hist[1].stamp = undefined
+  out = await w.poll(NOW + 720_000)
+  assert.deepEqual(out.errors, [])
+  assert.equal(w.state().seen[1].updatedAt, iso(NOW + 360_000))
+})
+
+test("a change is news unless every new edit is a bot's: a person, a person before or after a bot, an unknown or deleted edit, an edit with no time or id, no new edit at all", async () => {
+  const at = iso(NOW + 360_000)
+  const cases = [
+    ["a person", [personEdit("p", at)]],
+    ["a person, then a bot", [personEdit("p", at), botEdit("b", at)]],
+    ["a bot, then a person", [botEdit("b", at), personEdit("p", at)]],
+    ["a person at the second of the last poll", [personEdit("p", T(0)), botEdit("b", at)]],
+    ["an edit whose editor is gone", [{ id: "x", editedAt: at, deletedAt: null, editor: null }, botEdit("b", at)]],
+    ["a deleted edit", [{ ...botEdit("d", at), deletedAt: at }]],
+    ["an edit with no time", [botEdit("t", null)]],
+    ["an edit with no id", [{ ...botEdit("i", at), id: null }]],
+    ["an editor with no type or login", [{ id: "e", editedAt: at, deletedAt: null, editor: { login: null, type: null } }]],
+    ["no new edit at all", []],
+  ]
+  for (const [name, extra] of cases) {
+    const w = await editsWorld([ISSUE()])
+    w.hist[1] = history(3, { extra: [] })
+    await w.poll()
+    w.hist[1].extra.push(...extra)
+    w.change(1, NOW + 360_000, null)
+    const out = await w.poll(NOW + 360_000)
+    assert.equal(out.wakes.length, 1, name)
+    assert.deepEqual(out.wakes[0].events.map((event) => event.why), ["title or body edited"], name)
+  }
+})
+
+test("a title change is news with no history read; a bot-created issue's own rewrite stays quiet with none either; a record without a title is news; so is a reader that is not there", async () => {
+  const w = await editsWorld([ISSUE(), { ...issue(2, T(0), "Mine", "m1"), user: { login: BOT, type: "Bot" } }])
+  w.hist[1] = history(3)
+  w.hist[2] = history(3, { extra: [personEdit("p", T(4))] })
+  await w.poll()
+  w.issues[0] = issue(1, T(5), "Renamed", "health: 2")
+  w.issues[1] = { ...issue(2, T(5), "Mine", "m2"), user: { login: BOT, type: "Bot" } }
+  const out = await w.poll(NOW + 360_000)
+  assert.deepEqual(out.wakes[0].events.map((event) => `${event.number} ${event.why}`), ["1 title or body edited"])
+  assert.deepEqual(w.reads, [])
+  const legacy = await editsWorld([ISSUE()])
   await legacy.poll()
-  const stored = readDrainStates(legacy.paths.state)
-  delete stored[DRAIN.repo].seen["1"].title
+  const stored = JSON.parse(readFileSync(legacy.paths.state, "utf8"))
+  delete stored[DRAIN.repo].seen[1].title
   writeFileSync(legacy.paths.state, JSON.stringify(stored))
-  legacy.issues[0] = issue(1, T(5), "Health", "health: 2")
-  legacy.history[1] = bots
-  await legacy.poll()
-  assert.equal(legacy.sent.length, 1, "a record without a title cannot show the title is unchanged")
-  const blind = await world([issue(1, T(0), "Health", "health: 1")])
-  await blind.poll()
-  blind.issues[0] = issue(1, T(5), "Health", "health: 2")
-  await blind.poll()
-  assert.equal(blind.sent.length, 1, "no history reader is no proof")
+  legacy.hist[1] = history(3)
+  legacy.change(1, NOW + 360_000, botEdit("b", iso(NOW + 360_000)))
+  assert.equal((await legacy.poll(NOW + 360_000)).wakes.length, 1)
+  const none = await world([ISSUE()])
+  await none.poll()
+  none.issues[0] = issue(1, T(5), "Health", "health: 2")
+  assert.equal((await none.poll(NOW + 360_000)).wakes.length, 1)
 })
 
-test("a bot's body edit does not hide the rest: a person's comment, an outside label, a reopen and a cross-reference still wake", async () => {
+test("a bot's body edit does not hide the rest: a person's comment, an outside label, a reopen, a cross-reference and an assignment still wake", async () => {
   const quietEdit = async (setup) => {
-    const w = await editsWorld([issue(1, T(0), "Health", "health: 1")])
+    const w = await editsWorld([ISSUE()])
+    w.hist[1] = history(3)
     await w.poll()
-    w.issues[0] = issue(1, T(5), "Health", "health: 2")
-    w.history[1] = [editBy(T(5), BOT)]
+    w.change(1, NOW + 360_000, botEdit("n1", iso(NOW + 360_000)))
     setup(w)
-    await w.poll()
+    await w.poll(NOW + 360_000)
     return w
   }
   const quiet = await quietEdit(() => {})
   assert.deepEqual(quiet.sent, [])
-  assert.deepEqual(quiet.asked, [[DRAIN.repo, 1]])
-  const comment = await quietEdit((w) => { w.comments = async () => [{ id: 7, body: "please look", updated_at: T(4), user: { login: "ari", type: "User" } }] })
+  const comment = await quietEdit((w) => { w.comments = async () => [{ id: 7, body: "please look", updated_at: iso(NOW + 300_000), user: { login: "ari", type: "User" } }] })
   assert.match(comment.sent[0][1], /comment 7 by ari/u)
-  const label = await quietEdit((w) => { w.events = async () => [{ ...labelEvent(T(4), "bug"), actor: { login: "ari" } }] })
+  const label = await quietEdit((w) => { w.events = async () => [{ ...labelEvent(iso(NOW + 300_000), "bug"), actor: { login: "ari" } }] })
   assert.match(label.sent[0][1], /labeled bug/u)
-  const reopen = await quietEdit((w) => { w.events = async () => [lifecycle("reopened", T(4), "ari")] })
+  const reopen = await quietEdit((w) => { w.events = async () => [lifecycle("reopened", iso(NOW + 300_000), "ari")] })
   assert.match(reopen.sent[0][1], /reopened/u)
-  const reference = await quietEdit((w) => { w.timeline = async () => [{ event: "cross-referenced", created_at: T(4), source: { issue: { number: 9, repository_url: "https://api.github.com/repos/acme/other" } } }] })
+  const reference = await quietEdit((w) => { w.timeline = async () => [{ event: "cross-referenced", created_at: iso(NOW + 300_000), source: { issue: { number: 9, repository_url: "https://api.github.com/repos/acme/other" } } }] })
   assert.match(reference.sent[0][1], /cross-reference from acme\/other#9/u)
-  const assigned = await quietEdit((w) => { w.events = async () => [lifecycle("assigned", T(4), "ari", { assignee: { login: "dev" } })] })
+  const assigned = await quietEdit((w) => { w.events = async () => [lifecycle("assigned", iso(NOW + 300_000), "ari", { assignee: { login: "dev" } })] })
   assert.match(assigned.sent[0][1], /assigned dev/u)
-  const unassigned = await quietEdit((w) => { w.events = async () => [lifecycle("unassigned", T(4), "ari", { assignee: { login: "dev" } })] })
+  const unassigned = await quietEdit((w) => { w.events = async () => [lifecycle("unassigned", iso(NOW + 300_000), "ari", { assignee: { login: "dev" } })] })
   assert.match(unassigned.sent[0][1], /unassigned dev/u)
-  const drainsOwn = await quietEdit((w) => { w.comments = async () => [statusComment(8, T(4))] })
-  assert.deepEqual(drainsOwn.sent, [], "the drain's own comment still wakes nobody")
+  const own = await quietEdit((w) => { w.comments = async () => [statusComment(8, iso(NOW + 300_000))] })
+  assert.deepEqual(own.sent, [], "the drain's own comment still wakes nobody")
 })
 
-test("a failed edit-history read is a poll error that moves no marker, no cursor and no tag, and the next good poll wakes for the change", async () => {
-  const w = await deltaWorld([issue(1, T(0), "Health", "health: 1")])
-  w.asked = []
-  w.history = new Error("Check gh auth status, then try again: GitHub answered HTTP 502 for /graphql")
-  w.api.issueEdits = async (...args) => { w.asked.push(args); if (w.history instanceof Error) throw w.history; return w.history }
-  await w.poll()
-  const before = JSON.stringify({ seen: w.state().seen, pending: w.state().pending, cursor: w.state().cursor, etag: w.state().etag })
-  w.issues[0] = issue(1, T(5), "Health", "health: 2")
-  w.delta = async () => ({ issues: [w.issues[0]], etag: '"new"' })
-  const out = await w.poll(NOW + 300_000)
-  assert.deepEqual(out.errors, [{ repo: DRAIN.repo, error: w.history.message }])
-  assert.equal(JSON.stringify({ seen: w.state().seen, pending: w.state().pending, cursor: w.state().cursor, etag: w.state().etag }), before)
-  const tags = []
-  w.delta = async (...args) => { tags.push(args[2]); return { issues: [w.issues[0]], etag: '"new"' } }
-  w.history = { title: "Health", body: "health: 2", updatedAt: T(5), complete: true, edits: [editBy(T(5), "ari", "User")] }
-  const retry = await w.poll(NOW + 600_000)
-  assert.deepEqual(retry.errors, [])
-  assert.equal(tags[0], undefined, "the retry asks for the list again, not for a 304")
-  assert.deepEqual(retry.wakes[0].events.map((event) => event.why), ["title or body edited"])
-  assert.equal(w.state().etag.tag, '"new"')
-})
+const editAnswer = (nodes, { total = nodes.length, next = false, prev = false, start = "s", end = "e", updatedAt = T(5), cost = 1, headers = {} } = {}) =>
+  response({ data: { rateLimit: { cost }, repository: { issue: { updatedAt, userContentEdits: { totalCount: total, pageInfo: { hasNextPage: next, hasPreviousPage: prev, startCursor: start, endCursor: end }, nodes } } } } }, { headers })
 
-function graphqlAnswer(nodes, { next = false, cursor = "c1", title = "Health", body = "health: 2", updatedAt = T(5), headers = {} } = {}) {
-  return response({ data: { repository: { issue: { title, body, updatedAt, userContentEdits: { pageInfo: { hasNextPage: next, endCursor: next ? cursor : null }, nodes } } } } }, { headers })
-}
-
-test("issueEdits reads the whole edit history over GraphQL with the account's token, across pages, and keeps its quota apart from REST's", async () => {
-  const spawn = () => ({ status: 0, stdout: "tok\n" })
+test("editPage reads one page from the start or the end with the account's token, and keeps GraphQL's quota and cost apart from REST's", async () => {
   const calls = []
   const answers = [
     response([issue(1, "u1")], { headers: { "x-ratelimit-remaining": "4000", "x-ratelimit-limit": "5000", "x-ratelimit-reset": "1900000000", "x-ratelimit-resource": "core" } }),
-    graphqlAnswer([{ editedAt: T(5), deletedAt: null, editor: { __typename: "Bot", login: "app[bot]" } }], { next: true, headers: { "x-ratelimit-remaining": "4990", "x-ratelimit-limit": "5000", "x-ratelimit-reset": "1900000100", "x-ratelimit-resource": "graphql" } }),
-    graphqlAnswer([{ editedAt: T(1), deletedAt: T(2), editor: null }, { editedAt: T(0), editor: { __typename: "User", login: "ari" } }]),
+    editAnswer([{ id: "E1", editedAt: T(5), deletedAt: null, editor: { __typename: "Bot", login: "app[bot]" } }, { id: "E2", editedAt: T(1), deletedAt: T(2), editor: null }], { total: 250, next: true, end: "after-2", cost: 2, headers: { "x-ratelimit-remaining": "4990", "x-ratelimit-limit": "5000", "x-ratelimit-reset": "1900000100", "x-ratelimit-resource": "graphql" } }),
+    editAnswer([], { total: 250, prev: true, start: "before-1" }),
   ]
-  const fetchImpl = async (url, init) => { calls.push([url, init]); return answers.shift() }
-  const api = await connectGithub("maintainer", { spawn, fetchImpl, env: { PATH: "/bin" }, login: "maintainer" })
+  const api = await connectGithub("maintainer", { spawn: () => ({ status: 0, stdout: "tok\n" }), fetchImpl: async (url, init) => { calls.push([url, init]); return answers.shift() }, env: { PATH: "/bin" }, login: "maintainer" })
   await api.openIssues("o/r")
-  const history = await api.issueEdits("o/r", 5)
+  assert.equal(api.graphqlCost(), 1, "one call until a page says otherwise")
+  const first = await api.editPage("o/r", 5)
+  assert.equal(api.graphqlCost(), 2, "the cost GitHub charged for the page")
   assert.equal(calls[1][0], "https://api.github.com/graphql")
-  assert.equal(calls[1][1].method, "POST")
   assert.equal(calls[1][1].headers.Authorization, "Bearer tok")
-  const first = JSON.parse(calls[1][1].body)
-  assert.deepEqual(first.variables, { owner: "o", name: "r", number: 5, after: null })
-  assert.match(first.query, /userContentEdits\(first: 100, after: \$after\)/u)
-  assert.match(first.query, /editor \{ __typename login \}/u)
-  assert.equal(JSON.parse(calls[2][1].body).variables.after, "c1")
-  assert.deepEqual(history, {
-    title: "Health", body: "health: 2", updatedAt: T(5), complete: true,
-    edits: [
-      { editedAt: T(5), deletedAt: null, editor: { type: "Bot", login: "app[bot]" } },
-      { editedAt: T(1), deletedAt: T(2), editor: null },
-      { editedAt: T(0), deletedAt: null, editor: { type: "User", login: "ari" } },
-    ],
+  assert.deepEqual(JSON.parse(calls[1][1].body).variables, { owner: "o", name: "r", number: 5, cursor: null })
+  assert.match(JSON.parse(calls[1][1].body).query, /userContentEdits\(first: 100, after: \$cursor\)/u)
+  assert.deepEqual(first, {
+    updatedAt: T(5), total: 250, hasMore: true, cursor: "after-2",
+    edits: [{ id: "E1", editedAt: T(5), deletedAt: null, editor: { type: "Bot", login: "app[bot]" } }, { id: "E2", editedAt: T(1), deletedAt: T(2), editor: null }],
   })
-  assert.equal(api.quota().remaining, 4000, "the REST reading is not replaced by GraphQL's")
+  const last = await api.editPage("o/r", 5, { backward: true, cursor: "x" })
+  assert.match(JSON.parse(calls[2][1].body).query, /userContentEdits\(last: 100, before: \$cursor\)/u)
+  assert.equal(JSON.parse(calls[2][1].body).variables.cursor, "x")
+  assert.deepEqual({ hasMore: last.hasMore, cursor: last.cursor }, { hasMore: true, cursor: "before-1" })
+  assert.equal(api.quota().remaining, 4000)
   assert.equal(api.graphqlQuota().remaining, 4990)
+  assert.equal(api.graphqlCost(), 1)
   assert.deepEqual(api.calls(), { total: 3, notModified: 0 })
 })
 
-test("issueEdits is not complete when pages disagree about the issue, a page is malformed or the history is too long; a missing issue is null", async () => {
-  const connect = (answers) => connectGithub("maintainer", { spawn: () => ({ status: 0, stdout: "tok" }), fetchImpl: async () => (answers.length > 1 ? answers.shift() : answers[0]), env: { PATH: "/bin" }, login: "maintainer" })
-  const raced = await connect([graphqlAnswer([], { next: true }), graphqlAnswer([], { updatedAt: T(9) })])
-  assert.equal((await raced.issueEdits("o/r", 1)).complete, false)
-  const malformed = await connect([response({ data: { repository: { issue: { title: "t", body: "b", updatedAt: T(1), userContentEdits: null } } } })])
-  assert.equal((await malformed.issueEdits("o/r", 1)).complete, false)
-  const noCursor = await connect([graphqlAnswer([], { next: true, cursor: undefined })])
-  assert.equal((await noCursor.issueEdits("o/r", 1)).complete, false)
-  const endless = await connect([graphqlAnswer([], { next: true })])
-  assert.equal((await endless.issueEdits("o/r", 1)).complete, false, "a cursor that never advances is refused")
-  const cycle = await connect([graphqlAnswer([], { next: true, cursor: "a" }), graphqlAnswer([], { next: true, cursor: "b" }), graphqlAnswer([], { next: true, cursor: "a" })])
-  assert.equal((await cycle.issueEdits("o/r", 1)).complete, false, "a cursor seen before is a cycle")
-  const missing = await connect([response({ data: { repository: { issue: null } } })])
-  assert.equal(await missing.issueEdits("o/r", 1), null)
-})
-
-test("a GraphQL failure is reported with its reason: HTTP errors, GraphQL errors, no data and a spent GraphQL quota", async () => {
+test("editPage: a missing issue is null and a page that is not a connection has no edits; failures say why: HTTP errors, GraphQL errors, no data, a spent quota", async () => {
   const connect = (answer) => connectGithub("maintainer", { spawn: () => ({ status: 0, stdout: "tok" }), fetchImpl: async () => answer, env: { PATH: "/bin" }, login: "maintainer" })
-  await assert.rejects((await connect(response({}, { status: 502 }))).issueEdits("o/r", 1), /HTTP 502 for \/graphql/u)
-  await assert.rejects((await connect(response({ errors: [{ message: "Something went wrong" }] }))).issueEdits("o/r", 1), /Something went wrong/u)
-  await assert.rejects((await connect(response({ data: null }))).issueEdits("o/r", 1), /refused or unreadable/u)
+  assert.equal(await (await connect(response({ data: { repository: { issue: null } } }))).editPage("o/r", 1), null)
+  assert.deepEqual(await (await connect(response({ data: { repository: { issue: { updatedAt: T(1), userContentEdits: {} } } } }))).editPage("o/r", 1), { edits: null })
+  await assert.rejects((await connect(response({}, { status: 502 }))).editPage("o/r", 1), /HTTP 502 for \/graphql/u)
+  await assert.rejects((await connect(response({ errors: [{ message: "Something went wrong" }] }))).editPage("o/r", 1), /Something went wrong/u)
+  await assert.rejects((await connect(response({ data: null }))).editPage("o/r", 1), /refused or unreadable/u)
   const limited = response({ errors: [{ type: "RATE_LIMITED", message: "API rate limit exceeded" }] }, { headers: { "x-ratelimit-reset": "1900000000" } })
-  await assert.rejects((await connect(limited)).issueEdits("o/r", 1), (error) => error.code === "drains_rate_limited" && /GraphQL limit is used up/u.test(error.message))
-  await assert.rejects((await connect(response({}, { status: 403, headers: { "x-ratelimit-remaining": "0" } }))).issueEdits("o/r", 1), (error) => error.rateLimited === true)
+  await assert.rejects((await connect(limited)).editPage("o/r", 1), (error) => error.code === "drains_rate_limited" && /GraphQL limit is used up/u.test(error.message))
+  await assert.rejects((await connect(response({}, { status: 403, headers: { "x-ratelimit-remaining": "0" } }))).editPage("o/r", 1), (error) => error.rateLimited === true)
 })
 
 test("the state keeps GraphQL's quota beside REST's", async () => {
@@ -1975,26 +2097,76 @@ test("the state keeps GraphQL's quota beside REST's", async () => {
   assert.equal(w.state().quota, undefined)
 })
 
-test("an edit history of any length is read to its end: 120 pages of a bot's refreshes still prove a bot-only edit, and a person's edit on the last page is found", async () => {
-  const pages = 120
-  const served = []
-  const edits = (page) => Array.from({ length: 100 }, (_, i) => ({ editedAt: T(5), deletedAt: null, editor: { __typename: page === pages - 1 && i === 99 ? "User" : "Bot", login: page === pages - 1 && i === 99 ? "ari" : BOT } }))
-  const fetchImpl = async (_url, init) => {
-    const { after } = JSON.parse(init.body).variables
-    const page = after === null ? 0 : Number(after.slice(1))
-    served.push(page)
-    return graphqlAnswer(edits(page), { next: page < pages - 1, cursor: `p${page + 1}` })
+test("the lock is never taken from a live owner, however long it has held it; its owner releases it, and only while it is still the owner's", async () => {
+  const dir = await mkTempRoot("desk-drains-")
+  const lock = path.join(dir, "poll.lock")
+  for (const minutes of [16, 60, 600]) {
+    writeFileSync(lock, `${process.pid} some-token`)
+    const old = new Date(Date.now() - minutes * 60_000)
+    utimesSync(lock, old, old)
+    await assert.rejects(withDrainLock(lock, () => "never", { now: Date.now() + minutes * 60_000 }), /holds .* and is still working/u, `${minutes} minutes`)
+    assert.match(readFileSync(lock, "utf8"), /some-token/u)
   }
-  const api = await connectGithub("maintainer", { spawn: () => ({ status: 0, stdout: "tok" }), fetchImpl, env: { PATH: "/bin" }, login: "maintainer" })
-  const history = await api.issueEdits("o/r", 1)
-  assert.equal(history.complete, true)
-  assert.equal(history.edits.length, pages * 100)
-  assert.equal(served.length, pages)
-  assert.deepEqual(history.edits.filter((edit) => edit.editor.type === "User").map((edit) => edit.editor.login), ["ari"])
-  const w = await editsWorld([issue(1, T(0), "Health", "health: 1")])
-  await w.poll()
-  w.issues[0] = issue(1, T(5), "Health", "health: 2")
-  w.history[1] = (found) => ({ title: found.title, body: found.body, updatedAt: found.updated_at, complete: history.complete, edits: history.edits.map((edit) => ({ ...edit, editor: { ...edit.editor, type: "Bot" } })) })
-  await w.poll()
-  assert.deepEqual(w.sent, [], "a long all-bot history is quiet")
+  rmSync(lock)
+  let release
+  const gate = new Promise((resolve) => { release = resolve })
+  const slow = withDrainLock(lock, () => gate)
+  const mine = readFileSync(lock, "utf8")
+  assert.match(mine, /^\d+ [0-9a-f-]{36}$/u)
+  writeFileSync(lock, `${process.pid} the-next-owner`)
+  release("done")
+  assert.equal(await slow, "done")
+  assert.equal(readFileSync(lock, "utf8"), `${process.pid} the-next-owner`, "a lock that is no longer this run's is left alone")
+  rmSync(lock)
+})
+
+test("two contenders for a dead owner's lock cannot both take it: the one that loses the race leaves the winner's lock alone", async () => {
+  const dir = await mkTempRoot("desk-drains-")
+  const lock = path.join(dir, "poll.lock")
+  writeFileSync(lock, "999999 dead-token")
+  let release
+  const gate = new Promise((resolve) => { release = resolve })
+  let winner = null
+  // The second contender has read the dead owner's lock and is asking whether it is alive when the first runs its whole takeover.
+  const loser = withDrainLock(lock, () => "never", {
+    alive: () => {
+      winner ??= withDrainLock(lock, () => gate, { alive: () => false })
+      return false
+    },
+  })
+  await assert.rejects(loser, /holds .* and is still working/u)
+  const held = readFileSync(lock, "utf8")
+  assert.match(held, new RegExp(`^${process.pid} [0-9a-f-]{36}$`, "u"), "the winner's lock is intact")
+  assert.throws(() => readFileSync(`${lock}.reap`), { code: "ENOENT" })
+  release("won")
+  assert.equal(await winner, "won")
+  assert.throws(() => readFileSync(lock), { code: "ENOENT" })
+})
+
+test("a takeover that another contender is in the middle of, or a lock of garbage, a directory or a dead owner, is handled", async () => {
+  const dir = await mkTempRoot("desk-drains-")
+  const lock = path.join(dir, "poll.lock")
+  assert.equal(await withDrainLock(lock, () => "done"), "done")
+  assert.throws(() => readFileSync(lock), { code: "ENOENT" })
+  await assert.rejects(withDrainLock(lock, () => withDrainLock(lock, () => "inner")), /process \d+ holds .* and is still working/u)
+  writeFileSync(lock, "999999")
+  assert.equal(await withDrainLock(lock, () => "legacy lock of a dead owner", { alive: () => false }), "legacy lock of a dead owner")
+  writeFileSync(lock, String(spawnSync(process.execPath, ["-e", ""]).pid))
+  assert.equal(await withDrainLock(lock, () => "exited owner"), "exited owner")
+  writeFileSync(lock, "not a pid")
+  assert.equal(await withDrainLock(lock, () => "garbage"), "garbage")
+  writeFileSync(lock, "999999 dead")
+  writeFileSync(`${lock}.reap`, "")
+  await assert.rejects(withDrainLock(lock, () => "never", { alive: () => false }), /still working/u)
+  rmSync(`${lock}.reap`)
+  rmSync(lock)
+  await assert.rejects(withDrainLock(lock, () => { throw new Error("work failed") }), /work failed/u)
+  assert.throws(() => readFileSync(lock), { code: "ENOENT" })
+  await fs.mkdir(path.join(dir, "dir.lock"))
+  await assert.rejects(withDrainLock(path.join(dir, "dir.lock"), () => "never"))
+})
+
+test("a lock that cannot be created for another reason than an existing owner is reported as it is", async () => {
+  const dir = await mkTempRoot("desk-drains-")
+  await assert.rejects(withDrainLock(path.join(dir, `${"x".repeat(400)}.lock`), () => "x"), (error) => error.code !== "EEXIST")
 })

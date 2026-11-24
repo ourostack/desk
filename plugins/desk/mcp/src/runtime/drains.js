@@ -4,9 +4,9 @@
 //
 // `updated_at` alone is not a revision: the drain's own label edits and status comment move it too. An issue is news only when
 // something other than the drain changed it since the revision last recorded for that issue.
-import { createHash } from "node:crypto"
+import { createHash, randomUUID } from "node:crypto"
 import { spawnSync } from "node:child_process"
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs"
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 import * as os from "node:os"
 import * as path from "node:path"
@@ -26,10 +26,11 @@ const TURN_MS = 90 * 60_000
 const TURNS_KEPT = 50
 /** A closed issue's record is kept this long, so one that comes back unchanged is not mistaken for a new issue. */
 const GONE_MS = 30 * 24 * 3_600_000
-const LOCK_STALE_MS = 15 * 60_000
 const MAX_TITLES = 20
 const PAGE = 100
-const EDITS_QUERY = "query($owner: String!, $name: String!, $number: Int!, $after: String) { repository(owner: $owner, name: $name) { issue(number: $number) { title body updatedAt userContentEdits(first: 100, after: $after) { pageInfo { hasNextPage endCursor } nodes { editedAt deletedAt editor { __typename login } } } } } }"
+const EDIT_FIELDS = "totalCount pageInfo { hasNextPage hasPreviousPage startCursor endCursor } nodes { id editedAt deletedAt editor { __typename login } }"
+const EDITS_FORWARD = `query($owner: String!, $name: String!, $number: Int!, $cursor: String) { rateLimit { cost } repository(owner: $owner, name: $name) { issue(number: $number) { updatedAt userContentEdits(first: 100, after: $cursor) { ${EDIT_FIELDS} } } } }`
+const EDITS_BACKWARD = `query($owner: String!, $name: String!, $number: Int!, $cursor: String) { rateLimit { cost } repository(owner: $owner, name: $name) { issue(number: $number) { updatedAt userContentEdits(last: 100, before: $cursor) { ${EDIT_FIELDS} } } } }`
 /** A full listing of the open issues is read again this often; between them only issues updated since the last change are read. */
 const FULL_SYNC_MS = 3_600_000
 /** The list is read from a little before the newest change it knew, so an update GitHub lists late is still seen. */
@@ -226,38 +227,64 @@ function writeDrainStates(file, states) {
   renameSync(temporary, file)
 }
 
-function create(lockFile) {
+function create(lockFile, token) {
   closeSync(openSync(lockFile, "wx"))
-  writeFileSync(lockFile, String(process.pid))
+  writeFileSync(lockFile, `${process.pid} ${token}`)
 }
 
-function lockOwner(lockFile, now) {
+/** Who holds the lock: its process id and the token that tells this holder from any later one. */
+function lockOwner(lockFile) {
   try {
-    return { pid: Number.parseInt(readFileSync(lockFile, "utf8"), 10), ageMs: now - statSync(lockFile).mtimeMs }
+    const [pid, token] = readFileSync(lockFile, "utf8").trim().split(/\s+/u)
+    return { pid: Number.parseInt(pid, 10), token: token ?? "" }
   } catch {
     return null
   }
 }
 
-/** Runs `work`, which may be async, while this process owns the lock file. A live owner means another poll or ack is mid-write, so this one stops instead of racing it. */
-export async function withDrainLock(lockFile, work, { now = Date.now(), alive = processAlive } = {}) {
+const busy = (lockFile, pid) => problem("desk_drains_busy", "drains lock", `process ${pid} holds ${lockFile} and is still working`, `check that process, then look at ${lockFile}`, "run the command again once it finishes")
+
+/**
+ * Runs `work`, which may be async, while this process owns the lock file. An owner that is alive is never taken from, however long
+ * it works: the lock is released only by its owner. The lock of a dead owner is taken over under a second file made with `wx`, so
+ * of several processes that find the same dead owner one reaps and the others stop; the winner takes the lock only if it is still
+ * the dead owner's. The lock is removed afterwards only while it still carries this run's token.
+ */
+export async function withDrainLock(lockFile, work, { alive = processAlive } = {}) {
   assertNotRealStateUnderTest(path.dirname(lockFile))
   mkdirSync(path.dirname(lockFile), { recursive: true })
+  const token = randomUUID()
   try {
-    create(lockFile)
+    create(lockFile, token)
   } catch (error) {
     if (error.code !== "EEXIST") throw error
-    const owner = lockOwner(lockFile, now)
-    if (owner && owner.ageMs <= LOCK_STALE_MS && alive(owner.pid)) {
-      throw problem("desk_drains_busy", "drains lock", `process ${owner.pid} holds ${lockFile} and is still working`, `check that process, then look at ${lockFile}`, "run the command again once it finishes")
+    const owner = lockOwner(lockFile)
+    if (owner && alive(owner.pid)) throw busy(lockFile, owner.pid)
+    const marker = `${lockFile}.reap`
+    try {
+      closeSync(openSync(marker, "wx"))
+    } catch (markerError) {
+      if (markerError.code !== "EEXIST") throw markerError
+      throw busy(lockFile, "another poll, which is taking over a dead owner's lock,")
     }
-    rmSync(lockFile, { force: true })
-    create(lockFile)
+    try {
+      const again = lockOwner(lockFile)
+      if (again && again.token !== owner?.token) throw busy(lockFile, again.pid)
+      rmSync(lockFile, { force: true })
+      try {
+        create(lockFile, token)
+      } catch (createError) {
+        if (createError.code === "EEXIST") throw busy(lockFile, "another poll")
+        throw createError
+      }
+    } finally {
+      rmSync(marker, { force: true })
+    }
   }
   try {
     return await work()
   } finally {
-    rmSync(lockFile, { force: true })
+    if (lockOwner(lockFile)?.token === token) rmSync(lockFile, { force: true })
   }
 }
 
@@ -309,21 +336,158 @@ const ignoredComment = (comment, rules) => rules.some((rule) => comment.user?.lo
 
 const isBot = (item) => item.user?.type === "Bot" || (item.user?.login ?? "").toLowerCase().endsWith("[bot]")
 const isBotActor = (actor) => actor?.type === "Bot" || (actor?.login ?? "").toLowerCase().endsWith("[bot]")
-const lines = (text) => String(text ?? "").replace(/\r\n/gu, "\n")
+
+// ── Who edited an issue's body ──
+//
+// An issue whose body changed is news unless every edit made since it was last recorded was a bot's. The proof reads the issue's
+// edit history one GraphQL page at a time, and the progress is kept in `state.scans[number]`, so a history of any length is read
+// across polls and quota windows without starting over. No order of the history is assumed. What is counted instead:
+//   - `base`: how many edits were already judged when the issue was last recorded (null when that is not known: the first pass
+//     then counts the edits older than `floor` as it reads forward, and knows `base` once it reaches the end);
+//   - an edit is new when it is not older than `floor` and is not one of the `tail` ids already judged at that second;
+//   - `total` is read from every page, so the new edits still to find are `total - base`, wherever they sit and however many more
+//     arrive while the scan runs (an edit that arrives behind the cursor makes `total` grow, and the scan reads on until it has found them).
+// The scan stops at once on an edit that is not a bot's (or has no editor, no id, no time, or is deleted): that is news.
+
+const pagesFor = (total) => Math.ceil(total / PAGE) + 1
+const emptySide = () => ({ cursor: null, pages: 0, done: false })
+
+function newScan(before) {
+  const edits = before.edits
+  return { of: before.updatedAt, floor: edits?.at ?? before.updatedAt, base: edits ? edits.total : null, tail: edits ? [...edits.tail] : [], old: 0, found: {}, total: 0, passTotal: null, fwd: emptySide(), bwd: emptySide(), next: "fwd", stamp: null, served: 0 }
+}
+
+const restartPass = (scan) => Object.assign(scan, { fwd: emptySide(), bwd: emptySide(), passTotal: scan.total, old: 0, next: "fwd" })
+
+const isNewEdit = (scan, edit) => !(Date.parse(edit.editedAt) < Date.parse(scan.floor)) && !scan.tail.includes(edit.id)
+
+const botEdit = (edit) => typeof edit.id === "string" && Number.isFinite(Date.parse(edit.editedAt)) && !edit.deletedAt && Boolean(edit.editor) && isBotActor(edit.editor)
+
+/** What a finished scan leaves on the issue's record: how many edits are now judged, when the newest was made and which ones were made then. */
+function baselineOf(scan) {
+  const at = Object.values(scan.found).reduce((top, editedAt) => (Date.parse(editedAt) > Date.parse(top) ? editedAt : top))
+  const same = (editedAt) => Date.parse(editedAt) === Date.parse(at)
+  return { total: scan.total, at, tail: [...(same(scan.floor) ? scan.tail : []), ...Object.entries(scan.found).filter(([, editedAt]) => same(editedAt)).map(([id]) => id)] }
+}
+
+const NEWS = { kind: "news" }
+
+const validPage = (page) => Array.isArray(page.edits) && Number.isInteger(page.total) && typeof page.updatedAt === "string" && typeof page.hasMore === "boolean"
+
+/** What the pages read so far settle: the issue's new edits are all found (a bot-only proof, once a page is as fresh as the issue), not all found yet (null), or cannot be explained (news). */
+function conclude(scan, issue) {
+  const found = Object.keys(scan.found).length
+  const exhausted = scan.base === null ? scan.fwd.done : scan.fwd.done || scan.bwd.done
+  const expected = scan.total - (scan.base ?? scan.old)
+  if (found === expected && (scan.base !== null || exhausted)) {
+    if (found === 0) return NEWS
+    if (Date.parse(scan.stamp) < Date.parse(issue.updated_at)) {
+      scan.base ??= scan.old
+      scan.lag = true
+      return { kind: "deferred", message: "Wait for the next poll: GitHub's edit history is behind the issue and is read again then", code: "drains_edit_history_behind" }
+    }
+    return { kind: "bot", baseline: baselineOf(scan) }
+  }
+  if (found > expected && scan.base !== null) return NEWS
+  if (exhausted) {
+    // Edits that arrived while the history was being read make `total` grow past the pass, and another pass finds them. When nothing new arrived the count cannot be explained.
+    if (scan.total <= scan.passTotal || found + (scan.base === null ? scan.old : 0) > scan.total) return NEWS
+    scan.base ??= scan.old
+    restartPass(scan)
+  }
+  return null
+}
+
+/** Reads one page of the scan and says what it settled, or null when it is not settled yet: news, a bot-only proof with the record it leaves, or waiting for GitHub's history to catch up with the issue. */
+async function advance(api, repo, issue, scan) {
+  if (!Number.isFinite(Date.parse(scan.floor)) || typeof api.editPage !== "function") return NEWS
+  if (scan.lag) {
+    // The history was behind the issue: the first page, read again, tells whether it has caught up and whether more edits arrived.
+    const page = await api.editPage(repo, issue.number, { backward: false, cursor: null })
+    if (!page || !validPage(page)) return NEWS
+    scan.total = page.total
+    scan.stamp = page.updatedAt
+    if (Date.parse(scan.stamp) < Date.parse(issue.updated_at)) return { kind: "deferred", message: "Wait for the next poll: GitHub's edit history is behind the issue and is read again then", code: "drains_edit_history_behind" }
+    scan.lag = false
+    return conclude(scan, issue)
+  }
+  let direction = scan.base !== null && scan.next === "bwd" ? "bwd" : "fwd"
+  if (scan[direction].done) direction = direction === "fwd" ? "bwd" : "fwd"
+  const side = scan[direction]
+  const page = await api.editPage(repo, issue.number, { backward: direction === "bwd", cursor: side.cursor })
+  if (!page || !validPage(page)) return NEWS
+  scan.total = page.total
+  scan.stamp = page.updatedAt
+  scan.passTotal ??= page.total
+  side.pages += 1
+  scan.next = direction === "fwd" ? "bwd" : "fwd"
+  for (const edit of page.edits) {
+    if (!edit || typeof edit !== "object") return NEWS
+    if (!isNewEdit(scan, edit)) {
+      if (scan.base === null) scan.old += 1
+      continue
+    }
+    if (!botEdit(edit)) return NEWS
+    scan.found[edit.id] = edit.editedAt
+  }
+  if (page.hasMore) {
+    // A cursor that does not move, or more pages than the history can hold, is a cycle: it would never end.
+    if (typeof page.cursor !== "string" || page.cursor === side.cursor || side.pages >= pagesFor(scan.total)) return NEWS
+    side.cursor = page.cursor
+  } else {
+    side.done = true
+  }
+  return conclude(scan, issue)
+}
+
+/** Whether the GraphQL quota allows another page now: the same reserve as REST's, read from the connection's own headers, else from the last poll's reading while its window is open. */
+function canSpend(api, state, now) {
+  const quota = api.graphqlQuota?.() ?? state.graphqlQuota
+  if (!quota || now >= quota.reset * 1000) return true
+  return quota.remaining - (api.graphqlCost?.() ?? 1) > QUOTA_RESERVE
+}
 
 /**
- * Whether every edit of the issue's body since `since` was made by a bot, proven from the issue's complete edit history. Anything
- * the history cannot show (no adapter, a page missing, an edit with no editor or a deleted one, a snapshot that no longer matches
- * the issue the poll listed, no edit in the interval) is not proof, so the change stays news.
+ * Settles, for the issues whose body changed, whether bots alone made the edits. Every open scan gets one page per round, the one
+ * served longest ago first (`served` is kept with the scan), so scans that outnumber the pages the quota allows still take turns,
+ * and an issue with a short history is settled in the first round. A scan that cannot go on keeps its progress and is deferred,
+ * never settled by a guess.
  */
-async function botOnlyBodyEdits(api, repo, issue, since) {
-  if (typeof api.issueEdits !== "function") return false
-  const history = await api.issueEdits(repo, issue.number)
-  if (!history?.complete || history.updatedAt !== issue.updated_at || history.title !== issue.title || lines(history.body) !== lines(issue.body)) return false
-  const floor = Date.parse(since)
-  if (!Number.isFinite(floor)) return false
-  const interval = history.edits.filter((edit) => !(Date.parse(edit.editedAt) < floor))
-  return interval.length > 0 && interval.every((edit) => Number.isFinite(Date.parse(edit.editedAt)) && !edit.deletedAt && edit.editor && isBotActor(edit.editor))
+async function attribute(api, repo, state, needs, now) {
+  const verdicts = new Map()
+  const scans = state.scans ?? (state.scans = {})
+  const wanted = new Set(needs.map(({ issue }) => String(issue.number)))
+  for (const key of Object.keys(scans)) if (!wanted.has(key)) delete scans[key]
+  const pending = new Set()
+  for (const { issue, before } of needs) {
+    const key = String(issue.number)
+    if (scans[key]?.of !== before.updatedAt) scans[key] = newScan(before)
+    pending.add({ issue, key, scan: scans[key] })
+  }
+  let halted = null
+  while (pending.size > 0 && !halted) {
+    for (const item of [...pending].sort((a, b) => a.scan.served - b.scan.served || a.issue.number - b.issue.number)) {
+      if (!canSpend(api, state, now)) {
+        const quota = api.graphqlQuota?.() ?? state.graphqlQuota
+        halted = { message: `Wait for the quota to reset: GitHub's GraphQL limit leaves ${quota.remaining}/${quota.limit} calls until ${new Date(quota.reset * 1000).toISOString()}`, code: "drains_rate_limited" }
+        break
+      }
+      item.scan.served = state.scanTurn = (state.scanTurn ?? 0) + 1
+      try {
+        const verdict = await advance(api, repo, item.issue, item.scan)
+        if (!verdict) continue
+        verdicts.set(item.issue.number, verdict)
+        pending.delete(item)
+        if (verdict.kind !== "deferred") delete scans[item.key]
+      } catch (error) {
+        pending.delete(item)
+        verdicts.set(item.issue.number, { kind: "deferred", message: error.message, code: error.code })
+        if (error.code === "drains_rate_limited") halted = { message: error.message, code: error.code }
+      }
+    }
+  }
+  for (const item of pending) verdicts.set(item.issue.number, { kind: "deferred", ...halted })
+  return verdicts
 }
 
 /** A bot comment's text without what changes from run to run: run URLs and IDs, dates, times and durations. */
@@ -377,12 +541,9 @@ function newsEvent(event, rules, claims, login, openedAt) {
 const filedByDrain = (issue) => (issue.labels ?? []).some((label) => (label?.name ?? "").toLowerCase().startsWith(DRAIN_LABEL_PREFIX)) || (issue.body ?? "").includes(DRAIN_STATUS_MARKER)
 
 /** What someone but the drain changed since `before` (a new issue, a title or body edit (an edit that only bots made to the body, such as a health table's refresh, is not news), an edit, another comment, a reopen or a label outside the drain's own), or null. The reason travels with the event. */
-async function changedByOthers(api, repo, issue, before, digest, ignored, rules) {
+async function changedByOthers(api, repo, issue, before, digest, ignored, rules, edited) {
   if (!before) return filedByDrain(issue) ? null : "new issue"
-  if (before.digest && (before.ignored ?? "") === ignored && before.digest !== digest) {
-    // A record from before titles were kept cannot show the title is unchanged, so its first changed poll is news as it always was.
-    if (before.title !== issue.title || !(await botOnlyBodyEdits(api, repo, issue, before.updatedAt))) return "title or body edited"
-  }
+  if (edited) return edited
   const since = before.updatedAt
   const comments = (await api.comments(repo, issue.number, since)).filter((comment) => comment.updated_at > since)
   const all = {}
@@ -457,6 +618,7 @@ export function quotaHold(quota, lastPollAt, now) {
 export async function pollDrain(drain, states, { connect, now, desk }) {
   const state = states[drain.repo] ?? (states[drain.repo] = blank())
   let api = null
+  let left = null
   try {
     const knownLogin = state.loginAt && now - Date.parse(state.loginAt) < LOGIN_MS ? state.login : undefined
     api = await connect(drain.account, { login: knownLogin })
@@ -466,13 +628,24 @@ export async function pollDrain(drain, states, { connect, now, desk }) {
     }
     const listed = await listIssues(api, drain, state, now)
     if (!listed.untouched) {
-      await recordChanges(api, drain, state, listed, { now, desk })
-      // The tag of the list is kept only once every change in it is recorded: a failed poll asks for the same list again, never a 304 for it.
-      if (listed.newEtag) state.etag = listed.etag
+      const { deferred } = await recordChanges(api, drain, state, listed, { now, desk })
+      // The tag of the list is kept only once every change in it is recorded: a failed poll, or an issue left for the next one, asks for the same list again, never a 304 for it.
+      if (deferred.length > 0) delete state.etag
+      else if (listed.newEtag) state.etag = listed.etag
+      if (deferred.length > 0) {
+        const shown = deferred.slice(0, 3).map((item) => `#${item.number} (${item.message})`).join(", ")
+        left = { message: `Wait for the next poll: ${deferred.length} issue(s) were left for it: ${shown}${deferred.length > 3 ? ", …" : ""}`, code: "drains_issues_deferred" }
+        const specific = deferred.find((item) => item.code)?.code
+        if (specific) left.code = specific
+      }
     }
     state.lastOkAt = new Date(now).toISOString()
     delete state.lastError
     delete state.lastErrorCode
+    if (left) {
+      state.lastError = left.message
+      if (left.code) state.lastErrorCode = left.code
+    }
   } catch (error) {
     state.lastError = error.message
     if (typeof error.code === "string") state.lastErrorCode = error.code
@@ -496,6 +669,9 @@ async function recordChanges(api, drain, state, { full, issues }, { now, desk })
   const seen = full ? {} : { ...state.seen }
   const recorded = []
   const closed = new Set()
+  const todo = []
+  const deferred = []
+  let held = null
   let cursor = state.cursor ?? ""
   for (const issue of issues) {
     if (!full && issue.updated_at > cursor) cursor = issue.updated_at
@@ -509,10 +685,31 @@ async function recordChanges(api, drain, state, { full, issues }, { now, desk })
     }
     if (full && issue.updated_at > cursor) cursor = issue.updated_at
     const digest = digestOf(issue, trailers)
-    seen[key] = { updatedAt: issue.updated_at, digest, title: issue.title, ...(ignored ? { ignored } : {}) }
+    seen[key] = { updatedAt: issue.updated_at, digest, title: issue.title, ...(ignored ? { ignored } : {}), ...(before?.edits && before.digest === digest ? { edits: before.edits } : {}) }
     if (!state.seeded || before?.updatedAt === issue.updated_at) continue
-    const why = await changedByOthers(api, drain.repo, issue, before, digest, ignored, rules)
-    if (why) recorded.push({ number: issue.number, title: issue.title, updatedAt: issue.updated_at, seenAt: new Date(now).toISOString(), why })
+    // A body that changed on an issue a person created is news unless bots alone edited it; one a bot created is a bot's own to rewrite.
+    const bodyChanged = Boolean(before?.digest) && (before.ignored ?? "") === ignored && before.digest !== digest && !isBot(issue)
+    // A record from before titles were kept cannot show the title is unchanged, so its first changed poll is news as it always was.
+    const edited = bodyChanged && before.title !== issue.title ? "title or body edited" : null
+    todo.push({ issue, key, before, digest, edited, scan: bodyChanged && !edited })
+  }
+  const verdicts = await attribute(api, drain.repo, state, todo.filter((item) => item.scan), now)
+  for (const item of todo) {
+    const { issue, key, before, digest } = item
+    const verdict = verdicts.get(issue.number)
+    try {
+      if (verdict?.kind === "deferred") throw Object.assign(new Error(verdict.message), { code: verdict.code })
+      if (verdict?.kind === "news") item.edited = "title or body edited"
+      const why = await changedByOthers(api, drain.repo, issue, before, digest, ignored, rules, item.edited)
+      if (verdict?.kind === "bot") seen[key].edits = verdict.baseline
+      if (why) recorded.push({ number: issue.number, title: issue.title, updatedAt: issue.updated_at, seenAt: new Date(now).toISOString(), why })
+    } catch (error) {
+      // This issue's marker stays where it was, so the next poll judges the same change again; the others go on.
+      if (before) seen[key] = before
+      else delete seen[key]
+      deferred.push({ number: issue.number, message: error.message, code: error.code })
+      if (!held || issue.updated_at < held) held = issue.updated_at
+    }
   }
   for (const [key, entry] of Object.entries(state.seen)) {
     const gone = seenIssue(entry)
@@ -527,8 +724,10 @@ async function recordChanges(api, drain, state, { full, issues }, { now, desk })
   state.seen = seen
   state.seeded = true
   state.openCount = Object.values(seen).filter((entry) => !seenIssue(entry).goneAt).length
+  if (held && (!cursor || held < cursor)) cursor = held
   if (cursor) state.cursor = cursor
   if (full) state.syncedAt = new Date(now).toISOString()
+  return { deferred }
 }
 
 function span(ms) {
@@ -738,7 +937,7 @@ export async function connectGithub(account, { spawn = spawnSync, fetchImpl = fe
   if (!token && transient) throw Object.assign(new Error(`Wait for the next poll, which reads the token again: the GitHub CLI's token read for ${account ?? "its active account"} gave no answer, probably because the keyring was busy or slow (${transient.slice(0, 160)})`), { code: "drains_github_cli_token_unavailable", transient: true })
   if (!token) throw Object.assign(new Error(`Sign in the GitHub CLI: the GitHub CLI has no token for ${account ?? "its active account"} (run \`gh auth login --hostname github.com\`)`), { code: "drains_sign_in_the_github_cli" })
   // What this connection spent and what GitHub says is left in the account's window; a 304 answer costs nothing against it.
-  const meter = { total: 0, notModified: 0, quota: null, graphqlQuota: null }
+  const meter = { total: 0, notModified: 0, quota: null, graphqlQuota: null, graphqlCost: 1 }
   const get = async (route, { etag } = {}) => {
     const response = await fetchImpl(`https://api.github.com${route}`, {
       headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json", "User-Agent": "desk-issue-drains", ...(etag ? { "If-None-Match": etag } : {}) },
@@ -810,27 +1009,23 @@ export async function connectGithub(account, { spawn = spawnSync, fetchImpl = fe
     }
     return payload.data
   }
-  // The whole edit history of one issue with its current title, body and update time. `complete` is false for a history that is cut short or whose pages disagree about the issue.
-  const issueEdits = async (repo, number) => {
+  // One page of an issue's edit history, from its start or, with `backward`, from its end, after `cursor`. `hasMore` says whether
+  // more lies beyond in that direction; `total` and `updatedAt` are the issue's as this page saw them.
+  const editPage = async (repo, number, { backward = false, cursor = null } = {}) => {
     const [owner, name] = repo.split("/")
-    const edits = []
-    let snapshot = null
-    let after = null
-    const cursors = new Set()
-    // Read to the end however long the history is: no order is assumed, so no page can be skipped. A cursor that repeats can never end.
-    for (;;) {
-      const found = (await graphql(EDITS_QUERY, { owner, name, number, after })).repository?.issue
-      if (!found) return null
-      const current = { title: found.title, body: found.body, updatedAt: found.updatedAt }
-      if (snapshot && JSON.stringify(snapshot) !== JSON.stringify(current)) return { ...snapshot, edits, complete: false }
-      snapshot = current
-      const connection = found.userContentEdits
-      if (!Array.isArray(connection?.nodes) || typeof connection.pageInfo?.hasNextPage !== "boolean") return { ...snapshot, edits, complete: false }
-      edits.push(...connection.nodes.map((node) => ({ editedAt: node?.editedAt ?? null, deletedAt: node?.deletedAt ?? null, editor: node?.editor ? { type: node.editor.__typename ?? null, login: node.editor.login ?? null } : null })))
-      if (!connection.pageInfo.hasNextPage) return { ...snapshot, edits, complete: true }
-      after = connection.pageInfo.endCursor
-      if (typeof after !== "string" || cursors.has(after)) return { ...snapshot, edits, complete: false }
-      cursors.add(after)
+    const data = await graphql(backward ? EDITS_BACKWARD : EDITS_FORWARD, { owner, name, number, cursor })
+    if (Number.isFinite(data.rateLimit?.cost)) meter.graphqlCost = data.rateLimit.cost
+    const found = data.repository?.issue
+    if (!found) return null
+    const connection = found.userContentEdits
+    const info = connection?.pageInfo
+    if (!Array.isArray(connection?.nodes) || typeof info?.[backward ? "hasPreviousPage" : "hasNextPage"] !== "boolean") return { edits: null }
+    return {
+      updatedAt: found.updatedAt,
+      total: connection.totalCount,
+      edits: connection.nodes.map((node) => ({ id: node?.id ?? null, editedAt: node?.editedAt ?? null, deletedAt: node?.deletedAt ?? null, editor: node?.editor ? { type: node.editor.__typename ?? null, login: node.editor.login ?? null } : null })),
+      hasMore: backward ? info.hasPreviousPage : info.hasNextPage,
+      cursor: backward ? info.startCursor : info.endCursor,
     }
   }
   // Who the token really is decides which comments are the drain's own, so each drain's account is resolved from the token that polls its repository.
@@ -856,7 +1051,8 @@ export async function connectGithub(account, { spawn = spawnSync, fetchImpl = fe
     send,
     quota: () => meter.quota,
     graphqlQuota: () => meter.graphqlQuota,
-    issueEdits,
+    editPage,
+    graphqlCost: () => meter.graphqlCost,
     calls: () => ({ total: meter.total, notModified: meter.notModified }),
     timeline: (repo, issue) => all(`/repos/${repo}/issues/${issue}/timeline`),
     pull: async (repo, number) => (await get(`/repos/${repo}/pulls/${number}`)).body,
