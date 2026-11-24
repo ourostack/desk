@@ -360,3 +360,13 @@ test("a join into a workspace whose .desk/publication.json requires pull request
   assert.match(onMain(repo.bare, "_meta/desks.md"), /\| bob \| bob_example \|/u)
   assert.equal((await crewStatus({ repo: memberClone(repo, "check").clone, identity: "bob_example" })).member.alias, "bob")
 })
+
+test("a publication policy the join cannot read counts as requiring pull requests", async () => {
+  const repo = await started()
+  await pushFromElsewhere(repo, { ".desk/publication.json": "not json\n" })
+  const fake = fakeGh(repo.bare)
+  const bob = memberClone(repo, "bob")
+  const result = await joinWorkspace({ repo: bob.clone, spawnGit: repo.spawnGit, gh: fake.gh, identity: "bob_example", alias: "bob", wait: noWait, now: NOW, apply: true })
+  assert.equal(result.state, "joined", result.message)
+  assert.match(result.deskPr, /\/pull\/\d+$/u)
+})
