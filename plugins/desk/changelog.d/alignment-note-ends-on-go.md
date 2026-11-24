@@ -1,1 +1,0 @@
-The first-step alignment for new work now ends on its go request. `work-orchestration` says the reply ends with "Say go and I'll start on <outcome>." after any scope or summary, because the engineering kernel evaluation `v2-new-work-alignment` failed intermittently when the reply ended on the delivery scope instead of asking for go.

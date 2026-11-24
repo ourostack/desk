@@ -1,5 +1,29 @@
 # desk plugin — changelog
 
+## 3.2.523 — 2026-11-24
+
+The first-step alignment for new work now ends on its go request. `work-orchestration` says the reply ends with "Say go and I'll start on <outcome>." after any scope or summary, because the engineering kernel evaluation `v2-new-work-alignment` failed intermittently when the reply ended on the delivery scope instead of asking for go.
+
+Errors printed by `hooks/boot-checks.cjs` (`--compatible`, `--fast-forward`, `--repair`, `--ack`, `--revoke`) now start with `boot-checks:` instead of `workspace-tidy:`. `resolve-desk-root` carries `code: "desk-root-not-found"` in its JSON when no desk is bound (the exit status stays 0), and neither it nor `session-boot` is declared read-only any more, because `--boot-checks` starts repairs and the boot syncs the workspace and can write a file.
+
+`crew status` and `crew join` now exit 1 when the folder is not a Crew workspace (`not_crew`), as the other crew commands already did, and `crew start` in a folder that is not a Git clone says `not_git` instead of `refused`, as the others do.
+
+A long Desk session no longer loses its tools when a host removes the plugin version folder it started from. The idle proxy now remembers which Desk it started as; when that folder is gone, its next server runs the newest installed copy of the same Desk that fits the running Node and has the same tool protocol, instead of failing three times and ending. A copy in a `<plugin>/<version>` plugin cache now looks at its sibling versions too, and a plugin root the host set that no longer exists is replaced.
+
+`drains poll` and `drains relays poll` now keep a failure's stable code. Each entry in the poll's `errors` list carries `code` beside `error` when the failure had one (for example `drains_sign_in_the_github_cli` or `drains_rate_limited`), and the state files record it as `lastErrorCode` until the next good poll.
+
+`factory derive`, `flush`, `finalize`, `evaluate` and `loop` now exit 1 when they did nothing because the machine has not opted in (`not_opted_in`) or because another process holds the lock (`locked`, `busy`); they used to exit 0. `factory job-link` with a store that is not `owner/repo` now fails with the `usage` code and exit 2, as its comment says.
+
+Desk's MCP server now vendors Ouro UI v1.3.521, moved by Ouro Current.
+
+Desk's MCP server now vendors Ouro UI v1.3.522, moved by Ouro Current.
+
+A repository's pre-push hook now tests the rebuilt tree that is about to land. Sync no longer sticks in `push_rejected` when the shared checkout has not yet caught up with commits already on the remote and the hook refuses that stale copy.
+
+The `sessions` command's error codes are now kebab-case (`sessions-target`, `sessions-app-socket`, `sessions-send-refused`, `sessions-whoami-platform`, `sessions-tail-count`, `sessions-tail-target`), matching its census cards and the other runtime commands; they were snake_case.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.522 — 2026-11-24
 
 When `gh` fails while Desk publishes through a pull request, Desk now says what `gh` reported instead of always blaming auth. A quota or rate-limit refusal reads "Wait for the GitHub API quota to recover" and shows gh's first line (with the reset time its guard gives); only an auth error from gh names `gh auth status`, and any other failure says to run it again.

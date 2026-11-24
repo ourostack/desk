@@ -1,1 +1,0 @@
-`drains poll` and `drains relays poll` now keep a failure's stable code. Each entry in the poll's `errors` list carries `code` beside `error` when the failure had one (for example `drains_sign_in_the_github_cli` or `drains_rate_limited`), and the state files record it as `lastErrorCode` until the next good poll.

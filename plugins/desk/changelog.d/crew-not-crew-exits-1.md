@@ -1,1 +1,0 @@
-`crew status` and `crew join` now exit 1 when the folder is not a Crew workspace (`not_crew`), as the other crew commands already did, and `crew start` in a folder that is not a Git clone says `not_git` instead of `refused`, as the others do.

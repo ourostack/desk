@@ -1,1 +1,0 @@
-`factory derive`, `flush`, `finalize`, `evaluate` and `loop` now exit 1 when they did nothing because the machine has not opted in (`not_opted_in`) or because another process holds the lock (`locked`, `busy`); they used to exit 0. `factory job-link` with a store that is not `owner/repo` now fails with the `usage` code and exit 2, as its comment says.
