@@ -461,7 +461,11 @@ export async function runJobLinkCommand({ store, "desk-remote": deskRemote, trac
     slug = birth.slug
   }
   // A bad store fails with the usage error before any state is read.
-  jobReportUrl({ store, job: "0".repeat(32) })
+  try {
+    jobReportUrl({ store, job: "0".repeat(32) })
+  } catch (error) {
+    throw usageError("job-link", error.message, "factory job-link --store <owner/repo> ...")
+  }
   const job = jobId({ deskRemote, personPrefix, track, slug })
   const published = publishedJobId({ env, deskRemote, job })
   if (thisMachine) return thisMachineLink({ env, store, job, published })
@@ -604,6 +608,11 @@ const JOB_FLAG = { type: "string", required: true, placeholder: "<job>", descrip
 const ISSUE_FLAGS = { store: { type: "string", required: true, placeholder: "<directory>", description: "The checked-out store." }, repo: { type: "string", required: true, placeholder: "<owner/repo>", description: "The store's owner/repo." }, author: { type: "string", placeholder: "<login>", description: "The bot login whose comments are the build's own." } }
 const text = (result) => JSON.stringify(result)
 const exitFor = (ok) => (ok ? "ok" : "error")
+// A result that did nothing because the machine has not opted in, or because another process holds the lock, is a refusal: exit 1 so a caller
+// that checks the status can tell it from work done. A finalize result is refused when any of its jobs was.
+const REFUSED_RESULTS = new Set(["not_opted_in", "locked", "busy"])
+const refusedOne = (result) => Object(result).ok === false || REFUSED_RESULTS.has(Object(result).result)
+export const outcome = (result) => exitFor(!(refusedOne(result) || Object.values(Object(Object(result).jobs)).some(refusedOne)))
 const noFailures = (result) => exitFor(!(Object(result).failed > 0))
 
 /** The commands defined with Ouro AX; each prints one JSON value on one line, and a refusal exits 1. */
@@ -616,19 +625,19 @@ function factoryCli({ env, cwd, git, runner }) {
     commands: [
       command("account", { summary: "Name the signed-in GitHub account that can open intake pull requests on the store.", readOnly: true, flags: { store: STORE }, exit: (r) => exitFor(r.result === "account_found") }, runAccountCommand),
       command("consent", { summary: "Record whether this machine contributes to the store.", flags: { store: STORE, contribute: { type: "enum", values: ["yes", "no"], required: true, description: "Whether to contribute." }, account: { type: "string", placeholder: "<gh login>", description: "The GitHub account to deliver with." } } }, runConsentCommand),
-      command("derive", { summary: "Derive facts from one marker file (the detached worker).", flags: { marker: { type: "string", required: true, placeholder: "<file>", description: "The marker file." }, "wait-quiet": { type: "number", min: 0, max: 30000, placeholder: "<milliseconds>", description: "How long to wait for the session to go quiet first." } } }, runDeriveCommand),
+      command("derive", { summary: "Derive facts from one marker file (the detached worker).", flags: { marker: { type: "string", required: true, placeholder: "<file>", description: "The marker file." }, "wait-quiet": { type: "number", min: 0, max: 30000, placeholder: "<milliseconds>", description: "How long to wait for the session to go quiet first." } }, exit: outcome }, runDeriveCommand),
       command("status", { summary: "Print the factory's local status and maintain existing state; do not enable an uninitialized factory." }, runStatusCommand),
-      command("flush", { summary: "Make one delivery attempt to the store.", flags: { store: STORE } }, runFlushCommand),
+      command("flush", { summary: "Make one delivery attempt to the store.", flags: { store: STORE }, exit: outcome }, runFlushCommand),
       command("context-request", { summary: "Request the task context of one existing job, as the operator.", flags: { store: STORE, job: { ...JOB_FLAG, placeholder: "<public job id>" } }, exit: (r) => exitFor(r.ok !== false) }, runContextRequestCommand),
-      command("finalize", { summary: "Finalize up to eight finished jobs, then start the loop worker when its step is due.", flags: { job: { ...JOB_FLAG, repeat: true } } }, runFinalizeCommand),
+      command("finalize", { summary: "Finalize up to eight finished jobs, then start the loop worker when its step is due.", flags: { job: { ...JOB_FLAG, repeat: true } }, exit: outcome }, runFinalizeCommand),
       command("build", { summary: "Build the store's reports.", flags: { store: { type: "string", required: true, placeholder: "<directory>", description: "The checked-out store." }, out: { type: "string", required: true, placeholder: "<directory>", description: "Where to write the build." } } }, runBuildCommand),
       command("evaluate-accept", { summary: "Check what the evaluator wrote for a job and move accepted labels into the outbox.", flags: { job: JOB_FLAG } }, runEvaluateAcceptCommand),
-      command("evaluate", { summary: "Record a job's evaluation request and prepare its briefs; --pending prepares every retained request again.", flags: { desk: { type: "string", placeholder: "<absolute desk root>", description: "The desk." }, task: { type: "string", placeholder: "<track>/<slug>", description: "The task, as [desks/<alias>/]<track>/<slug>." }, pending: { type: "boolean", description: "Prepare every retained request again." } } }, runEvaluateCommand),
+      command("evaluate", { summary: "Record a job's evaluation request and prepare its briefs; --pending prepares every retained request again.", flags: { desk: { type: "string", placeholder: "<absolute desk root>", description: "The desk." }, task: { type: "string", placeholder: "<track>/<slug>", description: "The task, as [desks/<alias>/]<track>/<slug>." }, pending: { type: "boolean", description: "Prepare every retained request again." } }, exit: outcome }, runEvaluateCommand),
       command("job-link", { summary: "Print the keyed link of a job in the store (private).", readOnly: true, flags: { store: STORE, "desk-remote": { type: "string", required: true, placeholder: "<url>", description: "The desk's remote." }, track: { type: "string", required: true, placeholder: "<track>", description: "The track." }, slug: { type: "string", required: true, placeholder: "<slug>", description: "The task slug." }, "person-prefix": { type: "string", placeholder: "<prefix>", description: "The person prefix, desks/<alias>." }, desk: { type: "string", placeholder: "<desk root>", description: "The desk, to follow a renamed task." }, "this-machine": { type: "boolean", description: "Print only this machine's own link." } } }, runJobLinkCommand),
       command("kaizen-check", { summary: "Run the kaizen check on every open card of the store.", flags: ISSUE_FLAGS, exit: noFailures }, runKaizenCheckCommand),
       command("andon", { summary: "Open, update, reopen and close the store's andon issues.", flags: ISSUE_FLAGS, exit: noFailures }, runAndonCommand),
       command("reconcile", { summary: "Reconcile a desk's sessions against the store for a time window.", readOnly: true, flags: { desk: { type: "string", required: true, placeholder: "<absolute desk root>", description: "The desk." }, since: { type: "string", required: true, placeholder: "<iso>", description: "Window start, a UTC timestamp." }, until: { type: "string", required: true, placeholder: "<iso>", description: "Window end, a UTC timestamp." }, store: { type: "string", placeholder: "<directory>", description: "The store checkout." }, "person-prefix": { type: "string", placeholder: "desks/<alias>", description: "The person prefix." } }, exit: (r) => exitFor(r.ok !== false) }, runReconcileCommand),
-      command("loop", { summary: "Run the improvement steps once for the desk and person given.", flags: { desk: { type: "string", placeholder: "<absolute desk root>", description: "The desk." }, "person-prefix": { type: "string", placeholder: "desks/<alias>", description: "The person prefix." } } }, runLoopCommand),
+      command("loop", { summary: "Run the improvement steps once for the desk and person given.", flags: { desk: { type: "string", placeholder: "<absolute desk root>", description: "The desk." }, "person-prefix": { type: "string", placeholder: "desks/<alias>", description: "The person prefix." } }, exit: outcome }, runLoopCommand),
       command("validate-pr", { summary: "Validate a store pull request against the facts its merge would leave.", readOnly: true, flags: { base: { type: "string", required: true, placeholder: "<base sha>", description: "The base commit." }, head: { type: "string", required: true, placeholder: "<head sha>", description: "The pull request head commit." }, "author-association": { type: "string", required: true, placeholder: "<value>", description: "The author's association, such as NONE or OWNER." }, repo: { type: "string", placeholder: "<owner/repo>", description: "The store, to read the triage actor." }, pr: { type: "string", placeholder: "<number>", description: "The pull request number." } }, exit: (r) => exitFor(r.ok !== false) }, runValidatePrCommand),
       command("proof", { summary: "Mark an existing local session as a controlled proof.", args: [{ name: "session", required: true, description: "The session id." }], flags: { desk: { type: "string", placeholder: "<absolute desk root>", description: "The desk the session belongs to." } }, exit: (r) => exitFor(["marked", "already_proof"].includes(r.result)) }, runProofCommand),
     ],
