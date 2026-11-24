@@ -34,7 +34,7 @@ DRY_RUN="${DRY_RUN:-0}"
 for arg in "$@"; do
   case "$arg" in
     --dry-run) DRY_RUN=1 ;;
-    *) printf 'unknown argument %s; use --dry-run or nothing\n' "$arg" >&2; exit 2 ;;
+    *) printf 'unknown-argument: unknown argument %s; use --dry-run or nothing\n' "$arg" >&2; exit 2 ;;
   esac
 done
 
@@ -55,7 +55,7 @@ if show_error="$(az_read containerapp show -n "$APP" -g "$RESOURCE_GROUP" --quer
   exists=1
   say "$APP exists at https://$fqdn (hosted-deploy.yml keeps its image current)"
 elif ! not_found "$show_error"; then
-  printf 'Could not read Container App %s:\n%s\n' "$APP" "$show_error" >&2
+  printf 'read-failed: Could not read Container App %s:\n%s\n' "$APP" "$show_error" >&2
   exit 1
 fi
 
@@ -65,11 +65,11 @@ wait_ready() {
   local deadline=$((SECONDS + ${READY_TIMEOUT_SECONDS:-600}))
   until [[ "$(az_read containerapp show -n "$APP" -g "$RESOURCE_GROUP" --query properties.latestReadyRevisionName -o tsv)" == \
            "$(az_read containerapp show -n "$APP" -g "$RESOURCE_GROUP" --query properties.latestRevisionName -o tsv)" ]]; do
-    if ((SECONDS >= deadline)); then printf '%s was not ready after %s seconds; see az containerapp logs show -n %s -g %s\n' "$APP" "${READY_TIMEOUT_SECONDS:-600}" "$APP" "$RESOURCE_GROUP" >&2; exit 1; fi
+    if ((SECONDS >= deadline)); then printf 'not-ready: %s was not ready after %s seconds; see az containerapp logs show -n %s -g %s\n' "$APP" "${READY_TIMEOUT_SECONDS:-600}" "$APP" "$RESOURCE_GROUP" >&2; exit 1; fi
     sleep "${READY_POLL_SECONDS:-10}"
   done
   until [[ "$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "https://$fqdn/healthz")" == 200 ]]; do
-    if ((SECONDS >= deadline)); then printf 'https://%s/healthz did not answer 200\n' "$fqdn" >&2; exit 1; fi
+    if ((SECONDS >= deadline)); then printf 'not-ready: https://%s/healthz did not answer 200\n' "$fqdn" >&2; exit 1; fi
     sleep "${READY_POLL_SECONDS:-10}"
   done
 }
@@ -130,7 +130,7 @@ else
       public_url="https://$DOMAIN"
     fi
   else
-    say "Skipping $DOMAIN until its DNS exists. Create these records in ouro.bot's DNS (Cloudflare, DNS only, not proxied), then run this again:"
+    say "dns-missing: skipping $DOMAIN until its DNS exists. Create these records in ouro.bot's DNS (Cloudflare, DNS only, not proxied), then run this again:"
     printf '    CNAME  %-26s %s\n' "$DOMAIN" "$fqdn"
     printf '    TXT    %-26s %s\n' "asuid.$DOMAIN" "$verification_id"
   fi

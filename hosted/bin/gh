@@ -37,13 +37,16 @@ function findRealGh() {
   return null;
 }
 
+// The token client's messages carry no code of their own, so name the failure by which message it is.
+const tokenFailureCode = (message) => (message.startsWith("DESK_TOKEN_SOCKET is not set") ? "no-token-socket" : message.startsWith("could not reach") || message === "timed out" ? "socket-unreachable" : "mint-failed");
+
 const realGh = findRealGh();
-if (!realGh) fail("the real gh is not installed (set DESK_REAL_GH or put gh on PATH).", 127);
+if (!realGh) fail("no-real-gh: the real gh is not installed (set DESK_REAL_GH or put gh on PATH).", 127);
 let token;
 try {
   token = await requestToken();
 } catch (error) {
-  fail(error.message);
+  fail(`${tokenFailureCode(error.message)}: ${error.message}`);
 }
 const child = spawn(realGh, process.argv.slice(2), { stdio: "inherit", env: { ...process.env, GH_TOKEN: token } });
 for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) process.on(signal, () => child.kill(signal));

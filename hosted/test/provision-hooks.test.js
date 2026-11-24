@@ -209,7 +209,7 @@ test("a CNAME pointing elsewhere, or a missing verification value, binds nothing
     const { status, output, argv } = run(t, { env: { FAKE_EXISTS: "1", ...env } });
     assert.equal(status, 0, output);
     assert.deepEqual(calls(argv, "hostname"), []);
-    assert.match(output, /Skipping hooks\.ouro\.bot until its DNS exists/);
+    assert.match(output, /dns-missing: skipping hooks\.ouro\.bot until its DNS exists/);
   }
 });
 

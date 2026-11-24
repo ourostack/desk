@@ -115,7 +115,7 @@ case "$STAGE" in
     # Its own gateway identity (identity-record.mjs GATEWAY_IDENTITIES.test), never production's (re-review N-I1).
     PULL_IDENTITY=id-ouro-desk-hosted-staging PULL_IDENTITY_GROUP=rg-ouro-identity
     ;;
-  *) printf 'STAGE must be prod or staging, not %s\n' "$STAGE" >&2; exit 1 ;;
+  *) printf 'bad-setting: STAGE must be prod or staging, not %s\n' "$STAGE" >&2; exit 1 ;;
 esac
 DOMAIN=desk.ouro.bot
 FEDERATED_NAME=ourostack-desk-main-ids
@@ -124,11 +124,11 @@ PUBLIC_URL_PASSED="${DESK_PUBLIC_URL:+1}"
 REDIRECTS_PASSED="${DESK_REDIRECTS+1}"
 case "${REMOVE_OURO_SETTINGS:-}" in
   "" | 0 | 1) ;;
-  *) printf 'REMOVE_OURO_SETTINGS must be 1 or unset, not %s\n' "$REMOVE_OURO_SETTINGS" >&2; exit 1 ;;
+  *) printf 'bad-setting: REMOVE_OURO_SETTINGS must be 1 or unset, not %s\n' "$REMOVE_OURO_SETTINGS" >&2; exit 1 ;;
 esac
 case "${DESK_GITHUB_SIGNIN:-}" in
   "" | on | off) ;;
-  *) printf 'DESK_GITHUB_SIGNIN must be on or off, not %s\n' "$DESK_GITHUB_SIGNIN" >&2; exit 1 ;;
+  *) printf 'bad-setting: DESK_GITHUB_SIGNIN must be on or off, not %s\n' "$DESK_GITHUB_SIGNIN" >&2; exit 1 ;;
 esac
 APP_SECRETS=(desk-app-id desk-app-client-id desk-app-client-secret desk-app-key)
 
@@ -179,7 +179,7 @@ if [[ "$STAGE" == staging ]]; then
       pull_principal="$(az_read identity show -n "$PULL_IDENTITY" -g "$PULL_IDENTITY_GROUP" --query principalId -o tsv)"
     fi
   else
-    printf 'Could not read identity %s:\n%s\n' "$PULL_IDENTITY" "$identity_error" >&2
+    printf 'read-failed: Could not read identity %s:\n%s\n' "$PULL_IDENTITY" "$identity_error" >&2
     exit 1
   fi
   registry_id="$(az_read acr show -n "$REGISTRY" --query id -o tsv)"
@@ -329,7 +329,7 @@ app_exists=0
 if show_error="$(az_read containerapp show -n "$APP" -g "$RESOURCE_GROUP" --query name -o tsv 2>&1 >/dev/null)"; then
   app_exists=1
 elif ! not_found "$show_error"; then
-  printf 'Could not read Container App %s:\n%s\n' "$APP" "$show_error" >&2
+  printf 'read-failed: Could not read Container App %s:\n%s\n' "$APP" "$show_error" >&2
   exit 1
 fi
 
@@ -402,7 +402,7 @@ reconcile_app() {
         printf -v joined '%s; ' "${sent_before[@]}"
         before="Already sent to the app before it, and still in effect: ${joined%; }."
       fi
-      printf '%s\n' "az could not send the update: listSecrets returned a Key Vault reference without a value, which az 2.77's YAML update can't handle (KeyError: 'value'). az stops there before sending the update, so none of this update's changes reached the app. $before Record this for the rehearsal; the update path needs a fix before this app can be updated again." >&2
+      printf '%s\n' "key-vault-fill: az could not send the update: listSecrets returned a Key Vault reference without a value, which az 2.77's YAML update can't handle (KeyError: 'value'). az stops there before sending the update, so none of this update's changes reached the app. $before Record this for the rehearsal; the update path needs a fix before this app can be updated again." >&2
     else
       cat "$work/update.err" >&2
     fi
@@ -430,11 +430,11 @@ await_revision() {
       return
     fi
     if [[ "$state" == Failed ]]; then
-      printf '%s did not start (running state: %s); %s still serves. See its logs with az containerapp logs show -n %s -g %s --revision %s --subscription %s.\n' "$latest" "$state" "${ready:-no revision}" "$APP" "$RESOURCE_GROUP" "$latest" "$SUBSCRIPTION" >&2
+      printf 'not-ready: %s did not start (running state: %s); %s still serves. See its logs with az containerapp logs show -n %s -g %s --revision %s --subscription %s.\n' "$latest" "$state" "${ready:-no revision}" "$APP" "$RESOURCE_GROUP" "$latest" "$SUBSCRIPTION" >&2
       exit 1
     fi
     if ((SECONDS >= deadline)); then
-      printf '%s was not ready after %s seconds (running state: %s); %s still serves.\n' "${latest:-the new revision}" "${READY_TIMEOUT_SECONDS:-900}" "${state:-unknown}" "${ready:-no revision}" >&2
+      printf 'not-ready: %s was not ready after %s seconds (running state: %s); %s still serves.\n' "${latest:-the new revision}" "${READY_TIMEOUT_SECONDS:-900}" "${state:-unknown}" "${ready:-no revision}" >&2
       exit 1
     fi
     sleep "${READY_POLL_SECONDS:-15}"

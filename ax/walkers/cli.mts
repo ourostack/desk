@@ -22,14 +22,18 @@
 // `cards` is the sidecar of cards, `{ "doors": [DoorCard] }`. A card whose door isn't found is a census error.
 // A card's error code counts as raised only when it is a literal in the door's own file or in a local module that file
 // imports, followed through every local import (a relative `import`, `export ... from`, `import()` or `require`), never
-// in a folder the door doesn't import. A Python or shell door's codes are not checked yet: the walker can't read its
-// text for raised codes, and Superpowers' locked shell scripts print none of the codes their cards list. A code counts as raised as written or with its hyphens as underscores. Read-only evidence is the kit's `readOnly:
+// in a folder the door doesn't import. A Python or shell door's codes are checked the same way against its text, split on anything that
+// isn't a word, `-`, `.`, `:` or `/` character (a trailing `.` or `:` dropped), so the script prints the code, as in
+// `code: the sentence`, on its error line. The one exemption: a
+// door whose file is a `generatedPath` in the root's `upstream-sources.lock.json` is Superpowers' locked copy, which
+// this repo can't edit, so its codes are not checked until upstream prints them (obra/superpowers#2729 tracks that).
+// A code counts as raised as written or with its hyphens as underscores. Read-only evidence is the kit's `readOnly:
 // true` on the command. A hand-written script declares itself read-only with a comment line that reads exactly
 // `ax: read-only`, alone or followed by a space, `.` or `;` and the reason, in the comments before its first code (a
 // `#!` line aside): for a Node script, its leading two-slash `//` or `/* */` comments (a block's lines may start with `*`); for a
 // shell or Python script, its leading `#` lines, so in Python the line goes above the docstring. It covers every door
 // the file is, its first words included.
-import { closeSync, openSync, readFileSync, readSync, readdirSync, statSync } from "node:fs";
+import { closeSync, existsSync, openSync, readFileSync, readSync, readdirSync, statSync } from "node:fs";
 import { basename, dirname, extname, join, relative, resolve } from "node:path";
 import ts from "typescript";
 import { directImports, importClosure } from "./imports.mts";
@@ -72,6 +76,14 @@ function isShellScript(path: string): boolean {
   } finally {
     closeSync(fd);
   }
+}
+
+/** The files the repo copies from locked upstream sources, as root-relative paths (none when there is no lock file). */
+function lockedPaths(root: string): Set<string> {
+  const lock = resolve(root, "upstream-sources.lock.json");
+  if (!existsSync(lock)) return new Set();
+  const data = JSON.parse(readFileSync(lock, "utf8")) as { sources?: { files?: { generatedPath?: string }[] }[] };
+  return new Set((data.sources ?? []).flatMap((s) => (s.files ?? []).map((f) => f.generatedPath)).filter((p): p is string => typeof p === "string"));
 }
 
 /** The line of a Python script's `#!` or `if __name__ == "__main__":`, or null for a module (and for test_*.py). */
@@ -468,6 +480,8 @@ export async function walk(opts: WalkerOptions): Promise<WalkResult> {
     }
     return found;
   };
+  const locked = lockedPaths(opts.root);
+  const wordsIn = (file: string): Set<string> => new Set(readFileSync(file, "utf8").split(/[^A-Za-z0-9_.:/-]+/).flatMap((w) => [w, w.replace(/[.:]+$/, "")]));
   const doors: Door[] = [];
   const seen = new Set<string>();
   for (const { door: d, readOnly } of found) {
@@ -478,8 +492,9 @@ export async function walk(opts: WalkerOptions): Promise<WalkResult> {
     seen.add(d.id);
     const card = byId.get(d.id) ?? null;
     let raises: string[] | undefined;
-    if (card && Array.isArray(card.errors) && SCRIPT.test(d.file)) {
-      const own = raisedIn(resolve(opts.root, d.file));
+    const script = SCRIPT.test(d.file);
+    if (card && Array.isArray(card.errors) && (script || !locked.has(d.file))) {
+      const own = script ? raisedIn(resolve(opts.root, d.file)) : wordsIn(resolve(opts.root, d.file));
       const has = (code: string) => own.has(code) || own.has(code.replaceAll("-", "_"));
       raises = card.errors.map((e) => e?.code).filter((code): code is string => typeof code === "string" && has(code));
     }
