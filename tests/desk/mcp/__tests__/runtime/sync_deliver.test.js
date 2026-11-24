@@ -186,6 +186,7 @@ function publicationServer(shared, { failed = false, missing = false, moveBaseDu
   let head
   let number = null
   let moved = false
+  let refusing = failed
   const pushes = []
   const merges = []
   const closed = []
@@ -229,7 +230,7 @@ function publicationServer(shared, { failed = false, missing = false, moveBaseDu
       response = [{ statuses: [] }]
     } else if (args.includes(`repos/example/workspace/commits/${head}/check-runs?filter=latest&per_page=100`)) {
       assert.ok(args.includes("--paginate") && args.includes("--slurp"))
-      response = [{ check_runs: missing ? [] : [{ id: 4242, name: "workspace-policy", status: "completed", conclusion: failed ? "failure" : "success" }] }]
+      response = [{ check_runs: missing ? [] : [{ id: 4242, name: "workspace-policy", status: "completed", conclusion: refusing ? "failure" : "success" }] }]
     } else if (args.includes("repos/example/workspace/rules/branches/main?per_page=100")) {
       assert.ok(args.includes("--paginate") && args.includes("--slurp"))
       response = [[]]
@@ -241,7 +242,7 @@ function publicationServer(shared, { failed = false, missing = false, moveBaseDu
     } else assert.fail(`unexpected publication call: ${args.join(" ")}`)
     return { status: 0, stdout: JSON.stringify(response), stderr: "" }
   }
-  return { spawnGit, clock, pushes, merges, closed }
+  return { spawnGit, clock, pushes, merges, closed, heal: () => { refusing = false } }
 }
 
 for (const replayed of [false, true]) {
@@ -343,6 +344,52 @@ for (const replayed of [false, true]) {
     assert.equal(git(shared.desk, ["worktree", "list", "--porcelain"]).match(/^worktree /gmu).length, 1)
   })
 }
+
+test("a refused publication is rebuilt on the repaired main by the next delivery (#1597)", async () => {
+  const shared = await mkShared()
+  await enablePullRequests(shared)
+  await commit(shared.desk, "tasks/mine.md", "saved\n", "desk: save")
+  const server = publicationServer(shared, { failed: true })
+  const refused = deliver({ root: shared.desk, spawnGit: server.spawnGit, publicationClock: server.clock })
+  assert.equal(refused.state, "failed")
+  const stale = server.pushes[0].split(":")[0]
+
+  await commit(shared.elsewhere, "notes/repair.md", "repaired\n", "repair main")
+  git(shared.elsewhere, ["push", "-q", "origin", "main"])
+  server.heal()
+  const later = deliver({ root: shared.desk, spawnGit: server.spawnGit, publicationClock: server.clock })
+
+  assert.equal(later.state, "delivered", JSON.stringify(later))
+  const rebuilt = server.merges.at(-1)
+  assert.notEqual(rebuilt, stale, "the refused candidate was not retried")
+  assert.equal(bare(shared.origin, ["rev-parse", `${rebuilt}^`]).trim(), git(shared.elsewhere, ["rev-parse", "HEAD"]).trim())
+  assert.equal(bare(shared.origin, ["show", "main:tasks/mine.md"]), "saved\n")
+})
+
+test("the push worker publishes again after main is repaired when the first branch push was refused by the remote's guard (#1597)", async () => {
+  const shared = await mkShared()
+  await enablePullRequests(shared)
+  // The remote's guard refuses any publication branch built on a main that lacks the repair.
+  const hook = path.join(shared.origin, "hooks", "pre-receive")
+  await fs.mkdir(path.dirname(hook), { recursive: true })
+  await fs.writeFile(hook, "#!/bin/sh\nwhile read old new ref; do\n  case \"$ref\" in refs/heads/desk/publish/*) git cat-file -e \"$new:notes/repair.md\" 2>/dev/null || { echo 'guard: stale allowlist' >&2; exit 1; } ;; esac\ndone\n", { mode: 0o755 })
+  await commit(shared.desk, "tasks/mine.md", "saved\n", "desk: save")
+  const server = publicationServer(shared)
+  const options = { root: shared.desk, env: process.env, clock: instantClock, fileProblem: () => {}, debounceMs: 0, spawnGit: server.spawnGit, publicationClock: server.clock }
+
+  const refused = await runPushWorker(options)
+  assert.equal(refused.result, "blocked")
+  assert.equal(refused.reason, "publication_blocked")
+  assert.deepEqual(server.merges, [])
+
+  await commit(shared.elsewhere, "notes/repair.md", "repaired\n", "repair main")
+  git(shared.elsewhere, ["push", "-q", "origin", "main"])
+  const later = await runPushWorker(options)
+
+  assert.equal(later.result, "ok", JSON.stringify(later))
+  assert.equal(bare(shared.origin, ["show", "main:tasks/mine.md"]), "saved\n")
+  assert.equal(readSyncStatus({ root: shared.desk, env: process.env }).blocked, false)
+})
 
 test("missing required PR checks time out with recovery instead of counting as green", async () => {
   const shared = await mkShared()
