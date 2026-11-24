@@ -1,5 +1,23 @@
 # desk plugin — changelog
 
+## 3.2.519 — 2026-11-24
+
+The card commit guard no longer names a recovery script from a source mirror. A mirror has no `bootstrap.cjs`, so the shell command in the refusal always failed with `transport_closed`. The guard now names the script only when the plugin's `bootstrap.cjs` sits beside it, and falls back to the plugin folder path otherwise.
+
+A shared checkout no longer stays behind its remote because a tracked file already holds the bytes that were published. When another session switched branches while a card was published, the published bytes could remain as an unstaged change and every later delivery reported `behind` with `local_changes`. Catch-up now stages such a file, the tracked counterpart of removing an identical untracked one, and moves on. A file whose bytes differ is still left alone and named.
+
+`desk_save` no longer fails a whole save because one listed path is not known to Git, such as an ignored generated log. It commits the paths that changed and names the rest in `unchanged_paths` in its answer.
+
+[`visual-proof`](skills/visual-proof/SKILL.md) now says any image an agent delivers, not only proof, has to render in the recipient's actual client, with the source's confidentiality and intended audience preserved. Private bytes never move to public anonymous hosting to make an image render, and the destination's access controls, pixels and metadata are inspected first. Sign-in-gated GitHub links (`blob`, `raw`, tokenised) are a known risk of showing a broken image on mobile and chat clients, not a mechanism anyone has verified. No upload method is declared universally supported.
+
+The [pull request visual-proof checker](skills/pr-surface-hygiene/check-visual-proof.cjs) now rejects `github.com/.../blob/` and `/raw/`, `raw.githubusercontent.com` and tokenised `githubusercontent.com` image URLs as proof. It only judges URL syntax, never whether a client renders the image, and applies to pull request bodies only.
+
+Desk's MCP server now vendors Ouro UI v1.3.520, moved by Ouro Current.
+
+`desk_search` now finds tracks. A track's `track.md` is indexed as kind `track`, so `filters: {kind: "track"}` lists the desk's tracks, including a track with no tasks, and a search for a track's title or scope line finds its card.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.518 — 2026-11-24
 
 ### A delegation logged with task_update names the child's session

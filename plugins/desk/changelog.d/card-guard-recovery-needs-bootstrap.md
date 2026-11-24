@@ -1,1 +1,0 @@
-The card commit guard no longer names a recovery script from a source mirror. A mirror has no `bootstrap.cjs`, so the shell command in the refusal always failed with `transport_closed`. The guard now names the script only when the plugin's `bootstrap.cjs` sits beside it, and falls back to the plugin folder path otherwise.
