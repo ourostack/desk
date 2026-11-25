@@ -2615,3 +2615,42 @@ test("edit histories that are unusable, behind, unexplained or already at a base
   assert.match(out.errors[0].error, /5 issue\(s\) were left for it: .*\), …/u)
   assert.equal(many.state().cursor, iso(NOW + 60_000), "the cursor stays at the earliest failure, though a later issue was read")
 })
+
+test("a GitHub 5xx is asked once more and, if it persists, worded as the server's fault with no auth advice; a 401 is not retried and still says to check auth", async () => {
+  const connect = (answers) => {
+    const asked = []
+    const fetchImpl = async (url) => { asked.push(url); return answers.shift() ?? response({}, { status: 599 }) }
+    return connectGithub("maintainer", { spawn: () => ({ status: 0, stdout: "tok" }), fetchImpl, login: "maintainer" }).then((api) => ({ api, asked }))
+  }
+  for (const status of [500, 502, 503, 504]) {
+    const { api, asked } = await connect([response({}, { status }), response({}, { status })])
+    await assert.rejects(api.openIssues("o/r"), (error) => error.code === "drains_github_server_error" && error.status === status && new RegExp(`server answered HTTP ${status} for /repos/o/r/issues`, "u").test(error.message) && !/gh auth/u.test(error.message))
+    assert.equal(asked.length, 2, `${status}: exactly one retry`)
+    assert.equal(api.calls().total, 2)
+  }
+  const recovers = await connect([response({}, { status: 502 }), response([])])
+  assert.deepEqual(await recovers.api.openIssues("o/r"), [])
+  assert.equal(recovers.asked.length, 2)
+  const refused = await connect([response({}, { status: 401 })])
+  await assert.rejects(refused.api.openIssues("o/r"), (error) => error.code === "drains_check_gh_auth_status_then" && /Check gh auth status/u.test(error.message))
+  assert.equal(refused.asked.length, 1, "a refused credential is not retried")
+  const graph = await connect([response({}, { status: 503 }), response({}, { status: 503 })])
+  await assert.rejects(graph.api.editPage("o/r", 1), (error) => error.code === "drains_github_server_error" && /for \/graphql/u.test(error.message))
+  assert.equal(graph.asked.length, 2)
+  const bad = await connect([response({}, { status: 401 })])
+  await assert.rejects(bad.api.editPage("o/r", 1), (error) => error.code === "drains_check_gh_auth_status_then")
+  assert.equal(bad.asked.length, 1)
+})
+
+test("a persistent 5xx is recorded as the drain's last error, wakes nobody and leaves what was seen as it was", async () => {
+  const w = await world([issue(1, T(0))])
+  await w.poll()
+  const before = JSON.stringify(w.state().seen)
+  w.api.changedIssues = async () => { throw Object.assign(new Error("Wait for the next poll: GitHub's server answered HTTP 502 for /repos/acme/widgets/issues (asked twice); this usually clears on its own and needs nothing from you"), { code: "drains_github_server_error", status: 502 }) }
+  const out = await w.poll(NOW + 360_000)
+  assert.deepEqual(out.wakes, [])
+  assert.equal(out.errors[0].code, "drains_github_server_error")
+  assert.match(out.errors[0].error, /server answered HTTP 502/u)
+  assert.equal(w.state().lastErrorCode, "drains_github_server_error")
+  assert.equal(JSON.stringify(w.state().seen), before)
+})
