@@ -18,7 +18,7 @@
 // not counted in the REST tally.
 
 import { createHash } from "node:crypto"
-import { appendFileSync, closeSync, fstatSync, openSync, readFileSync, readSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs"
+import { appendFileSync, closeSync, fstatSync, openSync, readFileSync, readSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs"
 import * as path from "node:path"
 import { looksLikeNodeTestRunner } from "./test-state-guard.js"
 
@@ -127,7 +127,11 @@ function locked(file, write) {
       closeSync(openSync(lock, "wx"))
     } catch {
       try {
-        if (Date.now() - statSync(lock).mtimeMs > LOCK_STALE_MS) unlinkSync(lock)
+        if (Date.now() - statSync(lock).mtimeMs > LOCK_STALE_MS) {
+          const gone = `${lock}.${process.pid}.stale`
+          renameSync(lock, gone)
+          unlinkSync(gone)
+        }
       } catch {
         // Released between the two calls.
       }
@@ -137,7 +141,7 @@ function locked(file, write) {
     try {
       write()
     } finally {
-      unlinkSync(lock)
+      rmSync(lock, { force: true })
     }
     return true
   }
@@ -236,7 +240,7 @@ const asking = new Map()
 // Which account a token belongs to: the login the caller knows, else what GitHub says for `GET /user`, once per token per process even
 // when several calls start together (one asks, the rest wait for it), kept by the token's digest, never the token. An answer that names
 // no account (a 403 for an app's installation token, say) is kept as "". A lookup that got no answer (`transient`: a dropped connection,
-// a 5xx or a 429) is not kept, so the next call asks again. `probe` is how the lookup went for the call that sent it ("apiget" when
+// a 5xx, a 429 or a rate-limit 403) is not kept, so the next call asks again. `probe` is how the lookup went for the call that sent it ("apiget" when
 // answered, "unknown" when it got no answer; null for a call that sent none), `id` the token's digest.
 async function loginOf({ token, hint, fetchFn, init }) {
   if (hint) return { login: hint, probe: null, transient: false, id: "" }
@@ -244,11 +248,13 @@ async function loginOf({ token, hint, fetchFn, init }) {
   if (identities.has(id)) return { login: identities.get(id), probe: null, transient: false, id }
   if (asking.has(id)) return { ...(await asking.get(id)), probe: null }
   const ask = (async () => {
+    await null
     try {
       const response = await fetchFn(`${API}/user`, { headers: init?.headers, signal: init?.signal })
       const login = response.status === 200 ? JSON.parse(await response.text())?.login : ""
       const found = typeof login === "string" ? login : ""
-      if (response.status >= 500 || response.status === 429) return { login: "", probe: "unknown", transient: true, id }
+      const limited = response.status === 429 || (response.status === 403 && (response.headers?.get?.("x-ratelimit-remaining") === "0" || response.headers?.get?.("retry-after") != null))
+      if (response.status >= 500 || limited) return { login: "", probe: "unknown", transient: true, id }
       identities.set(id, found)
       return { login: found, probe: "apiget", transient: false, id }
     } catch {

@@ -427,3 +427,24 @@ test("a lock left behind by a dead process is broken, and a live one is waited o
   assert.equal(rate("personal")[0], 3000)
   assert.equal(existsSync(lock), false)
 })
+
+test("a rate-limited or synchronously failing /user lookup is held and asked again, never kept as no account", async (t) => {
+  const { env } = ledger(t)
+  let users = 0
+  const inner = (url) => {
+    if (url.endsWith("/user")) {
+      users += 1
+      if (users === 1) throw new Error("sync failure")
+      if (users === 2) return Promise.resolve(answer(403, {}, { "x-ratelimit-remaining": "0" }))
+      return Promise.resolve(answer(200, { login: "ari" }))
+    }
+    if (url.endsWith("/rate_limit")) return Promise.resolve(answer(200, { resources: { core: { remaining: 4000, reset: RESET, limit: 5000 } } }))
+    return Promise.resolve(answer(200, {}, quota(4000)))
+  }
+  const fetchFn = ledgeredFetch(inner, { env, now: clockNow })
+  const url = "https://api.github.com/repos/o/r/pulls/1"
+  await assert.rejects(fetchFn(url, auth("tok-sync")), SpendHeld)
+  await assert.rejects(fetchFn(url, auth("tok-sync")), SpendHeld)
+  assert.equal((await fetchFn(url, auth("tok-sync"))).status, 200)
+  assert.equal(users, 3)
+})
