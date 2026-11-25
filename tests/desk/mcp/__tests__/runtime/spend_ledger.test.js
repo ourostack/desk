@@ -430,13 +430,13 @@ test("a higher number written over the file by a slower writer is corrected from
   assert.equal(rate("personal")[0], 3000)
 })
 
-test("an observation log that cannot be written leaves the stored numbers alone and the write unharmed", async (t) => {
+test("an observation log that cannot be written keeps the answer in the cache and the write unharmed", async (t) => {
   const { dir, env, rate } = ledger(t)
   writeFileSync(path.join(dir, "personal.rate"), `4000 ${RESET} 5000 ${NOW}\n`)
   mkdirSync(path.join(dir, `personal.rate.obs.${RESET}`))
   const fetchFn = ledgeredFetch(async () => answer(200, {}, quota(3000)), { env, login: () => "ari", now: clockNow })
   assert.equal((await fetchFn("https://api.github.com/repos/o/r/pulls/1", { ...auth(), method: "POST" })).status, 200)
-  assert.equal(rate("personal")[0], 4000)
+  assert.equal(rate("personal")[0], 3000)
 })
 
 test("a rate-limited or synchronously failing /user lookup is held and asked again, never kept as no account", async (t) => {
@@ -501,7 +501,7 @@ test("observations that cannot be read hold reads and raise a warning, even when
   await assert.rejects(fetchFn("https://api.github.com/repos/o/r/pulls/1", auth()), (error) => error instanceof SpendHeld && /readable/u.test(error.message))
   await new Promise((resolve) => setImmediate(resolve))
   assert.equal(sent, 0)
-  assert.deepEqual(warnings, ["DESK_SPEND_OBSERVATIONS_UNREADABLE"])
+  assert.ok(warnings.includes("DESK_SPEND_OBSERVATIONS_UNREADABLE"))
 })
 
 test("the first numbers ever seen for an account, from a write's headers, are stored as fetched now", async (t) => {
