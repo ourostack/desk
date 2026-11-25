@@ -66,7 +66,8 @@ function harness({ idleMs: idle = IDLE, failSpawnAt = [], watchesParent = true }
     clearTimer: (id) => timers.delete(id),
     exit: (code) => exits.push(code),
     signals,
-    kill: (pid, signal) => kills.push(signal),
+    // A signal the proxy raises at itself reaches its own listeners again, as it does in a process; the bound only keeps a regression from recursing for ever.
+    kill: (pid, signal) => { kills.push(signal); if (kills.length < 20) signals.emit(signal) },
     compact: () => compacted.push(clock.now),
   })
 
@@ -441,6 +442,25 @@ test("SIGINT, SIGTERM and SIGHUP go to the running server; with none running the
   await h.flush()
   h.signals.emit("SIGHUP")
   assert.deepEqual(h.kills, ["SIGHUP"])
+})
+
+test("a signal taken by an idle proxy is raised once: its listeners come off first and other listeners stay", async () => {
+  for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
+    const h = harness()
+    const unrelated = []
+    h.signals.on(signal, () => unrelated.push(signal))
+    await handshaken(h)
+    await h.advance(IDLE)
+    h.last().leave(0)
+    await h.flush()
+    assert.equal(h.proxy.running(), false)
+    h.signals.emit(signal)
+    assert.deepEqual(h.kills, [signal])
+    assert.deepEqual(h.exits, [])
+    for (const name of ["SIGINT", "SIGTERM", "SIGHUP"]) assert.equal(h.signals.listenerCount(name), name === signal ? 1 : 0)
+    // The one listener left is the unrelated one, called by the signal the proxy raised and by the first emit.
+    assert.deepEqual(unrelated, [signal, signal])
+  }
 })
 
 test("with the idle time 0 the server is never ended", async () => {
