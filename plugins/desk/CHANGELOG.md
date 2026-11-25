@@ -1,5 +1,13 @@
 # desk plugin — changelog
 
+## 3.2.581 — 2026-11-25
+
+Desk's MCP server now vendors Ouro UI v1.3.567, moved by Ouro Current.
+
+Desk's direct-call spend ledger is safer under concurrency and failure: a token whose account lookup got no answer now holds its reads (`spend_held`) instead of bypassing the quota floor, a token GitHub names no account for is floored on its own answers' numbers and counted by `unattributedSends()`, `<kind>.rate` writes go through a per-window append-only observation log and are read back until they match the lowest remaining, with no lock and no pass limit, and reads are decided from the observations rather than the file (racing processes and out-of-order answers cannot raise remaining), and parallel first calls with one token send a single `GET /user`. See [relays](docs/relays.md#quota).
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.580 — 2026-11-25
 
 Desk's MCP server now vendors Ouro UI v1.3.566, moved by Ouro Current.
