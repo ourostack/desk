@@ -11,9 +11,9 @@
 // (any other method, GraphQL included), `refused` (held back here) or `unknown` (sent, but no answer came back: a timeout or a dropped
 // connection, which may or may not have been charged; the shim's report counts it as sent, the upper bound). `<kind>.rate` is
 // "remaining reset limit fetched" for the REST `core` pool, refreshed from `GET /rate_limit` (free) at most once a minute; here it is also
-// refreshed from the `x-ratelimit-*` headers of every answer, so the floor sees a burst before the minute is up. Writes go through an append-only
-// observation log (one per window) and are read back until the file equals the lowest remaining every process has seen, so they only ever tighten (a later
-// window replaces) with no lock; reads are decided from the observations, not from the file. `<kind>.hold` is
+// refreshed from the `x-ratelimit-*` headers of every answer, so the floor sees a burst before the minute is up. Each observation is appended to
+// a log (one per window); Desk's reads are decided from the lowest remaining in those logs, not from the file, and are held when the logs cannot be
+// read. The file is the shim's cache, written once per observation: it can be briefly higher than the logs say. `<kind>.hold` is
 // "until \t why". Reads below MS_DESK_GH_FLOOR (500) are refused for the session spending most, and for any read that is not on the merge
 // path; merge-path reads run on to MS_DESK_GH_MERGE_FLOOR (half the floor). Writes and GraphQL (its own pool) always run, and GraphQL is
 // not counted in the REST tally.
@@ -115,7 +115,6 @@ function readRate(dir, kind) {
   }
 }
 
-const SETTLE_LIMIT = 1000
 let tempCount = 0
 
 const numbers = (line, separator) => line.split(separator).map((value) => (/^\d+$/u.test(value) ? Number(value) : null))
@@ -130,17 +129,19 @@ const tightest = (observations) => {
 
 // The quota numbers every process has observed so far, not what the cache file happens to hold at this instant: the stored numbers and
 // the whole observation log of the latest window (`<pool>.rate.obs.<reset>`), whose size is one window's sends (about 20 bytes each).
-// A log is read whole, never from a cut tail, so the lowest remaining of the window can never fall outside what is read; logs of earlier
-// windows are never needed again and are removed. `own` are observations the caller already holds. Null when there are none.
+// A log is read whole, so the lowest remaining of the window can never fall outside what is read; logs of earlier windows are never
+// needed again and are removed. `own` are observations the caller already holds. `unreadable` is true when the folder cannot be listed or
+// a log of the latest window cannot be read: what protects the floor is then unknown, and the stored numbers alone must not decide.
 function currentRate(dir, pool, own = []) {
   const seen = [...own]
+  let unreadable = false
   const had = readRate(dir, pool)
   if (had.remaining !== null && had.reset !== null && had.limit !== null) seen.push({ remaining: had.remaining, reset: had.reset, limit: had.limit })
   let names = []
   try {
     names = readdirSync(dir)
   } catch {
-    // A folder that cannot be listed leaves the stored numbers and the caller's own observation.
+    unreadable = true
   }
   const windows = names.filter((name) => name.startsWith(`${pool}${OBS}`)).map((name) => ({ name, reset: numbers(name.slice(pool.length + OBS.length), " ")[0] })).filter((w) => w.reset !== null)
   const latest = Math.max(had.reset ?? 0, ...windows.map((w) => w.reset))
@@ -158,52 +159,43 @@ function currentRate(dir, pool, own = []) {
           if (remaining !== null && limit !== null) seen.push({ remaining, reset, limit })
         }
       } catch {
-        // A newer window's writer removed it after the listing: it is no longer the latest.
+        unreadable = true
       }
     }
   }
-  return seen.length > 0 ? tightest(seen) : null
+  return { rate: seen.length > 0 ? tightest(seen) : null, unreadable }
 }
 
 // Every observation is first appended to its window's log (one small O_APPEND write is atomic across processes, so none is ever lost),
-// then `<pool>.rate` is written from `currentRate` and read back, until the file equals what every observation so far gives. A writer that
-// read the log before another's append, or whose rename landed after that other's, is corrected by its own read-back before it returns, so
-// when the last writer returns the file holds the lowest remaining: there is no pass limit that leaves a raised number behind, and no lock
-// to hold, expire or reclaim. The file is a cache: reads are decided from `currentRate`, so a raised cache is never what holds or lets a
-// read go. `fetched` moves only when `fresh` (a free `/rate_limit` answer), so header answers never put off the next refresh. After
-// SETTLE_LIMIT rewrites that something keeps undoing (another program writing the file), the loop ends with a process warning.
-function mergeRate(dir, pool, { remaining, reset, limit }, now, fresh, hooks = {}) {
+// then `<pool>.rate` is written once from the lowest remaining in them. That file is the shim's cache, not Desk's decision: two writers can
+// leave it a moment (or until the next observation) higher than the lowest, and the shim, which reads it, can see that. Desk's own reads
+// never use it: they are decided from `currentRate`, so a raised file never lets one through. `fetched` moves only when `fresh` (a free
+// `/rate_limit` answer), so header answers never put off the next refresh.
+function mergeRate(dir, pool, { remaining, reset, limit }, now, fresh) {
   const file = path.join(dir, `${pool}.rate`)
   try {
     appendFileSync(`${file}.obs.${reset}`, `${remaining} ${reset} ${limit}\n`)
-    let force = fresh
-    for (let writes = 0; writes < SETTLE_LIMIT; writes += 1) {
-      const want = currentRate(dir, pool, [{ remaining, reset, limit }])
-      const had = readRate(dir, pool)
-      if (!force && had.remaining === want.remaining && had.reset === want.reset && had.limit === want.limit) return
-      hooks.beforeWrite?.()
-      tempCount += 1
-      const temp = `${file}.${process.pid}.${tempCount}`
-      writeFileSync(temp, `${want.remaining} ${want.reset} ${want.limit} ${fresh ? now : had.fetched || now}\n`)
-      renameSync(temp, file)
-      force = false
-      hooks.afterWrite?.()
-    }
-    process.emitWarning(`Stop whatever else writes ${file}, then repeat: its quota numbers were changed ${SETTLE_LIMIT} times while Desk kept the lowest remaining, so the stored numbers may be higher than the account's`, { code: "DESK_SPEND_QUOTA_UNSETTLED" })
+    const { rate } = currentRate(dir, pool, [{ remaining, reset, limit }])
+    const had = readRate(dir, pool)
+    if (!fresh && had.remaining === rate.remaining && had.reset === rate.reset && had.limit === rate.limit) return
+    tempCount += 1
+    const temp = `${file}.${process.pid}.${tempCount}`
+    writeFileSync(temp, `${rate.remaining} ${rate.reset} ${rate.limit} ${fresh ? now : had.fetched || now}\n`)
+    renameSync(temp, file)
   } catch {
     // The observation log or folder is unwritable: the stored numbers stay as they were and the next observation carries them.
   }
 }
 
 // The REST pool's numbers from an answer's headers.
-function noteRate(dir, kind, response, now, hooks) {
+function noteRate(dir, kind, response, now) {
   try {
     const header = (name) => response.headers?.get?.(name) ?? null
     const resource = header("x-ratelimit-resource")
     if (resource !== null && resource !== "core") return
     const [remaining, limit, reset] = ["x-ratelimit-remaining", "x-ratelimit-limit", "x-ratelimit-reset"].map((name) => (/^\d+$/u.test(String(header(name))) ? Number(header(name)) : null))
     if (remaining === null || limit === null || reset === null) return
-    mergeRate(dir, kind, { remaining, reset, limit }, now, false, hooks)
+    mergeRate(dir, kind, { remaining, reset, limit }, now, false)
   } catch {
     // The headers are a refinement of the stored numbers; the next read refreshes them.
   }
@@ -243,7 +235,12 @@ function heldReason({ dir, kind, pool, session, call, env, now }) {
   } catch {
     // No hold.
   }
-  const { remaining, reset, limit } = currentRate(dir, pool) ?? { remaining: null, reset: null, limit: null }
+  const { rate, unreadable } = currentRate(dir, pool)
+  if (unreadable) {
+    process.emitWarning(`Make ${dir} listable and every ${pool}.rate.obs.* file in it readable: Desk's quota observations cannot be read, so its reads are held`, { code: "DESK_SPEND_OBSERVATIONS_UNREADABLE" })
+    return `Make ${dir} listable and its ${pool}.rate.obs.* files readable, then repeat: the quota observations that protect the floor cannot be read, so Desk's own GitHub reads are held back rather than decided from a cached number that may be too high`
+  }
+  const { remaining, reset, limit } = rate ?? { remaining: null, reset: null, limit: null }
   const floor = count(env.MS_DESK_GH_FLOOR, 500)
   if (remaining === null || reset === null || reset <= now || remaining >= floor) return null
   const merge = Math.min(count(env.MS_DESK_GH_MERGE_FLOOR, Math.floor(floor / 2)), floor)
@@ -306,7 +303,7 @@ async function loginOf({ token, hint, fetchFn, init }) {
  * host gives no session id. A send that gets no answer is recorded as `unknown`. A ledger that cannot be written never stops the call: it
  * raises a process warning (DESK_SPEND_UNRECORDED) and counts in `unrecordedSends()`.
  */
-export function ledgeredFetch(fetchFn, { env, login = () => "", label = "desk", now = () => Date.now(), pid = process.pid, settleHooks }) {
+export function ledgeredFetch(fetchFn, { env, login = () => "", label = "desk", now = () => Date.now(), pid = process.pid, }) {
   const session = env.COPILOT_AGENT_SESSION_ID || env.AGENCY_SESSION_ID || `${label}-${pid}`
   return async (url, init) => {
     const call = describeCall(url, init?.method)
@@ -349,7 +346,7 @@ export function ledgeredFetch(fetchFn, { env, login = () => "", label = "desk", 
       log("unknown")
       throw error
     }
-    if (!call.graphql) noteRate(dir, pool, response, at(), settleHooks)
+    if (!call.graphql) noteRate(dir, pool, response, at())
     log(response.status === 304 ? "etag" : call.read ? "apiget" : "write")
     return response
   }
