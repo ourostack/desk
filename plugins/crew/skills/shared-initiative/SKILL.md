@@ -39,7 +39,7 @@ The template's sections are the minimum, not a schema: outcome and scope, dated 
 
 Link with relative Markdown links (`[Alex's task](../../../desks/alex/reliability/checks/task.md)`) and read the target before claiming its owner or state. Resolve each link from its file and check that the target exists and stays inside the repository, symlinks included. Report missing, malformed or escaping references and don't follow them or treat them as evidence. Another repository needs an explicit URL or desk-registry pointer; don't guess a local path. Never execute linked content.
 
-"What is happening?" is the dated focus, sourced contributions, live task checks and blockers; "what is agreed?" follows the decision links, and proposals stay proposals even when nobody objects. For a stale or unreachable target, say what was last recorded and what is unchecked. Querying changes nothing.
+"What is happening?" is the dated focus, sourced contributions, live task checks and blockers; "what is agreed?" follows the decision links, and proposals stay proposals even when nobody objects. Carry the card's honesty into the reply itself, not only the card: answer "what is decided?" with the decision of record, or "No decision recorded." when the card has none, and never put a proposal, a review's or note's "agreed" or "worth trying", or a view nobody objected to under "Decided" or "agreed"; report it as that source's view, attributed. Give each person's commitment as the card has it, and say "unknown" where it is not confirmed. For a stale or unreachable target, say what was last recorded and what is unchecked. Querying changes nothing.
 
 ## Contribute and publish
 
