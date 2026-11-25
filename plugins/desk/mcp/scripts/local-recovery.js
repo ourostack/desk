@@ -406,7 +406,7 @@ export async function runRecovery({
         : commitExpected && report.effects.commit !== "observed" ? "commit_not_observed"
         : logPending ? "commit_queued"
         : report.effects.log === "unknown" ? "log_evidence_unknown"
-        : report.effects.push === "pending" ? "push_pending" : "commit_not_observed"
+        : "push_pending"
       exitCode = 2
     } else {
       report.status = "completed"
