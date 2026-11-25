@@ -12,6 +12,7 @@ import * as os from "node:os"
 import * as path from "node:path"
 import { deskFailure } from "./desk-failure.js"
 import { assertNotRealStateUnderTest } from "./test-state-guard.js"
+import { activeLogin, ledgeredFetch, SpendHeld } from "./spend-ledger.js"
 
 /** A drain's own status comment carries this marker, so its creation and edits do not wake the drain again. */
 export const DRAIN_STATUS_MARKER = "<!-- ouro-drain-status -->"
@@ -1069,8 +1070,14 @@ function failedAnswer(status, route) {
   return Object.assign(new Error(`Read GitHub's answer, then fix its cause: GitHub refused the request with HTTP ${status} for ${route}; that is not by itself a credential problem`), { code: "drains_github_refused", status })
 }
 
+// A read held under the quota floor stops the poll the way the quota running out does, and the next poll tries again.
+function heldAsRateLimit(error) {
+  if (!(error instanceof SpendHeld)) throw error
+  throw Object.assign(new Error(error.message), { code: "drains_rate_limited", status: 429, rateLimited: true })
+}
+
 /** The drain's GitHub access: its account's token from the `gh` CLI, then the REST API. `login` skips asking GitHub who the token is. */
-export async function connectGithub(account, { spawn = spawnSync, fetchImpl = fetch, env = process.env, login: knownLogin, pauseMs = TOKEN_PAUSE_MS } = {}) {
+export async function connectGithub(account, { spawn = spawnSync, fetchImpl: rawFetch = fetch, env = process.env, login: knownLogin, pauseMs = TOKEN_PAUSE_MS } = {}) {
   const tokenArgs = ["auth", "token", "--hostname", "github.com", ...(account ? ["--user", account] : [])]
   const cleaned = { ...env, PATH: ["/opt/homebrew/bin", "/usr/local/bin", env.PATH].filter(Boolean).join(":") }
   for (const name of ["GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GH_HOST"]) delete cleaned[name]
@@ -1088,6 +1095,8 @@ export async function connectGithub(account, { spawn = spawnSync, fetchImpl = fe
   }
   if (!token && transient) throw Object.assign(new Error(`Wait for the next poll, which reads the token again: the GitHub CLI's token read for ${account ?? "its active account"} gave no answer, probably because the keyring was busy or slow (${transient.slice(0, 160)})`), { code: "drains_github_cli_token_unavailable", transient: true })
   if (!token) throw Object.assign(new Error(`Sign in the GitHub CLI: the GitHub CLI has no token for ${account ?? "its active account"} (run \`gh auth login --hostname github.com\`)`), { code: "drains_sign_in_the_github_cli" })
+  // Every answer is also one line in the host's gh spend ledger (when it has one), and a read is held under its quota floor.
+  const fetchImpl = ledgeredFetch(rawFetch, { env, login: () => account || knownLogin || activeLogin(env), label: "desk-drain" })
   // What this connection spent and what GitHub says is left in the account's window; a 304 answer costs nothing against it.
   const meter = { total: 0, notModified: 0, quota: null, graphqlQuota: null, graphqlCost: 1 }
   // A read that GitHub answers with a 5xx is asked once more, at once: its own server failing usually clears. Only reads are repeated, never a write.
@@ -1104,7 +1113,7 @@ export async function connectGithub(account, { spawn = spawnSync, fetchImpl = fe
     const response = await readTwice(`https://api.github.com${route}`, () => ({
       headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json", "User-Agent": "desk-issue-drains", ...(etag ? { "If-None-Match": etag } : {}) },
       signal: AbortSignal.timeout(30_000),
-    }))
+    })).catch(heldAsRateLimit)
     const remaining = response.headers.get("x-ratelimit-remaining")
     if (remaining !== null && response.headers.get("x-ratelimit-resource") !== "graphql") meter.quota = { remaining: Number(remaining), limit: Number(response.headers.get("x-ratelimit-limit")), reset: Number(response.headers.get("x-ratelimit-reset")), at: new Date().toISOString() }
     if (response.status === 304) {
