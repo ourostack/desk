@@ -1032,7 +1032,9 @@ test("a card whose record cannot be written, and whose commit cannot be read bac
 // Crew in a temp folder, with its own HOME, XDG folders and Git config, no credentials and no default desk, so nothing of the machine's is read or written.
 async function sealed(run) {
   const home = mkdtempSync(path.join(tmpdir(), "desk-sealed-home-"))
-  const clean = { PATH: process.env.PATH, TMPDIR: tmpdir(), HOME: home, USERPROFILE: home, XDG_CONFIG_HOME: path.join(home, "config"), XDG_STATE_HOME: path.join(home, "state"), XDG_CACHE_HOME: path.join(home, "cache"), GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1", GIT_TERMINAL_PROMPT: "0" }
+  // Windows finds its temp folder and system programs through TEMP/TMP and SystemRoot, so those operating-system variables are kept; nothing else is inherited.
+  const platform = Object.fromEntries(["SystemRoot", "windir"].filter((key) => process.env[key] !== undefined).map((key) => [key, process.env[key]]))
+  const clean = { ...platform, PATH: process.env.PATH, TMPDIR: tmpdir(), TMP: tmpdir(), TEMP: tmpdir(), HOME: home, USERPROFILE: home, XDG_CONFIG_HOME: path.join(home, "config"), XDG_STATE_HOME: path.join(home, "state"), XDG_CACHE_HOME: path.join(home, "cache"), GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1", GIT_TERMINAL_PROMPT: "0" }
   const saved = { ...process.env }
   for (const key of Object.keys(process.env)) delete process.env[key]
   Object.assign(process.env, clean)
