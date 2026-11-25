@@ -869,6 +869,12 @@ console.log(logCommitState(${JSON.stringify(root)}, process.env, "work/one/log.m
   assert.equal(out.stdout.trim(), "unknown")
 })
 
+test("a log removed between the walk and the open is unknown without hashing", async () => {
+  const { root, state, hashed } = await scene()
+  assert.equal(state({ afterWalk: () => unlinkSync(path.join(root, "work/one/log.md")) }), "unknown")
+  assert.equal(hashed(), 0)
+})
+
 test("a log changed while Git reads it is unknown", async () => {
   const { root, state } = await scene()
   assert.equal(state({ afterHash: () => writeFileSync(path.join(root, "work/one/log.md"), `${LOG_TEXT}appended\n`) }), "unknown")
