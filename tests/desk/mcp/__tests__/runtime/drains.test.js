@@ -553,7 +553,7 @@ test("the timeline is read only when updated_at moved with nothing else news, an
   w.timeline = async (...args) => { calls.push(args); return timeline(...args) }
   const out = await w.poll()
   assert.deepEqual(out.wakes, [])
-  assert.deepEqual(calls, [["acme/widgets", 1]])
+  assert.deepEqual(calls, [["acme/widgets", 1, T(0)]], "only what is newer than the last marker is asked for")
   // A real change is found without it.
   w.issues[0] = issue(1, T(9), "Issue 1", "edited")
   await w.poll()
@@ -2673,4 +2673,189 @@ test("only a 401 is worded as a credential problem; other refusals and an unread
   assert.equal(forbidden.asked.length, 1)
   const unauthorized = await connect([response({}, { status: 401 })])
   await assert.rejects(unauthorized.api.openIssues("o/r"), (error) => error.code === "drains_check_gh_auth_status_then" && /token was refused/u.test(error.message))
+})
+
+// ── Bounded history reads (#1798): a fake GitHub over HTTP that serves oldest-first pages and counts the real requests ──
+
+function historyGithub({ histories, issues }) {
+  const log = []
+  const failures = new Set()
+  const page = (list, url) => {
+    const number = Number(new URL(url).searchParams.get("page"))
+    const last = Math.max(1, Math.ceil(list.length / 100))
+    const link = [number < last ? `<https://api.github.com/x?page=${number + 1}>; rel="next"` : null, last > 1 ? `<https://api.github.com/x?per_page=100&page=${last}>; rel="last"` : null].filter(Boolean).join(", ")
+    return response(list.slice((number - 1) * 100, number * 100), { link: link || null })
+  }
+  const fetchImpl = async (url) => {
+    const { pathname, searchParams } = new URL(url)
+    if (pathname === "/graphql") return response({ data: {} })
+    log.push(`${pathname}?page=${searchParams.get("page")}`)
+    const [, , , , , number, kind] = pathname.split("/")
+    if (failures.has(`${kind}:${searchParams.get("page")}`)) return response({}, { status: 502 })
+    if (pathname === "/repos/o/r/issues") {
+      const since = searchParams.get("since")
+      return response(issues().filter((item) => searchParams.get("state") === "all" ? !since || item.updated_at >= since : item.state === "open"))
+    }
+    if (kind === "comments") return page(histories[number].comments.filter((item) => item.updated_at >= (searchParams.get("since") ?? "")), url)
+    return page(histories[number][kind], url)
+  }
+  const history = () => log.filter((line) => /\/issues\/\d+\/(events|timeline|comments)/u.test(line))
+  return { fetchImpl, log, history, failures }
+}
+
+const linked = (created_at, number, repo = "other/repo") => ({ event: "cross-referenced", created_at, source: { issue: { number, repository_url: `https://api.github.com/repos/${repo}` } } })
+
+test("history reads follow what is new, not how long the issue's history is, and a failed read keeps its wake pending", async () => {
+  const at = (index) => new Date(Date.parse("2026-11-01T00:00:00Z") + index * 60_000).toISOString().replace(".000", "")
+  const noise = (count) => Array.from({ length: count }, (_, index) => ({ id: index, event: "milestoned", created_at: at(index) }))
+  const long = { comments: [], events: noise(450), timeline: noise(450) }
+  const state = { open: [{ number: 7, title: "Long", body: "b", state: "open", updated_at: at(500) }], closed: { number: 9, title: "Done", body: "b", state: "closed", updated_at: at(500) } }
+  const world = historyGithub({ histories: { 3: { comments: [] }, 7: long, 9: { comments: [], events: noise(450), timeline: noise(450) } }, issues: () => [...state.open, ...(state.closed ? [state.closed] : [])] })
+  const connect = (account, { login }) => connectGithub(account, { spawn: () => ({ status: 0, stdout: "tok" }), fetchImpl: world.fetchImpl, env: { PATH: "/bin" }, login })
+  const states = {}
+  const drain = { repo: "o/r", account: "maintainer", session: "s" }
+  const poll = async (minutes) => {
+    world.log.length = 0
+    await pollDrain(drain, states, { connect, now: NOW + minutes * 60_000 })
+    return states["o/r"]
+  }
+  await poll(0)
+  assert.equal(states["o/r"].seeded, true)
+
+  // The issue is closed afterwards and keeps changing: its history is never read.
+  state.closed = { ...state.closed, updated_at: at(510) }
+  await poll(1)
+  assert.deepEqual(world.history(), [], "a closed issue's history is not read")
+
+  // A change with nothing news in it: the newest page of the events and of the timeline is read, not all five of each.
+  const since = at(500)
+  long.events.push({ id: 900, event: "milestoned", created_at: at(520) })
+  long.timeline.push(...[{ event: "commented", created_at: at(520) }, linked(at(521), 3)])
+  state.open = [{ ...state.open[0], updated_at: at(521) }]
+  world.failures.add("timeline:5")
+  const failed = await poll(2)
+  const failedReads = world.history()
+  assert.ok(failedReads.every((line) => /page=[15]$/u.test(line)) && failedReads.some((line) => line.includes("/timeline?page=5")), `reads stay at the ends of the lists: ${failedReads}`)
+  assert.equal(failed.seen[7].updatedAt, since, "the marker stays where it was, so the same change is judged again")
+  assert.match(failed.lastError, /left for it/u)
+  assert.equal(failed.pending.length, 0, "a read that failed is not a quiet success")
+
+  world.failures.clear()
+  const recovered = await poll(3)
+  assert.equal(world.log.some((line) => line.includes("/repos/other/repo/issues/3/comments") && !line.endsWith("page=1")), false)
+  const reads = world.history()
+  assert.deepEqual(reads, ["comments?page=1", "events?page=1", "events?page=5", "timeline?page=1", "timeline?page=5"].map((tail) => `/repos/o/r/issues/7/${tail}`).concat(["/repos/o/r/issues/7/comments?page=1", "/repos/other/repo/issues/3/comments?page=1"]), "the first and last page of each list, never the pages between, then one page of comments to tell whose cross-reference it is")
+  assert.equal(recovered.pending.length, 1)
+  assert.match(recovered.pending[0].why, /cross-reference from other\/repo#3/u)
+  assert.equal(recovered.seen[7].updatedAt, at(521))
+  assert.equal(recovered.lastError, undefined)
+})
+
+test("recent reads stop at the first page that reaches back far enough, and read whole a list whose end GitHub does not name", async () => {
+  const urls = []
+  const stamped = Array.from({ length: 250 }, (_, index) => ({ id: index, created_at: new Date(Date.parse("2026-11-01T00:00:00Z") + index * 60_000).toISOString() }))
+  const serve = (named) => async (url) => {
+    urls.push(url)
+    const number = Number(new URL(url).searchParams.get("page"))
+    const link = [number < 3 ? `<https://api.github.com/x?page=${number + 1}>; rel="next"` : null, named ? '<https://api.github.com/x?per_page=100&page=3>; rel="last"' : null].filter(Boolean).join(", ")
+    return response(stamped.slice((number - 1) * 100, number * 100), { link: link || null })
+  }
+  const connect = (named) => connectGithub("maintainer", { spawn: () => ({ status: 0, stdout: "tok" }), fetchImpl: serve(named), env: { PATH: "/bin" }, login: "maintainer" })
+  const since = stamped[150].created_at
+  const named = await connect(true)
+  assert.equal((await named.issueEvents("o/r", 5, since)).length, 150, "pages 2 and 3 reach back to the time; page 1 is not read again")
+  assert.deepEqual(urls.map((url) => new URL(url).searchParams.get("page")), ["1", "3", "2"])
+  urls.length = 0
+  const unnamed = await connect(false)
+  assert.equal((await unnamed.timeline("o/r", 5, since)).length, 250)
+  assert.deepEqual(urls.map((url) => new URL(url).searchParams.get("page")), ["1", "1", "2", "3"], "no `last` link: the whole list, as before")
+  urls.length = 0
+  assert.equal((await named.comments("o/r", 5, "1970-01-01T00:00:00Z", (page) => page.some((item) => item.id === 150))).length, 150)
+  assert.deepEqual(urls.map((url) => new URL(url).searchParams.get("page")), ["1", "3", "2"], "a bot comment's previous one is found without reading the oldest pages")
+  urls.length = 0
+  assert.equal((await named.issueEvents("o/r", 5, "1970-01-01T00:00:00Z")).length, 250, "a time older than the whole list reads all of it, page 1 from the first answer")
+  assert.deepEqual(urls.map((url) => new URL(url).searchParams.get("page")), ["1", "3", "2"])
+})
+
+test("a reopen by the drain's own claim is still recognised when the claim sits on the page before the last one read", async () => {
+  const at = (index) => new Date(Date.parse("2026-11-01T00:00:00Z") + index * 1000).toISOString().replace(".000", "")
+  const events = Array.from({ length: 201 }, (_, index) => ({ id: index, event: "milestoned", created_at: at(index) }))
+  // Page 2 ends with the drain's claim; page 3 starts with an old event (the revision's second), so the last page alone reaches back to the revision.
+  events[199] = { id: 199, event: "labeled", label: { name: "drain:claimed" }, actor: { login: "maintainer" }, created_at: at(199) }
+  events.push({ id: 500, event: "reopened", actor: { login: "maintainer" }, created_at: at(230) })
+  const world = historyGithub({ histories: { 7: { comments: [], events, timeline: [] } }, issues: () => [{ number: 7, title: "T", body: "b", state: "open", updated_at: at(231) }] })
+  const connect = (account, { login }) => connectGithub(account, { spawn: () => ({ status: 0, stdout: "tok" }), fetchImpl: world.fetchImpl, env: { PATH: "/bin" }, login })
+  const states = { "o/r": { seeded: true, seen: { 7: { updatedAt: at(200), digest: createHash("sha1").update("T\nb").digest("hex").slice(0, 16), title: "T" } }, pending: [], turns: [] } }
+  await pollDrain({ repo: "o/r", account: "maintainer", session: "s" }, states, { connect, now: Date.parse(at(240)) })
+  assert.equal(states["o/r"].lastError, undefined)
+  assert.deepEqual(states["o/r"].pending, [], "the claim one minute before the reopen is found on page 2, so the reopen is the drain's own")
+  assert.ok(world.history().some((line) => line.endsWith("events?page=2")))
+})
+
+test("recent follows the link on the last page it was told of, so an item added to a new page after the first answer is still read", async () => {
+  const urls = []
+  const stamped = Array.from({ length: 350 }, (_, index) => ({ id: index, created_at: new Date(Date.parse("2026-11-01T00:00:00Z") + index * 60_000).toISOString() }))
+  const fetchImpl = async (url) => {
+    urls.push(url)
+    const number = Number(new URL(url).searchParams.get("page"))
+    // The first answer names page 3 as the last; by the time page 3 is read, page 4 exists.
+    const link = [number < 4 ? `<https://api.github.com/x?page=${number + 1}>; rel="next"` : null, `<https://api.github.com/x?per_page=100&page=${number === 1 ? 3 : 4}>; rel="last"`].filter(Boolean).join(", ")
+    return response(stamped.slice((number - 1) * 100, number * 100), { link })
+  }
+  const api = connectGithub("maintainer", { spawn: () => ({ status: 0, stdout: "tok" }), fetchImpl, env: { PATH: "/bin" }, login: "maintainer" })
+  const items = await (await api).timeline("o/r", 5, stamped[250].created_at)
+  assert.ok(items.some((item) => item.id === 349), "the reference on page 4 is read")
+  assert.deepEqual(urls.map((url) => new URL(url).searchParams.get("page")), ["1", "3", "4"], "page 3 reaches back far enough, so page 2 is not read")
+})
+
+test("a cross-reference is attributed from the end of a long comment history, and an unreadable comment page never hides it", async () => {
+  const at = (index) => new Date(Date.parse("2026-11-01T00:00:00Z") + index * 1000).toISOString().replace(".000", "")
+  const comments = Array.from({ length: 150 }, (_, index) => ({ id: index, user: { login: "someone" }, body: "hi", created_at: at(index), updated_at: at(index) }))
+  comments[120] = { ...comments[120], user: { login: "maintainer" }, body: "<!-- ouro-drain-status --> working on #99" }
+  const world = historyGithub({ histories: { 3: { comments: [] }, 7: { comments, events: [], timeline: [linked(at(300), 3)] } }, issues: () => [{ number: 7, title: "T", body: "b", state: "open", updated_at: at(301) }] })
+  const connect = (account, { login }) => connectGithub(account, { spawn: () => ({ status: 0, stdout: "tok" }), fetchImpl: world.fetchImpl, env: { PATH: "/bin" }, login })
+  const run = async () => {
+    world.log.length = 0
+    const states = { "o/r": { seeded: true, seen: { 7: { updatedAt: at(200), digest: createHash("sha1").update("T\nb").digest("hex").slice(0, 16), title: "T" } }, pending: [], turns: [] } }
+    await pollDrain({ repo: "o/r", account: "maintainer", session: "s" }, states, { connect, now: Date.parse(at(310)) })
+    return states["o/r"]
+  }
+  const read = await run()
+  assert.match(read.pending[0]?.why ?? "", /cross-reference from other\/repo#3/u)
+  assert.ok(world.history().includes("/repos/o/r/issues/7/comments?page=2"), "the own-comment lookup starts at the last page")
+  world.failures.add("comments:2")
+  const failed = await run()
+  assert.match(failed.pending[0]?.why ?? "", /cross-reference from other\/repo#3/u, "a comment page that cannot be read is not evidence the drain caused the reference")
+})
+
+test("a bot comment that repeats the bot's previous one is noise, found by reading the comment history from its end", async () => {
+  const at = (index) => new Date(Date.parse("2026-11-01T00:00:00Z") + index * 1000).toISOString().replace(".000", "")
+  const comments = Array.from({ length: 150 }, (_, index) => ({ id: index, user: { login: "ci[bot]", type: "Bot" }, body: "build passed", created_at: at(index), updated_at: at(index) }))
+  const world = historyGithub({ histories: { 7: { comments, events: [], timeline: [] } }, issues: () => [{ number: 7, title: "T", body: "b", state: "open", updated_at: at(251) }] })
+  const connect = (account, { login }) => connectGithub(account, { spawn: () => ({ status: 0, stdout: "tok" }), fetchImpl: world.fetchImpl, env: { PATH: "/bin" }, login })
+  const states = { "o/r": { seeded: true, seen: { 7: { updatedAt: at(125), digest: createHash("sha1").update("T\nb").digest("hex").slice(0, 16), title: "T" } }, pending: [], turns: [] } }
+  await pollDrain({ repo: "o/r", account: "maintainer", session: "s" }, states, { connect, now: Date.parse(at(260)) })
+  assert.equal(states["o/r"].lastError, undefined)
+  assert.deepEqual(states["o/r"].pending, [])
+  const commentReads = world.history().filter((line) => line.includes("/issues/7/comments"))
+  assert.ok(commentReads.length <= 3, `the 24 repeated bot comments share one bounded lookup, not one each: ${commentReads.length} comment requests`)
+})
+
+test("repeated bot comments from two authors each find their own previous comment, reading further back when the shared tail lacks it", async () => {
+  const at = (index) => new Date(Date.parse("2026-11-01T00:00:00Z") + index * 1000).toISOString().replace(".000", "")
+  const run = async (newBody) => {
+    const comments = Array.from({ length: 150 }, (_, index) => ({ id: index, user: { login: "ci[bot]", type: "Bot" }, body: "build passed", created_at: at(index), updated_at: at(index) }))
+    // ci-two's only earlier comment (99) is on page 1, which the page-2 tail read does not reach; its new comment is the last one.
+    comments[99] = { ...comments[99], user: { login: "ci-two[bot]", type: "Bot" }, body: "other" }
+    comments[149] = { ...comments[149], user: { login: "ci-two[bot]", type: "Bot" }, body: newBody }
+    const world = historyGithub({ histories: { 7: { comments, events: [], timeline: [] } }, issues: () => [{ number: 7, title: "T", body: "b", state: "open", updated_at: at(251) }] })
+    const connect = (account, { login }) => connectGithub(account, { spawn: () => ({ status: 0, stdout: "tok" }), fetchImpl: world.fetchImpl, env: { PATH: "/bin" }, login })
+    const states = { "o/r": { seeded: true, seen: { 7: { updatedAt: at(125), digest: createHash("sha1").update("T\nb").digest("hex").slice(0, 16), title: "T" } }, pending: [], turns: [] } }
+    await pollDrain({ repo: "o/r", account: "maintainer", session: "s" }, states, { connect, now: Date.parse(at(260)) })
+    return { pending: states["o/r"].pending }
+  }
+  const quiet = await run("other")
+  assert.deepEqual(quiet.pending, [], "repeating its own previous text is quiet, found on the older page")
+  const wakes = await run("build passed")
+  assert.match(wakes.pending[0]?.why ?? "", /comment 149 by ci-two\[bot\]/u, "it matches the other author's previous text, not its own")
 })
