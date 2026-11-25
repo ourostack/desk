@@ -7,23 +7,32 @@ import { randomUUID } from "node:crypto"
 import { existsSync, mkdtempSync, readFileSync, readdirSync, realpathSync, utimesSync, writeFileSync, mkdirSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
+import { fileURLToPath } from "node:url"
 
 import { finishCommit, runFinishCommitCli } from "../../../../../plugins/desk/mcp/src/util/finish-commit.js"
 import { commitIndexPaths, commitPaths, indexEntries } from "../../../../../plugins/desk/mcp/src/util/git-stage.js"
 import { commitFailure, commitFailureWords, commitRoute, heldFileRouteFor } from "../../../../../plugins/desk/mcp/src/util/route-around.js"
 import { CAPTURE_DIR, readCaptureRecord, writeCaptureRecord } from "../../../../../plugins/desk/mcp/src/util/capture-record.js"
+import { removeTreeSync } from "../_remove_tree.js"
 import { installCardGuard, TOOL_COMMIT_ENV } from "../../../../../plugins/desk/mcp/src/desk/card-commit-guard.js"
 
 const env = (() => { const { [TOOL_COMMIT_ENV]: _drop, ...rest } = process.env; return rest })()
 
+// Set only while sealed() runs: the exact clean environment, never merged with the one captured at import.
+let sealedEnv = null
+const owned = []
+// The removal sealed() performs; a test swaps it to make one named root fail deterministically.
+let removeRoot = (dir) => removeTreeSync(dir)
+
 function git(root, args, options = {}) {
-  const result = spawnSync("git", ["-C", root, ...args], { encoding: "utf8", env, ...options })
+  const result = spawnSync("git", ["-C", root, ...args], { encoding: "utf8", env: sealedEnv ?? env, ...options })
   assert.equal(result.status, 0, `git ${args.join(" ")}: ${result.stderr}`)
   return result.stdout
 }
 
 function repo() {
   const root = realpathSync(mkdtempSync(path.join(tmpdir(), "finish-commit-")))
+  if (sealedEnv) owned.push(root)
   git(root, ["init", "-q", "-b", "main"])
   git(root, ["config", "user.name", "t"])
   git(root, ["config", "user.email", "t@example.com"])
@@ -1017,4 +1026,277 @@ test("a card whose record cannot be written, and whose commit cannot be read bac
   const route = commitRoute({ root: "/desk", paths: ["t/x.md"], message: "m", readback: "unknown", card: "t/x", capture })
   assert.equal(route.held, true)
   assert.match(route.summary, /^Desk cannot tell whether its commit of the card t\/x landed/u)
+})
+
+// #1724: a card commit failed, other work then advanced HEAD by many commits, and the card stayed staged. Everything below runs on a synthetic
+// Crew in a temp folder, with its own HOME, XDG folders and Git config, no credentials and no default desk, so nothing of the machine's is read or written.
+async function sealed(run) {
+  const home = mkdtempSync(path.join(tmpdir(), "desk-sealed-home-"))
+  // Windows finds its temp folder and system programs through TEMP/TMP and SystemRoot, so those operating-system variables are kept; nothing else is inherited.
+  const platform = Object.fromEntries(["SystemRoot", "windir"].filter((key) => process.env[key] !== undefined).map((key) => [key, process.env[key]]))
+  const clean = { ...platform, PATH: process.env.PATH, TMPDIR: tmpdir(), TMP: tmpdir(), TEMP: tmpdir(), HOME: home, USERPROFILE: home, XDG_CONFIG_HOME: path.join(home, "config"), XDG_STATE_HOME: path.join(home, "state"), XDG_CACHE_HOME: path.join(home, "cache"), GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1", GIT_TERMINAL_PROMPT: "0" }
+  const saved = { ...process.env }
+  for (const key of Object.keys(process.env)) delete process.env[key]
+  Object.assign(process.env, clean)
+  sealedEnv = clean
+  owned.push(home)
+  let failed = null
+  try {
+    return await run(clean)
+  } catch (error) {
+    failed = error
+    throw error
+  } finally {
+    sealedEnv = null
+    try {
+      // A root that cannot be removed stays registered and is reported, never dropped from the list.
+      const left = []
+      for (const dir of owned.splice(0)) {
+        try { removeRoot(dir) } catch { left.push(dir) }
+      }
+      owned.push(...left)
+      if (left.length > 0) {
+        const note = `sealed fixture roots could not be removed and remain: ${left.join(", ")}`
+        if (failed === null) throw new Error(note)
+        process.stderr.write(`${note}\n`)
+      }
+    } finally {
+      for (const key of Object.keys(process.env)) delete process.env[key]
+      Object.assign(process.env, saved)
+    }
+  }
+}
+
+const ARI_CARD = "desks/ari/greenhouse/watering-api"
+
+// A Crew desk with two members. Ari's new card is staged and its commit failed (as task_create does it, from the card's own folder); Bo has a staged and an edited card of their own.
+function strandedCreate(clean) {
+  const root = repo()
+  for (const dir of ["_meta", "desks/ari/greenhouse/seed", "desks/bo/orchard/pruning"]) mkdirSync(path.join(root, dir), { recursive: true })
+  writeFileSync(path.join(root, "_meta", "keep.md"), "x\n")
+  writeFileSync(path.join(root, "desks/ari/greenhouse/seed/task.md"), "---\ntitle: seed\nstatus: processing\n---\n\nseed\n")
+  writeFileSync(path.join(root, "desks/bo/orchard/pruning/task.md"), "---\ntitle: pruning\nstatus: processing\n---\n\nbo v1\n")
+  git(root, ["add", "-A"])
+  git(root, ["commit", "-q", "-m", "seed"])
+  installCardGuard(root)
+  mkdirSync(path.join(root, ARI_CARD), { recursive: true })
+  writeFileSync(path.join(root, ARI_CARD, "task.md"), "---\ntitle: watering\nstatus: drafting\n---\n\nnew card\n")
+  const dir = path.join(root, ARI_CARD)
+  const committed = capturedFailure(dir, ["task.md"], "task_create: greenhouse/watering-api", refused)
+  const failure = commitFailure({ root: dir, paths: ["task.md"], message: "task_create: greenhouse/watering-api", committed, card: "greenhouse/watering-api", deskRoot: root })
+  assert.ok(failure.route_around.steps[1].argv, JSON.stringify(failure))
+  const finish = failure.route_around.steps[1].argv.slice(2)
+  const records = path.join(clean.XDG_STATE_HOME, "ouroboros-skills", "desk", CAPTURE_DIR)
+  return { root, dir, finish, records, recorded: clean }
+}
+
+// Unrelated commits, as another session or another member makes them, written without touching the index or the working tree.
+function advance(root, count) {
+  for (let i = 0; i < count; i++) {
+    const tree = git(root, ["rev-parse", "HEAD^{tree}"]).trim()
+    const commit = git(root, ["commit-tree", "-p", "HEAD", "-m", `theirs ${i}`, tree]).trim()
+    git(root, ["update-ref", "refs/heads/main", commit])
+  }
+}
+
+for (const count of [3, 50, 51, 120]) {
+  test(`a stranded card create is finished once after ${count} unrelated commits, leaving a teammate's staged and edited card as it was`, () => sealed(async (clean) => {
+    const { root, dir, finish, records, recorded } = strandedCreate(clean)
+    const bo = "desks/bo/orchard/pruning/task.md"
+    writeFileSync(path.join(root, bo), "---\ntitle: pruning\nstatus: processing\n---\n\nbo v2 staged\n")
+    git(root, ["add", bo])
+    writeFileSync(path.join(root, bo), "---\ntitle: pruning\nstatus: processing\n---\n\nbo v3 unstaged\n")
+    advance(root, count)
+    const mine = head(root)
+    const theirs = snapshot(root, [bo])
+    const check = finish.filter((arg) => arg !== "--commit")
+    assert.equal((await runRecorded(check, { recorded })).code, 3, "the read says ready")
+    assert.equal(head(root), mine)
+    const done = await runRecorded(finish, { recorded })
+    assert.equal(done.code, 0, JSON.stringify(done.answer))
+    assert.equal(done.answer.state, "finished")
+    assert.equal(git(root, ["rev-parse", "HEAD~1"]).trim(), mine, "one commit, on the HEAD it read")
+    assert.equal(git(root, ["show", "--name-only", "--format=", "HEAD"]).trim(), `${ARI_CARD}/task.md`, "only Ari's card")
+    assert.deepEqual(snapshot(root, [bo]).index, theirs.index, "Bo's staged entry is as it was")
+    assert.equal(snapshot(root, [bo]).cached, theirs.cached)
+    assert.equal(snapshot(root, [bo]).worktree, theirs.worktree, "Bo's working bytes are as they were")
+    assert.equal(git(root, ["status", "--porcelain", "--", `${ARI_CARD}/task.md`]), "", "the card is clean, so task_update no longer refuses it")
+    assert.deepEqual(readdirSync(records), [], "the record is removed")
+    const again = await runRecorded(finish, { recorded })
+    assert.equal(again.answer.state, "held", "its record is gone, so a second finish commits nothing")
+    assert.equal(git(root, ["rev-parse", "HEAD~1"]).trim(), mine)
+    assert.ok(dir)
+  }))
+}
+
+test("a stranded card create stays unknown and changes nothing when more than 50 new commits touch the card", () => sealed(async (clean) => {
+  const { root, finish, records, recorded } = strandedCreate(clean)
+  const card = `${ARI_CARD}/task.md`
+  for (let i = 0; i < 51; i++) {
+    writeFileSync(path.join(root, card), `---\ntitle: watering\nstatus: drafting\n---\n\nother ${i}\n`)
+    git(root, ["add", card])
+    git(root, ["commit", "-q", "-m", `other ${i}`, "--", card], { env: { ...process.env, [TOOL_COMMIT_ENV]: "1" } })
+  }
+  const before = snapshot(root, [card])
+  const answer = await runRecorded(finish, { recorded })
+  assert.equal(answer.code, 5, JSON.stringify(answer.answer))
+  assert.equal(answer.answer.state, "unknown")
+  assert.deepEqual(snapshot(root, [card]), before)
+  assert.equal(readdirSync(records).length, 1, "the record stays")
+}))
+
+test("a stranded card create is unknown, not finished, when another commit changed the card's bytes, after any number of unrelated commits", () => sealed(async (clean) => {
+  const { root, finish, records, recorded } = strandedCreate(clean)
+  const card = `${ARI_CARD}/task.md`
+  const index = git(root, ["rev-parse", `:${card}`]).trim()
+  git(root, ["reset", "-q", "--", card])
+  writeFileSync(path.join(root, card), "---\ntitle: watering\nstatus: drafting\n---\n\ntheirs\n")
+  git(root, ["add", card])
+  git(root, ["commit", "-q", "-m", "theirs", "--", card], { env: { ...process.env, [TOOL_COMMIT_ENV]: "1" } })
+  advance(root, 60)
+  const before = head(root)
+  const answer = await runRecorded(finish, { recorded })
+  assert.deepEqual([answer.code, answer.answer.state], [5, "unknown"], JSON.stringify(answer.answer))
+  assert.equal(head(root), before)
+  assert.equal(readdirSync(records).length, 1, "the record stays")
+  assert.notEqual(git(root, ["rev-parse", `HEAD:${card}`]).trim(), index)
+}))
+
+test("a stranded card create is held when the card's staged bytes are no longer the captured ones, or the branch changed, and nothing is committed", () => sealed(async (clean) => {
+  const { root, finish, recorded } = strandedCreate(clean)
+  const card = `${ARI_CARD}/task.md`
+  advance(root, 60)
+  writeFileSync(path.join(root, card), "---\ntitle: watering\nstatus: drafting\n---\n\nsomeone else's edit\n")
+  git(root, ["add", card])
+  const before = snapshot(root, [card])
+  const staged = await runRecorded(finish, { recorded })
+  assert.equal(staged.code, 4, JSON.stringify(staged.answer))
+  assert.deepEqual(snapshot(root, [card]), before)
+  git(root, ["checkout", "-q", "--", card])
+  git(root, ["reset", "-q", "--", card])
+  git(root, ["switch", "-q", "-c", "elsewhere"])
+  const branch = await runRecorded(finish, { recorded })
+  assert.equal(branch.code, 4, JSON.stringify(branch.answer))
+  assert.equal(git(root, ["log", "-1", "--format=%s"]).trim(), "theirs 59", "no commit was made on the other branch")
+}))
+
+test("a recorded finish whose paths leave the Crew member's card folder, or name a teammate's card, is held and commits nothing", () => sealed(async (clean) => {
+  const { root, dir, finish, records, recorded } = strandedCreate(clean)
+  advance(root, 55)
+  const before = snapshot(root, ["desks"])
+  const answer = (argv) => runRecorded(argv, { recorded })
+  const outside = ["../../bo/orchard/pruning/task.md", "../../../../_meta/keep.md", path.join(root, "_meta", "keep.md")]
+  for (const target of outside) {
+    const result = await answer(withArg(finish, "--path", target))
+    assert.equal(result.code, 4, `${target}: ${JSON.stringify(result.answer)}`)
+    assert.equal(result.answer.state, "held")
+  }
+  // A record that itself names such a path holds no matching captured entry, so it is held too.
+  const file = path.join(records, readdirSync(records)[0])
+  const real = JSON.parse(readFileSync(file, "utf8"))
+  for (const target of outside) {
+    writeFileSync(file, `${JSON.stringify({ ...real, paths: [target] })}\n`)
+    const result = await answer(withArg(finish, "--path", target))
+    assert.equal(result.code, 4, `${target}: ${JSON.stringify(result.answer)}`)
+    assert.equal(result.answer.state, "held")
+  }
+  assert.deepEqual(snapshot(root, ["desks"]), before)
+  assert.equal(git(root, ["log", "-1", "--format=%s"]).trim(), "theirs 54")
+  assert.ok(dir)
+}))
+
+// What the finish step guarantees about ownership: nothing beyond "Desk issued this record in this state folder". Who may change a card is decided by the tool that
+// captured the change, before it writes the record; the finish replays what was captured and has no Crew-person check of its own. Adding one is an authority decision.
+test("a finish replays any card change Desk itself recorded, even one in a teammate's folder: the guard is the record's issuer, not a person prefix", () => sealed(async (clean) => {
+  const { root, records, recorded } = strandedCreate(clean)
+  const bo = "desks/bo/orchard/pruning"
+  writeFileSync(path.join(root, bo, "task.md"), "---\ntitle: pruning\nstatus: processing\n---\n\nbo staged\n")
+  const boDir = path.join(root, bo)
+  const committed = capturedFailure(boDir, ["task.md"], "task_update: orchard/pruning", refused)
+  const failure = commitFailure({ root: boDir, paths: ["task.md"], message: "task_update: orchard/pruning", committed, card: "orchard/pruning", deskRoot: root })
+  assert.equal(readdirSync(records).length, 2, "Desk wrote a record for each failed card commit")
+  const done = await runRecorded(failure.route_around.steps[1].argv.slice(2), { recorded })
+  assert.deepEqual([done.code, done.answer.state], [0, "finished"], JSON.stringify(done.answer))
+  assert.equal(git(root, ["show", "--name-only", "--format=", "HEAD"]).trim(), `${bo}/task.md`)
+}))
+
+// A hostile but synthetic parent environment (Git repository and config injection, a hooks path, a foreign home) never reaches the fixtures' Git calls or the recorded finish.
+test("sealed() swaps in the clean environment and removes the home it made, even when the body fails", async () => {
+  const planted = { GIT_DIR: "/nonexistent-synthetic", GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "core.hooksPath", GIT_CONFIG_VALUE_0: "/nonexistent-synthetic/hooks", DESK_SYNTHETIC_PROBE: "leak" }
+  const saved = Object.fromEntries(Object.keys(planted).map((key) => [key, process.env[key]]))
+  Object.assign(process.env, planted)
+  let home = null
+  try {
+    await assert.rejects(sealed(async (clean) => {
+      home = clean.HOME
+      assert.equal(process.env.GIT_CONFIG_COUNT, undefined)
+      assert.equal(sealedEnv.DESK_SYNTHETIC_PROBE, undefined)
+      throw new Error("body failed")
+    }), /body failed/u)
+    assert.equal(existsSync(home), false, "the sealed home is removed")
+    assert.equal(sealedEnv, null)
+    assert.equal(process.env.GIT_CONFIG_COUNT, "1", "the caller's environment is restored")
+  } finally {
+    for (const [key, value] of Object.entries(saved)) value === undefined ? delete process.env[key] : (process.env[key] = value)
+  }
+})
+
+test("a sealed root that cannot be removed stays registered and reported, and the environment is still restored", async () => {
+  const stuck = mkdtempSync(path.join(tmpdir(), "desk-unremovable-"))
+  const real = removeRoot
+  const before = process.env.PATH
+  removeRoot = (dir) => {
+    if (dir === stuck) throw new Error("synthetic removal failure")
+    real(dir)
+  }
+  try {
+    await assert.rejects(sealed(async () => { owned.push(stuck) }), (error) => error.message.includes(stuck))
+    assert.ok(owned.includes(stuck), "the unremovable root is still registered")
+    assert.equal(sealedEnv, null)
+    assert.equal(process.env.PATH, before, "the environment is restored although removal failed")
+  } finally {
+    removeRoot = real
+    const at = owned.indexOf(stuck)
+    if (at >= 0) owned.splice(at, 1)
+    removeTreeSync(stuck)
+  }
+})
+
+// The probe below runs only in a child launched by the next test, with hostile synthetic state already in the environment at import.
+test("pre-import probe: hostile launch state reaches neither helper Git nor the recorded finish", { skip: process.env.DESK_SEAL_PROBE !== "1" }, () => sealed(async (clean) => {
+  assert.equal(env.GIT_CONFIG_COUNT, "2", "the hostile state was present when this module was imported")
+  assert.match(env.GIT_DIR, /blocker/u)
+  const { root, finish, recorded } = strandedCreate(clean)
+  assert.equal(realpathSync(git(root, ["rev-parse", "--show-toplevel"]).trim()), realpathSync(root), "helper Git ignores the hostile GIT_DIR (Git spells Windows paths with forward slashes, so compare real paths)")
+  assert.equal(git(root, ["config", "user.name"]).trim(), "t", "helper Git ignores the hostile config injection")
+  assert.deepEqual(Object.keys(recorded).filter((key) => key.startsWith("GIT_")).sort(), ["GIT_CONFIG_GLOBAL", "GIT_CONFIG_NOSYSTEM", "GIT_TERMINAL_PROMPT"])
+  advance(root, 2)
+  const done = await runRecorded(finish, { recorded })
+  assert.deepEqual([done.code, done.answer.state], [0, "finished"], JSON.stringify(done.answer))
+  assert.equal(git(root, ["log", "-1", "--format=%an <%ae>"]).trim(), "t <t@example.com>", "the recorded finish committed as the repository's own identity")
+  assert.equal(git(root, ["show", "--name-only", "--format=", "HEAD"]).trim(), `${ARI_CARD}/task.md`)
+}))
+
+test("a hostile launch environment present before import is neutralized for helper Git and the recorded finish", () => {
+  const base = realpathSync(mkdtempSync(path.join(tmpdir(), "desk-probe-launch-")))
+  try {
+    const blocker = path.join(base, "blocker")
+    writeFileSync(blocker, "not a directory")
+    const hostile = {
+      ...Object.fromEntries(["SystemRoot", "windir"].filter((key) => process.env[key] !== undefined).map((key) => [key, process.env[key]])),
+      PATH: process.env.PATH, TMPDIR: base, TMP: base, TEMP: base, HOME: path.join(base, "hostile-home"), XDG_STATE_HOME: path.join(base, "hostile-state"),
+      GIT_DIR: path.join(blocker, "gitdir"), GIT_WORK_TREE: path.join(blocker, "tree"), GIT_INDEX_FILE: path.join(blocker, "index"),
+      GIT_CONFIG_COUNT: "2", GIT_CONFIG_KEY_0: "user.name", GIT_CONFIG_VALUE_0: "hostile-name", GIT_CONFIG_KEY_1: "user.email", GIT_CONFIG_VALUE_1: "hostile@example.invalid",
+      GIT_CONFIG_PARAMETERS: `'core.hooksPath=${path.join(base, "hostile-hooks")}'`, GIT_AUTHOR_NAME: "hostile-author", GIT_AUTHOR_EMAIL: "hostile-author@example.invalid",
+      GIT_COMMITTER_NAME: "hostile-committer", GIT_COMMITTER_EMAIL: "hostile-committer@example.invalid", DESK_SEAL_PROBE: "1",
+    }
+    const child = spawnSync(process.execPath, ["--test", "--test-reporter=tap", "--test-concurrency=1", "--test-name-pattern=pre-import probe", fileURLToPath(import.meta.url)], { encoding: "utf8", env: hostile, timeout: 120000 })
+    assert.equal(child.status, 0, `${child.stdout}\n${child.stderr}`)
+    assert.match(child.stdout, /^# pass 1$/mu)
+    assert.match(child.stdout, /^# fail 0$/mu)
+    assert.equal(existsSync(hostile.XDG_STATE_HOME), false, "the hostile state folder was never written")
+    assert.equal(existsSync(hostile.HOME), false, "the hostile home was never written")
+  } finally {
+    removeTreeSync(base)
+  }
 })

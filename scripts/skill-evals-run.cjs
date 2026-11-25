@@ -133,8 +133,28 @@ function pluginDirectories(suite, root) {
 // (and, for a suite whose sources include `evals/fixtures/<name>/`, a scratch copy of that repository) that nothing real shares.
 const baselineCommit = ["-c", "user.name=Skill eval", "-c", "user.email=skill-eval@example.invalid", "-c", "commit.gpgsign=false"];
 
+// The one Git config the subject and the harness's own setup Git share, so a contributor's global hooks, templates and signing never apply.
+const isolatedGitConfig = `[user]\n\tname = Skill eval\n\temail = skill-eval@example.invalid\n[commit]\n\tgpgsign = false\n[credential]\n\thelper =\n[url "file:///skill-eval-no-network/"]\n\tinsteadOf = https://\n\tinsteadOf = http://\n\tinsteadOf = ssh://\n\tinsteadOf = git@\n`;
+
+function withoutGitVariables(env) {
+  return Object.fromEntries(Object.entries(env).filter(([key]) => !/^GIT_/iu.test(key)));
+}
+
+let setupGitConfig = null;
+
+function setupGitEnvironment() {
+  if (setupGitConfig === null) {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "skill-eval-gitconfig-"));
+    setupGitConfig = path.join(directory, "gitconfig");
+    fs.writeFileSync(setupGitConfig, isolatedGitConfig);
+    process.once("exit", () => fs.rmSync(directory, { recursive: true, force: true }));
+  }
+  // Ambient GIT_* variables (a template dir, injected config, or a GIT_DIR from a hook that runs these tests) outrank the config file.
+  return { ...withoutGitVariables(process.env), GIT_CONFIG_GLOBAL: setupGitConfig, GIT_CONFIG_NOSYSTEM: "1" };
+}
+
 function scratchGit(cwd, args) {
-  return spawnSync("git", [...baselineCommit, ...args], { cwd, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
+  return spawnSync("git", [...baselineCommit, ...args], { cwd, encoding: "utf8", env: setupGitEnvironment(), maxBuffer: 64 * 1024 * 1024 });
 }
 
 function commitBaseline(directory) {
@@ -190,9 +210,9 @@ function subjectEnvironment(caseDirectory, desk, person, standIns) {
   fs.mkdirSync(path.join(config, "state"), { recursive: true });
   fs.mkdirSync(path.join(config, "shepherd-home"), { recursive: true });
   fs.writeFileSync(path.join(config, "npmrc"), "");
-  fs.writeFileSync(path.join(config, "gitconfig"), `[user]\n\tname = Skill eval\n\temail = skill-eval@example.invalid\n[commit]\n\tgpgsign = false\n[credential]\n\thelper =\n[url "file:///skill-eval-no-network/"]\n\tinsteadOf = https://\n\tinsteadOf = http://\n\tinsteadOf = ssh://\n\tinsteadOf = git@\n`);
+  fs.writeFileSync(path.join(config, "gitconfig"), isolatedGitConfig);
   const env = {
-    ...copilotAccountEnvironment(),
+    ...withoutGitVariables(copilotAccountEnvironment()),
     DESK: desk,
     ...(person === null ? {} : { DESK_PERSON: person }),
     XDG_STATE_HOME: path.join(config, "state"),

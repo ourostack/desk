@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { spawn, spawnSync } from "node:child_process"
-import { realpathSync, statSync, promises as fs } from "node:fs"
+import { closeSync, constants, fstatSync, lstatSync, openSync, realpathSync, statSync, promises as fs } from "node:fs"
 import * as path from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import { resolveStartupStateBranch } from "../src/runtime/startup-resolve.js"
@@ -191,6 +191,64 @@ function gitHead(root, env) {
   return result.status === 0 ? result.stdout.trim() : null
 }
 
+// The qualified namespace of one log: the root and every directory below it down to the leaf, each by exact (dev, ino). Any symbolic link, non-directory parent or non-regular leaf, and a root that is not its own real path, disqualifies it.
+function qualifyLog(root, rel) {
+  try {
+    if (realpathSync(root) !== path.resolve(root)) return null
+    const identity = (stat) => ({ dev: stat.dev, ino: stat.ino })
+    const chain = []
+    let current = path.resolve(root)
+    const parts = rel.split(/[\\/]/u)
+    for (const [index, part] of [null, ...parts].entries()) {
+      if (part !== null) current = path.join(current, part)
+      const stat = lstatSync(current, { bigint: true })
+      const last = index === parts.length
+      if (stat.isSymbolicLink() || (last ? !stat.isFile() : !stat.isDirectory())) return null
+      chain.push(identity(stat))
+    }
+    return { file: current, chain }
+  } catch { return null }
+}
+const sameChain = (a, b) => a.chain.length === b.chain.length && a.chain.every((entry, i) => entry.dev === b.chain[i].dev && entry.ino === b.chain[i].ino)
+
+// A queued log is already in the working tree. It counts as committed only when the working file, hashed with the path's own Git filters (EOL included), is the very blob `head` holds at that path. Status flags such as assume-unchanged cannot hide a difference from that comparison, and every path is literal. A path Git neither tracks at `head` nor lists as indexed or untracked (missing, ignored) stays unknown; that listing reads names only, never the file's bytes, and runs only through a qualified namespace.
+// Acquisition: the qualified namespace is walked, the leaf opened with O_NOFOLLOW, and the descriptor must be the walked leaf (exact bigint dev/ino) and the walk must repeat unchanged BEFORE Git is handed the descriptor, and again after. Git then reads that descriptor; `--path` only supplies the logical attribute/filter context. This pins what is hashed to the object the qualified path named; it does not keep the namespace unchanged while reading, and Node has no race-free openat. It observes content at `head`; it does not attribute who wrote it. `probe` is a test seam between the steps.
+export function logCommitState(root, env, rel, head, probe = {}) {
+  if (typeof rel !== "string" || !rel || path.isAbsolute(rel) || rel.split(/[\\/]/u).includes("..") || !head) return "unknown"
+  const git = (args, stdio) => spawnSync("git", ["--literal-pathspecs", ...args], { cwd: root, env, encoding: "utf8", timeout: 5000, windowsHide: true, ...(stdio ? { stdio } : {}) })
+  const first = qualifyLog(root, rel)
+  const blob = git(["rev-parse", "--verify", `${head}:${rel}`])
+  if (blob.status !== 0) {
+    // Not at `head`: only the names Git lists (index entries, untracked non-ignored files) are consulted, never the file's bytes, and only through a namespace that qualified before and still does after.
+    if (first === null) return "unknown"
+    probe.afterWalk?.()
+    const listed = git(["ls-files", "--cached", "--others", "--exclude-standard", "--", rel])
+    const again = qualifyLog(root, rel)
+    return listed.status === 0 && listed.stdout.trim() !== "" && again !== null && sameChain(first, again) ? "pending" : "unknown"
+  }
+  if (first === null) return "unknown"
+  probe.afterWalk?.()
+  let fd
+  try {
+    fd = openSync(first.file, constants.O_RDONLY | constants.O_NONBLOCK | constants.O_NOFOLLOW)
+    const opened = fstatSync(fd, { bigint: true })
+    const leaf = first.chain.at(-1)
+    if (!opened.isFile() || opened.dev !== leaf.dev || opened.ino !== leaf.ino) return "unknown"
+    probe.afterOpen?.()
+    const again = qualifyLog(root, rel)
+    if (again === null || !sameChain(first, again)) return "unknown"
+    const working = git(["hash-object", `--path=${rel}`, "--stdin"], [fd, "pipe", "pipe"])
+    probe.afterHash?.()
+    const after = fstatSync(fd, { bigint: true })
+    const last = qualifyLog(root, rel)
+    if (working.status !== 0 || last === null || !sameChain(first, last)
+      || after.size !== opened.size || after.mtimeNs !== opened.mtimeNs || after.ctimeNs !== opened.ctimeNs) return "unknown"
+    return working.stdout.trim() === blob.stdout.trim() ? "committed" : "pending"
+  } catch { return "unknown" } finally {
+    if (fd !== undefined) closeSync(fd)
+  }
+}
+
 /** One mutation at most, through the ordinary MCP bootstrap and admission. */
 export async function runRecovery({
   argv = process.argv.slice(2), options, env = process.env, cwd = process.cwd(),
@@ -309,26 +367,50 @@ export async function runRecovery({
     const response = await client.request("tools/call", { name: report.operation, arguments: payload }, Math.min(Date.now() + dispatchTimeoutMs, totalDeadline))
     const result = toolPayload(response)
     report.result = redact(result, payload)
+    // Only an admitted queued log is accepted; a bare "logged" without it stays unexpected.
+    const queuedPath = result.status === "logged" && result.commit === "queued" ? result.path
+      : result.status === "updated" && result.log?.commit === "queued" ? result.log.path : null
     report.git.headAfter = gitHead(root, env)
+    const logState = queuedPath === null ? null : logCommitState(root, env, queuedPath, report.git.headAfter)
     if (response.isError || result.status === "error") throw failure("tool_error")
-    if (!["updated", "created", "archived", "already_archived", "committed", "nothing_to_commit", "commit_failed", "commit_unknown"].includes(result.status)) {
+    if (!["logged", "updated", "created", "archived", "already_archived", "committed", "nothing_to_commit", "commit_failed", "commit_unknown"].includes(result.status) || (result.status === "logged" && queuedPath === null)) {
       throw failure("unexpected_tool_result")
     }
     report.effects.mutation = ["nothing_to_commit", "already_archived"].includes(result.status)
       ? "reported_complete" : "reported_applied"
-    report.effects.commit = result.commit?.status === "failed" ? "failed"
+    const headChanged = report.git.headBefore !== null && report.git.headAfter !== null && report.git.headBefore !== report.git.headAfter
+    const logOnly = result.status === "logged"
+    if (queuedPath !== null) {
+      report.effects.log = logState === "pending" ? "queued" : logState === "committed" && headChanged ? "observed" : "unknown"
+      report.queued = { path: queuedPath, state: logState, committer: options["publication"] === "deferred" ? "next_session_start" : "background_worker" }
+    }
+    report.effects.commit = logOnly ? report.effects.log
+      : result.commit?.status === "failed" ? "failed"
       : result.commit?.status === "unknown" ? "unknown"
       : report.git.headBefore !== null && report.git.headAfter !== null
         ? report.git.headBefore !== report.git.headAfter ? "observed" : "not_observed"
         : "unknown"
     report.effects.push = status.sync === "no remote configured" ? "not_applicable" : options["publication"] === "deferred" ? "deferred" : "pending"
-    const commitExpected = ["updated", "created", "archived", "committed"].includes(result.status)
-    if (report.effects.commit === "failed" || result.commit?.status === "unknown" || report.effects.push === "pending" ||
-        (commitExpected && report.effects.commit !== "observed")) {
+    const commitExpected = ["updated", "created", "archived", "committed"].includes(result.status) || (logOnly && logState === "committed")
+    const logPending = report.effects.log === "queued"
+    if (report.effects.log === "unknown") {
+      report.readback = `The entry at ${queuedPath} was reported written, but Git does not show it committed or pending. Do not resend it: that may duplicate the entry. Read that path first. ${report.readback}`
+    }
+    if (logPending) {
+      // --publication deferred schedules no background worker, so nothing in this run will commit the entry.
+      const who = report.queued.committer === "background_worker" ? "its commit is pending in Desk's background writer"
+        : "publication is deferred, so no background commit is scheduled: the next Desk session start commits it, or commit that path yourself"
+      report.readback = `Entry written to ${queuedPath}; ${who}. Do not resend it: that would duplicate the entry. ${report.readback}`
+    }
+    if (report.effects.commit === "failed" || result.commit?.status === "unknown" || report.effects.push === "pending" || logPending ||
+        report.effects.log === "unknown" || (commitExpected && report.effects.commit !== "observed")) {
       report.status = "partial"
       report.code = report.effects.commit === "failed" ? "commit_failed"
         : result.commit?.status === "unknown" ? "commit_unknown"
-        : report.effects.push === "pending" ? "push_pending" : "commit_not_observed"
+        : commitExpected && report.effects.commit !== "observed" ? "commit_not_observed"
+        : logPending ? "commit_queued"
+        : report.effects.log === "unknown" ? "log_evidence_unknown"
+        : "push_pending"
       exitCode = 2
     } else {
       report.status = "completed"

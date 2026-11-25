@@ -962,7 +962,7 @@ try {
       'const cwd = process.cwd();',
       'const git = (gitArgs) => spawnSync("git", gitArgs, { cwd, encoding: "utf8" }).stdout.trim().split("\\n");',
       'const linkTarget = (file) => { try { return fs.readlinkSync(file); } catch { return null; } };',
-      'if (log) fs.appendFileSync(log, JSON.stringify({ role: judging ? "judge" : "subject", model: value("--model"), pid: process.pid, args, cwd, pathFirst: judging ? null : (process.env.PATH ?? "").split(path.delimiter)[0], deskIsCwd: Boolean(process.env.DESK) && fs.realpathSync(process.env.DESK) === fs.realpathSync(cwd), bound: fs.existsSync(cwd + "/_meta") && fs.existsSync(cwd + "/_archive"), gh: process.env.GH_CONFIG_DIR, shepherdHome: process.env.SHEPHERD_HOME ?? null, heldOut: judging ? null : fs.readdirSync(cwd).filter((name) => name.startsWith("held-out")), deskPerson: judging ? null : (process.env.DESK_PERSON ?? null), linkTo: judging ? null : linkTarget(cwd + "/linked.md"), originMain: judging ? null : git(["--git-dir", path.join(cwd, "..", "origin.git"), "log", "main", "--format=%s"]), originBranches: judging ? null : git(["--git-dir", path.join(cwd, "..", "origin.git"), "branch", "--list"]), prompt, tracked: judging ? null : git(["ls-files"]), commits: judging ? null : git(["log", "--format=%s"]), status: judging ? null : git(["status", "--porcelain"]) }) + "\\n");',
+      'if (log) fs.appendFileSync(log, JSON.stringify({ role: judging ? "judge" : "subject", model: value("--model"), pid: process.pid, args, cwd, pathFirst: judging ? null : (process.env.PATH ?? "").split(path.delimiter)[0], deskIsCwd: Boolean(process.env.DESK) && fs.realpathSync(process.env.DESK) === fs.realpathSync(cwd), bound: fs.existsSync(cwd + "/_meta") && fs.existsSync(cwd + "/_archive"), gh: process.env.GH_CONFIG_DIR, gitVariables: Object.keys(process.env).filter((key) => /^GIT_/i.test(key)).sort(), shepherdHome: process.env.SHEPHERD_HOME ?? null, heldOut: judging ? null : fs.readdirSync(cwd).filter((name) => name.startsWith("held-out")), deskPerson: judging ? null : (process.env.DESK_PERSON ?? null), linkTo: judging ? null : linkTarget(cwd + "/linked.md"), originMain: judging ? null : git(["--git-dir", path.join(cwd, "..", "origin.git"), "log", "main", "--format=%s"]), originBranches: judging ? null : git(["--git-dir", path.join(cwd, "..", "origin.git"), "branch", "--list"]), prompt, tracked: judging ? null : git(["ls-files"]), commits: judging ? null : git(["log", "--format=%s"]), status: judging ? null : git(["status", "--porcelain"]) }) + "\\n");',
       'if (!judging && mode === "write") fs.writeFileSync(cwd + "/written.txt", "x\\n");',
       'if (!judging && mode === "commit") { fs.writeFileSync(cwd + "/subject.txt", "x\\n"); spawnSync("git", ["add", "-A"], { cwd }); spawnSync("git", ["commit", "-q", "-m", "Subject change"], { cwd }); }',
       'if (!judging && mode === "worktree") { const wt = cwd + "/../wt"; spawnSync("git", ["worktree", "add", "-q", "-b", "fix", wt], { cwd }); fs.writeFileSync(wt + "/subject.txt", "x\\n"); spawnSync("git", ["add", "-A"], { cwd: wt }); spawnSync("git", ["commit", "-q", "-m", "Subject change"], { cwd: wt }); fs.writeFileSync(wt + "/worktree-note.md", "x\\n"); }',
@@ -1409,6 +1409,46 @@ try {
     }
 
     {
+      // Setup Git (scratch desk, fixture repository, world baselines, origin overlays) uses the subject's isolated config, never the contributor's global hooks or templates.
+      const hostile = fs.mkdtempSync(path.join(os.tmpdir(), "skill-eval-hostile-"));
+      try {
+        const marker = path.join(hostile, "hook-ran");
+        const failingHook = `#!/bin/sh\necho "$0" >> "${marker.replaceAll("\\", "/")}"\nexit 1\n`;
+        const hookNames = ["pre-commit", "commit-msg", "pre-push", "post-checkout", "post-commit"];
+        const hooksPath = path.join(hostile, "hooks");
+        const templateHooks = path.join(hostile, "template", "hooks");
+        for (const folder of [hooksPath, templateHooks]) {
+          fs.mkdirSync(folder, { recursive: true });
+          for (const name of hookNames) fs.writeFileSync(path.join(folder, name), failingHook, { mode: 0o755 });
+        }
+        const slashed = (file) => file.replaceAll("\\", "/");
+        fs.writeFileSync(path.join(hostile, "gitconfig"), `[core]\n\thooksPath = ${slashed(hooksPath)}\n[init]\n\ttemplateDir = ${slashed(path.join(hostile, "template"))}\n[commit]\n\tgpgsign = true\n[gpg]\n\tprogram = skill-eval-no-such-gpg\n`);
+        const { run, calls } = runFixture((suite, root) => {
+          const repo = path.join(root, "evals", "fixtures", "repo", "src");
+          fs.mkdirSync(repo, { recursive: true });
+          fs.writeFileSync(path.join(repo, "code.js"), "original\n");
+          const world = path.join(root, "evals", "worlds", "fixture", "case-1");
+          fs.mkdirSync(path.join(world, "desk"), { recursive: true });
+          fs.mkdirSync(path.join(world, "repo", "src"), { recursive: true });
+          fs.mkdirSync(path.join(world, "desk-origin-ahead"), { recursive: true });
+          fs.writeFileSync(path.join(world, "desk", "seeded.md"), "seeded\n");
+          fs.writeFileSync(path.join(world, "repo", "src", "code.js"), "scenario\n");
+          fs.writeFileSync(path.join(world, "desk-origin-ahead", "card.md"), "another writer\n");
+          suite.cases[0].world = "evals/worlds/fixture/case-1";
+          suite.sources = ["source.txt", "evals/fixtures/repo/src/code.js", "evals/worlds/fixture/case-1/desk/seeded.md", "evals/worlds/fixture/case-1/repo/src/code.js", "evals/worlds/fixture/case-1/desk-origin-ahead/card.md"];
+          suite.reviewedSourceFingerprint = sourceFingerprint(suite.sources, root);
+        });
+        const result = run(["fixture", ...fake, "--concurrency", "1"], { GIT_CONFIG_GLOBAL: path.join(hostile, "gitconfig"), HOME: hostile, XDG_CONFIG_HOME: hostile, GIT_TEMPLATE_DIR: slashed(path.join(hostile, "template")), GIT_CONFIG_PARAMETERS: `'core.hookspath=${slashed(hooksPath)}'` });
+        assert.equal(result.status, 0, result.stderr);
+        assert.equal(fs.existsSync(marker), false, "no global hook ran during setup");
+        assert.deepEqual(calls()[0].gitVariables, ["GIT_CONFIG_GLOBAL", "GIT_CONFIG_NOSYSTEM", "GIT_SSH_COMMAND", "GIT_TERMINAL_PROMPT"], "the subject inherits only the harness's own Git variables");
+        assert.deepEqual(calls()[0].commits, ["Scenario world", "Baseline"]);
+      } finally {
+        fs.rmSync(hostile, { recursive: true, force: true });
+      }
+    }
+
+    {
       // The world's origin overlays land on the case's origin: a newer main that the desk has not fetched, and a pending branch.
       const { run, calls } = runFixture((suite, root) => {
         const world = path.join(root, "evals", "worlds", "fixture", "case-1");
@@ -1548,6 +1588,17 @@ try {
       gitRun("commit", "-q", "-m", "unrelated");
       assert.match(run(["--changed", ...fake]).stderr, /share no history/u);
     }
+  }
+
+  {
+    // #1780: the case only asks for an edit, so the reply check must not demand listing moves and deletions.
+    const crew = JSON.parse(fs.readFileSync(path.join(root, "evals", "crew-shared-initiatives.json"), "utf8"));
+    const checks = crew.cases.find((entry) => entry.id === "note-rules").checks;
+    const replyCheck = checks.find((check) => check.id === "states-both-rules").description;
+    assert.match(replyCheck, /left unchanged because Crew's note rule forbids editing/u);
+    assert.match(replyCheck, /does not claim to have notified Sam/u);
+    assert.doesNotMatch(replyCheck, /never edited, moved or deleted/u, "the reply check must not require restating every prohibition");
+    assert.match(checks.find((check) => check.id === "old-note-intact").description, /not edited, moved or deleted/u);
   }
 
   require("./test-core-meeting-capture-model-choice.cjs");

@@ -1,5 +1,273 @@
 # desk plugin — changelog
 
+## 3.2.581 — 2026-11-25
+
+Desk's MCP server now vendors Ouro UI v1.3.567, moved by Ouro Current.
+
+Desk's direct-call spend ledger is safer under concurrency and failure: a token whose account lookup got no answer now holds its reads (`spend_held`) instead of bypassing the quota floor, a token GitHub names no account for is floored on its own answers' numbers and counted by `unattributedSends()`, `<kind>.rate` writes go through a per-window append-only observation log and are read back until they match the lowest remaining, with no lock and no pass limit, and reads are decided from the observations rather than the file (racing processes and out-of-order answers cannot raise remaining), and parallel first calls with one token send a single `GET /user`. See [relays](docs/relays.md#quota).
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.580 — 2026-11-25
+
+Desk's MCP server now vendors Ouro UI v1.3.566, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.579 — 2026-11-25
+
+Desk's own direct GitHub calls (the delivery gate, issue drains and relays) now join the gh shim's spend ledger where a host keeps one: one `calls.log` row per send under the host session id and the token's own account, reads held under the shim's quota floor (refreshed from the answers' quota headers), `unknown` rows for sends that got no answer, and a `DESK_SPEND_UNRECORDED` warning when the ledger cannot be written. This covers Desk's direct calls only; a `gh` that bypasses the shim is a separate gap. See [relays](docs/relays.md#quota).
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.578 — 2026-11-25
+
+Desk's MCP server now vendors Ouro UI v1.3.565, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.577 — 2026-11-25
+
+Desk's MCP server now vendors Ouro UI v1.3.564, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.576 — 2026-11-25
+
+Desk's MCP server now vendors Ouro UI v1.3.563, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.575 — 2026-11-25
+
+Desk's MCP server now vendors Ouro UI v1.3.562, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.574 — 2026-11-25
+
+Desk's MCP server now vendors Ouro UI v1.3.561, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.573 — 2026-11-25
+
+Desk's MCP server now vendors Ouro UI v1.3.560, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.572 — 2026-11-25
+
+Desk's MCP server now vendors Ouro UI v1.3.559, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.571 — 2026-11-25
+
+Desk's MCP server now vendors Ouro UI v1.3.558, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.570 — 2026-11-25
+
+Desk's MCP server now vendors Ouro UI v1.3.557, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.569 — 2026-11-25
+
+Desk's MCP server now vendors Ouro UI v1.3.555, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.568 — 2026-11-25
+
+Desk's MCP server now vendors Ouro UI v1.3.554, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.567 — 2026-11-25
+
+### A publish pull request whose content reached `main` through another commit is settled, not called unmerged
+
+A save recorded as a waiting publish pull request stayed open, and boot listed it as an unmerged save, when exactly the same content had reached `main` through a different commit that did not contain the save's own commit. Boot now leaves a save out of that list only when fetched `main` provably holds it: its commit is an ancestor, or every path it changed has the same mode, type and object on `main` (or is shown absent on both sides). A sync with nothing to deliver now also starts the existing background worker for such a save, so settlement closes its pull request promptly instead of at the next write. An unreadable comparison, an unreachable remote, differing content or a mode-only change keeps the save listed, and nothing is swept: pull requests nobody recorded and other desks' candidates are left alone. Fixes #1749.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.566 — 2026-11-25
+
+Desk's MCP server now vendors Ouro UI v1.3.553, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.565 — 2026-11-25
+
+Desk's MCP server now vendors Ouro UI v1.3.552, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.564 — 2026-11-25
+
+Desk's MCP server now vendors Ouro UI v1.3.551, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.563 — 2026-11-25
+
+Desk's MCP server now vendors Ouro UI v1.3.550, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.562 — 2026-11-25
+
+Desk's MCP server now vendors Ouro UI v1.3.549, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.561 — 2026-11-25
+
+Desk's MCP server now vendors Ouro UI v1.3.548, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.560 — 2026-11-25
+
+Desk's MCP server now vendors Ouro UI v1.3.546, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.559 — 2026-11-25
+
+Desk's MCP server now vendors Ouro UI v1.3.545, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.558 — 2026-11-25
+
+Desk's MCP server now vendors Ouro UI v1.3.544, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.557 — 2026-11-25
+
+Desk's MCP server now vendors Ouro UI v1.3.543, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.556 — 2026-11-25
+
+Desk's MCP server now vendors Ouro UI v1.3.542, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.555 — 2026-11-25
+
+### A card staged by a failed `task_create` can be finished after many unrelated commits
+
+When a card commit fails and other work then advances `HEAD`, `finish-commit.js` reads back the new commits to see whether the change landed. It used to give up as unknown once more than 50 commits had arrived, even when none touched the card, so the card stayed staged and `task_update` refused it with `content_home_dirty_target`. The read-back now counts only commits that touch the captured paths (path names taken literally, every side of a merge followed). More than 50 commits touching those paths is still unknown, and a missing or mismatched capture record (the tool prunes old records on later writes; no new expiry rule), foreign staged bytes, another branch and an unfinished Git operation still hold the commit. Fixes #1724.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.554 — 2026-11-25
+
+Desk's MCP server now vendors Ouro UI v1.3.541, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.553 — 2026-11-25
+
+The queued-log readback tests count Git hash-object runs with Git's own trace2 stream and a node clean-filter spy, so their hash-once and zero-read checks run on Windows as well as POSIX.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.552 — 2026-11-25
+
+- Issue drains: `Check gh auth status` is now said only for an HTTP 401 (a refused token). Any other refusal (403 permissions, 404, 422) and an unreadable GraphQL edit-history answer are recorded as GitHub's answer (`drains_github_refused`, `drains_graphql_failed`) with no credential diagnosis; quota handling and the no-retry of non-5xx answers, writes and network errors are unchanged.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.551 — 2026-11-25
+
+Desk's MCP server now vendors Ouro UI v1.3.540, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.550 — 2026-11-25
+
+Local recovery no longer reports a queued card log as `unexpected_tool_result`. A `task_update` that only logs (or logs alongside other fields) writes the entry before it returns and leaves the commit to Desk's background writer, so recovery now says so: exit `2`, `status: "partial"`, `code: "commit_queued"`, `effects.mutation: "reported_applied"`, `effects.commit: "queued"` and a `queued` object with the log path, whether Git still shows it uncommitted (`pending`) and who commits it. A mixed update keeps the card's observed commit in `effects.commit` and reports the log separately in `effects.log`. If the writer has already committed the entry when recovery looks, the result is the usual completed `observed` result. The receipt says not to resend, because a resend duplicates the entry. With `--publication deferred` no background commit is scheduled, and the receipt says the next Desk session start commits it or the caller must. Unknown results and refusals still end `unexpected_tool_result` or `tool_error` and are never resent. See [the recovery contract](mcp/README.md).
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.549 — 2026-11-25
+
+### Issue drains: a GitHub 5xx is no longer worded as an auth problem
+
+When GitHub answers a drain's read with a 5xx (500, 502, 503, 504), the poll now asks once more in the same poll. If the retry fails too, the drain's last error says GitHub's server failed and needs nothing from you (`drains_github_server_error`) instead of sending an agent to `Check gh auth status`, which stays for a refused credential. Writes are never retried, and a persistent failure still wakes nobody and leaves what the drain has seen untouched. See [issue drains](docs/issue-drains.md).
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.548 — 2026-11-25
+
+The issue-drain poller now decides whether a body change is a bot's from the issue's edit history, on any issue whoever created it. A body that only bots edited since the last poll, such as a health table refreshed every few minutes, wakes nobody, and a person's edit among a bot's still wakes the drain. Anything the history cannot prove (an unknown or deleted edit, a history that cycles, a changed title, a revision recorded before titles were kept) stays news. The history is read page by page with progress kept in the poll state, so a very long one is finished across GraphQL quota windows, scans share the pages fairly, and an issue that needs no read is never held behind one. A read that fails or runs out of quota leaves only that issue for the next poll and is shown as the poll's error without waking the drain. The GraphQL quota is kept apart from the REST quota. See [issue drains](docs/issue-drains.md).
+
+Someone else assigning or unassigning an issue now wakes the drain (`assigned <login>`, `unassigned <login>`), while the drain's own assignment during its turn stays quiet. A poll lock is no longer taken from a live owner however long it holds it, is published whole as a directory, and is released only by its owner; a lock file left by an earlier Desk is never replaced, and the poll says so instead of calling it busy.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.547 — 2026-11-25
+
+Desk's MCP server now vendors Ouro UI v1.3.539, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.546 — 2026-11-25
+
+Desk's MCP server now vendors Ouro UI v1.3.538, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.545 — 2026-11-25
+
+Desk's MCP server now vendors Ouro UI v1.3.537, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.544 — 2026-11-25
+
+Desk's MCP server now vendors Ouro UI v1.3.536, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.543 — 2026-11-25
+
+`desk_status` is declared read-only. It is the session-start health check, and the admission retry it triggers only updates Desk's own in-process state and its local last-start record, never the desk's content. Hosted clients (claude.ai, ChatGPT) use `readOnlyHint` to decide whether a call needs the person's approval, so a non-read-only `desk_status` would put an approval prompt in front of the first call of every hosted session. This restores the hint hosted Desk served before the single-source change.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.542 — 2026-11-25
+
+Desk's MCP server now vendors Ouro UI v1.3.535, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.541 — 2026-11-25
+
+A Desk MCP server ends when its host sends it SIGTERM, SIGINT or SIGHUP while no Desk server is running behind its idle proxy. Before, the [idle proxy](mcp/idle-proxy.cjs) re-raised the signal while still listening for it, so the signal came straight back and was raised again, forever. The process never ended and used most of a core. On one Ouro host, six of these ran for almost four hours after their servers failed to start. The proxy now stops listening before it re-raises, so the signal's default action ends it.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.540 — 2026-11-25
+
+Desk's MCP server now vendors Ouro UI v1.3.534, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.539 — 2026-11-25
+
+Desk's MCP server now vendors Ouro UI v1.3.533, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.538 — 2026-11-25
 
 Desk's MCP server now vendors Ouro UI v1.3.531, moved by Ouro Current.

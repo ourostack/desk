@@ -439,7 +439,7 @@
           "covers": [
             "note-rules"
           ],
-          "description": "The reply says the existing note was left unchanged because notes are never edited, moved or deleted, and does not claim to have notified Sam."
+          "description": "The reply says the existing note was left unchanged because Crew's note rule forbids editing it, and does not claim to have notified Sam. Naming the requested edit is enough; the reply need not also list moving or deleting."
         }
       ]
     }

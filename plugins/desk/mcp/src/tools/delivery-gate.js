@@ -34,6 +34,7 @@
 
 import { execFile } from "node:child_process"
 import { looksLikeNodeTestRunner } from "../runtime/test-state-guard.js"
+import { activeLogin, ledgeredFetch, SpendHeld } from "../runtime/spend-ledger.js"
 
 export const POLICY_PATH = ".desk/delivery.json"
 const REQUEST_BUDGET_MS = 5000
@@ -91,15 +92,17 @@ function forgetGhToken(run, now) {
   ghTokens.set(run, { pending: false, token: undefined, at: now(), promise: Promise.resolve(undefined) })
 }
 
-async function send({ fetchFn, budgetMs, token }, route, accept) {
+async function send({ fetchFn, ledgered, budgetMs, token }, route, accept) {
   const headers = { "User-Agent": "desk-delivery-gate", Accept: accept }
   if (token !== undefined) headers.Authorization = `Bearer ${token.trim()}`
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), budgetMs)
   try {
-    const response = await fetchFn(`https://api.github.com${route}`, { headers, signal: controller.signal })
+    // A request with a token spends that account's quota, so it goes through the spend ledger; an anonymous one spends no account's.
+    const response = await (token === undefined ? fetchFn : ledgered)(`https://api.github.com${route}`, { headers, signal: controller.signal })
     return { status: response.status, body: response.status === 200 ? await response.text() : "" }
-  } catch {
+  } catch (error) {
+    if (error instanceof SpendHeld) throw error
     return { status: 0, body: "" }
   } finally {
     clearTimeout(timer)
@@ -157,12 +160,23 @@ function usableRule(rule) {
  * `{ status: "not_verified", reason }` when GitHub could not answer, `{ status: "not_found" }` for a pull request GitHub does not know.
  * `fetchFn`, `budgetMs` (per request), `ghRunner` (asks `gh` for a token) and `now` (the clock) are test seams; a caller that injects `fetchFn` without `ghRunner` never runs `gh`.
  */
-export async function prDelivery({ repo, number, env = process.env, fetchFn, budgetMs = REQUEST_BUDGET_MS, ghRunner, now = Date.now }) {
+export async function prDelivery(input) {
+  try {
+    return await deliveryOf(input)
+  } catch (error) {
+    // A read held under the account's quota floor is not a verdict: the gate lets the move through and says why.
+    if (error instanceof SpendHeld) return notVerified(`${input.repo}#${input.number}'s delivery could not be checked: ${error.message}`)
+    throw error
+  }
+}
+
+async function deliveryOf({ repo, number, env = process.env, fetchFn, budgetMs = REQUEST_BUDGET_MS, ghRunner, now = Date.now }) {
   const runner = ghRunner ?? defaultRunner(fetchFn)
   const envToken = [env.GH_TOKEN, env.GITHUB_TOKEN].find((value) => typeof value === "string" && value.trim() !== "")
   const fromGh = envToken !== undefined || runner === undefined ? undefined : await ghToken(runner, now)
   // istanbul ignore next -- outside a node:test run the real fetch is used; every test hands its own.
-  const ask = { fetchFn: fetchFn ?? globalThis.fetch, budgetMs, token: envToken ?? fromGh, gh: undefined }
+  const ask = { fetchFn: fetchFn ?? globalThis.fetch, ledgered: undefined, budgetMs, token: envToken ?? fromGh, gh: undefined }
+  ask.ledgered = ledgeredFetch(ask.fetchFn, { env, login: () => (ask.gh === undefined ? "" : activeLogin(env)), label: "desk-gate" })
   if (fromGh !== undefined) ask.gh = { run: runner, now }
   // The pull request comes first: it must exist, and its base branch says which copy of the rules applies.
   const prAnswer = await github(ask, `/repos/${repo}/pulls/${number}`)
