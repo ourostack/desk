@@ -25,8 +25,8 @@ function desk(name, { roster = false } = {}) {
   mkdirSync(path.join(root, ".desk"), { recursive: true })
   writeFileSync(path.join(root, ".desk/content-home.json"), JSON.stringify(POLICY))
   const base = roster ? path.join(root, "desks/ari") : root
-  mkdirSync(path.join(base, "t/work"), { recursive: true })
-  writeFileSync(path.join(base, "t/work/task.md"), CARD)
+  mkdirSync(path.join(base, "zq9/work"), { recursive: true })
+  writeFileSync(path.join(base, "zq9/work/task.md"), CARD)
   if (roster) {
     mkdirSync(path.join(root, "_meta"), { recursive: true })
     writeFileSync(path.join(root, "_meta/desks.md"), "| alias | identity | path |\n|---|---|---|\n| ari | ari_microsoft | desks/ari |\n")
@@ -38,12 +38,16 @@ function desk(name, { roster = false } = {}) {
   git(root, "update-ref", "refs/remotes/origin/main", "HEAD")
   git(root, "config", "branch.main.remote", "origin")
   git(root, "config", "branch.main.merge", "refs/heads/main")
-  return { root, card: path.join(base, "t/work/task.md"), log: path.join(base, "t/work/log.md") }
+  return { root, card: path.join(base, "zq9/work/task.md"), log: path.join(base, "zq9/work/log.md") }
 }
-const personal = desk("personal")
-const crew = desk("crew", { roster: true })
+let personal, crew, count = 0
 const registry = path.join(home, "desks.md")
-writeFileSync(registry, `| desk | local path | repo |\n|---|---|---|\n| solo | ${personal.root} | sample/personal |\n\n| crew | local path | repo |\n|---|---|---|\n| team | ${crew.root} | sample/team |\n`)
+function fresh() {
+  count += 1
+  personal = desk(`personal-${count}`)
+  crew = desk(`crew-${count}`, { roster: true })
+  writeFileSync(registry, `| desk | local path | repo |\n|---|---|---|\n| solo | ${personal.root} | sample/personal |\n\n| crew | local path | repo |\n|---|---|---|\n| team | ${crew.root} | sample/team |\n`)
+}
 
 function activation(root) {
   const file = path.join(sandbox, `activation-${path.basename(root)}.json`)
@@ -54,7 +58,9 @@ const sha = (file) => (existsSync(file) ? createHash("sha256").update(readFileSy
 const snap = (d) => ({ head: git(d.root, "rev-parse", "HEAD"), status: git(d.root, "status", "--porcelain"), card: sha(d.card), log: sha(d.log) })
 
 const results = []
-function run(label, rootDesk, input, { person = true, extraEnv = {} } = {}) {
+function run(label, which, input, { person = true, extraEnv = {} } = {}) {
+  fresh()
+  const rootDesk = which === "crew" ? crew : personal
   const before = { personal: snap(personal), crew: snap(crew) }
   const file = path.join(sandbox, `input-${results.length}.json`)
   writeFileSync(file, JSON.stringify(input))
@@ -68,9 +74,10 @@ function run(label, rootDesk, input, { person = true, extraEnv = {} } = {}) {
   let report = null
   try { report = JSON.parse(r.stdout) } catch {}
   const after = { personal: snap(personal), crew: snap(crew) }
+  const crewHeadAuthor = git(crew.root, "log", "-1", "--format=%an <%ae> %s")
   const entry = { label, input, exit: r.status, ms: Date.now() - started, result: report?.result ?? null, effects: report?.effects ?? null, before, after }
   results.push(entry)
-  console.log(`\n=== ${label} ===\nexit=${r.status} ms=${entry.ms}\n${JSON.stringify({ before, after }, null, 1)}\nstdout:\n${r.stdout}\nstderr(len ${r.stderr.length}):\n${r.stderr.slice(0, 1500)}`)
+  console.log(`\n=== ${label} ===\nexit=${r.status} ms=${entry.ms} crewLast=${crewHeadAuthor}\n${JSON.stringify({ before, after }, null, 1)}\nstdout:\n${r.stdout}\nstderr(len ${r.stderr.length}):\n${r.stderr.slice(0, 1500)}`)
   return entry
 }
 
@@ -81,13 +88,13 @@ const LOG = "- progress entry from the consumer probe"
 const CH = { purpose: "coordination", lifecycle: "current" }
 // The bound session is a solo personal desk (no --person); the card is in a registered Crew desk, written as the member this machine's sign-in resolves (DESK_PERSON stands in for the sign-in).
 const viaDesk = { person: false }
-run("B refusal atomicity: Crew card status change via `desk` without content_home", personal, { desk: "team", track: "t", slug: "work", status: "processing" }, viaDesk)
-run("G ordinary: Crew card status change via `desk` with content_home commits as the member", personal, { desk: "team", track: "t", slug: "work", status: "processing", note: "ordinary write", content_home: CH }, viaDesk)
-run("F non-member sign-in is refused before any write", personal, { desk: "team", track: "t", slug: "work", note: "x", content_home: CH }, { person: false, extraEnv: { DESK_PERSON: "", DESK_IDENTITY: "nobody" } })
-run("E unregistered desk refused", personal, { desk: "nowhere", track: "t", slug: "work", log: LOG }, viaDesk)
-run("A ordinary: Crew card log-only via `desk` (content_home defaulted)", personal, { desk: "team", track: "t", slug: "work", log: LOG }, viaDesk)
-run("C recovery: log-only on the Crew desk itself as its member", crew, { track: "t", slug: "work", log: LOG })
-run("D recovery: log + status mixed on the Crew desk (content_home still required)", crew, { track: "t", slug: "work", status: "processing", log: LOG })
+run("B refusal atomicity: Crew card status change via `desk` without content_home", "personal", { desk: "team", track: "zq9", slug: "work", status: "processing" }, viaDesk)
+run("G ordinary: Crew card status change via `desk` with content_home commits as the member", "personal", { desk: "team", track: "zq9", slug: "work", status: "processing", note: "ordinary write", content_home: CH }, viaDesk)
+run("F non-member sign-in is refused before any write", "personal", { desk: "team", track: "zq9", slug: "work", note: "x", content_home: CH }, { person: false, extraEnv: { DESK_PERSON: "", DESK_IDENTITY: "nobody" } })
+run("E unregistered desk refused", "personal", { desk: "nowhere", track: "zq9", slug: "work", log: LOG }, viaDesk)
+run("A ordinary: Crew card log-only via `desk` (content_home defaulted)", "personal", { desk: "team", track: "zq9", slug: "work", log: LOG }, viaDesk)
+run("C recovery: log-only on the Crew desk itself as its member", "crew", { track: "zq9", slug: "work", log: LOG })
+run("D recovery: log + status mixed on the Crew desk (content_home still required)", "crew", { track: "zq9", slug: "work", status: "processing", log: LOG })
 
 console.log("\n=== SUMMARY ===")
 for (const r of results) console.log(`${r.label}\n  exit=${r.exit} result=${r.result ? `${r.result.status}/${r.result.code ?? ""}` : "none"} crewHead ${r.before.crew.head.slice(0, 8)}->${r.after.crew.head.slice(0, 8)} personalHead ${r.before.personal.head.slice(0, 8)}->${r.after.personal.head.slice(0, 8)}`)
