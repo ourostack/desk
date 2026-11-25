@@ -839,6 +839,18 @@ test("a different object swapped in between the walk and the open is refused wit
   assert.equal(hashed(), 0)
 })
 
+test("a leaf replaced after the walk and its path restored after the open is refused, the opened descriptor being a different object", async () => {
+  const { root, state, hashed } = await scene()
+  const log = path.join(root, "work/one/log.md")
+  const aside = `${log}.aside`
+  const swapped = state({
+    afterWalk: () => { renameSync(log, aside); writeFileSync(log, LOG_TEXT.replace("entry", "ENTRY")) },
+    afterOpen: () => { unlinkSync(log); renameSync(aside, log) },
+  })
+  assert.equal(swapped, "unknown")
+  assert.equal(hashed(), 0, "the descriptor that was opened is not the walked leaf, so Git is never handed it")
+})
+
 test("the very directory walked, relocated and linked from its old parent between walk and open, is refused without hashing", async () => {
   const { state, hashed, relocate } = await scene()
   assert.equal(state({ afterOpen: () => relocate(false), afterWalk: () => {} }), "unknown")
