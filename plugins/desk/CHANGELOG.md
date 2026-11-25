@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.588 — 2026-11-25
+
+Desk's Git hooks now include a `commit-msg` step. In a repository that has `.github/scripts/attribution.mjs`, it runs that file's own checker over the final message and removes the `Co-authored-by` lines the checker rejects, so a person's co-author stays and the hook never disagrees with the repository's check. A `commit-msg` hook that was already there still runs first and can still refuse the commit. If the checker can't run (for example, node is missing), the commit is refused with a message saying why. Commits no longer reach a pull request that the attribution check then fails, so nobody has to reword and force-push.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.587 — 2026-11-25
 
 A commit that fails while Desk checks the tree it built against HEAD now says which Git call failed and how. The reason names the `git ls-tree` or `git diff-tree` call and carries its own answer: a real `ETIMEDOUT: spawnSync git ETIMEDOUT`, or "the time budget was spent before this step, so it was not run". Before, both cases read the same ("Git could not compare it with HEAD"), so a spent budget could not be told apart from a cut-off call. The commit's deadline, authority and mutation behavior are unchanged, and this does not change the cause of any earlier private-index timeout report.
