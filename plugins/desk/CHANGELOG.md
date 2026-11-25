@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.590 — 2026-11-25
+
+An issue drain that wakes for a person's body edit now keeps the edit history's count and that edit's time as its baseline, as it already did after a bot's edit. The next body change reads the history from its end instead of paging it from the start again, which on a 30,000-edit synthetic history took 301 reads per poll before and 2 after. The baseline is left only when every edit is accounted for, so a person's edit that was not read is never hidden under the count; an early stop leaves none. Which host produced the originally reported traffic is still not established.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.589 — 2026-11-25
 
 An issue drain now reads an issue's events, timeline and comments from their newest end and only as far back as what changed since it last looked (a reopen's drain claim one minute earlier included), instead of paging the whole history every time an open issue's `updated_at` moves or a failed read is retried. Closed issues were already skipped. A read that fails still leaves the issue's marker and its wake where they were. Which host produced the reported traffic is not established here, and a body edit's GraphQL history read is unchanged.
