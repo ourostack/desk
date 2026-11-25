@@ -6,6 +6,7 @@
 
 import { existsSync, readFileSync } from "node:fs"
 import * as path from "node:path"
+import { ACTION_TOOLS } from "../actions/served.js"
 import { TOOL_NAMES } from "../tool-names.js"
 import { readAgentsMd } from "./agents-md.js"
 
@@ -45,15 +46,15 @@ export function hostedRefusal(name, input, env) {
   return reason === undefined ? null : { status: "refused", code: "hosted_unavailable", tool: name, reason }
 }
 
-// task_focus writes nothing: it only sets which task this session works on.
-const READ_ONLY = new Set(["desk_search", "desk_recall", "desk_status", "desk_skill", "task_focus"])
+const READ_ONLY = new Set(["desk_search", "desk_recall", "desk_status", "desk_skill"])
 // Tools that can remove or overwrite what was there: archive relocates a task and desk_save replaces files.
 const DESTRUCTIVE = new Set(["task_archive", "desk_save"])
 
-// desk_doctor is not read-only even though a read-only session may call it: its repairs change state.
+// A tool declared in actions/ serves its generated annotations, so the declaration is the one truth; the lists above
+// cover only tools without one. desk_doctor is not read-only even though a read-only session may call it: its repairs change state.
 export const TOOL_ANNOTATIONS = Object.freeze(Object.fromEntries(TOOL_NAMES.map((name) => [
   name,
-  Object.freeze({ readOnlyHint: READ_ONLY.has(name), destructiveHint: DESTRUCTIVE.has(name) }),
+  ACTION_TOOLS[name]?.annotations ?? Object.freeze({ readOnlyHint: READ_ONLY.has(name), destructiveHint: DESTRUCTIVE.has(name) }),
 ])))
 
 // A hosted client's own memory (claude.ai's, ChatGPT's) would split durable context between the client and the desk.

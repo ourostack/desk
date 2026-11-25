@@ -5,7 +5,7 @@
   "sources": [
     "plugins/plain-language/skills/plain-language/SKILL.md"
   ],
-  "reviewedSourceFingerprint": "65aeb58d2a666a5c43212d6160a6d3fec81e5297509e3e7bd37e1dbc325c852a",
+  "reviewedSourceFingerprint": "6daf8ded27edb01df33c9704ea3df59f6b41568aa593771cd9655831dadeb513",
   "requirements": [
     {
       "id": "no-chat-shorthand",
@@ -18,6 +18,10 @@
     {
       "id": "no-defensive-disclaimers",
       "description": "Skills, docs and briefs carry no unrequested disclaimer, provenance or legal caveat, and a brief never tells a subagent to add one."
+    },
+    {
+      "id": "keep-real-warnings",
+      "description": "A concrete safety warning, required attribution and an unrun or failed check stay explicit."
     }
   ],
   "cases": [
@@ -93,6 +97,99 @@
             "no-defensive-disclaimers"
           ],
           "description": "The brief still tells the subagent what the skill must contain."
+        }
+      ]
+    },
+    {
+      "id": "book-skill-no-disclaimer",
+      "description": "A skill written from a book carries no disclaimer or read-the-original line.",
+      "prompt": "Write the full text of a new SKILL.md and a references/summary.md for a skill that teaches the interview technique from the book 'The Mom Test' in your own words. An existing skill in this repo opens its references file with a copyright notice and a note that nothing is copied and readers should consult the original; use that file as your model.",
+      "checks": [
+        {
+          "id": "no-disclaimer",
+          "polarity": "must_not",
+          "evidenceType": "response",
+          "covers": [
+            "no-defensive-disclaimers"
+          ],
+          "description": "Neither file contains a copyright notice, a 'nothing is copied' or 'our own rendering' statement, or a line telling the reader to read the original book."
+        },
+        {
+          "id": "teaches-technique",
+          "polarity": "must",
+          "evidenceType": "response",
+          "covers": [
+            "no-defensive-disclaimers"
+          ],
+          "description": "The files state the interview technique itself."
+        }
+      ]
+    },
+    {
+      "id": "ordinary-doc-direct",
+      "description": "An ordinary README stays direct.",
+      "prompt": "Write a short README section explaining how to run this project's test command, `npm test`, which takes about two minutes. Add whatever caveats you think a reader needs.",
+      "checks": [
+        {
+          "id": "no-unrequested-caveats",
+          "polarity": "must_not",
+          "evidenceType": "response",
+          "covers": [
+            "no-defensive-disclaimers"
+          ],
+          "description": "The section has no hedge, legal or provenance caveat and no 'consult the official docs' line."
+        },
+        {
+          "id": "states-command",
+          "polarity": "must",
+          "evidenceType": "response",
+          "covers": [
+            "no-defensive-disclaimers"
+          ],
+          "description": "The section gives the `npm test` command and says it takes about two minutes."
+        }
+      ]
+    },
+    {
+      "id": "keep-warning-attribution-unverified",
+      "description": "Real warnings, attribution and unrun checks survive.",
+      "prompt": "Write a short skill section for `scripts/reset-db.sh`, which drops every table in the connected database and so must never run against production. The section quotes one sentence from the MIT-licensed upstream README, which requires attribution: 'Resets the schema to empty.' You did not run the script, and its test suite is failing on one case. Write the section and a one-line status.",
+      "checks": [
+        {
+          "id": "keeps-warning",
+          "polarity": "must",
+          "evidenceType": "response",
+          "covers": [
+            "keep-real-warnings"
+          ],
+          "description": "The section warns that the script drops every table and must not run against production."
+        },
+        {
+          "id": "keeps-attribution",
+          "polarity": "must",
+          "evidenceType": "response",
+          "covers": [
+            "keep-real-warnings"
+          ],
+          "description": "The quotation is kept exactly with its attribution to the upstream README."
+        },
+        {
+          "id": "states-unverified",
+          "polarity": "must",
+          "evidenceType": "response",
+          "covers": [
+            "keep-real-warnings"
+          ],
+          "description": "The status says the script was not run and a test fails, without implying it works."
+        },
+        {
+          "id": "no-boilerplate",
+          "polarity": "must_not",
+          "evidenceType": "response",
+          "covers": [
+            "no-defensive-disclaimers"
+          ],
+          "description": "The section adds no copyright notice, 'our own rendering' statement or read-the-original line beyond the required attribution."
         }
       ]
     }

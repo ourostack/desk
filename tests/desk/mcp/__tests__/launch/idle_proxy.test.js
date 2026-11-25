@@ -443,6 +443,30 @@ test("SIGINT, SIGTERM and SIGHUP go to the running server; with none running the
   assert.deepEqual(h.kills, ["SIGHUP"])
 })
 
+// The proxy re-raises a signal it takes itself so that the signal's default action ends it. While its own listener was
+// still on the signal, the re-raised signal came straight back to that listener, which raised it again, forever: on
+// 2026-11-24 six proxies whose servers had failed to start spun at ~70% of a core each for almost 4 hours after their
+// host's SIGTERM, and never ended. The proxy stops listening before it re-raises.
+test("a proxy with no server stops listening for signals before it takes one itself, so the signal ends it", async () => {
+  const h = harness()
+  await handshaken(h)
+  await h.advance(IDLE)
+  h.last().leave(0)
+  await h.flush()
+  for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) assert.equal(h.signals.listenerCount(signal), 1)
+  h.signals.emit("SIGTERM")
+  assert.deepEqual(h.kills, ["SIGTERM"])
+  for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) assert.equal(h.signals.listenerCount(signal), 0, signal)
+})
+
+test("a proxy whose server is running keeps listening, so the next signal still reaches the server", async () => {
+  const h = harness()
+  await handshaken(h)
+  h.signals.emit("SIGINT")
+  assert.deepEqual(h.kills, [])
+  assert.equal(h.signals.listenerCount("SIGTERM"), 1)
+})
+
 test("with the idle time 0 the server is never ended", async () => {
   const h = harness({ idleMs: 0 })
   await handshaken(h)

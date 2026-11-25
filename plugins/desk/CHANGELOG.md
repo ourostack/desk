@@ -1,5 +1,91 @@
 # desk plugin — changelog
 
+## 3.2.542 — 2026-11-25
+
+Desk's MCP server now vendors Ouro UI v1.3.535, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.541 — 2026-11-25
+
+A Desk MCP server ends when its host sends it SIGTERM, SIGINT or SIGHUP while no Desk server is running behind its idle proxy. Before, the [idle proxy](mcp/idle-proxy.cjs) re-raised the signal while still listening for it, so the signal came straight back and was raised again, forever. The process never ended and used most of a core. On one Ouro host, six of these ran for almost four hours after their servers failed to start. The proxy now stops listening before it re-raises, so the signal's default action ends it.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.540 — 2026-11-25
+
+Desk's MCP server now vendors Ouro UI v1.3.534, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.539 — 2026-11-25
+
+Desk's MCP server now vendors Ouro UI v1.3.533, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.538 — 2026-11-25
+
+Desk's MCP server now vendors Ouro UI v1.3.531, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.537 — 2026-11-24
+
+### No defensive disclaimers in skills, docs or briefs
+
+Agents downstream of Desk no longer write copyright notices, "our own rendering" statements, read-the-original lines or other unrequested provenance caveats into skills, docs, prompts or briefs, and a brief never tells a subagent to add one. Plain Language now states the rule, Desk's start and child-agent lines point skills, prompts and briefs at it, and `using-superpowers-with-desk` applies it to briefs and `writing-skills` use. Concrete warnings, required attribution, exact quotations and unrun or failed checks stay explicit. Follows #1692, which closed #1671.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.536 — 2026-11-24
+
+Desk's MCP server now vendors Ouro UI v1.3.530, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.535 — 2026-11-24
+
+Desk's MCP server now vendors Ouro UI v1.3.529, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.534 — 2026-11-24
+
+Desk's MCP server now vendors Ouro UI v1.3.528, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.533 — 2026-11-24
+
+Desk's MCP server now vendors Ouro UI v1.3.527, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.532 — 2026-11-24
+
+Desk's MCP server now vendors Ouro UI v1.3.526, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.531 — 2026-11-24
+
+Desk's MCP server now vendors Ouro UI v1.3.525, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.530 — 2026-11-24
+
+Desk now takes every declared tool's read-only and destructive hints from its declaration, in the first tool list and after the session is ready, instead of a second hand-kept list. `task_focus` stays read-only; `desk_status` now reports that it is not read-only, matching its declaration.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.529 — 2026-11-24
+
+Desk's MCP server now vendors Ouro UI v1.3.524, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.528 — 2026-11-24
 
 The tools list a client actually receives now marks `task_focus` as read-only. The earlier fix declared it in the action declarations, but the front door served its own annotation list, so a real session still saw `readOnlyHint: false`.

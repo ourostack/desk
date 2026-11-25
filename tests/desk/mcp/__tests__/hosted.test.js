@@ -5,7 +5,6 @@ import { strict as assert } from "node:assert"
 import { existsSync, mkdirSync } from "node:fs"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
-import { READ_ONLY_TOOLS } from "../../../../plugins/desk/mcp/src/factory/headless-flag.js"
 import { FRONT_DOOR_TOOLS } from "../../../../plugins/desk/mcp/src/runtime/front-door.js"
 import { createDeskSession } from "../../../../plugins/desk/mcp/src/runtime/desk-session.js"
 import {
@@ -54,10 +53,10 @@ test("the lists name real tools, repairs and skills", () => {
   for (const reason of Object.values(HOSTED_SHELL_SKILLS)) assert.ok(reason.length > 0)
 })
 
-test("TOOL_ANNOTATIONS covers every tool: read-only is the read-only list minus desk_doctor, plus task_focus; destructive is the two overwriting tools", () => {
+test("TOOL_ANNOTATIONS covers every tool: read-only follows the declarations in actions/ (desk_status, the session-start health check, declares itself read-only); destructive is the two overwriting tools", () => {
   assert.deepEqual(Object.keys(TOOL_ANNOTATIONS), TOOL_NAMES)
   const readOnly = TOOL_NAMES.filter((name) => TOOL_ANNOTATIONS[name].readOnlyHint)
-  assert.deepEqual(readOnly.sort(), [...READ_ONLY_TOOLS.filter((name) => name !== "desk_doctor"), "task_focus"].sort())
+  assert.deepEqual(readOnly.sort(), ["desk_recall", "desk_search", "desk_skill", "desk_status", "task_focus"])
   const destructive = TOOL_NAMES.filter((name) => TOOL_ANNOTATIONS[name].destructiveHint)
   assert.deepEqual(destructive.sort(), ["desk_save", "task_archive"])
   assert.equal(TOOL_ANNOTATIONS.desk_doctor.readOnlyHint, false)

@@ -416,7 +416,7 @@
       "id": "mcp:desk_status",
       "group": "desk-mcp-health",
       "when": "First call of a session, or whenever Desk seems off, to learn readiness, the bound location, sync and active work",
-      "effect": "write",
+      "effect": "read",
       "errors": [
         {
           "code": "no-desk-root",
