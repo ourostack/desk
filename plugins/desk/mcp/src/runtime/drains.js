@@ -282,7 +282,9 @@ export function acquireDrainLock(lockFile, { alive = processAlive, onStep = () =
 
 /** The one step that must never replace what is at the lock: POSIX `rename` refuses all but an absent or empty directory, but Windows' replaces a plain file. */
 function publishDirectory(from, to) {
-  if (process.platform === "win32") moveWithoutReplace(from, to)
+  // Only Windows runs the first branch; the native Windows suite (desk-windows-suite.yml) exercises it, a Linux or macOS run cannot.
+  /* istanbul ignore if */
+  if (process.platform === "win32") moveWithoutReplace(from, to, { shells: ["pwsh", "powershell"] })
   else renameSync(from, to)
 }
 
@@ -298,11 +300,11 @@ const MOVE_SCRIPT = "try { [System.IO.Directory]::Move($env:DESK_MOVE_FROM, $env
  * Moves a directory to a path that must not exist, failing (and changing nothing) if anything is there. The next shell is tried only
  * when the first cannot be launched at all; a move that ran, was refused or timed out is never retried and never falls back to `rename`.
  */
-export function moveWithoutReplace(from, to, { shells = ["pwsh", "powershell"], timeoutMs = TOKEN_MS } = {}) {
+export function moveWithoutReplace(from, to, { shells, timeoutMs = TOKEN_MS }) {
   for (const shell of shells) {
     const result = spawnSync(shell, ["-NoProfile", "-NonInteractive", "-Command", MOVE_SCRIPT], { env: { ...process.env, DESK_MOVE_FROM: from, DESK_MOVE_TO: to }, encoding: "utf8", timeout: timeoutMs, windowsHide: true })
     if (result.error?.code === "ENOENT") continue
-    if (result.error) throw Object.assign(new Error(`${shell}: ${result.error.message}`), { code: result.error.code ?? "ESPAWN" })
+    if (result.error) throw Object.assign(new Error(`${shell}: ${result.error.message}`), { code: result.error.code })
     if (result.status === 0) return
     throw Object.assign(new Error(`Run the command again once what is at the lock is dealt with: ${shell} did not move it (exit ${result.status}): ${String(result.stderr).trim() || "no message"}`), { code: "desk_move_refused" })
   }
@@ -363,15 +365,16 @@ function sweepStaging(dir, base, alive) {
 }
 
 function retireDeadOwner(lockFile, alive, onStep) {
-  let names
+  let names = null
   try {
-    if (!lstatSync(lockFile).isDirectory()) throw legacyLock(lockFile)
-    names = readdirSync(lockFile)
+    if (lstatSync(lockFile).isDirectory()) names = readdirSync(lockFile)
   } catch (error) {
+    // A lock that vanished since the publish failed belongs to someone who just released it: the next attempt publishes.
+    /* istanbul ignore if -- a race with another process's release */
     if (error.code === "ENOENT") return
-    if (error.code && error.code !== "ENOTDIR") throw unavailable(lockFile, error)
-    throw error
+    throw unavailable(lockFile, error)
   }
+  if (names === null) throw legacyLock(lockFile)
   if (names.length === 0) return removeEmptyLock(lockFile)
   if (names.length !== 1 || !OWNER_FILE.test(names[0])) {
     throw lockProblem("desk_drains_lock_unrecognized", lockFile, `${lockFile} holds ${names.slice(0, 5).join(", ")}, which is not one owner file of this Desk's lock`, `${lockFile}, and whether another tool or a newer Desk made it`, "leave it, or ask its owner; Desk removes nothing it did not make")
@@ -380,6 +383,7 @@ function retireDeadOwner(lockFile, alive, onStep) {
   try {
     pid = Number.parseInt(readFileSync(path.join(lockFile, names[0]), "utf8"), 10)
   } catch (error) {
+    /* istanbul ignore if -- a race with another process's release */
     if (error.code === "ENOENT") return
     throw unavailable(lockFile, error)
   }
@@ -551,6 +555,8 @@ async function advance(api, repo, issue, scan) {
     return conclude(scan, issue)
   }
   let direction = scan.base !== null && scan.next === "bwd" ? "bwd" : "fwd"
+  // A finished side ends the pass in `conclude`, which either settles it or restarts both sides, so this only guards a state no page can produce.
+  /* istanbul ignore if */
   if (scan[direction].done) direction = direction === "fwd" ? "bwd" : "fwd"
   const side = scan[direction]
   const page = await api.editPage(repo, issue.number, { backward: direction === "bwd", cursor: side.cursor })
@@ -783,7 +789,7 @@ export async function pollDrain(drain, states, { connect, now, desk }) {
     delete state.lastErrorCode
     if (left) {
       state.lastError = left.message
-      if (left.code) state.lastErrorCode = left.code
+      state.lastErrorCode = left.code
     }
   } catch (error) {
     state.lastError = error.message

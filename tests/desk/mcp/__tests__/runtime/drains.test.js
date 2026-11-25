@@ -753,6 +753,7 @@ test("a label or state change by the polling account during the drain's turn is 
     ["a label the drain's scripts apply", [byDrain(labelEvent("2026-11-13T02:04:00Z", "waiting:external")), byDrain(labelEvent("2026-11-13T02:04:00Z", "lane:window")), byDrain(labelEvent("2026-11-13T02:04:00Z", "agent:drain"))], "2026-11-13T02:04:00Z", false],
     ["a label it removes", [byDrain(labelEvent("2026-11-13T02:10:00Z", "waiting:external", "unlabeled"))], "2026-11-13T02:10:00Z", false],
     ["a reopen it does", [byDrain(lifecycle("reopened", "2026-11-13T02:20:00Z"))], "2026-11-13T02:20:00Z", false],
+    ["an assignment it makes", [byDrain(lifecycle("assigned", "2026-11-13T02:04:00Z", "maintainer", { assignee: { login: "maintainer" } }))], "2026-11-13T02:04:00Z", false],
     ["a label just before the wake was acknowledged", [byDrain(labelEvent("2026-11-13T01:59:30Z", "lane:window"))], "2026-11-13T02:00:30Z", false],
     ["a label by someone else in the turn", [labelEvent("2026-11-13T02:04:00Z", "lane:window"), { ...labelEvent("2026-11-13T02:04:00Z", "lane:window"), actor: { login: "someone" } }], "2026-11-13T02:04:00Z", true],
     ["a reopen by someone else in the turn", [{ ...lifecycle("reopened", "2026-11-13T02:20:00Z"), actor: { login: "someone" } }], "2026-11-13T02:20:00Z", true],
@@ -2070,6 +2071,10 @@ test("a bot's body edit does not hide the rest: a person's comment, an outside l
   assert.match(assigned.sent[0][1], /assigned dev/u)
   const unassigned = await quietEdit((w) => { w.events = async () => [lifecycle("unassigned", iso(NOW + 300_000), "ari", { assignee: { login: "dev" } })] })
   assert.match(unassigned.sent[0][1], /unassigned dev/u)
+  const nobody = await quietEdit((w) => { w.events = async () => [lifecycle("unassigned", iso(NOW + 300_000), "ari")] })
+  assert.match(nobody.sent[0][1], /unassigned nobody/u)
+  const opening = await quietEdit((w) => { w.issues[0] = { ...w.issues[0], created_at: iso(NOW + 299_000) }; w.events = async () => [lifecycle("assigned", iso(NOW + 300_000), "ari", { assignee: { login: "dev" } })] })
+  assert.deepEqual(opening.sent, [], "an assignment made as the issue was opened is not news")
   const own = await quietEdit((w) => { w.comments = async () => [statusComment(8, iso(NOW + 300_000))] })
   assert.deepEqual(own.sent, [], "the drain's own comment still wakes nobody")
 })
@@ -2114,6 +2119,12 @@ test("editPage: a missing issue is null and a page that is not a connection has 
   await assert.rejects((await connect(response({}, { status: 502 }))).editPage("o/r", 1), /HTTP 502 for \/graphql/u)
   await assert.rejects((await connect(response({ errors: [{ message: "Something went wrong" }] }))).editPage("o/r", 1), /Something went wrong/u)
   await assert.rejects((await connect(response({ data: null }))).editPage("o/r", 1), /refused or unreadable/u)
+  await assert.rejects((await connect(response({ errors: [null, {}] }))).editPage("o/r", 1), /refused or unreadable \(; \)/u)
+  await assert.rejects((await connect({ ...response({}), json: async () => { throw new Error("not json") } })).editPage("o/r", 1), /refused or unreadable \(no data\)/u)
+  assert.deepEqual((await (await connect(editAnswer([null, { editor: { __typename: null, login: null } }], { next: true }))).editPage("o/r", 1)).edits, [
+    { id: null, editedAt: null, deletedAt: null, editor: null },
+    { id: null, editedAt: null, deletedAt: null, editor: { type: null, login: null } },
+  ])
   const limited = response({ errors: [{ type: "RATE_LIMITED", message: "API rate limit exceeded" }] }, { headers: { "x-ratelimit-reset": "1900000000" } })
   await assert.rejects((await connect(limited)).editPage("o/r", 1), (error) => error.code === "drains_rate_limited" && /GraphQL limit is used up/u.test(error.message))
   await assert.rejects((await connect(response({}, { status: 403, headers: { "x-ratelimit-remaining": "0" } }))).editPage("o/r", 1), (error) => error.rateLimited === true)
@@ -2487,4 +2498,120 @@ test("an unreadable or vanished part of the lock is named, not called busy, and 
   } finally {
     chmodSync(dir, 0o700)
   }
+})
+
+test("the lock's remaining failure paths name what failed: an error without a code, a stranger in staging, a leftover of process 0, a refusal with no message", async (t) => {
+  const dir = await mkTempRoot("desk-drains-")
+  const lock = path.join(dir, "poll.lock")
+  assert.throws(() => acquireDrainLock(lock, { rename: () => { throw new Error("boom") } }), (error) => /desk_drains_lock_unavailable/u.test(error.message) && /boom/u.test(error.message) && /error code unknown/u.test(error.message))
+  let staging
+  assert.throws(() => acquireDrainLock(lock, { rename: (from) => { staging = from; writeFileSync(path.join(from, "stranger"), "x"); throw Object.assign(new Error("timed out"), { code: "ETIMEDOUT" }) } }), /desk_drains_lock_unavailable/u)
+  assert.deepEqual(readdirSync(staging), ["stranger"], "a file that is not this run's owner file is not removed")
+  removeTreeSync(staging)
+  const orphan = path.join(dir, `poll.lock.new-0-${randomUUID()}`)
+  mkdirSync(orphan)
+  acquireDrainLock(lock)()
+  assert.deepEqual(readdirSync(dir), [], "a staging directory of process 0 is a leftover, never a live process")
+  if (process.platform === "win32") return
+  const from = path.join(dir, "from")
+  mkdirSync(from)
+  assert.throws(() => moveWithoutReplace(from, path.join(dir, "to"), { shells: ["false"] }), (error) => error.code === "desk_move_refused" && /exit 1\): no message/u.test(error.message), "a refusal that says nothing is still reported")
+  assert.equal(existsSync(from), true)
+  if (process.getuid?.() === 0) return t.skip("needs POSIX permissions as an ordinary user")
+  const locked = (setup, act, what) => {
+    const sub = mkdtempSync(path.join(dir, "case-"))
+    const target = path.join(sub, "poll.lock")
+    const finish = setup(sub, target)
+    try {
+      assert.throws(() => act(target, sub), (error) => /desk_drains_lock_unavailable/u.test(error.message) && /EACCES/u.test(error.message) && !/still working/u.test(error.message), what)
+    } finally {
+      chmodSync(sub, 0o700)
+      if (existsSync(target)) chmodSync(target, 0o700)
+    }
+    return finish
+  }
+  locked((sub, target) => { plant(target, DEAD); chmodSync(target, 0o500) }, (target) => acquireDrainLock(target, { alive: liveExceptDead }), "a dead owner's file that cannot be removed")
+  locked((sub, target) => { mkdirSync(target); writeFileSync(path.join(target, "a"), "x"); chmodSync(target, 0o000) }, (target) => acquireDrainLock(target), "a lock directory that cannot be read")
+  locked((sub, target) => mkdirSync(target), (target, sub) => acquireDrainLock(target, { rename: (staged) => { removeTreeSync(staged); chmodSync(sub, 0o500); throw Object.assign(new Error("not empty"), { code: "ENOTEMPTY" }) } }), "an empty lock that cannot be removed")
+  const sub = mkdtempSync(path.join(dir, "case-"))
+  const release = acquireDrainLock(path.join(sub, "poll.lock"))
+  chmodSync(path.join(sub, "poll.lock"), 0o500)
+  try {
+    assert.throws(release, (error) => /desk_drains_lock_unavailable/u.test(error.message) && /EACCES/u.test(error.message))
+  } finally {
+    chmodSync(path.join(sub, "poll.lock"), 0o700)
+  }
+  release()
+})
+
+test("edit histories that are unusable, behind, unexplained or already at a baseline's second are judged conservatively, and a failing issue holds the cursor back", async () => {
+  const BASE = iso(NOW + 60_000)
+  const based = async (issues = [ISSUE()], options, baseline = true) => {
+    const w = await editsWorld(issues, options)
+    for (const item of issues) w.hist[item.number] = history(3)
+    await w.poll()
+    if (baseline) {
+      w.change(1, NOW + 60_000, botEdit("n0", BASE))
+      await w.poll(NOW + 60_000)
+    }
+    return w
+  }
+  const pages = (w, answer) => { w.hist[1] = { count: 0, extra: [], total: 5, page: answer } }
+  const old = (index) => botEdit(`o${index}`, iso(LONG_AGO + index * 1000))
+  const n0 = botEdit("n0", BASE)
+  const outcome = async (name, setup, wakes) => {
+    const w = await based()
+    w.change(1, NOW + 360_000, null)
+    setup(w)
+    const out = await w.poll(NOW + 360_000)
+    assert.equal(out.wakes.length, wakes, name)
+    return w
+  }
+  await outcome("a new bot edit in the baseline's own second", (w) => pages(w, () => ({ nodes: [old(0), old(1), old(2), n0, botEdit("x", BASE)], hasMore: false, cursor: "c" })), 0)
+  await outcome("more new edits than the count allows", (w) => pages(w, () => ({ nodes: [old(0), botEdit("x", iso(NOW + 120_000)), botEdit("y", iso(NOW + 120_000))], hasMore: true, cursor: "c" })), 1)
+  await outcome("a count that cannot be explained", (w) => pages(w, () => ({ nodes: [old(0), old(1), old(2), n0], hasMore: false, cursor: "c" })), 1)
+  await outcome("an unreadable page", (w) => pages(w, () => ({ nodes: null, hasMore: true, cursor: "c" })), 1)
+  await outcome("an edit that is not an object", (w) => pages(w, () => ({ nodes: [null], hasMore: true, cursor: "c" })), 1)
+  let call = 0
+  await outcome("edits that arrive while the history is read, which nothing explains", (w) => {
+    pages(w, function () {
+      call += 1
+      this.total = call === 1 ? 5 : 6
+      return { nodes: call === 1 ? [old(0)] : call === 2 ? [n0] : [old(0)], hasMore: call === 1, cursor: "c" }
+    })
+  }, 1)
+  const lagging = await based()
+  lagging.change(1, NOW + 360_000, botEdit("n", iso(NOW + 360_000)))
+  lagging.hist[1].stamp = T(0)
+  await lagging.poll(NOW + 360_000)
+  assert.equal((await lagging.poll(NOW + 720_000)).errors.length, 1, "still behind: read again next poll")
+  lagging.hist[1].stamp = undefined
+  lagging.hist[1].page = () => ({ nodes: null, hasMore: true, cursor: "c" })
+  assert.equal((await lagging.poll(NOW + 1_080_000)).wakes.length, 1, "an unreadable page after the lag is news")
+  const limited = await outcome("a quota error from the page", (w) => { w.hist[1] = Object.assign(new Error("Wait for the quota to reset: used up"), { code: "drains_rate_limited" }) }, 0)
+  assert.equal(limited.state().lastErrorCode, "drains_rate_limited")
+  const bare = await based([ISSUE()], { limit: 25 }, false)
+  bare.change(1, NOW + 360_000, botEdit("n", iso(NOW + 360_000)))
+  delete bare.api.graphqlQuota
+  delete bare.api.graphqlCost
+  const held = await bare.poll(NOW + 360_000)
+  assert.match(held.errors[0].error, /quota/u, "a connection that reports no quota is held by the last reading")
+  const gone = await based([issue(1, T(0), "A", "health: 0"), issue(2, T(0), "B")], { limit: 26 }, false)
+  gone.hist[1] = history(500_100)
+  gone.change(1, NOW + 360_000, botEdit("n", iso(NOW + 360_000)))
+  await gone.poll(NOW + 360_000)
+  assert.ok(gone.state().scans[1])
+  gone.issues.splice(0, 1)
+  gone.change(2, NOW + 720_000, personEdit("p", iso(NOW + 720_000)))
+  await gone.poll(NOW + 720_000)
+  assert.equal(gone.state().scans[1], undefined, "a scan for an issue that is no longer changed is dropped")
+  const many = await based([1, 2, 3, 4, 5].map((n) => issue(n, T(0), `I${n}`, "health: 0")), undefined, false)
+  for (const n of [1, 2, 3, 4, 5]) {
+    many.hist[n] = Object.assign(new Error("Check gh auth status, then try again: HTTP 502"), { code: "drains_check_gh_auth_status_then" })
+    many.issues[n - 1] = { ...many.issues[n - 1], updated_at: iso(NOW + n * 60_000), body: `changed ${n}` }
+  }
+  many.issues.push(issue(9, iso(NOW + 600_000)))
+  const out = await many.poll(NOW + 600_000)
+  assert.match(out.errors[0].error, /5 issue\(s\) were left for it: .*\), …/u)
+  assert.equal(many.state().cursor, iso(NOW + 60_000), "the cursor stays at the earliest failure, though a later issue was read")
 })
