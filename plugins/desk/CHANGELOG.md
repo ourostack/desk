@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.556 — 2026-11-25
+
+Desk's MCP server now vendors Ouro UI v1.3.542, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.555 — 2026-11-25
 
 ### A card staged by a failed `task_create` can be finished after many unrelated commits
