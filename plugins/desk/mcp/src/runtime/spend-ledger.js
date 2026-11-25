@@ -11,13 +11,14 @@
 // (any other method, GraphQL included), `refused` (held back here) or `unknown` (sent, but no answer came back: a timeout or a dropped
 // connection, which may or may not have been charged; the shim's report counts it as sent, the upper bound). `<kind>.rate` is
 // "remaining reset limit fetched" for the REST `core` pool, refreshed from `GET /rate_limit` (free) at most once a minute; here it is also
-// refreshed from the `x-ratelimit-*` headers of every answer, so the floor sees a burst before the minute is up. `<kind>.hold` is
+// refreshed from the `x-ratelimit-*` headers of every answer, so the floor sees a burst before the minute is up. Writes take a lock file and
+// only ever tighten (a later window replaces, within one window the lower remaining wins), so concurrent processes cannot raise it. `<kind>.hold` is
 // "until \t why". Reads below MS_DESK_GH_FLOOR (500) are refused for the session spending most, and for any read that is not on the merge
 // path; merge-path reads run on to MS_DESK_GH_MERGE_FLOOR (half the floor). Writes and GraphQL (its own pool) always run, and GraphQL is
 // not counted in the REST tally.
 
 import { createHash } from "node:crypto"
-import { appendFileSync, closeSync, fstatSync, openSync, readFileSync, readSync, renameSync, statSync, writeFileSync } from "node:fs"
+import { appendFileSync, closeSync, fstatSync, openSync, readFileSync, readSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs"
 import * as path from "node:path"
 import { looksLikeNodeTestRunner } from "./test-state-guard.js"
 
@@ -41,6 +42,11 @@ let warned = false
 
 /** How many sends this process could not write to the ledger (an unwritable folder), so an attribution report can say it is incomplete. */
 export const unrecordedSends = () => unrecorded
+
+let unattributed = 0
+
+/** How many ledger rows this process wrote for a token whose account could not be told (kind `unresolved`): the shim's report groups only work and personal, so these never show in it. */
+export const unattributedSends = () => unattributed
 
 const count = (value, fallback) => (/^\d+$/u.test(String(value ?? "")) ? Number(value) : fallback)
 
@@ -108,15 +114,53 @@ function readRate(dir, kind) {
   }
 }
 
-function writeRate(dir, kind, { remaining, reset, limit }, now) {
-  const file = path.join(dir, `${kind}.rate`)
-  const temp = `${file}.${process.pid}`
-  writeFileSync(temp, `${remaining} ${reset} ${limit} ${now}\n`)
-  renameSync(temp, file)
+const LOCK_STALE_MS = 10_000
+const LOCK_TRIES = 200
+const pause = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
+
+// One writer at a time per rate file, across processes: an exclusive lock file, broken when its owner is long gone. False when the lock
+// could not be had, in which case the write is skipped (the next answer or refresh carries the numbers).
+function locked(file, write) {
+  const lock = `${file}.lock`
+  for (let attempt = 0; attempt < LOCK_TRIES; attempt += 1) {
+    try {
+      closeSync(openSync(lock, "wx"))
+    } catch {
+      try {
+        if (Date.now() - statSync(lock).mtimeMs > LOCK_STALE_MS) unlinkSync(lock)
+      } catch {
+        // Released between the two calls.
+      }
+      pause(5)
+      continue
+    }
+    try {
+      write()
+    } finally {
+      unlinkSync(lock)
+    }
+    return true
+  }
+  return false
 }
 
-// The REST pool's numbers from an answer's headers. Another window (a later reset) replaces the stored one; within one window the lower
-// remaining wins, so answers arriving out of order or from a concurrent process only ever tighten the picture.
+// Fold one observation of the REST pool into the stored numbers. A later window replaces the stored one, an earlier one is ignored, and
+// within one window the lower remaining wins together with the ceiling of the answer that gave it, so answers arriving out of order, from
+// a free refresh or from a concurrent process only ever tighten the picture.
+function mergeRate(dir, kind, { remaining, reset, limit }, now) {
+  const file = path.join(dir, `${kind}.rate`)
+  return locked(file, () => {
+    const had = readRate(dir, kind)
+    if (had.reset !== null && had.reset > reset) return
+    const keep = had.reset === reset && had.remaining !== null && had.remaining < remaining
+    const next = keep ? { remaining: had.remaining, limit: had.limit ?? limit } : { remaining, limit }
+    const temp = `${file}.${process.pid}`
+    writeFileSync(temp, `${next.remaining} ${reset} ${next.limit} ${now}\n`)
+    renameSync(temp, file)
+  })
+}
+
+// The REST pool's numbers from an answer's headers.
 function noteRate(dir, kind, response, now) {
   try {
     const header = (name) => response.headers?.get?.(name) ?? null
@@ -124,10 +168,7 @@ function noteRate(dir, kind, response, now) {
     if (resource !== null && resource !== "core") return
     const [remaining, limit, reset] = ["x-ratelimit-remaining", "x-ratelimit-limit", "x-ratelimit-reset"].map((name) => (/^\d+$/u.test(String(header(name))) ? Number(header(name)) : null))
     if (remaining === null || limit === null || reset === null) return
-    const had = readRate(dir, kind)
-    if (had.reset !== null && had.reset > reset) return
-    const same = had.reset === reset && had.remaining !== null
-    writeRate(dir, kind, { remaining: same ? Math.min(had.remaining, remaining) : remaining, reset, limit }, now)
+    mergeRate(dir, kind, { remaining, reset, limit }, now)
   } catch {
     // The headers are a refinement of the stored numbers; the next read refreshes them.
   }
@@ -147,7 +188,7 @@ async function refreshRate({ dir, kind, fetchFn, init, now }) {
         try {
           const response = await fetchFn(`${API}/rate_limit`, { headers: init?.headers, signal: init?.signal })
           const core = response.status === 200 ? JSON.parse(await response.text())?.resources?.core : null
-          if (core && [core.remaining, core.reset, core.limit].every((value) => Number.isInteger(value))) writeRate(dir, kind, core, now)
+          if (core && [core.remaining, core.reset, core.limit].every((value) => Number.isInteger(value))) mergeRate(dir, kind, core, now)
         } catch {
           // Without fresh numbers the stored ones (or none) decide.
         } finally {
@@ -160,14 +201,14 @@ async function refreshRate({ dir, kind, fetchFn, init, now }) {
 }
 
 /** Why a read must wait under the floor or an account hold, or null when it may run. The shim's rule (see the header). */
-function heldReason({ dir, kind, session, call, env, now }) {
+function heldReason({ dir, kind, pool, session, call, env, now }) {
   try {
-    const [until, ...why] = readFileSync(path.join(dir, `${kind}.hold`), "utf8").trim().split("\t")
+    const [until, ...why] = readFileSync(path.join(dir, `${pool}.hold`), "utf8").trim().split("\t")
     if (count(until, 0) > now) return `Wait until ${clock(count(until, 0))}Z, then repeat: the ${kind} account is on hold (${why.join("\t") || "no reason given"}), so Desk's own GitHub reads are held back to keep its REST quota for a service that needs it`
   } catch {
     // No hold.
   }
-  const { remaining, reset, limit } = readRate(dir, kind)
+  const { remaining, reset, limit } = readRate(dir, pool)
   const floor = count(env.MS_DESK_GH_FLOOR, 500)
   if (remaining === null || reset === null || reset <= now || remaining >= floor) return null
   const merge = Math.min(count(env.MS_DESK_GH_MERGE_FLOOR, Math.floor(floor / 2)), floor)
@@ -190,32 +231,41 @@ const bearer = (init) => {
 }
 
 const identities = new Map()
+const asking = new Map()
 
-// Which account a token belongs to: the login the caller knows, else what GitHub says for `GET /user` (one call per token per process
-// once answered, kept by the token's digest, never the token). A failed lookup is not kept, so the next call asks again. `probe` is how
-// the lookup went (null when none was sent): "apiget" when answered, "unknown" when it got no answer.
+// Which account a token belongs to: the login the caller knows, else what GitHub says for `GET /user`, once per token per process even
+// when several calls start together (one asks, the rest wait for it), kept by the token's digest, never the token. An answer that names
+// no account (a 403 for an app's installation token, say) is kept as "". A lookup that got no answer (`transient`: a dropped connection,
+// a 5xx or a 429) is not kept, so the next call asks again. `probe` is how the lookup went for the call that sent it ("apiget" when
+// answered, "unknown" when it got no answer; null for a call that sent none), `id` the token's digest.
 async function loginOf({ token, hint, fetchFn, init }) {
-  if (hint) return { login: hint, probe: null }
+  if (hint) return { login: hint, probe: null, transient: false, id: "" }
   const id = createHash("sha256").update(token).digest("hex")
-  if (identities.has(id)) return { login: identities.get(id), probe: null }
-  try {
-    const response = await fetchFn(`${API}/user`, { headers: init?.headers, signal: init?.signal })
-    const login = response.status === 200 ? JSON.parse(await response.text())?.login : ""
-    if (typeof login === "string" && login !== "") {
-      identities.set(id, login)
-      return { login, probe: "apiget" }
+  if (identities.has(id)) return { login: identities.get(id), probe: null, transient: false, id }
+  if (asking.has(id)) return { ...(await asking.get(id)), probe: null }
+  const ask = (async () => {
+    try {
+      const response = await fetchFn(`${API}/user`, { headers: init?.headers, signal: init?.signal })
+      const login = response.status === 200 ? JSON.parse(await response.text())?.login : ""
+      const found = typeof login === "string" ? login : ""
+      if (response.status >= 500 || response.status === 429) return { login: "", probe: "unknown", transient: true, id }
+      identities.set(id, found)
+      return { login: found, probe: "apiget", transient: false, id }
+    } catch {
+      return { login: "", probe: "unknown", transient: true, id }
+    } finally {
+      asking.delete(id)
     }
-    return { login: "", probe: response.status >= 500 || response.status === 0 ? "unknown" : "apiget" }
-  } catch {
-    return { login: "", probe: "unknown" }
-  }
+  })()
+  asking.set(id, ask)
+  return ask
 }
 
 /**
  * `fetch` that records each send to https://api.github.com in the shim's ledger and holds reads under its floor (throwing `SpendHeld`
  * before anything is sent). Only requests that carry a token are accounted: they spend an account's quota. `login()` is the account the
  * token belongs to when the caller knows it, else GitHub is asked once per token; the repository's owner is never a stand-in for it, and a
- * token whose account cannot be told is recorded as kind `unresolved` and never floored. `label` names this process in the ledger when the
+ * token whose account GitHub names none for (an installation token) is recorded as kind `unresolved`, which the shim's report does not group (`unattributedSends()` counts them), and floored on the numbers its own answers carry; one whose lookup got no answer holds the read, as nothing says which floor applies. `label` names this process in the ledger when the
  * host gives no session id. A send that gets no answer is recorded as `unknown`. A ledger that cannot be written never stops the call: it
  * raises a process warning (DESK_SPEND_UNRECORDED) and counts in `unrecordedSends()`.
  */
@@ -226,11 +276,13 @@ export function ledgeredFetch(fetchFn, { env, login = () => "", label = "desk", 
     const token = call === null ? "" : bearer(init)
     const dir = token === "" ? null : ledgerDir(env)
     if (dir === null) return fetchFn(url, init)
-    const { login: account, probe } = await loginOf({ token, hint: login(), fetchFn, init })
+    const { login: account, probe, transient, id } = await loginOf({ token, hint: login(), fetchFn, init })
     const kind = account === "" ? "unresolved" : kindOf(account)
+    const pool = account === "" ? `unresolved-${id.slice(0, 12)}` : kind
     const at = () => Math.floor(now() / 1000)
     const log = (mode, route = call.route, repo = call.repo) => {
       try {
+        if (kind === "unresolved") unattributed += 1
         appendFileSync(path.join(dir, "calls.log"), `${at()}\t${kind}\tapi ${route.slice(0, 160)}\t${session}\t${repo}\t${mode}\n`)
       } catch (error) {
         unrecorded += 1
@@ -241,9 +293,13 @@ export function ledgeredFetch(fetchFn, { env, login = () => "", label = "desk", 
       }
     }
     if (probe !== null) log(probe, "user", "")
-    if (call.read && kind !== "unresolved") {
-      await refreshRate({ dir, kind, fetchFn, init, now: at() })
-      const held = heldReason({ dir, kind, session, call, env, now: at() })
+    if (call.read) {
+      if (transient) {
+        log("refused")
+        throw new SpendHeld("Repeat once GitHub answers `GET /user`: Desk could not tell which account this token belongs to, so its read was held back rather than counted against a guessed quota floor")
+      }
+      await refreshRate({ dir, kind: pool, fetchFn, init, now: at() })
+      const held = heldReason({ dir, kind, pool, session, call, env, now: at() })
       if (held !== null) {
         log("refused")
         throw new SpendHeld(held)
@@ -256,7 +312,7 @@ export function ledgeredFetch(fetchFn, { env, login = () => "", label = "desk", 
       log("unknown")
       throw error
     }
-    if (kind !== "unresolved" && !call.graphql) noteRate(dir, kind, response, at())
+    if (!call.graphql) noteRate(dir, pool, response, at())
     log(response.status === 304 ? "etag" : call.read ? "apiget" : "write")
     return response
   }
