@@ -211,7 +211,7 @@ function qualifyLog(root, rel) {
 }
 const sameChain = (a, b) => a.chain.length === b.chain.length && a.chain.every((entry, i) => entry.dev === b.chain[i].dev && entry.ino === b.chain[i].ino)
 
-// A queued log is already in the working tree. It counts as committed only when the working file, hashed with the path's own Git filters (EOL included), is the very blob `head` holds at that path. Status flags such as assume-unchanged cannot hide a difference from that comparison, and every path is literal. A path Git neither tracks at `head` nor shows as untracked (missing, ignored) stays unknown.
+// A queued log is already in the working tree. It counts as committed only when the working file, hashed with the path's own Git filters (EOL included), is the very blob `head` holds at that path. Status flags such as assume-unchanged cannot hide a difference from that comparison, and every path is literal. A path Git neither tracks at `head` nor lists as indexed or untracked (missing, ignored) stays unknown; that listing reads names only, never the file's bytes, and runs only through a qualified namespace.
 // Acquisition: the qualified namespace is walked, the leaf opened with O_NOFOLLOW, and the descriptor must be the walked leaf (exact bigint dev/ino) and the walk must repeat unchanged BEFORE Git is handed the descriptor, and again after. Git then reads that descriptor; `--path` only supplies the logical attribute/filter context. This pins what is hashed to the object the qualified path named; it does not keep the namespace unchanged while reading, and Node has no race-free openat. It observes content at `head`; it does not attribute who wrote it. `probe` is a test seam between the steps.
 export function logCommitState(root, env, rel, head, probe = {}) {
   if (typeof rel !== "string" || !rel || path.isAbsolute(rel) || rel.split(/[\\/]/u).includes("..") || !head) return "unknown"
@@ -219,8 +219,12 @@ export function logCommitState(root, env, rel, head, probe = {}) {
   const first = qualifyLog(root, rel)
   const blob = git(["rev-parse", "--verify", `${head}:${rel}`])
   if (blob.status !== 0) {
-    const status = git(["status", "--porcelain", "--", rel])
-    return status.status === 0 && status.stdout.trim() !== "" && first !== null ? "pending" : "unknown"
+    // Not at `head`: only the names Git lists (index entries, untracked non-ignored files) are consulted, never the file's bytes, and only through a namespace that qualified before and still does after.
+    if (first === null) return "unknown"
+    probe.afterWalk?.()
+    const listed = git(["ls-files", "--cached", "--others", "--exclude-standard", "--", rel])
+    const again = qualifyLog(root, rel)
+    return listed.status === 0 && listed.stdout.trim() !== "" && again !== null && sameChain(first, again) ? "pending" : "unknown"
   }
   if (first === null) return "unknown"
   probe.afterWalk?.()

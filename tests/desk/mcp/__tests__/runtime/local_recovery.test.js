@@ -680,7 +680,7 @@ test("mixed update, log committed before readback: both observed, exit 0", async
     commitCard(root)
     writeLog(root)
     git(root, "add", "work/one/log.md")
-    git(root, "commit", "-m", "log")
+    git(root, "commit", "--allow-empty", "-m", "log")
   })
   assert.equal(report.effects.commit, "observed")
   assert.equal(report.effects.log, "observed")
@@ -760,13 +760,18 @@ test("an unrelated dirty path matching an ignored log path as a glob does not ma
 
 // Descriptor-bound acquisition, exercised directly. A `git` shim records every hash-object call, so "refused without hashing" is observed.
 const LOG_TEXT = "# Log\n\n## entry\n"
-async function scene({ text = LOG_TEXT, files = {} } = {}) {
+async function scene({ text = LOG_TEXT, files = {}, logState = "committed" } = {}) {
   const { logCommitState } = await import("../../../../../plugins/desk/mcp/scripts/local-recovery.js")
   const root = fixture()
   for (const [name, body] of Object.entries(files)) writeFileSync(path.join(root, name), body)
-  writeFileSync(path.join(root, "work/one/log.md"), text)
+  if (logState === "committed") writeFileSync(path.join(root, "work/one/log.md"), text)
   git(root, "add", "-A")
-  git(root, "commit", "-m", "log")
+  git(root, "commit", "--allow-empty", "-m", "log")
+  if (logState !== "committed") {
+    writeFileSync(path.join(root, "work/one/log.md"), text)
+    if (logState === "staged") git(root, "add", "work/one/log.md")
+    if (logState === "ignored") { writeFileSync(path.join(root, ".gitignore"), "work/one/log.md\n"); }
+  }
   const shim = path.join(here, `shim-${sequence}`)
   mkdirSync(shim, { recursive: true })
   const calls = path.join(shim, "calls.txt")
@@ -778,13 +783,17 @@ async function scene({ text = LOG_TEXT, files = {} } = {}) {
   const head = git(root, "rev-parse", "HEAD")
   const state = (probe, at = root) => logCommitState(at, { ...env(), PATH: `${shim}:${process.env.PATH}` }, "work/one/log.md", head, probe)
   const hashed = () => readFileSync(calls, "utf8").split("\n").filter(Boolean).length
+  const spyFilter = () => {
+    writeFileSync(path.join(root, ".git/info/attributes"), "*.md filter=spy\n")
+    git(root, "config", "filter.spy.clean", `sh -c 'echo clean >> "${calls}"; cat'`)
+  }
   const relocate = (copy) => {
     const dir = path.join(root, "work/one")
     if (copy) { mkdirSync(path.join(sibling, "one"), { recursive: true }); copyFileSync(path.join(dir, "log.md"), path.join(sibling, "one/log.md")); removeTreeSync(dir) }
     else renameSync(dir, path.join(sibling, "one"))
     symlinkSync(path.join(sibling, "one"), dir)
   }
-  return { root, sibling, state, hashed, relocate }
+  return { root, sibling, state, hashed, relocate, spyFilter }
 }
 
 test("an in-root log equal to the HEAD blob is committed and hashed once", async () => {
@@ -960,3 +969,27 @@ test("the queued commit survives a real spawned bootstrap being closed", async (
   assertQueuedOrObserved(result, "work/one/log.md", headBefore, root)
   assert.equal(await commitOfLog(root, "work/one/log.md", headBefore), "work/one/log.md", "the detached worker commits after the child is gone")
 })
+
+// Before HEAD holds the log, readback may list Git's names but must not run Git over the file's bytes (a clean filter or hash is a read of them), nor through a namespace that did not qualify.
+for (const [logState, expected] of [["staged", "pending"], ["untracked", "pending"], ["ignored", "unknown"], ["missing", "unknown"]]) {
+  test(`a ${logState} log not at HEAD is ${expected} without any read of its bytes`, async () => {
+    const { root, state, hashed, spyFilter } = await scene({ logState: logState === "missing" ? "ignored" : logState })
+    if (logState === "missing") removeTreeSync(path.join(root, "work/one/log.md"))
+    spyFilter()
+    writeFileSync(path.join(root, "work/one"  , "log.md"), LOG_TEXT.replace("entry", "ENTRY"), { flag: logState === "missing" ? "a" : "w" })
+    if (logState === "missing") removeTreeSync(path.join(root, "work/one/log.md"))
+    assert.equal(state(), expected)
+    assert.equal(hashed(), 0, "no filter or hash ran over the log")
+  })
+}
+
+for (const [name, when] of [["linked before the readback", null], ["relocated between the walk and the listing", "afterWalk"]]) {
+  test(`a staged log not at HEAD, its directory ${name}, is unknown without any read of its bytes`, async () => {
+    const { root, sibling, state, hashed, relocate, spyFilter } = await scene({ logState: "staged" })
+    spyFilter()
+    writeFileSync(path.join(root, "work/one/log.md"), LOG_TEXT.replace("entry", "ENTRY"))
+    if (when === null) { relocate(false); assert.equal(state(), "unknown") } else assert.equal(state({ afterWalk: () => relocate(false) }), "unknown")
+    assert.equal(hashed(), 0)
+    assert.ok(sibling)
+  })
+}
