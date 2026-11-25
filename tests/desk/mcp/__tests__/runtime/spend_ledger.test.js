@@ -2,7 +2,7 @@ import test from "node:test"
 import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
 import { fileURLToPath } from "node:url"
-import { appendFileSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync, existsSync, unlinkSync, chmodSync } from "node:fs"
+import { appendFileSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync, existsSync, unlinkSync, chmodSync, symlinkSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 import { removeTreeSync } from "../_remove_tree.js"
@@ -510,6 +510,16 @@ test("the first numbers ever seen for an account, from a write's headers, are st
   await fetchFn("https://api.github.com/repos/o/r/issues/1/comments", { ...auth(), method: "POST" })
   assert.deepEqual(rate("personal").slice(0, 2), [4321, RESET])
   assert.equal(Number(readFileSync(path.join(dir, "personal.rate"), "utf8").trim().split(" ")[3]), clockNow() / 1000)
+})
+
+test("a log removed after the listing is not unreadable: the read is decided from what remains", async (t) => {
+  const { dir, env } = ledger(t)
+  writeFileSync(path.join(dir, "personal.rate"), `4000 ${RESET} 5000 ${NOW}\n`)
+  symlinkSync(path.join(dir, "gone"), path.join(dir, `personal.rate.obs.${RESET}`))
+  let sent = 0
+  const fetchFn = ledgeredFetch(async () => { sent += 1; return answer(200, {}, quota(4000)) }, { env, login: () => "ari", now: clockNow })
+  assert.equal((await fetchFn("https://api.github.com/repos/o/r/pulls/1", auth())).status, 200)
+  assert.equal(sent, 1)
 })
 
 test("a ledger folder that cannot be listed holds reads even with a cache above the floor, and a write keeps its own observation", async (t) => {

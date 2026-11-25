@@ -40,6 +40,7 @@ export class SpendHeld extends Error {
 
 let unrecorded = 0
 let warned = false
+const warnedUnreadable = new Set()
 
 /** How many sends this process could not write to the ledger (an unwritable folder), so an attribution report can say it is incomplete. */
 export const unrecordedSends = () => unrecorded
@@ -158,8 +159,9 @@ function currentRate(dir, pool, own = []) {
           const [remaining, , limit] = numbers(line, " ")
           if (remaining !== null && limit !== null) seen.push({ remaining, reset, limit })
         }
-      } catch {
-        unreadable = true
+      } catch (error) {
+        // A newer window's writer removing this log after the listing is benign; anything else leaves the floor unprotected.
+        if (error?.code !== "ENOENT") unreadable = true
       }
     }
   }
@@ -237,7 +239,10 @@ function heldReason({ dir, kind, pool, session, call, env, now }) {
   }
   const { rate, unreadable } = currentRate(dir, pool)
   if (unreadable) {
-    process.emitWarning(`Make ${dir} listable and every ${pool}.rate.obs.* file in it readable: Desk's quota observations cannot be read, so its reads are held`, { code: "DESK_SPEND_OBSERVATIONS_UNREADABLE" })
+    if (!warnedUnreadable.has(dir)) {
+      warnedUnreadable.add(dir)
+      process.emitWarning(`Make ${dir} listable and every ${pool}.rate.obs.* file in it readable: Desk's quota observations cannot be read, so its reads are held`, { code: "DESK_SPEND_OBSERVATIONS_UNREADABLE" })
+    }
     return `Make ${dir} listable and its ${pool}.rate.obs.* files readable, then repeat: the quota observations that protect the floor cannot be read, so Desk's own GitHub reads are held back rather than decided from a cached number that may be too high`
   }
   const { remaining, reset, limit } = rate ?? { remaining: null, reset: null, limit: null }
@@ -303,7 +308,7 @@ async function loginOf({ token, hint, fetchFn, init }) {
  * host gives no session id. A send that gets no answer is recorded as `unknown`. A ledger that cannot be written never stops the call: it
  * raises a process warning (DESK_SPEND_UNRECORDED) and counts in `unrecordedSends()`.
  */
-export function ledgeredFetch(fetchFn, { env, login = () => "", label = "desk", now = () => Date.now(), pid = process.pid, }) {
+export function ledgeredFetch(fetchFn, { env, login = () => "", label = "desk", now = () => Date.now(), pid = process.pid }) {
   const session = env.COPILOT_AGENT_SESSION_ID || env.AGENCY_SESSION_ID || `${label}-${pid}`
   return async (url, init) => {
     const call = describeCall(url, init?.method)
