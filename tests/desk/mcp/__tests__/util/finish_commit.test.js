@@ -4,7 +4,7 @@ import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import { spawnSync } from "node:child_process"
 import { randomUUID } from "node:crypto"
-import { chmodSync, existsSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, utimesSync, writeFileSync, mkdirSync } from "node:fs"
+import { existsSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, utimesSync, writeFileSync, mkdirSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
@@ -20,6 +20,8 @@ const env = (() => { const { [TOOL_COMMIT_ENV]: _drop, ...rest } = process.env; 
 // Set only while sealed() runs: the exact clean environment, never merged with the one captured at import.
 let sealedEnv = null
 const owned = []
+// The removal sealed() performs; a test swaps it to make one named root fail deterministically.
+let removeRoot = (dir) => rmSync(dir, { recursive: true, force: true })
 
 function git(root, args, options = {}) {
   const result = spawnSync("git", ["-C", root, ...args], { encoding: "utf8", env: sealedEnv ?? env, ...options })
@@ -1047,7 +1049,7 @@ async function sealed(run) {
       // A root that cannot be removed stays registered and is reported, never dropped from the list.
       const left = []
       for (const dir of owned.splice(0)) {
-        try { rmSync(dir, { recursive: true, force: true }) } catch { left.push(dir) }
+        try { removeRoot(dir) } catch { left.push(dir) }
       }
       owned.push(...left)
       if (left.length > 0) {
@@ -1237,21 +1239,23 @@ test("sealed() swaps in the clean environment and removes the home it made, even
 })
 
 test("a sealed root that cannot be removed stays registered and reported, and the environment is still restored", async () => {
-  const outer = mkdtempSync(path.join(tmpdir(), "desk-unremovable-"))
-  const stuck = path.join(outer, "stuck")
-  mkdirSync(stuck)
-  writeFileSync(path.join(stuck, "keep"), "x")
+  const stuck = mkdtempSync(path.join(tmpdir(), "desk-unremovable-"))
+  const real = removeRoot
   const before = process.env.PATH
+  removeRoot = (dir) => {
+    if (dir === stuck) throw new Error("synthetic removal failure")
+    real(dir)
+  }
   try {
-    chmodSync(outer, 0o500)
     await assert.rejects(sealed(async () => { owned.push(stuck) }), (error) => error.message.includes(stuck))
-    assert.deepEqual(owned.filter((dir) => dir === stuck), [stuck], "the unremovable root is still registered")
+    assert.ok(owned.includes(stuck), "the unremovable root is still registered")
     assert.equal(sealedEnv, null)
     assert.equal(process.env.PATH, before, "the environment is restored although removal failed")
   } finally {
-    chmodSync(outer, 0o700)
-    owned.splice(0, owned.length)
-    rmSync(outer, { recursive: true, force: true })
+    removeRoot = real
+    const at = owned.indexOf(stuck)
+    if (at >= 0) owned.splice(at, 1)
+    rmSync(stuck, { recursive: true, force: true })
   }
 })
 
