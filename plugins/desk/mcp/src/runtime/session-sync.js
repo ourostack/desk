@@ -14,7 +14,7 @@ import { deskFailure } from "./desk-failure.js"
 import { clearLogsPending, hasRemoteConfigured, logsMayBePending, readSyncStatus, recordPullOutcome, schedulePush, updateSyncStatus } from "./sync-worker.js"
 import { readUpstreamRefs } from "./fast-refs.js"
 import { catchUpBehind, classifyPullFailure, undeliveredCommits, upstreamOf } from "./deliver.js"
-import { hasRecordedSaves } from "./unmerged-saves.js"
+import { hasSettledSave } from "./unmerged-saves.js"
 import { remoteIdentityEnv } from "./remote-identity.js"
 import { applyPublicationMode } from "./publication-mode.js"
 import { commitWaitingLogs } from "./append-lane.js"
@@ -190,8 +190,8 @@ function withDelivery({ root, env, spawnGit = spawnSync, scheduleDelivery = sche
   // Nothing the remote lacks: the checkout is exactly at its upstream, which two file reads can say without starting Git.
   const refs = spawnGit === spawnSync ? readUpstreamRefs(root) : null
   const offline = result.state === "unresolved" && OFFLINE.has(result.cause)
-  // Saves waiting as pull requests are settled by the worker too, so one whose content reached main another way is closed now.
-  const waiting = !offline && hasRecordedSaves({ root, env })
+  // A save waiting as a pull request that fetched main already holds is closed by the worker now, not at the next write.
+  const waiting = !offline && hasSettledSave({ root, env, spawnGit })
   if (refs !== null && refs.head === refs.target) {
     if (waiting) scheduleDelivery({ root, env, debounceMs: 0 })
     return result

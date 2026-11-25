@@ -198,7 +198,7 @@ test("a recorded save whose content reached main through another commit is not r
   git(seed, ["push", "-q", "origin", "HEAD:main"])
   await sync()
   assert.equal(stuckSaves({ root: desk, env, now: later }).length, 1, "differing content on main keeps the save listed")
-  assert.equal(scheduled.length, 1, "a recorded save is settled by the background worker even with nothing to deliver")
+  assert.equal(scheduled.length, 1, "this save's commit is still undelivered, so the worker runs as before")
 
   await fs.writeFile(path.join(seed, card), text)
   git(seed, ["add", card])
@@ -215,21 +215,42 @@ test("a recorded save whose content reached main through another commit is not r
   assert.deepEqual(settleSaves({ root: desk, env, spawnGit: gh, clock: clockOf() }).closed, [gh.prs.get(1).url])
 })
 
-test("a sync with nothing to deliver still schedules settlement of a recorded save, unless the remote is unreachable", async () => {
-  const { desk, env } = await world("sync-settles")
-  const scheduled = []
-  const schedule = (options) => scheduled.push(options)
-  await syncWorkspace({ scheduleDelivery: schedule, root: desk, env })
-  assert.equal(scheduled.length, 0, "no recorded save, nothing to settle")
-  const head = await appendTo(desk, "- delivered elsewhere", "save")
-  savesFor({ root: desk, env, now: Date.now }).record({ url: "https://github.example/team/workspace/pull/9", head, branch: "desk/publish/x", base: "main" })
-  await syncWorkspace({ scheduleDelivery: schedule, root: desk, env })
-  assert.equal(scheduled.length, 1, "the checkout holds a commit the worker already delivered")
+test("a sync with nothing to deliver schedules settlement only for a save fetched main already holds, and never when unreachable", async () => {
+  const { origin, seed, desk, env } = await world("sync-settles")
+  const onto = git(desk, ["rev-parse", "HEAD"])
+  const head = await appendTo(desk, "- landed elsewhere", "save")
+  const gh = fakeGh(origin, { pending: true })
+  assert.throws(() => publish({ desk, env, gh, head, onto }), /checks still missing or pending/u)
   updateSyncStatus(desk, env, { delivered: [head] })
-  await syncWorkspace({ scheduleDelivery: schedule, root: desk, env, now: () => Date.now() + 120_000 })
-  assert.equal(scheduled.length, 2)
-  git(desk, ["remote", "set-url", "origin", "/nonexistent/remote.git"])
-  await syncWorkspace({ scheduleDelivery: schedule, root: desk, env, now: () => Date.now() + 240_000 })
+  const scheduled = []
+  let tick = Date.now()
+  const sync = (options = {}) => { tick += MINUTE; return syncWorkspace({ scheduleDelivery: (call) => scheduled.push(call), root: desk, env, now: () => tick, ...options }) }
+  await sync()
+  assert.equal(scheduled.length, 0, "a waiting save is not on main, so nothing to settle and no worker per sync")
+
+  // Main gains every line the save adds, in another order and file shape: settlement may close it, boot must not hide it.
+  await appendTo(seed, "- other", "another")
+  await appendTo(seed, "- landed elsewhere", "same line, different file")
+  git(seed, ["push", "-q", "origin", "HEAD:main"])
+  await sync()
+  assert.equal(scheduled.length, 0, "only exact content counts as proof before settlement")
+  assert.equal(stuckSaves({ root: desk, env, now: () => tick + 60 * MINUTE }).length, 1)
+
+  const identical = await world("sync-settles-identical")
+  const same = await appendTo(identical.desk, "- landed elsewhere", "save")
+  const gh2 = fakeGh(identical.origin, { pending: true })
+  assert.throws(() => publish({ desk: identical.desk, env: identical.env, gh: gh2, head: same, onto: git(identical.desk, ["rev-parse", "HEAD~1"]) }), /checks still missing or pending/u)
+  updateSyncStatus(identical.desk, identical.env, { delivered: [same] })
+  await appendTo(identical.seed, "- landed elsewhere", "same content, another commit")
+  git(identical.seed, ["push", "-q", "origin", "HEAD:main"])
+  const again = (options) => { tick += MINUTE; return syncWorkspace({ scheduleDelivery: (call) => scheduled.push(call), root: identical.desk, env: identical.env, now: () => tick, ...options }) }
+  await again()
+  assert.equal(scheduled.length, 1, "diverged checkout with nothing undelivered")
+  git(identical.desk, ["reset", "-q", "--hard", "origin/main"])
+  await again()
+  assert.equal(scheduled.length, 2, "checkout exactly at main")
+  git(identical.desk, ["remote", "set-url", "origin", "/nonexistent/remote.git"])
+  await again()
   assert.equal(scheduled.length, 2, "an unreachable remote cannot settle anything")
 })
 

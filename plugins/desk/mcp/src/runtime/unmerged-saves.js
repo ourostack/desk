@@ -51,13 +51,14 @@ function clearUnmerged({ root, env, url }) {
 
 const stuckOf = (list, at) => list.map((save) => ({ ...save, minutes: Math.floor((at - Date.parse(save.since)) / 60_000) })).filter((save) => save.minutes * 60_000 >= STUCK_AFTER_MS)
 
-/** Whether the desk has any save recorded as waiting to merge. Local read. */
-export function hasRecordedSaves({ root, env }) {
-  return entries(readSyncStatus({ root, env })).length > 0
+/** Whether fetched main already holds a recorded save of the desk (see `onFetchedMain`), so settling it would close its pull request. Local reads. */
+export function hasSettledSave({ root, env, spawnGit = spawnSync }) {
+  return entries(readSyncStatus({ root, env })).some((save) => onFetchedMain({ root, save, spawnGit }))
 }
 
-// Whether the fetched main already holds the save, by ancestry or by the same content landing as another commit. Local reads
-// only; anything unreadable is "not proven", so the save stays named.
+// Whether the fetched main already holds the save: it is an ancestor, or every file it changed is identical on main (or absent
+// on both) because the same content landed as another commit. Looser evidence is left to settlement, which closes with it. Local
+// reads only; anything unreadable is "not proven", so the save stays named.
 function onFetchedMain({ root, save, spawnGit }) {
   try {
     const git = runner(spawnGit, root)
@@ -66,7 +67,7 @@ function onFetchedMain({ root, save, spawnGit }) {
     const main = git(["rev-parse", "--verify", "--quiet", `${upstream.tracking}^{commit}`]).stdout.trim()
     if (!OBJECT_ID.test(main) || git(["cat-file", "-e", `${save.head}^{commit}`]).status !== 0) return false
     if (git(["merge-base", "--is-ancestor", save.head, main]).status === 0) return true
-    return (supersession(git, save.head, main, () => "")?.length ?? 0) > 0
+    return (supersession(git, save.head, main, () => "", { exact: true })?.length ?? 0) > 0
   } catch {
     return false
   }
@@ -133,7 +134,7 @@ const FRONTMATTER_KEY = /^([A-Za-z][\w-]*):(?:\s|$)/u
  * main, when every line the commit adds is on main, or when the commit only sets frontmatter fields that a newer commit on
  * main has since set differently.
  */
-function supersession(git, head, main, link) {
+function supersession(git, head, main, link, { exact = false } = {}) {
   const parent = `${head}^`
   const files = git(["diff-tree", "--root", "-r", "--name-only", "--no-renames", "--no-commit-id", "-z", head]).stdout.split("\0").filter(Boolean)
   const headTime = Number(git(["log", "-1", "--format=%ct", head]).stdout.trim())
@@ -147,6 +148,7 @@ function supersession(git, head, main, link) {
       return null
     }
     if (onMain.stdout === onHead.stdout) { evidence.push(`${file} is identical on main (${link(file)})`); continue }
+    if (exact) return null
     const had = new Set(git(["cat-file", "blob", `${parent}:${file}`]).stdout.split("\n"))
     const added = onHead.stdout.split("\n").filter((line) => line.trim() !== "" && !had.has(line))
     const mainLines = onMain.stdout.split("\n")
