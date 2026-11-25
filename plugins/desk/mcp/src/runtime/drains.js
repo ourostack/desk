@@ -1062,10 +1062,11 @@ export function recoverDrainTarget({ paths, repo, now, start = startSuccessor })
 
 // ── GitHub ──
 
-/** What a non-OK answer means: GitHub's own server failing (5xx) clears by itself; only a refused credential is for the person to fix. */
+/** What a non-OK answer means: GitHub's own server failing (5xx) clears by itself; only a 401 (a refused credential) is for the person to fix; any other refusal is reported as the answer GitHub gave, with no credential diagnosis. */
 function failedAnswer(status, route) {
   if (status >= 500) return Object.assign(new Error(`Wait for the next poll: GitHub's server answered HTTP ${status} for ${route} (asked twice); this usually clears on its own and needs nothing from you`), { code: "drains_github_server_error", status })
-  return Object.assign(new Error(`Check gh auth status, then try again: GitHub answered HTTP ${status} for ${route}`), { code: "drains_check_gh_auth_status_then", status })
+  if (status === 401) return Object.assign(new Error(`Check gh auth status, then try again: GitHub answered HTTP ${status} for ${route}, which means the token was refused`), { code: "drains_check_gh_auth_status_then", status })
+  return Object.assign(new Error(`Read GitHub's answer, then fix its cause: GitHub refused the request with HTTP ${status} for ${route}; that is not by itself a credential problem`), { code: "drains_github_refused", status })
 }
 
 /** The drain's GitHub access: its account's token from the `gh` CLI, then the REST API. `login` skips asking GitHub who the token is. */
@@ -1164,7 +1165,7 @@ export async function connectGithub(account, { spawn = spawnSync, fetchImpl = fe
     if (!response.ok) throw failedAnswer(response.status, "/graphql")
     if (!payload || (Array.isArray(payload.errors) && payload.errors.length > 0) || typeof payload.data !== "object" || payload.data === null) {
       const said = Array.isArray(payload?.errors) ? payload.errors.map((error) => String(error?.message ?? "")).join("; ").slice(0, 160) : "no data"
-      throw Object.assign(new Error(`Check gh auth status, then try again: GitHub's GraphQL answer for the issue's edit history was refused or unreadable (${said})`), { code: "drains_graphql_failed" })
+      throw Object.assign(new Error(`Read GitHub's answer, then retry on the next poll: its GraphQL answer for the issue's edit history was refused or unreadable (${said}); that is not by itself a credential problem`), { code: "drains_graphql_failed" })
     }
     return payload.data
   }
