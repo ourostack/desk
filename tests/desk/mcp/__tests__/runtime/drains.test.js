@@ -2841,14 +2841,21 @@ test("a bot comment that repeats the bot's previous one is noise, found by readi
   assert.ok(commentReads.length <= 3, `the 24 repeated bot comments share one bounded lookup, not one each: ${commentReads.length} comment requests`)
 })
 
-test("repeated bot comments from two authors each find their own previous comment from a shared tail read", async () => {
+test("repeated bot comments from two authors each find their own previous comment, reading further back when the shared tail lacks it", async () => {
   const at = (index) => new Date(Date.parse("2026-11-01T00:00:00Z") + index * 1000).toISOString().replace(".000", "")
-  const comments = Array.from({ length: 150 }, (_, index) => ({ id: index, user: { login: index === 100 ? "ci-two[bot]" : "ci[bot]", type: "Bot" }, body: index === 100 ? "other" : "build passed", created_at: at(index), updated_at: at(index) }))
-  // ci-two's only earlier comment (100) is on page 2; its new comment (149 -> changed text) must still wake.
-  comments[149] = { ...comments[149], user: { login: "ci-two[bot]", type: "Bot" }, body: "different now" }
-  const world = historyGithub({ histories: { 7: { comments, events: [], timeline: [] } }, issues: () => [{ number: 7, title: "T", body: "b", state: "open", updated_at: at(251) }] })
-  const connect = (account, { login }) => connectGithub(account, { spawn: () => ({ status: 0, stdout: "tok" }), fetchImpl: world.fetchImpl, env: { PATH: "/bin" }, login })
-  const states = { "o/r": { seeded: true, seen: { 7: { updatedAt: at(125), digest: createHash("sha1").update("T\nb").digest("hex").slice(0, 16), title: "T" } }, pending: [], turns: [] } }
-  await pollDrain({ repo: "o/r", account: "maintainer", session: "s" }, states, { connect, now: Date.parse(at(260)) })
-  assert.match(states["o/r"].pending[0]?.why ?? "", /comment 149 by ci-two\[bot\]/u)
+  const run = async (newBody) => {
+    const comments = Array.from({ length: 150 }, (_, index) => ({ id: index, user: { login: "ci[bot]", type: "Bot" }, body: "build passed", created_at: at(index), updated_at: at(index) }))
+    // ci-two's only earlier comment (99) is on page 1, which the page-2 tail read does not reach; its new comment is the last one.
+    comments[99] = { ...comments[99], user: { login: "ci-two[bot]", type: "Bot" }, body: "other" }
+    comments[149] = { ...comments[149], user: { login: "ci-two[bot]", type: "Bot" }, body: newBody }
+    const world = historyGithub({ histories: { 7: { comments, events: [], timeline: [] } }, issues: () => [{ number: 7, title: "T", body: "b", state: "open", updated_at: at(251) }] })
+    const connect = (account, { login }) => connectGithub(account, { spawn: () => ({ status: 0, stdout: "tok" }), fetchImpl: world.fetchImpl, env: { PATH: "/bin" }, login })
+    const states = { "o/r": { seeded: true, seen: { 7: { updatedAt: at(125), digest: createHash("sha1").update("T\nb").digest("hex").slice(0, 16), title: "T" } }, pending: [], turns: [] } }
+    await pollDrain({ repo: "o/r", account: "maintainer", session: "s" }, states, { connect, now: Date.parse(at(260)) })
+    return { pending: states["o/r"].pending }
+  }
+  const quiet = await run("other")
+  assert.deepEqual(quiet.pending, [], "repeating its own previous text is quiet, found on the older page")
+  const wakes = await run("build passed")
+  assert.match(wakes.pending[0]?.why ?? "", /comment 149 by ci-two\[bot\]/u, "it matches the other author's previous text, not its own")
 })
