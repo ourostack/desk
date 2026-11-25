@@ -188,7 +188,7 @@ function mergeRate(dir, pool, { remaining, reset, limit }, now, fresh) {
       unlogged.set(`${dir}\0${pool}`, [tightest([{ remaining, reset, limit }, ...(unlogged.get(`${dir}\0${pool}`) ?? [])])])
       if (!warnedUnlogged.has(dir)) {
         warnedUnlogged.add(dir)
-        process.emitWarning(`Make ${dir} and its ${pool}.rate.obs.* files writable: a quota observation could not be recorded (${error?.code ?? "error"}), so only this process's reads see it`, { code: "DESK_SPEND_OBSERVATION_UNRECORDED" })
+        process.emitWarning(`Make ${dir} and its ${pool}.rate.obs.* files writable: a quota observation could not be recorded (${error.code}), so only this process's reads see it`, { code: "DESK_SPEND_OBSERVATION_UNRECORDED" })
       }
     }
     const { rate } = currentRate(dir, pool, [{ remaining, reset, limit }])

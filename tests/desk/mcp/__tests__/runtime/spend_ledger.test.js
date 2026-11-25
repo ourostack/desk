@@ -499,9 +499,10 @@ test("observations that cannot be read hold reads and raise a warning, even when
   let sent = 0
   const fetchFn = ledgeredFetch(async () => { sent += 1; return answer(200, {}, quota(4000)) }, { env, login: () => "ari", now: clockNow })
   await assert.rejects(fetchFn("https://api.github.com/repos/o/r/pulls/1", auth()), (error) => error instanceof SpendHeld && /readable/u.test(error.message))
+  await assert.rejects(fetchFn("https://api.github.com/repos/o/r/pulls/2", auth()), SpendHeld)
   await new Promise((resolve) => setImmediate(resolve))
   assert.equal(sent, 0)
-  assert.ok(warnings.includes("DESK_SPEND_OBSERVATIONS_UNREADABLE"))
+  assert.equal(warnings.filter((code) => code === "DESK_SPEND_OBSERVATIONS_UNREADABLE").length, 1)
 })
 
 test("the first numbers ever seen for an account, from a write's headers, are stored as fetched now", async (t) => {
