@@ -202,7 +202,7 @@ const sameEntries = (a, b) => JSON.stringify(a) === JSON.stringify(b)
  * could not be captured). Returns `{ readback, landed }`:
  * - `committed`: a new commit on HEAD has that message, changes only those paths and holds `expected` there, and HEAD holds `expected` there now;
  * - `absent`: HEAD has not moved, or no new commit touches those paths;
- * - `unknown` otherwise, and whenever Git cannot answer. When our commit landed but HEAD no longer holds it, `landed` names both
+ * - `unknown` otherwise (including more than 50 new commits touching those paths, or a merge that itself changed them), and whenever Git cannot answer. When our commit landed but HEAD no longer holds it, `landed` names both
  *   (`{ commit, head }`): it happened, but it is not in effect, so nothing claims completion and nothing replays it. Reads only.
  */
 export function readBackCommit(root, relPaths, message, before, expected, spawnGit) {
@@ -212,17 +212,17 @@ export function readBackCommit(root, relPaths, message, before, expected, spawnG
   if (after === null) return unknown
   if (after === before) return { readback: "absent" }
   if (after === "") return unknown
-  const listed = run(spawnGit, root, ["rev-list", `--max-count=${READBACK_LIMIT + 1}`, before === "" ? after : `${before}..${after}`])
+  // Only commits that touch these paths count toward the bound, so any number of unrelated commits (or a merge carrying none of them) cannot hide a landed change. `--full-history` keeps every side of a merge; `:(literal)` keeps a path with glob characters literal.
+  const listed = run(spawnGit, root, ["rev-list", `--max-count=${READBACK_LIMIT + 1}`, "--full-history", before === "" ? after : `${before}..${after}`, "--", ...relPaths.map((p) => `:(literal)${p}`)])
   if (listed?.status !== 0) return unknown
   const commits = String(listed.stdout).split("\n").map((line) => line.trim()).filter(Boolean)
   if (commits.length > READBACK_LIMIT) return unknown
-  let touched = false
   for (const commit of commits) {
-    const ours = run(spawnGit, root, ["diff-tree", "--root", "--no-commit-id", "-r", "--name-only", "-z", commit, "--", ...relPaths])
-    if (ours?.status !== 0) return unknown
-    const inside = nulList(ours).length
-    if (inside === 0) continue
-    touched = true
+    // `-m` diffs a merge against each parent, so a merge that itself changed these paths counts as touching them; it is then never ours (the whole-commit diff below is empty), and the answer stays unknown.
+    const ours = run(spawnGit, root, ["diff-tree", "--root", "-m", "--no-commit-id", "-r", "--name-only", "-z", commit, "--", ...relPaths])
+    // A listed commit that Git cannot show touching the paths is not ours to rule out: unknown, never absent.
+    const inside = ours?.status === 0 ? nulList(ours).length : 0
+    if (inside === 0) return unknown
     if (expected === null) return unknown
     const all = run(spawnGit, root, ["diff-tree", "--root", "--no-commit-id", "-r", "--name-only", "-z", commit])
     const body = run(spawnGit, root, ["log", "-1", "--format=%B", commit])
@@ -235,7 +235,7 @@ export function readBackCommit(root, relPaths, message, before, expected, spawnG
     if (now === null) return unknown
     return sameEntries(now, expected) ? { readback: "committed" } : { readback: "unknown", landed: { commit, head: after } }
   }
-  return touched ? unknown : { readback: "absent" }
+  return commits.length === 0 ? { readback: "absent" } : unknown
 }
 
 // A failed commit call's answer: `ok` when the read-back finds it landed and in effect (`readback: "committed"`), so every caller schedules its push; otherwise the failure with its read-back.
