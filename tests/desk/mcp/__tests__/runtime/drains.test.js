@@ -3,7 +3,7 @@
 import assert from "node:assert/strict"
 import { createHash, randomUUID } from "node:crypto"
 import { spawnSync } from "node:child_process"
-import { chmodSync, closeSync, existsSync, mkdirSync, mkdtempSync, openSync, promises as fs, readdirSync, readFileSync, renameSync, rmdirSync, rmSync, statSync, unlinkSync, utimesSync, writeFileSync } from "node:fs"
+import { chmodSync, closeSync, existsSync, mkdirSync, mkdtempSync, openSync, promises as fs, readdirSync, readFileSync, renameSync, rmdirSync, rmSync, statSync, symlinkSync, unlinkSync, utimesSync, writeFileSync } from "node:fs"
 import * as os from "node:os"
 import path from "node:path"
 import { test } from "node:test"
@@ -2439,4 +2439,46 @@ test("two consecutive crashes of lock-owning processes, in each place, are recov
       assert.deepEqual(readdirSync(dir), [], `cycle ${cycle} left nothing after ${at}`)
     }
   }
+})
+
+test("an unreadable or vanished part of the lock is named, not called busy, and nothing the lock holds is taken", async (t) => {
+  if (process.platform === "win32" || process.getuid?.() === 0) return t.skip("needs POSIX permissions as an ordinary user")
+  const dir = await mkTempRoot("desk-drains-")
+  const lock = path.join(dir, "poll.lock")
+  const unavailable = (what) => (error) => /desk_drains_lock_unavailable/u.test(error.message) && /EACCES|ENOENT/u.test(error.message) && !/still working/u.test(error.message) && what !== ""
+  assert.throws(() => acquireDrainLock(path.join(dir, "missing", "poll.lock")), unavailable("no parent directory"))
+  const unreadable = plant(lock, DEAD)
+  chmodSync(path.join(lock, unreadable), 0o000)
+  try {
+    assert.throws(() => acquireDrainLock(lock, { alive: liveExceptDead }), unavailable("owner file cannot be read"))
+  } finally {
+    chmodSync(path.join(lock, unreadable), 0o600)
+  }
+  const vanished = path.join(lock, unreadable)
+  unlinkSync(vanished)
+  symlinkSync(path.join(dir, "nowhere"), vanished)
+  assert.throws(() => acquireDrainLock(lock, { alive: liveExceptDead }), /desk_drains_busy/u, "an owner that vanished while being read is left to whoever is removing it, and the lock is judged busy")
+  unlinkSync(vanished)
+  rmdirSync(lock)
+  writeFileSync(lock, `${DEAD}`)
+  chmodSync(lock, 0o000)
+  try {
+    assert.throws(() => acquireDrainLock(lock, { alive: liveExceptDead }), /desk_drains_lock_legacy/u)
+  } finally {
+    chmodSync(lock, 0o600)
+  }
+  rmSync(lock)
+  const timedOut = () => Object.assign(new Error("timed out"), { code: "ETIMEDOUT" })
+  assert.throws(() => acquireDrainLock(lock, { rename: (from) => { removeTreeSync(from); mkdirSync(lock); chmodSync(lock, 0o000); throw timedOut() } }), unavailable("our own directory cannot be inspected"))
+  chmodSync(lock, 0o700)
+  rmdirSync(lock)
+  let staging
+  assert.throws(() => acquireDrainLock(lock, { rename: (from) => { staging = from; chmodSync(from, 0o000); throw timedOut() } }), unavailable("staging cannot be cleaned"))
+  chmodSync(staging, 0o700)
+  removeTreeSync(staging)
+  assert.throws(() => acquireDrainLock(lock, { rename: () => { chmodSync(dir, 0o000); throw timedOut() } }), unavailable("staging cannot be looked at"))
+  chmodSync(dir, 0o700)
+  assert.equal(readdirSync(dir).length, 1, "the unreachable staging directory is left for the next run's sweep, which removes it once its process is gone")
+  assert.doesNotThrow(() => acquireDrainLock(lock, { alive: () => false })())
+  assert.deepEqual(readdirSync(dir), [])
 })

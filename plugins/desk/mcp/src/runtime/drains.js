@@ -844,8 +844,8 @@ async function recordChanges(api, drain, state, { full, issues }, { now, desk })
       if (why) recorded.push({ number: issue.number, title: issue.title, updatedAt: issue.updated_at, seenAt: new Date(now).toISOString(), why })
     } catch (error) {
       // This issue's marker stays where it was, so the next poll judges the same change again; the others go on.
-      if (before) seen[key] = before
-      else delete seen[key]
+      // Only an issue that was seen before can fail here (a new one is judged without a read), so there is always a marker to restore.
+      seen[key] = before
       deferred.push({ number: issue.number, message: error.message, code: error.code })
       if (!held || issue.updated_at < held) held = issue.updated_at
     }
