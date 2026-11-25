@@ -567,14 +567,26 @@ async function advance(api, repo, issue, scan) {
   scan.passTotal ??= page.total
   side.pages += 1
   scan.next = direction === "fwd" ? "bwd" : "fwd"
+  let person = false
   for (const edit of page.edits) {
     if (!edit || typeof edit !== "object") return NEWS
     if (!isNewEdit(scan, edit)) {
       if (scan.base === null) scan.old += 1
       continue
     }
-    if (!botEdit(edit)) return NEWS
+    if (!botEdit(edit)) {
+      if (typeof edit.id !== "string" || !Number.isFinite(Date.parse(edit.editedAt))) return NEWS
+      person = true
+    }
     scan.found[edit.id] = edit.editedAt
+  }
+  if (person) {
+    // A person's edit is news. It also leaves a baseline, so the next change is not read from the start again, but only when every edit is accounted for:
+    // the whole page was judged, and the new edits found are exactly the ones the count says exist (or the side was read to its end and every edit was old or found).
+    // Otherwise an unread person's edit could sit under the count and be passed over later as a bot-only change.
+    const found = Object.keys(scan.found).length
+    const accounted = scan.base === null ? !page.hasMore && scan.old + found === scan.total : found === scan.total - scan.base
+    return accounted ? { kind: "news", baseline: baselineOf(scan) } : NEWS
   }
   if (page.hasMore) {
     // A cursor that does not move, or more pages than the history can hold, is a cycle: it would never end.
@@ -850,7 +862,7 @@ async function recordChanges(api, drain, state, { full, issues }, { now, desk })
       if (verdict?.kind === "deferred") throw Object.assign(new Error(verdict.message), { code: verdict.code })
       if (verdict?.kind === "news") item.edited = "title or body edited"
       const why = await changedByOthers(api, drain.repo, issue, before, digest, ignored, rules, item.edited)
-      if (verdict?.kind === "bot") seen[key].edits = verdict.baseline
+      if (verdict?.baseline) seen[key].edits = verdict.baseline
       if (why) recorded.push({ number: issue.number, title: issue.title, updatedAt: issue.updated_at, seenAt: new Date(now).toISOString(), why })
     } catch (error) {
       // This issue's marker stays where it was, so the next poll judges the same change again; the others go on.
