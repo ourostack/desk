@@ -1,5 +1,13 @@
 # desk plugin — changelog
 
+## 3.2.555 — 2026-11-25
+
+### A card staged by a failed `task_create` can be finished after many unrelated commits
+
+When a card commit fails and other work then advances `HEAD`, `finish-commit.js` reads back the new commits to see whether the change landed. It used to give up as unknown once more than 50 commits had arrived, even when none touched the card, so the card stayed staged and `task_update` refused it with `content_home_dirty_target`. The read-back now counts only commits that touch the captured paths (path names taken literally, every side of a merge followed). More than 50 commits touching those paths is still unknown, and a missing or mismatched capture record (the tool prunes old records on later writes; no new expiry rule), foreign staged bytes, another branch and an unfinished Git operation still hold the commit. Fixes #1724.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.554 — 2026-11-25
 
 Desk's MCP server now vendors Ouro UI v1.3.541, moved by Ouro Current.
