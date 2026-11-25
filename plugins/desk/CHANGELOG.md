@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.584 — 2026-11-25
+
+Desk's MCP server now vendors Ouro UI v1.3.569, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.583 — 2026-11-25
 
 [`content-routing`](skills/content-routing/SKILL.md) now names shipping as the usual case of general agent-work tooling in a team workspace: "open a pull request, wait for the required checks, merge, verify on `main`" belongs in Crew, not in one team's plugin, which keeps only its own checks. A team plugin had added its own shipping skill (CIT's `cit-ship`), and its rule disagreed with Crew's; Crew 0.2.28 now carries the merge-on-green procedure in `shared-desk-conventions`.
