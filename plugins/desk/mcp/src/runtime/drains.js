@@ -242,7 +242,7 @@ const unavailable = (lockFile, error) => lockProblem("desk_drains_lock_unavailab
  * lock is a plain file: it is never replaced, because replacing it by name cannot be made safe against that Desk's own takeover.
  * `onStep` is a test seam called at "staging" (the sibling exists, the owner file is not written), "staged" and "inspected".
  */
-export function acquireDrainLock(lockFile, { alive = processAlive, onStep = () => {}, rename = renameSync } = {}) {
+export function acquireDrainLock(lockFile, { alive = processAlive, onStep = () => {}, rename = publishDirectory } = {}) {
   const dir = path.dirname(lockFile)
   const base = path.basename(lockFile)
   sweepStaging(dir, base, alive)
@@ -266,7 +266,9 @@ export function acquireDrainLock(lockFile, { alive = processAlive, onStep = () =
       } catch (error) {
         // Platforms name an occupied target differently (POSIX ENOTEMPTY, ENOTDIR, EEXIST; Windows EPERM), so the error code is not
         // trusted: the target itself is inspected next. Only a rename that failed with nothing in the way is a failure to use the lock.
-        if (!existsAt(lockFile)) throw unavailable(lockFile, error)
+        // A move that was cut short (Windows, a timeout) may still have happened: our staging is gone and the lock stands, which is ours.
+        if (!existsAt(staging) && existsAt(lockFile)) renamed = true
+        else if (!existsAt(lockFile)) throw unavailable(lockFile, error)
       }
     } finally {
       if (!renamed) removeStaging(staging)
@@ -275,6 +277,32 @@ export function acquireDrainLock(lockFile, { alive = processAlive, onStep = () =
     retireDeadOwner(lockFile, alive, onStep)
   }
   throw busy(lockFile, "another poll, which started while this one looked,")
+}
+
+/** The one step that must never replace what is at the lock: POSIX `rename` refuses all but an absent or empty directory, but Windows' replaces a plain file. */
+function publishDirectory(from, to) {
+  if (process.platform === "win32") moveWithoutReplace(from, to)
+  else renameSync(from, to)
+}
+
+// Fixed script, paths as data (environment), never interpolated. Directory.Move ends in MoveFileExW without MOVEFILE_REPLACE_EXISTING
+// (dotnet/runtime, Interop.MoveFileEx.cs and FileSystem.Windows.cs: MoveFile(..., overwrite: false)), so an existing target is refused
+// by the system, not by a check made first. Exit 3 means "refused", with the outer exception, and its inner one if any, named on stderr.
+const MOVE_SCRIPT = "try { [System.IO.Directory]::Move($env:DESK_MOVE_FROM, $env:DESK_MOVE_TO) } catch { $e = $_.Exception; $i = $e.InnerException; [Console]::Error.Write('refused ' + $e.GetType().Name + ' ' + $e.HResult + $(if ($i) { ' inner ' + $i.GetType().Name + ' ' + $i.HResult } else { ' no-inner' })); exit 3 }"
+
+/**
+ * Moves a directory to a path that must not exist, failing (and changing nothing) if anything is there. The next shell is tried only
+ * when the first cannot be launched at all; a move that ran, was refused or timed out is never retried and never falls back to `rename`.
+ */
+export function moveWithoutReplace(from, to, { shells = ["pwsh", "powershell"], timeoutMs = TOKEN_MS } = {}) {
+  for (const shell of shells) {
+    const result = spawnSync(shell, ["-NoProfile", "-NonInteractive", "-Command", MOVE_SCRIPT], { env: { ...process.env, DESK_MOVE_FROM: from, DESK_MOVE_TO: to }, encoding: "utf8", timeout: timeoutMs, windowsHide: true })
+    if (result.error?.code === "ENOENT") continue
+    if (result.error) throw Object.assign(new Error(`${shell}: ${result.error.message}`), { code: result.error.code ?? "ESPAWN" })
+    if (result.status === 0) return
+    throw Object.assign(new Error(`Run the command again once what is at the lock is dealt with: ${shell} did not move it (exit ${result.status}): ${String(result.stderr).trim() || "no message"}`), { code: "desk_move_refused" })
+  }
+  throw Object.assign(new Error(`Install PowerShell (pwsh) or put powershell on PATH: none of ${shells.join(", ")} could be started`), { code: "desk_move_no_shell" })
 }
 
 function existsAt(target) {

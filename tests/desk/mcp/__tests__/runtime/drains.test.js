@@ -3,14 +3,14 @@
 import assert from "node:assert/strict"
 import { createHash, randomUUID } from "node:crypto"
 import { spawnSync } from "node:child_process"
-import { chmodSync, closeSync, existsSync, mkdirSync, mkdtempSync, openSync, promises as fs, readdirSync, readFileSync, renameSync, rmdirSync, rmSync, unlinkSync, utimesSync, writeFileSync } from "node:fs"
+import { chmodSync, closeSync, existsSync, mkdirSync, mkdtempSync, openSync, promises as fs, readdirSync, readFileSync, renameSync, rmdirSync, rmSync, statSync, unlinkSync, utimesSync, writeFileSync } from "node:fs"
 import * as os from "node:os"
 import path from "node:path"
 import { test } from "node:test"
 import { fileURLToPath } from "node:url"
 import { mkTempRoot } from "../_temp_roots.js"
 import {
-  acquireDrainLock, ackWake, connectGithub, DRAIN_STATUS_MARKER, drainPaths, drainsHome, deskInUse, drainStatusLines, installLauncher, parseDrainConfig, pollDrain, pollDrains, quotaHold, quotaLines, recoverDrainTarget, startSuccessor, successorKickoff,
+  acquireDrainLock, moveWithoutReplace, ackWake, connectGithub, DRAIN_STATUS_MARKER, drainPaths, drainsHome, deskInUse, drainStatusLines, installLauncher, parseDrainConfig, pollDrain, pollDrains, quotaHold, quotaLines, recoverDrainTarget, startSuccessor, successorKickoff,
   readDrainConfig, readDrainStates, wakeId, wakeMessage, whyOf, withDrainLock,
 } from "../../../../../plugins/desk/mcp/src/runtime/drains.js"
 import { runDrainsCli } from "../../../../../plugins/desk/mcp/src/runtime/drains-cli.js"
@@ -2307,6 +2307,82 @@ test("a platform that reports an occupied lock with another error code (Windows:
   }
 })
 
+const SHELLS = ["pwsh", "powershell"].filter((shell) => !spawnSync(shell, ["-NoProfile", "-NonInteractive", "-Command", "exit 0"], { timeout: 30_000 }).error)
+const TARGETS = {
+  absent: () => {},
+  file: (to) => writeFileSync(to, "OLD-FILE-LOCK"),
+  "file held open": (to) => { writeFileSync(to, "OLD-FILE-LOCK"); return openSync(to, "r+") },
+  "empty directory": (to) => mkdirSync(to),
+  "nonempty directory": (to) => { mkdirSync(to); writeFileSync(path.join(to, "owner-old"), "old") },
+}
+const readback = (target) => {
+  try {
+    return statSync(target).isDirectory() ? `dir[${readdirSync(target).join(",")}]` : `file[${readFileSync(target, "utf8")}]`
+  } catch (error) {
+    return `absent(${error.code})`
+  }
+}
+
+for (const shell of SHELLS) {
+  for (const [name, make] of Object.entries(TARGETS)) {
+    test(`${shell} moves a prepared directory onto ${name} without replacing what is there`, async () => {
+      const dir = await mkTempRoot("desk-drains-")
+      const from = path.join(dir, "from")
+      const to = path.join(dir, "poll.lock")
+      mkdirSync(from)
+      writeFileSync(path.join(from, "owner-new"), "new")
+      const handle = make(to)
+      const before = readback(to)
+      try {
+        if (name === "absent") {
+          moveWithoutReplace(from, to, { shells: [shell] })
+          assert.equal(readback(to), "dir[owner-new]")
+          assert.equal(readback(from), "absent(ENOENT)")
+        } else {
+          assert.throws(() => moveWithoutReplace(from, to, { shells: [shell] }), (error) => error.code === "desk_move_refused" && /refused \w+ -?\d+ (inner \w+ -?\d+|no-inner)/u.test(error.message))
+          assert.equal(readback(to), before, "the target is exactly as it was")
+          assert.equal(readback(from), "dir[owner-new]", "the prepared directory is untouched")
+        }
+      } finally {
+        if (handle !== undefined) closeSync(handle)
+      }
+    })
+  }
+}
+
+test("the lock is retired from an empty directory and published, and a legacy file that appears just before publication is refused, through a real no-replace move", { skip: SHELLS.length === 0 && "no PowerShell here" }, async () => {
+  const dir = await mkTempRoot("desk-drains-")
+  const lock = path.join(dir, "poll.lock")
+  const move = (from, to) => moveWithoutReplace(from, to, { shells: SHELLS })
+  mkdirSync(lock)
+  acquireDrainLock(lock, { rename: move })()
+  assert.deepEqual(readdirSync(dir), [], "an empty lock was removed, then the retry published and released")
+  assert.throws(() => acquireDrainLock(lock, { rename: (from, to) => { writeFileSync(to, "OLD-FILE-LOCK"); move(from, to) } }), /desk_drains_lock_legacy/u)
+  assert.equal(readFileSync(lock, "utf8"), "OLD-FILE-LOCK", "the earlier Desk's file is untouched")
+  assert.deepEqual(readdirSync(dir), ["poll.lock"], "our staging was removed")
+})
+
+test("only a shell that cannot be launched hands over to the next, and a move that ran is never repeated or replaced by rename", { skip: SHELLS.length === 0 && "no PowerShell here" }, async () => {
+  const dir = await mkTempRoot("desk-drains-")
+  const from = path.join(dir, "from")
+  mkdirSync(from)
+  writeFileSync(path.join(from, "owner-new"), "new")
+  const to = path.join(dir, "poll.lock")
+  assert.throws(() => moveWithoutReplace(from, to, { shells: ["desk-no-such-shell"] }), { code: "desk_move_no_shell" })
+  assert.throws(() => moveWithoutReplace(from, to, { shells: [SHELLS[0]], timeoutMs: 1 }), { code: "ETIMEDOUT" }, "a timeout is an error of its own")
+  moveWithoutReplace(from, to, { shells: ["desk-no-such-shell", SHELLS[0]] })
+  assert.equal(readback(to), "dir[owner-new]")
+})
+
+test("a publication that was cut short but happened is recognised as ours", async () => {
+  const dir = await mkTempRoot("desk-drains-")
+  const lock = path.join(dir, "poll.lock")
+  const release = acquireDrainLock(lock, { rename: (from, to) => { renameSync(from, to); throw Object.assign(new Error("timed out after the move"), { code: "ETIMEDOUT" }) } })
+  assert.equal(ownerFiles(lock).length, 1)
+  release()
+  assert.deepEqual(readdirSync(dir), [])
+})
+
 test("the file system does what the lock relies on, and an earlier Desk's file-only operations fail closed on the directory", { skip: process.platform === "win32" && "the lock's behaviour on Windows is not verified" }, async () => {
   const dir = await mkTempRoot("desk-drains-")
   const made = (name, file = "x") => { mkdirSync(path.join(dir, name)); writeFileSync(path.join(dir, name, "f"), file); return path.join(dir, name) }
@@ -2337,6 +2413,8 @@ test("two consecutive crashes of lock-owning processes, in each place, are recov
       const crashed = spawnSync(process.execPath, ["--input-type=module", "-e", child], { env: { ...process.env, LOCK: lock, CRASH_AT: at } })
       assert.equal(String(crashed.stdout), `reached ${at}`, `cycle ${cycle} reached ${at} before the kill`)
       // Windows reports a killed process as a nonzero exit status with no signal name.
+      assert.equal(crashed.error, undefined, `cycle ${cycle} ${at} spawned`)
+      assert.equal(String(crashed.stderr), "", `cycle ${cycle} ${at} threw nothing before the kill`)
       assert.ok(crashed.signal === "SIGKILL" || (process.platform === "win32" && crashed.signal === null && crashed.status !== 0 && crashed.status !== null), `cycle ${cycle} ${at} was killed (signal ${crashed.signal}, status ${crashed.status})`)
       const left = readdirSync(dir)
       assert.equal(left.length, 1, `${at} left one entry`)
