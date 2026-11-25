@@ -266,8 +266,9 @@ export function acquireDrainLock(lockFile, { alive = processAlive, onStep = () =
       } catch (error) {
         // Platforms name an occupied target differently (POSIX ENOTEMPTY, ENOTDIR, EEXIST; Windows EPERM), so the error code is not
         // trusted: the target itself is inspected next. Only a rename that failed with nothing in the way is a failure to use the lock.
-        // A move that was cut short (Windows, a timeout) may still have happened: our staging is gone and the lock stands, which is ours.
-        if (!existsAt(staging) && existsAt(lockFile)) renamed = true
+        // A move that was cut short (Windows, a timeout) may still have happened. It is ours only if the lock is a directory holding this
+        // acquisition's own `owner-<token>` (a name nothing else uses); any other target, live or legacy, is left alone.
+        if (!existsAt(staging) && holdsOwner(lockFile, `owner-${token}`)) renamed = true
         else if (!existsAt(lockFile)) throw unavailable(lockFile, error)
       }
     } finally {
@@ -287,7 +288,10 @@ function publishDirectory(from, to) {
 
 // Fixed script, paths as data (environment), never interpolated. Directory.Move ends in MoveFileExW without MOVEFILE_REPLACE_EXISTING
 // (dotnet/runtime, Interop.MoveFileEx.cs and FileSystem.Windows.cs: MoveFile(..., overwrite: false)), so an existing target is refused
-// by the system, not by a check made first. Exit 3 means "refused", with the outer exception, and its inner one if any, named on stderr.
+// by the system, not by a check made first. Windows PowerShell 5.1 runs .NET Framework, whose Directory.InternalMove makes no existence
+// check either: it validates paths and the shared root, then calls Win32Native.MoveFile, i.e. MoveFileEx(src, dst, 2 /* MOVEFILE_COPY_ALLOWED */)
+// or MoveFileW, neither of which replaces (microsoft/referencesource@ec9fa9ae770d, mscorlib/system/io/directory.cs InternalMove and
+// mscorlib/microsoft/win32/win32native.cs MoveFile). The native per-shell target tests are evidence, not a proof of every interleaving. Exit 3 means "refused", with the outer exception, and its inner one if any, named on stderr.
 const MOVE_SCRIPT = "try { [System.IO.Directory]::Move($env:DESK_MOVE_FROM, $env:DESK_MOVE_TO) } catch { $e = $_.Exception; $i = $e.InnerException; [Console]::Error.Write('refused ' + $e.GetType().Name + ' ' + $e.HResult + $(if ($i) { ' inner ' + $i.GetType().Name + ' ' + $i.HResult } else { ' no-inner' })); exit 3 }"
 
 /**
@@ -303,6 +307,15 @@ export function moveWithoutReplace(from, to, { shells = ["pwsh", "powershell"], 
     throw Object.assign(new Error(`Run the command again once what is at the lock is dealt with: ${shell} did not move it (exit ${result.status}): ${String(result.stderr).trim() || "no message"}`), { code: "desk_move_refused" })
   }
   throw Object.assign(new Error(`Install PowerShell (pwsh) or put powershell on PATH: none of ${shells.join(", ")} could be started`), { code: "desk_move_no_shell" })
+}
+
+function holdsOwner(lockFile, ownerName) {
+  try {
+    return lstatSync(lockFile).isDirectory() && lstatSync(path.join(lockFile, ownerName)).isFile()
+  } catch (error) {
+    if (error.code === "ENOENT" || error.code === "ENOTDIR") return false
+    throw unavailable(lockFile, error)
+  }
 }
 
 function existsAt(target) {

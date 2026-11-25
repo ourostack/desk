@@ -2383,6 +2383,21 @@ test("a publication that was cut short but happened is recognised as ours", asyn
   assert.deepEqual(readdirSync(dir), [])
 })
 
+test("a cut-short publication whose target is not our own directory is never taken as ours", async () => {
+  const timedOut = () => Object.assign(new Error("timed out"), { code: "ETIMEDOUT" })
+  const foreign = await mkTempRoot("desk-drains-")
+  const foreignLock = path.join(foreign, "poll.lock")
+  const foreignOwner = path.join(foreignLock, "owner-11111111-1111-1111-1111-111111111111")
+  assert.throws(() => acquireDrainLock(foreignLock, { rename: (from) => { rmSync(from, { recursive: true }); mkdirSync(foreignLock); writeFileSync(foreignOwner, `${process.pid}\n`); throw timedOut() } }), /desk_drains_busy/u)
+  assert.equal(readFileSync(foreignOwner, "utf8"), `${process.pid}\n`, "a live foreign owner is left untouched")
+  assert.deepEqual(readdirSync(foreignLock), ["owner-11111111-1111-1111-1111-111111111111"])
+
+  const legacy = await mkTempRoot("desk-drains-")
+  const legacyLock = path.join(legacy, "poll.lock")
+  assert.throws(() => acquireDrainLock(legacyLock, { rename: (from) => { rmSync(from, { recursive: true }); writeFileSync(legacyLock, `${process.pid}\n`); throw timedOut() } }), /desk_drains_lock_legacy/u)
+  assert.equal(readFileSync(legacyLock, "utf8"), `${process.pid}\n`, "a legacy file is left untouched")
+})
+
 test("the file system does what the lock relies on, and an earlier Desk's file-only operations fail closed on the directory", { skip: process.platform === "win32" && "the lock's behaviour on Windows is not verified" }, async () => {
   const dir = await mkTempRoot("desk-drains-")
   const made = (name, file = "x") => { mkdirSync(path.join(dir, name)); writeFileSync(path.join(dir, name, "f"), file); return path.join(dir, name) }
