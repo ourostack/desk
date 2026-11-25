@@ -2830,10 +2830,10 @@ test("a cross-reference is attributed from the end of a long comment history, an
 
 test("a bot comment that repeats the bot's previous one is noise, found by reading the comment history from its end", async () => {
   const at = (index) => new Date(Date.parse("2026-11-01T00:00:00Z") + index * 1000).toISOString().replace(".000", "")
-  const bot = (id, index) => ({ id, user: { login: "ci[bot]", type: "Bot" }, body: "build passed", created_at: at(index), updated_at: at(index) })
-  const world = historyGithub({ histories: { 7: { comments: [bot(1, 10), bot(2, 250)], events: [], timeline: [] } }, issues: () => [{ number: 7, title: "T", body: "b", state: "open", updated_at: at(251) }] })
+  const comments = Array.from({ length: 150 }, (_, index) => ({ id: index, user: { login: "ci[bot]", type: "Bot" }, body: "build passed", created_at: at(index), updated_at: at(index) }))
+  const world = historyGithub({ histories: { 7: { comments, events: [], timeline: [] } }, issues: () => [{ number: 7, title: "T", body: "b", state: "open", updated_at: at(251) }] })
   const connect = (account, { login }) => connectGithub(account, { spawn: () => ({ status: 0, stdout: "tok" }), fetchImpl: world.fetchImpl, env: { PATH: "/bin" }, login })
-  const states = { "o/r": { seeded: true, seen: { 7: { updatedAt: at(200), digest: createHash("sha1").update("T\nb").digest("hex").slice(0, 16), title: "T" } }, pending: [], turns: [] } }
+  const states = { "o/r": { seeded: true, seen: { 7: { updatedAt: at(125), digest: createHash("sha1").update("T\nb").digest("hex").slice(0, 16), title: "T" } }, pending: [], turns: [] } }
   await pollDrain({ repo: "o/r", account: "maintainer", session: "s" }, states, { connect, now: Date.parse(at(260)) })
   assert.equal(states["o/r"].lastError, undefined)
   assert.deepEqual(states["o/r"].pending, [])
