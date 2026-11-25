@@ -1,18 +1,18 @@
 {
   "schema_version": 1,
   "id": "desk",
-  "version": "3.2.576",
+  "version": "3.2.577",
   "dependencies": [
     {
       "id": "desk",
       "kind": "substrate",
-      "version": "3.2.576",
+      "version": "3.2.577",
       "provenance": {
         "source": "plugins/desk/.claude-plugin/plugin.json",
         "package": "ourostack/desk"
       },
       "lock": {
-        "version": "3.2.576",
+        "version": "3.2.577",
         "integrity": "sha256-desk-activation-manifest-v1"
       }
     },
