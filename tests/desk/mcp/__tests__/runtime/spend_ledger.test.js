@@ -2,7 +2,7 @@ import test from "node:test"
 import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
 import { fileURLToPath } from "node:url"
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, existsSync, unlinkSync, chmodSync } from "node:fs"
+import { appendFileSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync, existsSync, unlinkSync, chmodSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 import { removeTreeSync } from "../_remove_tree.js"
@@ -211,7 +211,8 @@ test("an unwritable ledger does not stop the call, but is raised as a process wa
 test("the delivery gate accounts an env GH_TOKEN to the token's account, is not_verified under the floor, and an anonymous read is not recorded", async (t) => {
   const { dir, env, rows } = ledger(t)
   const body = { merged_at: null, state: "open", head: { sha: "a" } }
-  const fetchFn = async (url) => (url.endsWith("/user") ? answer(200, { login: "ari_microsoft" }) : url.endsWith("/rate_limit") ? answer(200, { resources: { core: { remaining: 4000, reset: Math.floor(Date.now() / 1000) + 600, limit: 5000 } } }) : answer(200, body, quota(4000)))
+  const reset = Math.floor(Date.now() / 1000) + 600
+  const fetchFn = async (url) => (url.endsWith("/user") ? answer(200, { login: "ari_microsoft" }) : url.endsWith("/rate_limit") ? answer(200, { resources: { core: { remaining: 4000, reset, limit: 5000 } } }) : answer(200, body, quota(4000, { "x-ratelimit-reset": String(reset) })))
   await prDelivery({ repo: "ourostack/desk", number: 1, env: { ...env, GH_TOKEN: "synthetic-work" }, fetchFn })
   assert.ok(rows().length >= 2 && rows().every((r) => r[1] === "work"), JSON.stringify(rows()))
   const before = rows().length
@@ -432,7 +433,7 @@ test("a higher number written over the file by a slower writer is corrected from
 test("an observation log that cannot be written leaves the stored numbers alone and the send unharmed", async (t) => {
   const { dir, env, rate } = ledger(t)
   writeFileSync(path.join(dir, "personal.rate"), `4000 ${RESET} 5000 ${NOW}\n`)
-  mkdirSync(path.join(dir, "personal.rate.obs"))
+  mkdirSync(path.join(dir, `personal.rate.obs.${RESET}`))
   const fetchFn = ledgeredFetch(async () => answer(200, {}, quota(3000)), { env, login: () => "ari", now: clockNow })
   assert.equal((await fetchFn("https://api.github.com/repos/o/r/pulls/1", auth())).status, 200)
   assert.equal(rate("personal")[0], 4000)
@@ -459,17 +460,67 @@ test("a rate-limited or synchronously failing /user lookup is held and asked aga
   assert.equal(users, 3)
 })
 
-test("a long observation log is read from its last 64 KB without its cut first line, and header answers leave the fetched time alone", async (t) => {
+test("the lowest remaining of a window is read from the whole window's log however long it is, earlier windows' logs go, and header answers leave the fetched time alone", async (t) => {
   const { dir, env } = ledger(t)
   writeFileSync(path.join(dir, "personal.rate"), `4000 ${RESET} 5000 ${NOW - 30}\n`)
-  writeFileSync(path.join(dir, "personal.rate.obs"), `3 ${RESET} 500\n` + `4000 ${RESET} 5000\n`.repeat(5000))
-  const cut = readFileSync(path.join(dir, "personal.rate.obs"), "utf8")
-  assert.equal((cut.length - 65536) % 21, 1, "the cut falls one byte into a line, leaving a valid-looking 000 reading")
+  writeFileSync(path.join(dir, `personal.rate.obs.${RESET}`), `3 ${RESET} 500\n` + `4000 ${RESET} 5000\n`.repeat(5000))
+  writeFileSync(path.join(dir, "personal.rate.obs.100"), "1 100 5000\n")
+  mkdirSync(path.join(dir, "personal.rate.obs.99"))
+  writeFileSync(path.join(dir, "personal.rate.obs.99", "keep"), "")
   const fetchFn = ledgeredFetch(async () => answer(200, {}, quota(3900)), { env, login: () => "ari", now: clockNow })
+  await fetchFn("https://api.github.com/repos/o/r/issues/1/comments", { ...auth(), method: "POST" })
+  const [remaining, , limit, fetched] = readFileSync(path.join(dir, "personal.rate"), "utf8").trim().split(" ").map(Number)
+  assert.deepEqual([remaining, limit, fetched], [3, 500, NOW - 30], "the 3 written first in the window beats 5000 later lines and carries its own ceiling")
+  assert.equal(existsSync(path.join(dir, "personal.rate.obs.100")), false)
+})
+
+test("a writer whose rename lands after another's lower write is corrected before it returns, and a raised cache never lets a read through", async (t) => {
+  const { dir, env, rate } = ledger(t)
+  const file = path.join(dir, "personal.rate")
+  writeFileSync(file, `4000 ${RESET} 5000 ${NOW}\n`)
+  env.MS_DESK_GH_FLOOR = "3200"
+  let raced = false
+  const seen = []
+  const settleHooks = {
+    beforeWrite: () => {
+      if (raced) return
+      raced = true
+      appendFileSync(`${file}.obs.${RESET}`, `3000 ${RESET} 5000\n`)
+      writeFileSync(file, `3000 ${RESET} 5000 ${NOW}\n`)
+    },
+    afterWrite: () => seen.push(readFileSync(file, "utf8").split(" ")[0]),
+  }
+  let sent = 0
+  const fetchFn = ledgeredFetch(async () => { sent += 1; return answer(200, {}, quota(3500)) }, { env, login: () => "ari", now: clockNow, settleHooks })
   await fetchFn("https://api.github.com/repos/o/r/pulls/1", auth())
-  const [remaining, , , fetched] = readFileSync(path.join(dir, "personal.rate"), "utf8").trim().split(" ").map(Number)
-  assert.equal(remaining, 3900)
-  assert.equal(fetched, NOW - 30)
+  assert.deepEqual(seen, ["3500", "3000"], "the last finisher first leaves 3500 over the 3000, then rewrites it before returning")
+  assert.equal(rate("personal")[0], 3000)
+  writeFileSync(file, `3500 ${RESET} 5000 ${NOW}\n`)
+  await assert.rejects(fetchFn("https://api.github.com/repos/o/r/issues/1", auth()), SpendHeld)
+  assert.equal(sent, 1, "the cache says 3500, above the floor; the observations say 3000, so the second read is held")
+})
+
+test("a quota file that another program keeps rewriting ends the settling with a warning, not silently", async (t) => {
+  const { dir, env } = ledger(t)
+  const file = path.join(dir, "personal.rate")
+  writeFileSync(file, `4000 ${RESET} 5000 ${NOW}\n`)
+  const warnings = []
+  const onWarning = (warning) => warnings.push(warning.code)
+  process.on("warning", onWarning)
+  t.after(() => process.off("warning", onWarning))
+  const settleHooks = { afterWrite: () => writeFileSync(file, `4999 ${RESET} 5000 ${NOW}\n`) }
+  const fetchFn = ledgeredFetch(async () => answer(200, {}, quota(3000)), { env, login: () => "ari", now: clockNow, settleHooks })
+  assert.equal((await fetchFn("https://api.github.com/repos/o/r/pulls/1", auth())).status, 200)
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.deepEqual(warnings, ["DESK_SPEND_QUOTA_UNSETTLED"])
+})
+
+test("a log that cannot be read is skipped, so a read still decides from the stored numbers", async (t) => {
+  const { dir, env } = ledger(t)
+  writeFileSync(path.join(dir, "personal.rate"), `100 ${RESET} 5000 ${NOW}\n`)
+  mkdirSync(path.join(dir, `personal.rate.obs.${RESET}`))
+  const fetchFn = ledgeredFetch(async () => answer(200, {}, quota(100)), { env, login: () => "ari", now: clockNow })
+  await assert.rejects(fetchFn("https://api.github.com/repos/o/r/issues/1", auth()), SpendHeld)
 })
 
 test("the first numbers ever seen for an account, from a write's headers, are stored as fetched now", async (t) => {
