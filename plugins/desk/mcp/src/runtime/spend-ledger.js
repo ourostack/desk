@@ -45,7 +45,7 @@ export const unrecordedSends = () => unrecorded
 const count = (value, fallback) => (/^\d+$/u.test(String(value ?? "")) ? Number(value) : fallback)
 
 /** The shim's ledger folder when this host has one and may use it, else null. */
-export function ledgerDir(env = process.env, underTest = looksLikeNodeTestRunner(env)) {
+export function ledgerDir(env, underTest = looksLikeNodeTestRunner(env)) {
   if (env.MS_DESK_QUOTA === "off" || env.MS_DESK_ROUTE === "off") return null
   if (!env.MS_DESK_QUOTA_DIR && underTest) return null
   const base = env.XDG_STATE_HOME || (env.HOME ? path.join(env.HOME, ".local", "state") : "")
@@ -58,7 +58,7 @@ export function ledgerDir(env = process.env, underTest = looksLikeNodeTestRunner
 }
 
 /** The signed-in github.com login gh calls active, read from its hosts.yml the way the shim does; "" when unknown. */
-export function activeLogin(env = process.env) {
+export function activeLogin(env) {
   const home = env.GH_CONFIG_DIR || (env.XDG_CONFIG_HOME ? path.join(env.XDG_CONFIG_HOME, "gh") : env.HOME ? path.join(env.HOME, ".config", "gh") : "")
   try {
     return /^ {4}user:\s*(\S+)/mu.exec(readFileSync(path.join(home, "hosts.yml"), "utf8"))?.[1] ?? ""
@@ -160,7 +160,7 @@ async function refreshRate({ dir, kind, fetchFn, init, now }) {
 }
 
 /** Why a read must wait under the floor or an account hold, or null when it may run. The shim's rule (see the header). */
-function heldReason({ dir, kind, session, call, env = process.env, now = Math.floor(Date.now() / 1000) }) {
+function heldReason({ dir, kind, session, call, env, now }) {
   try {
     const [until, ...why] = readFileSync(path.join(dir, `${kind}.hold`), "utf8").trim().split("\t")
     if (count(until, 0) > now) return `Wait until ${clock(count(until, 0))}Z, then repeat: the ${kind} account is on hold (${why.join("\t") || "no reason given"}), so Desk's own GitHub reads are held back to keep its REST quota for a service that needs it`
@@ -219,7 +219,7 @@ async function loginOf({ token, hint, fetchFn, init }) {
  * host gives no session id. A send that gets no answer is recorded as `unknown`. A ledger that cannot be written never stops the call: it
  * raises a process warning (DESK_SPEND_UNRECORDED) and counts in `unrecordedSends()`.
  */
-export function ledgeredFetch(fetchFn, { env = process.env, login = () => "", label = "desk", now = () => Date.now(), pid = process.pid } = {}) {
+export function ledgeredFetch(fetchFn, { env, login = () => "", label = "desk", now = () => Date.now(), pid = process.pid }) {
   const session = env.COPILOT_AGENT_SESSION_ID || env.AGENCY_SESSION_ID || `${label}-${pid}`
   return async (url, init) => {
     const call = describeCall(url, init?.method)

@@ -316,3 +316,21 @@ test("a hosts.yml with no signed-in user gives no account", (t) => {
   writeFileSync(path.join(root, "hosts.yml"), "github.com:\n    git_protocol: https\n")
   assert.equal(activeLogin({ GH_CONFIG_DIR: root }), "")
 })
+
+test("an expired hold is no hold, and reads that start together share one rate_limit lookup", async (t) => {
+  const { dir, env } = ledger(t)
+  writeFileSync(path.join(dir, "personal.hold"), `${NOW - 10}\told reason\n`)
+  let lookups = 0
+  const inner = async (url) => {
+    if (url.endsWith("/rate_limit")) {
+      lookups += 1
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      return answer(200, { resources: { core: { remaining: 4000, reset: RESET, limit: 5000 } } })
+    }
+    return answer(200)
+  }
+  const fetchFn = ledgeredFetch(inner, { env, login: () => "ari", now: clockNow })
+  const results = await Promise.all([fetchFn("https://api.github.com/repos/o/r/pulls/1", auth()), fetchFn("https://api.github.com/repos/o/r/pulls/2", auth())])
+  assert.deepEqual(results.map((r) => r.status), [200, 200])
+  assert.equal(lookups, 1)
+})
