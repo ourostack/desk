@@ -1,7 +1,9 @@
-// Makes every agent commit traceable to its session. Desk's Copilot session start installs two git hooks in the repository the
+// Makes every agent commit traceable to its session. Desk's Copilot session start installs three git hooks in the repository the
 // session works in (worktrees share the repository's hooks folder, so one install covers them all):
 //   - `prepare-commit-msg` appends `Session: <id>` to the message, with `git interpret-trailers`, so a message that already has a
 //     Session trailer is left alone, and so is a merge, a squash or a fixup/squash/amend! commit;
+//   - `commit-msg` removes `Co-authored-by` lines that name an AI tool or a bot, but only in a repository that has
+//     `.github/scripts/attribution.mjs` (one that rejects AI attribution), so no one needs a force-push to fix a commit;
 //   - `pre-push` prints one warning when the branch tip on the remote carries a different session's trailer. It never refuses.
 // The id is `COPILOT_AGENT_SESSION_ID`, else `AGENCY_SESSION_ID`. With neither set (a person committing) both hooks do nothing, so a
 // hooks folder shared with a person's own commits is safe.
@@ -50,6 +52,20 @@ add_session() {
 }
 add_session "$@"
 ${chainTail("prepare-commit-msg", false)}`
+}
+
+/** The `commit-msg` hook text: in a repository that forbids AI attribution, drops `Co-authored-by` lines that name an AI tool or a bot. */
+function commitMsgScript() {
+  return `${header("commit-msg")}strip_ai_coauthors() {
+  [ -f .github/scripts/attribution.mjs ] || return 0
+  tmp="$1.desk-strip"
+  grep -v -i -E '^[[:space:]>*+-]*co-authored-by[[:space:]]*:.*(copilot|anthropic|openai|chatgpt|codex|gemini|claude code|\\[bot\\])' "$1" > "$tmp" 2>/dev/null
+  [ $? -le 1 ] && cat "$tmp" > "$1"
+  rm -f "$tmp"
+  return 0
+}
+strip_ai_coauthors "$@"
+${chainTail("commit-msg", false)}`
 }
 
 /** The `pre-push` hook text. */
@@ -118,7 +134,7 @@ export function installSessionTrailerHooks(folder, { spawnGit = spawnSync } = {}
     if (tracked.status === 0 && tracked.stdout.trim() !== "") return { state: "tracked", reason: `core.hooksPath (${dir}) holds tracked files, so Desk left it alone` }
     return {
       state: "ok",
-      hooks: [installHook(dir, "prepare-commit-msg", prepareCommitMsgScript()), installHook(dir, "pre-push", prePushScript())],
+      hooks: [installHook(dir, "prepare-commit-msg", prepareCommitMsgScript()), installHook(dir, "commit-msg", commitMsgScript()), installHook(dir, "pre-push", prePushScript())],
     }
   } catch (error) {
     return { state: "failed", reason: error.message }

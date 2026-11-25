@@ -99,7 +99,7 @@ test("a commit made in a linked worktree gets the trailer through the shared hoo
 test("installing again changes nothing, an older Desk hook is rewritten, and a foreign hook is chained and still runs", async () => {
   const dir = await repo()
   const hooks = path.join(dir, ".git", "hooks")
-  assert.deepEqual(installSessionTrailerHooks(dir).hooks.map((hook) => hook.state), ["current", "current"])
+  assert.deepEqual(installSessionTrailerHooks(dir).hooks.map((hook) => hook.state), ["current", "current", "current"])
   const file = path.join(hooks, "prepare-commit-msg")
   writeFileSync(file, readFileSync(file, "utf8").replace(/ v\d+\n/u, " v0\n"))
   assert.equal(installSessionTrailerHooks(dir).hooks[0].state, "updated")
@@ -210,4 +210,15 @@ test("a Session trailer matches none of the attribution checks", async () => {
   const ruleset = /co-authored-by:[^\n]*(\[bot\]|copilot)/iu
   const deskScan = /Co-Authored-By:|Co-authored with|Generated (with|by) |Built (by|with) |AI-assisted/iu
   for (const check of [aiCredit, ruleset, deskScan]) assert.doesNotMatch(`subject\n\n${trailer}\n`, check)
+})
+
+test("in a repository that rejects AI attribution, a commit loses AI Co-authored-by lines and keeps a person's", async () => {
+  const dir = await repo()
+  const body = ["Subject", "", "Co-authored-by: Copilot App <223556219+Copilot@users.noreply.github.com>", "Co-authored-by: Claude <noreply@anthropic.com>", "Co-authored-by: Dana Lee <dana@example.com>"].join("\n")
+  ok(commit(dir, body))
+  assert.match(message(dir), /Copilot App/u)
+  mkdirSync(path.join(dir, ".github", "scripts"), { recursive: true })
+  writeFileSync(path.join(dir, ".github", "scripts", "attribution.mjs"), "")
+  ok(commit(dir, body, {}, [], "g.txt"))
+  assert.equal(message(dir), "Subject\n\nCo-authored-by: Dana Lee <dana@example.com>")
 })
