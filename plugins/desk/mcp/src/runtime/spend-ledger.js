@@ -41,6 +41,9 @@ export class SpendHeld extends Error {
 let unrecorded = 0
 let warned = false
 const warnedUnreadable = new Set()
+// Observations this process could not append to a log (kept so its own reads still see them) and the folders already warned about.
+const unlogged = new Map()
+const warnedUnlogged = new Set()
 
 /** How many sends this process could not write to the ledger (an unwritable folder), so an attribution report can say it is incomplete. */
 export const unrecordedSends = () => unrecorded
@@ -134,7 +137,7 @@ const tightest = (observations) => {
 // needed again and are removed. `own` are observations the caller already holds. `unreadable` is true when the folder cannot be listed or
 // a log of the latest window cannot be read: what protects the floor is then unknown, and the stored numbers alone must not decide.
 function currentRate(dir, pool, own = []) {
-  const seen = [...own]
+  const seen = [...own, ...(unlogged.get(`${dir}\0${pool}`) ?? [])]
   let unreadable = false
   const had = readRate(dir, pool)
   if (had.remaining !== null && had.reset !== null && had.limit !== null) seen.push({ remaining: had.remaining, reset: had.reset, limit: had.limit })
@@ -168,15 +171,24 @@ function currentRate(dir, pool, own = []) {
   return { rate: seen.length > 0 ? tightest(seen) : null, unreadable }
 }
 
-// Every observation is first appended to its window's log (one small O_APPEND write is atomic across processes, so none is ever lost),
+// Every observation is first appended to its window's log (one small O_APPEND write is atomic across processes; one that cannot be appended is kept in this process and warned about),
 // then `<pool>.rate` is written once from the lowest remaining in them. That file is the shim's cache, not Desk's decision: two writers can
 // leave it a moment (or until the next observation) higher than the lowest, and the shim, which reads it, can see that. Desk's own reads
-// never use it: they are decided from `currentRate`, so a raised file never lets one through. `fetched` moves only when `fresh` (a free
+// are not decided from it alone: they are decided from `currentRate`, so a raised file never lets one through. `fetched` moves only when `fresh` (a free
 // `/rate_limit` answer), so header answers never put off the next refresh.
 function mergeRate(dir, pool, { remaining, reset, limit }, now, fresh) {
   const file = path.join(dir, `${pool}.rate`)
   try {
-    appendFileSync(`${file}.obs.${reset}`, `${remaining} ${reset} ${limit}\n`)
+    try {
+      appendFileSync(`${file}.obs.${reset}`, `${remaining} ${reset} ${limit}\n`)
+    } catch (error) {
+      // The answer is still known to this process: keep it, and say so once, rather than lose a below-floor observation silently.
+      unlogged.set(`${dir}\0${pool}`, [tightest([{ remaining, reset, limit }, ...(unlogged.get(`${dir}\0${pool}`) ?? [])])])
+      if (!warnedUnlogged.has(dir)) {
+        warnedUnlogged.add(dir)
+        process.emitWarning(`Make ${dir} and its ${pool}.rate.obs.* files writable: a quota observation could not be recorded (${error?.code ?? "error"}), so only this process's reads see it`, { code: "DESK_SPEND_OBSERVATION_UNRECORDED" })
+      }
+    }
     const { rate } = currentRate(dir, pool, [{ remaining, reset, limit }])
     const had = readRate(dir, pool)
     if (!fresh && had.remaining === rate.remaining && had.reset === rate.reset && had.limit === rate.limit) return

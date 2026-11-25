@@ -512,6 +512,27 @@ test("the first numbers ever seen for an account, from a write's headers, are st
   assert.equal(Number(readFileSync(path.join(dir, "personal.rate"), "utf8").trim().split(" ")[3]), clockNow() / 1000)
 })
 
+test("an answer whose observation cannot be appended is kept by the process and still holds its next read", async (t) => {
+  const { dir, env } = ledger(t)
+  env.MS_DESK_GH_FLOOR = "3200"
+  writeFileSync(path.join(dir, "personal.rate"), `4000 ${RESET} 5000 ${NOW}\n`)
+  const log = path.join(dir, `personal.rate.obs.${RESET}`)
+  writeFileSync(log, `4000 ${RESET} 5000\n`)
+  chmodSync(log, 0o444)
+  const warnings = []
+  const onWarning = (warning) => warnings.push(warning.code)
+  process.on("warning", onWarning)
+  t.after(() => process.off("warning", onWarning))
+  let sent = 0
+  const fetchFn = ledgeredFetch(async () => { sent += 1; return answer(200, {}, quota(3000)) }, { env, login: () => "ari", now: clockNow })
+  await fetchFn("https://api.github.com/repos/o/r/pulls/1", { ...auth(), method: "POST" })
+  await fetchFn("https://api.github.com/repos/o/r/pulls/1", { ...auth(), method: "POST" })
+  await assert.rejects(fetchFn("https://api.github.com/repos/o/r/issues/1", auth()), SpendHeld)
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.equal(sent, 2)
+  assert.deepEqual(warnings, ["DESK_SPEND_OBSERVATION_UNRECORDED"])
+})
+
 test("a log removed after the listing is not unreadable: the read is decided from what remains", async (t) => {
   const { dir, env } = ledger(t)
   writeFileSync(path.join(dir, "personal.rate"), `4000 ${RESET} 5000 ${NOW}\n`)
