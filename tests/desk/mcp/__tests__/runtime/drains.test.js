@@ -2772,6 +2772,9 @@ test("recent reads stop at the first page that reaches back far enough, and read
   urls.length = 0
   assert.equal((await named.comments("o/r", 5, "1970-01-01T00:00:00Z", (page) => page.some((item) => item.id === 150))).length, 150)
   assert.deepEqual(urls.map((url) => new URL(url).searchParams.get("page")), ["1", "3", "2"], "a bot comment's previous one is found without reading the oldest pages")
+  urls.length = 0
+  assert.equal((await named.issueEvents("o/r", 5, "1970-01-01T00:00:00Z")).length, 250, "a time older than the whole list reads all of it, page 1 from the first answer")
+  assert.deepEqual(urls.map((url) => new URL(url).searchParams.get("page")), ["1", "3", "2"])
 })
 
 test("a reopen by the drain's own claim is still recognised when the claim sits on the page before the last one read", async () => {
@@ -2803,4 +2806,24 @@ test("recent follows the link on the last page it was told of, so an item added 
   const items = await (await api).timeline("o/r", 5, stamped[250].created_at)
   assert.ok(items.some((item) => item.id === 349), "the reference on page 4 is read")
   assert.deepEqual(urls.map((url) => new URL(url).searchParams.get("page")), ["1", "3", "4"], "page 3 reaches back far enough, so page 2 is not read")
+})
+
+test("a cross-reference is attributed from the end of a long comment history, and an unreadable comment page never hides it", async () => {
+  const at = (index) => new Date(Date.parse("2026-11-01T00:00:00Z") + index * 1000).toISOString().replace(".000", "")
+  const comments = Array.from({ length: 150 }, (_, index) => ({ id: index, user: { login: "someone" }, body: "hi", created_at: at(index), updated_at: at(index) }))
+  comments[120] = { ...comments[120], user: { login: "maintainer" }, body: "<!-- ouro-drain-status --> working on #99" }
+  const world = historyGithub({ histories: { 3: { comments: [] }, 7: { comments, events: [], timeline: [linked(at(300), 3)] } }, issues: () => [{ number: 7, title: "T", body: "b", state: "open", updated_at: at(301) }] })
+  const connect = (account, { login }) => connectGithub(account, { spawn: () => ({ status: 0, stdout: "tok" }), fetchImpl: world.fetchImpl, env: { PATH: "/bin" }, login })
+  const run = async () => {
+    world.log.length = 0
+    const states = { "o/r": { seeded: true, seen: { 7: { updatedAt: at(200), digest: createHash("sha1").update("T\nb").digest("hex").slice(0, 16), title: "T" } }, pending: [], turns: [] } }
+    await pollDrain({ repo: "o/r", account: "maintainer", session: "s" }, states, { connect, now: Date.parse(at(310)) })
+    return states["o/r"]
+  }
+  const read = await run()
+  assert.match(read.pending[0]?.why ?? "", /cross-reference from other\/repo#3/u)
+  assert.ok(world.history().includes("/repos/o/r/issues/7/comments?page=2"), "the own-comment lookup starts at the last page")
+  world.failures.add("comments:2")
+  const failed = await run()
+  assert.match(failed.pending[0]?.why ?? "", /cross-reference from other\/repo#3/u, "a comment page that cannot be read is not evidence the drain caused the reference")
 })
