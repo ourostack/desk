@@ -39,6 +39,7 @@ const movers = {
 }
 
 test("probe: what each mover does to each existing target", () => {
+  const lines = []
   const root = mkdtempSync(path.join(os.tmpdir(), "desk-probe-"))
   try {
     for (const [moverName, move] of Object.entries(movers)) {
@@ -48,11 +49,11 @@ test("probe: what each mover does to each existing target", () => {
         const handle = make(to)
         const result = move(from, to)
         if (handle !== undefined) closeSync(handle)
-        console.log(`PROBE ${process.platform} ${moverName} onto ${targetName}: ${result}; target now ${describe(to)}; source now ${describe(from)}`)
+        lines.push(`PROBE ${process.platform} ${moverName} onto ${targetName}: ${result}; target now ${describe(to)}; source now ${describe(from)}`)
       }
     }
   } finally {
     rmSync(root, { recursive: true, force: true })
   }
-  assert.ok(true)
+  assert.fail(lines.join(" ## "))
 })
