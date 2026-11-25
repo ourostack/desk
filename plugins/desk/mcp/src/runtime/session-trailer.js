@@ -1,7 +1,9 @@
-// Makes every agent commit traceable to its session. Desk's Copilot session start installs two git hooks in the repository the
+// Makes every agent commit traceable to its session. Desk's Copilot session start installs three git hooks in the repository the
 // session works in (worktrees share the repository's hooks folder, so one install covers them all):
 //   - `prepare-commit-msg` appends `Session: <id>` to the message, with `git interpret-trailers`, so a message that already has a
 //     Session trailer is left alone, and so is a merge, a squash or a fixup/squash/amend! commit;
+//   - `commit-msg` removes `Co-authored-by` lines that name an AI tool or a bot, but only in a repository that has
+//     `.github/scripts/attribution.mjs` (one that rejects AI attribution), so no one needs a force-push to fix a commit;
 //   - `pre-push` prints one warning when the branch tip on the remote carries a different session's trailer. It never refuses.
 // The id is `COPILOT_AGENT_SESSION_ID`, else `AGENCY_SESSION_ID`. With neither set (a person committing) both hooks do nothing, so a
 // hooks folder shared with a person's own commits is safe.
@@ -50,6 +52,35 @@ add_session() {
 }
 add_session "$@"
 ${chainTail("prepare-commit-msg", false)}`
+}
+
+// Runs the repository's own attribution checker (`findings`), so the hook removes exactly the Co-authored-by lines that checker rejects
+// and keeps a person's. Written without single quotes: it sits inside a single-quoted shell word.
+const STRIP_SCRIPT = [
+  'import{readFileSync,writeFileSync}from"node:fs";import{resolve}from"node:path";import{pathToFileURL}from"node:url";',
+  'const f=process.argv[1];',
+  'const{findings}=await import(pathToFileURL(resolve(".github/scripts/attribution.mjs")).href);',
+  'const text=readFileSync(f,"utf8");',
+  'const drop=new Set(findings(text).filter(x=>x.reason.startsWith("Co-authored-by")).map(x=>x.line));',
+  'if(drop.size)writeFileSync(f,text.split(/\\r?\\n/).filter((_,i)=>!drop.has(i+1)).join("\\n"));',
+].join("")
+
+/**
+ * The `commit-msg` hook text. A foreign `commit-msg` hook runs first, and keeps its failure; then, in a repository with
+ * `.github/scripts/attribution.mjs`, the final message loses the Co-authored-by lines that checker rejects. A failed check refuses the commit.
+ */
+function commitMsgScript() {
+  return `${header("commit-msg")}chained="\${0%/*}/commit-msg${CHAINED_SUFFIX}"
+if [ -x "$chained" ] && ! grep -q '${SESSION_MARKER}' "$chained" 2>/dev/null; then
+  "$chained" "$@" || exit $?
+fi
+[ -f .github/scripts/attribution.mjs ] || exit 0
+if ! node --input-type=module -e '${STRIP_SCRIPT}' "$1"; then
+  echo "Desk commit-msg: could not check this commit message against .github/scripts/attribution.mjs (is node installed?), so the commit is refused. Remove any AI Co-authored-by line by hand." >&2
+  exit 1
+fi
+exit 0
+`
 }
 
 /** The `pre-push` hook text. */
@@ -118,7 +149,7 @@ export function installSessionTrailerHooks(folder, { spawnGit = spawnSync } = {}
     if (tracked.status === 0 && tracked.stdout.trim() !== "") return { state: "tracked", reason: `core.hooksPath (${dir}) holds tracked files, so Desk left it alone` }
     return {
       state: "ok",
-      hooks: [installHook(dir, "prepare-commit-msg", prepareCommitMsgScript()), installHook(dir, "pre-push", prePushScript())],
+      hooks: [installHook(dir, "prepare-commit-msg", prepareCommitMsgScript()), installHook(dir, "commit-msg", commitMsgScript()), installHook(dir, "pre-push", prePushScript())],
     }
   } catch (error) {
     return { state: "failed", reason: error.message }
