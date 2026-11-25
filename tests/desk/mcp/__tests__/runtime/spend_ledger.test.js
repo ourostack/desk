@@ -1,86 +1,199 @@
 import test from "node:test"
 import assert from "node:assert/strict"
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, existsSync, rmSync } from "node:fs"
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, existsSync, rmSync, chmodSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
-import { ledgeredFetch, SpendHeld } from "../../../../../plugins/desk/mcp/src/runtime/spend-ledger.js"
+import { ledgeredFetch, SpendHeld, unrecordedSends } from "../../../../../plugins/desk/mcp/src/runtime/spend-ledger.js"
 import { connectGithub } from "../../../../../plugins/desk/mcp/src/runtime/drains.js"
 import { prDelivery } from "../../../../../plugins/desk/mcp/src/tools/delivery-gate.js"
 
 const NOW = 1_800_000_000
-const ok = (status = 200, body = "{}") => ({ ok: status < 400, status, headers: { get: () => null, has: () => false }, text: async () => body, json: async () => JSON.parse(body) })
+const RESET = NOW + 1800
+const SESSION = "11111111-synthetic-session"
+const answer = (status = 200, body = {}, headers = {}) => ({ ok: status < 400, status, headers: { get: (name) => headers[name] ?? null, has: (name) => name in headers }, text: async () => JSON.stringify(body), json: async () => body })
+const quota = (remaining, extra = {}) => ({ "x-ratelimit-remaining": String(remaining), "x-ratelimit-limit": "5000", "x-ratelimit-reset": String(RESET), "x-ratelimit-resource": "core", ...extra })
+const auth = (token = "tok-A") => ({ headers: { Authorization: `Bearer ${token}` } })
 
 function ledger(t) {
   const root = mkdtempSync(path.join(tmpdir(), "spend-ledger-"))
-  t.after(() => rmSync(root, { recursive: true, force: true }))
+  t.after(() => { try { chmodSync(path.join(root, "gh-quota"), 0o700) } catch {} rmSync(root, { recursive: true, force: true }) })
   const dir = path.join(root, "gh-quota")
   mkdirSync(dir)
-  const env = { MS_DESK_QUOTA_DIR: dir, COPILOT_AGENT_SESSION_ID: "11111111-synthetic-session" }
+  const env = { MS_DESK_QUOTA_DIR: dir, COPILOT_AGENT_SESSION_ID: SESSION }
   const rows = () => (existsSync(path.join(dir, "calls.log")) ? readFileSync(path.join(dir, "calls.log"), "utf8").trim().split("\n").filter(Boolean).map((line) => line.split("\t")) : [])
-  return { dir, env, rows, root }
+  const rate = (kind) => readFileSync(path.join(dir, `${kind}.rate`), "utf8").trim().split(" ").map(Number)
+  return { dir, env, rows, rate, root }
 }
 
-test("each answer is one ledger row with session, kind, route without query and repository; a 304 is free; writes are marked write", async (t) => {
-  const { env, rows } = ledger(t)
-  const answers = [ok(), ok(304), ok(201)]
-  const fetchFn = ledgeredFetch(async () => answers.shift(), { env, login: () => "ari_microsoft", now: () => NOW * 1000 })
-  await fetchFn("https://api.github.com/repos/o/r/pulls/1?x=secret", { headers: { Authorization: "Bearer tok" } })
-  await fetchFn("https://api.github.com/repos/o/r/issues", {})
-  await fetchFn("https://api.github.com/repos/o/r/issues", { method: "POST", body: "payload" })
+const clockNow = () => NOW * 1000
+
+test("each send is one ledger row with session, kind, route without query and repository; a 304 is free; writes are marked write", async (t) => {
+  const { dir, env, rows } = ledger(t)
+  writeFileSync(path.join(dir, "work.rate"), `4000 ${RESET} 5000 ${NOW}\n`)
+  const answers = [answer(), answer(304), answer(201)]
+  const fetchFn = ledgeredFetch(async () => answers.shift(), { env, login: () => "ari_microsoft", now: clockNow })
+  await fetchFn("https://api.github.com/repos/o/r/pulls/1?x=secret", auth("tok-secret"))
+  await fetchFn("https://api.github.com/repos/o/r/issues", auth("tok-secret"))
+  await fetchFn("https://api.github.com/repos/o/r/issues", { method: "POST", body: "payload", ...auth("tok-secret") })
   assert.deepEqual(rows(), [
-    [String(NOW), "work", "api repos/o/r/pulls/1", "11111111-synthetic-session", "o/r", "apiget"],
-    [String(NOW), "work", "api repos/o/r/issues", "11111111-synthetic-session", "o/r", "etag"],
-    [String(NOW), "work", "api repos/o/r/issues", "11111111-synthetic-session", "o/r", "write"],
+    [String(NOW), "work", "api repos/o/r/pulls/1", SESSION, "o/r", "apiget"],
+    [String(NOW), "work", "api repos/o/r/issues", SESSION, "o/r", "etag"],
+    [String(NOW), "work", "api repos/o/r/issues", SESSION, "o/r", "write"],
   ])
-  assert.doesNotMatch(JSON.stringify(rows()), /secret|tok|payload/u)
+  assert.doesNotMatch(JSON.stringify(rows()), /secret|payload/u)
 })
 
-test("no ledger folder, MS_DESK_QUOTA=off, other hosts and a thrown fetch leave the ledger alone", async (t) => {
-  const { dir, env, rows, root } = ledger(t)
+test("the account is the token's, never the repository owner's: an env token is asked once, a work login is work for a personal-looking repo, an unknown one is unresolved", async (t) => {
+  const { env, rows } = ledger(t)
+  let users = 0
+  const inner = async (url, init) => {
+    if (url.endsWith("/user")) {
+      users += 1
+      return init.headers.Authorization.includes("work") ? answer(200, { login: "ari_microsoft" }) : init.headers.Authorization.includes("mystery") ? answer(401) : answer(200, { login: "ari" })
+    }
+    if (url.endsWith("/rate_limit")) return answer(200, { resources: { core: { remaining: 4000, reset: RESET, limit: 5000 } } })
+    return answer(200, {}, quota(4000))
+  }
+  const fetchFn = ledgeredFetch(inner, { env, now: clockNow })
+  await fetchFn("https://api.github.com/repos/ourostack/desk/pulls/1", auth("tok-work"))
+  await fetchFn("https://api.github.com/repos/ourostack/desk/pulls/2", auth("tok-work"))
+  await fetchFn("https://api.github.com/repos/microsoft/x/pulls/1", auth("tok-personal"))
+  await fetchFn("https://api.github.com/repos/o/r/pulls/1", auth("tok-mystery"))
+  assert.equal(users, 3, "one lookup per token")
+  assert.deepEqual(rows().map((r) => [r[1], r[2], r[5]]), [
+    ["work", "api user", "apiget"], ["work", "api repos/ourostack/desk/pulls/1", "apiget"], ["work", "api repos/ourostack/desk/pulls/2", "apiget"],
+    ["personal", "api user", "apiget"], ["personal", "api repos/microsoft/x/pulls/1", "apiget"],
+    ["unresolved", "api user", "apiget"], ["unresolved", "api repos/o/r/pulls/1", "apiget"],
+  ])
+})
+
+test("no ledger folder, MS_DESK_QUOTA=off, other hosts and anonymous requests leave the ledger alone", async (t) => {
+  const { env, rows, root } = ledger(t)
   let sent = 0
-  const inner = async () => { sent += 1; return ok() }
-  await ledgeredFetch(inner, { env: { MS_DESK_QUOTA_DIR: path.join(root, "absent") }, login: () => "a" })("https://api.github.com/repos/o/r")
-  await ledgeredFetch(inner, { env: { ...env, MS_DESK_QUOTA: "off" }, login: () => "a" })("https://api.github.com/repos/o/r")
-  await ledgeredFetch(inner, { env, login: () => "a" })("https://example.com/repos/o/r")
-  await assert.rejects(ledgeredFetch(async () => { throw new Error("net") }, { env, login: () => "a" })("https://api.github.com/repos/o/r"))
-  assert.equal(sent, 3)
+  const inner = async () => { sent += 1; return answer() }
+  const login = () => "a"
+  await ledgeredFetch(inner, { env: { MS_DESK_QUOTA_DIR: path.join(root, "absent") }, login })("https://api.github.com/repos/o/r", auth())
+  await ledgeredFetch(inner, { env: { ...env, MS_DESK_QUOTA: "off" }, login })("https://api.github.com/repos/o/r", auth())
+  await ledgeredFetch(inner, { env, login })("https://example.com/repos/o/r", auth())
+  await ledgeredFetch(inner, { env, login })("https://api.github.com/repos/o/r", { headers: { Accept: "x" } })
+  assert.equal(sent, 4)
   assert.equal(rows().length, 0)
   assert.equal(existsSync(path.join(root, "absent")), false)
-  assert.ok(dir)
 })
 
-test("under the floor a read is refused before sending and logged refused; writes and merge-path reads for other sessions still run", async (t) => {
-  const { dir, env, rows } = ledger(t)
-  writeFileSync(path.join(dir, "personal.rate"), `300 ${NOW + 600} 5000 ${NOW}\n`)
+test("sequential exhaustion: answers' quota headers move the floor, so reads are refused before the minute-old snapshot would say so", async (t) => {
+  const { dir, env, rows, rate } = ledger(t)
+  writeFileSync(path.join(dir, "personal.rate"), `700 ${RESET} 5000 ${NOW}\n`)
+  const left = [650, 520, 499]
   let sent = 0
-  const fetchFn = ledgeredFetch(async () => { sent += 1; return ok() }, { env, login: () => "ari", now: () => NOW * 1000 })
-  await fetchFn("https://api.github.com/repos/o/r/pulls/1") // no spend yet: not the top spender, merge path, above merge floor
-  await assert.rejects(fetchFn("https://api.github.com/repos/o/r/issues"), (e) => e instanceof SpendHeld && /Wait until .*under the floor of 500/u.test(e.message))
-  await fetchFn("https://api.github.com/repos/o/r/issues", { method: "PATCH" })
-  await fetchFn("https://api.github.com/graphql", { method: "POST" })
+  const fetchFn = ledgeredFetch(async () => { sent += 1; return answer(200, {}, quota(left.shift())) }, { env, login: () => "ari", now: clockNow })
+  for (const n of [1, 2, 3]) await fetchFn(`https://api.github.com/repos/o/r/issues/${n}`, auth())
+  assert.deepEqual(rate("personal").slice(0, 2), [499, RESET])
+  await assert.rejects(fetchFn("https://api.github.com/repos/o/r/issues/4", auth()), (e) => e instanceof SpendHeld && /499 of 5000 REST calls left, under the floor of 500/u.test(e.message))
+  assert.equal(sent, 3)
+  assert.deepEqual(rows().map((r) => r[5]), ["apiget", "apiget", "apiget", "refused"])
+})
+
+test("a missing snapshot is refreshed from the free rate_limit read, and headers from the GraphQL pool never touch the REST numbers", async (t) => {
+  const { env, rate } = ledger(t)
+  const urls = []
+  const fetchFn = ledgeredFetch(async (url) => {
+    urls.push(url)
+    if (url.endsWith("/rate_limit")) return answer(200, { resources: { core: { remaining: 120, reset: RESET, limit: 5000 } } })
+    return answer(200, {}, quota(4999, { "x-ratelimit-resource": "graphql" }))
+  }, { env, login: () => "ari", now: clockNow })
+  await assert.rejects(fetchFn("https://api.github.com/repos/o/r/issues", auth()), SpendHeld)
+  assert.deepEqual(urls, ["https://api.github.com/rate_limit"])
+  assert.deepEqual(rate("personal"), [120, RESET, 5000, NOW])
+  await fetchFn("https://api.github.com/graphql", { method: "POST", ...auth() })
+  assert.equal(rate("personal")[0], 120, "GraphQL headers are another pool")
+})
+
+test("concurrent reads cannot raise the remaining count: the lowest answer in a window wins whatever order they land", async (t) => {
+  const { dir, env, rate } = ledger(t)
+  writeFileSync(path.join(dir, "personal.rate"), `900 ${RESET} 5000 ${NOW}\n`)
+  const left = [880, 870, 860]
+  const releases = []
+  const fetchFn = ledgeredFetch(async () => {
+    const mine = left.shift()
+    await new Promise((resolve) => releases.push(resolve))
+    return answer(200, {}, quota(mine))
+  }, { env, login: () => "ari", now: clockNow })
+  const all = [1, 2, 3].map((n) => fetchFn(`https://api.github.com/repos/o/r/issues/${n}`, auth()))
+  await new Promise((resolve) => setTimeout(resolve, 20))
+  releases.reverse().forEach((release) => release())
+  await Promise.all(all)
+  assert.equal(rate("personal")[0], 860)
+})
+
+test("GraphQL and REST are separate pools: GraphQL rows are not REST spend, so they do not make a session the top spender", async (t) => {
+  const { dir, env } = ledger(t)
+  writeFileSync(path.join(dir, "personal.rate"), `300 ${RESET} 5000 ${NOW}\n`)
+  writeFileSync(path.join(dir, "calls.log"), Array.from({ length: 50 }, () => `${NOW - 5}\tpersonal\tapi graphql\t${SESSION}\t\twrite\n`).join("") + `${NOW - 5}\tpersonal\tapi repos/o/r/pulls/9\tother-session\to/r\tapiget\n`)
+  const fetchFn = ledgeredFetch(async () => answer(200, {}, quota(300)), { env, login: () => "ari", now: clockNow })
+  // Merge-path read above the merge floor runs because this session's REST spend is 0, not 50.
+  assert.equal((await fetchFn("https://api.github.com/repos/o/r/pulls/1", auth())).status, 200)
+})
+
+test("under the floor a read is refused before sending and logged refused; writes and GraphQL still run; the top REST spender loses merge-path reads too", async (t) => {
+  const { dir, env, rows } = ledger(t)
+  writeFileSync(path.join(dir, "personal.rate"), `300 ${RESET} 5000 ${NOW}\n`)
+  let sent = 0
+  const fetchFn = ledgeredFetch(async () => { sent += 1; return answer() }, { env, login: () => "ari", now: clockNow })
+  await fetchFn("https://api.github.com/repos/o/r/pulls/1", auth())
+  await assert.rejects(fetchFn("https://api.github.com/repos/o/r/issues", auth()), (e) => /Wait until .*under the floor of 500/u.test(e.message))
+  await fetchFn("https://api.github.com/repos/o/r/issues", { method: "PATCH", ...auth() })
+  await fetchFn("https://api.github.com/graphql", { method: "POST", ...auth() })
   assert.equal(sent, 3)
   assert.deepEqual(rows().map((r) => r[5]), ["apiget", "refused", "write", "write"])
-  // Now this session is the top spender, so even merge-path reads are held.
-  await assert.rejects(fetchFn("https://api.github.com/repos/o/r/pulls/2"), SpendHeld)
+  await assert.rejects(fetchFn("https://api.github.com/repos/o/r/pulls/2", auth()), SpendHeld)
 })
 
 test("an account hold refuses reads", async (t) => {
   const { dir, env } = ledger(t)
+  writeFileSync(path.join(dir, "personal.rate"), `4000 ${RESET} 5000 ${NOW}\n`)
   writeFileSync(path.join(dir, "personal.hold"), `${NOW + 600}\tsecondary limit\n`)
-  const fetchFn = ledgeredFetch(async () => ok(), { env, login: () => "ari", now: () => NOW * 1000 })
-  await assert.rejects(fetchFn("https://api.github.com/repos/o/r"), /on hold \(secondary limit\)/u)
+  const fetchFn = ledgeredFetch(async () => answer(), { env, login: () => "ari", now: clockNow })
+  await assert.rejects(fetchFn("https://api.github.com/repos/o/r", auth()), /on hold \(secondary limit\)/u)
 })
 
-test("the delivery gate records its authenticated reads, is not_verified under the floor, and an anonymous read is not recorded", async (t) => {
+test("a send that gets no answer is kept as unknown, not as a confirmed read, and the error still reaches the caller", async (t) => {
+  const { env, rows, dir } = ledger(t)
+  writeFileSync(path.join(dir, "personal.rate"), `4000 ${RESET} 5000 ${NOW}\n`)
+  const fetchFn = ledgeredFetch(async () => { throw Object.assign(new Error("aborted"), { name: "AbortError" }) }, { env, login: () => "ari", now: clockNow })
+  await assert.rejects(fetchFn("https://api.github.com/repos/o/r/pulls/1", auth()), /aborted/u)
+  assert.deepEqual(rows().map((r) => [r[2], r[5]]), [["api repos/o/r/pulls/1", "unknown"]])
+})
+
+test("an unwritable ledger does not stop the call, but is raised as a process warning and counted, never reported as recorded", async (t) => {
+  if (process.getuid?.() === 0 || process.platform === "win32") return t.skip("this host can write anywhere or ignores modes")
+  const { dir, env } = ledger(t)
+  writeFileSync(path.join(dir, "personal.rate"), `4000 ${RESET} 5000 ${NOW}\n`)
+  chmodSync(dir, 0o500)
+  const warnings = []
+  const onWarning = (warning) => warnings.push(warning)
+  process.on("warning", onWarning)
+  t.after(() => process.off("warning", onWarning))
+  const before = unrecordedSends()
+  const fetchFn = ledgeredFetch(async () => answer(200), { env, login: () => "ari", now: clockNow })
+  assert.equal((await fetchFn("https://api.github.com/repos/o/r/pulls/1", auth())).status, 200)
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.ok(unrecordedSends() > before)
+  assert.ok(warnings.some((w) => w.code === "DESK_SPEND_UNRECORDED" && /Fix the permissions of the gh spend ledger folder/u.test(w.message)))
+})
+
+test("the delivery gate accounts an env GH_TOKEN to the token's account, is not_verified under the floor, and an anonymous read is not recorded", async (t) => {
   const { dir, env, rows } = ledger(t)
-  const fetchFn = async () => ok(200, JSON.stringify({ merged_at: null, state: "open", head: { sha: "a" } }))
-  await prDelivery({ repo: "o/r", number: 1, env: { ...env, GH_TOKEN: "synthetic" }, fetchFn })
-  assert.ok(rows().length >= 1 && rows().every((r) => r[5] === "apiget" || r[5] === "write"))
+  const body = { merged_at: null, state: "open", head: { sha: "a" } }
+  const fetchFn = async (url) => (url.endsWith("/user") ? answer(200, { login: "ari_microsoft" }) : url.endsWith("/rate_limit") ? answer(200, { resources: { core: { remaining: 4000, reset: Math.floor(Date.now() / 1000) + 600, limit: 5000 } } }) : answer(200, body, quota(4000)))
+  await prDelivery({ repo: "ourostack/desk", number: 1, env: { ...env, GH_TOKEN: "synthetic-work" }, fetchFn })
+  assert.ok(rows().length >= 2 && rows().every((r) => r[1] === "work"), JSON.stringify(rows()))
   const before = rows().length
   await prDelivery({ repo: "o/r", number: 1, env, fetchFn, ghRunner: async () => { throw new Error("signed out") } })
   assert.equal(rows().length, before, "no token, no account spend")
-  writeFileSync(path.join(dir, "personal.rate"), `10 ${Math.floor(Date.now() / 1000) + 600} 5000 0\n`)
-  const result = await prDelivery({ repo: "o/r", number: 2, env: { ...env, GH_TOKEN: "synthetic" }, fetchFn: async () => assert.fail("must not send") })
+  const now = Math.floor(Date.now() / 1000)
+  writeFileSync(path.join(dir, "work.rate"), `10 ${now + 600} 5000 ${now}\n`)
+  const result = await prDelivery({ repo: "o/r", number: 2, env: { ...env, GH_TOKEN: "synthetic-work" }, fetchFn: async (url) => (url.endsWith("/user") ? answer(200, { login: "ari_microsoft" }) : assert.fail("must not send")) })
   assert.equal(result.status, "not_verified")
   assert.match(result.reason, /under the floor/u)
 })
@@ -89,11 +202,13 @@ test("a drain's read under the floor halts the poll as rate limited, and its sen
   const { dir, env, rows } = ledger(t)
   const spawn = () => ({ status: 0, stdout: "tok" })
   let sent = 0
-  const api = await connectGithub("ari", { spawn, fetchImpl: async () => { sent += 1; return ok(200, "[]") }, env, login: "ari" })
+  const now = Math.floor(Date.now() / 1000)
+  writeFileSync(path.join(dir, "personal.rate"), `4000 ${now + 600} 5000 ${now}\n`)
+  const api = await connectGithub("ari", { spawn, fetchImpl: async () => { sent += 1; return answer(200, [], quota(4000, { "x-ratelimit-reset": String(now + 600) })) }, env, login: "ari" })
   await api.changedIssues("o/r", "2026-11-13T00:58:00Z")
   assert.equal(rows().at(-1)[5], "apiget")
   assert.match(rows().at(-1)[3], /^11111111/u)
-  writeFileSync(path.join(dir, "personal.rate"), `10 ${Math.floor(Date.now() / 1000) + 600} 5000 0\n`)
+  writeFileSync(path.join(dir, "personal.rate"), `10 ${now + 600} 5000 ${now}\n`)
   await assert.rejects(api.changedIssues("o/r", "2026-11-13T00:58:00Z"), (e) => e.code === "drains_rate_limited" && e.rateLimited === true && /under the floor/u.test(e.message))
   assert.equal(sent, 1)
 })
