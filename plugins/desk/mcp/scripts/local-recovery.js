@@ -184,6 +184,51 @@ function redact(value, input) {
   return visit(value)
 }
 
+const RECORDED_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u
+const CARD_PATH = /^[A-Za-z0-9][A-Za-z0-9._/-]*$/u
+const CARD_OPERATIONS = new Set(["task_create", "task_update", "task_archive"])
+
+/**
+ * `redact` rewrites the route a failed card commit hands back (the card's folder, the interpreter and the cache path), so its
+ * argv cannot run. The argv is carried through exactly only when every command equals the one Desk builds for a recorded change
+ * of the card this call named: a card operation, the message `<operation>: <track>/<slug>`, a Desk record id, and card paths that
+ * credential redaction leaves alone. Each command is compared whole, so no other text can ride along. Otherwise the redacted
+ * copy stays, and it is marked not runnable.
+ */
+function restoreRecordedRoute(redacted, original, operation, payload) {
+  const route = original?.commit?.route_around
+  const shown = redacted?.commit?.route_around
+  if (!route || !shown) return redacted
+  const same = (a, b) => JSON.stringify(a) === JSON.stringify(b)
+  const refuse = () => {
+    shown.argv_usable = false
+    shown.argv_note = "Its commands were redacted, so they cannot be run. Report the tool's failure instead."
+    return redacted
+  }
+  const check = route.steps?.[0]?.argv
+  if (!CARD_OPERATIONS.has(operation) || typeof payload?.track !== "string" || typeof payload?.slug !== "string") return refuse()
+  if (!Array.isArray(check) || check.length < 9 || !check.every((arg) => typeof arg === "string")) return refuse()
+  const [exec, script, rootFlag, root, idFlag, id, messageFlag, message, ...pathArgs] = check
+  const paths = pathArgs.filter((_, index) => index % 2 === 1)
+  if (path.basename(script) !== "finish-commit.js" || rootFlag !== "--root" || idFlag !== "--capture-id" || messageFlag !== "--message") return refuse()
+  if (!RECORDED_ID.test(id) || message !== `${operation}: ${payload.track}/${payload.slug}` || redactCredentialLikeText(message) !== message) return refuse()
+  if (pathArgs.length === 0 || pathArgs.length % 2 !== 0 || !pathArgs.every((arg, index) => index % 2 === 0 ? arg === "--path" : arg === "../track.md" || (CARD_PATH.test(arg) && !arg.split("/").includes("..") && redactCredentialLikeText(arg) === arg))) return refuse()
+  const publish = route.steps?.[2]?.argv
+  if (route.steps.length !== 4 || !Array.isArray(publish) || publish.length !== 6 || !same([publish[0], publish[2], publish[4], publish[5]], [exec, "--root", "--debounce-ms", "0"]) || typeof publish[3] !== "string" || path.basename(publish[1]) !== "sync-push.js") return refuse()
+  const git = (...rest) => ["git", "-C", root, ...rest]
+  const expected = [
+    check, [...check, "--commit"], publish, [git("diff", "--quiet", "HEAD", "--", ...paths)],
+    [git("diff", "--exit-code", "HEAD", "--", ...paths), git("log", "-1", "--format=%s", "--", ...paths)],
+    [git("fetch", "--quiet"), git("diff", "--exit-code", "HEAD", "@{u}", "--", ...paths)],
+    [git("diff", "--quiet", "HEAD", "--", ...paths)],
+  ]
+  const actual = [route.steps[0].argv, route.steps[1]?.argv, route.steps[2].argv, route.steps[3]?.argv, route.committed_locally_when?.argv, route.published_when?.argv, route.newer_unsaved_when?.argv]
+  if (!same(actual, expected)) return refuse()
+  route.steps.forEach((step, index) => { shown.steps[index].argv = step.argv })
+  for (const key of ["committed_locally_when", "published_when", "newer_unsaved_when"]) shown[key].argv = route[key].argv
+  return redacted
+}
+
 function gitHead(root, env) {
   const result = spawnSync("git", ["rev-parse", "--verify", "HEAD"], {
     cwd: root, env, encoding: "utf8", timeout: 5000, windowsHide: true,
@@ -366,7 +411,7 @@ export async function runRecovery({
     // deadline. With the defaults the preflight ends within 60 s, so the write always has at least 40 s.
     const response = await client.request("tools/call", { name: report.operation, arguments: payload }, Math.min(Date.now() + dispatchTimeoutMs, totalDeadline))
     const result = toolPayload(response)
-    report.result = redact(result, payload)
+    report.result = restoreRecordedRoute(redact(result, payload), result, report.operation, payload)
     // Only an admitted queued log is accepted; a bare "logged" without it stays unexpected.
     const queuedPath = result.status === "logged" && result.commit === "queued" ? result.path
       : result.status === "updated" && result.log?.commit === "queued" ? result.log.path : null

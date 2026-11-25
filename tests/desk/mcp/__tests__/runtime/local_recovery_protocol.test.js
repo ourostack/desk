@@ -6,6 +6,7 @@ import { EventEmitter } from "node:events"
 import * as path from "node:path"
 import { spawnSync } from "node:child_process"
 import { runRecovery, launchBootstrap } from "../../../../../plugins/desk/mcp/scripts/local-recovery.js"
+import { commitRoute } from "../../../../../plugins/desk/mcp/src/util/route-around.js"
 
 const fixturePath = path.resolve(process.env.TMPDIR ?? ".local-recovery-evidence/scratch", `recovery-protocol-${process.pid}`)
 mkdirSync(fixturePath, { recursive: true })
@@ -32,9 +33,9 @@ function mockTransport(answer = () => ({ status: "updated" }), statusOf = status
       if (request.id === undefined) return
       let result
       if (request.method === "initialize") result = { protocolVersion: "2025-06-18", capabilities: {}, serverInfo: { name: "fixture", version: "1" } }
-      if (request.method === "tools/list") result = { tools: [{ name: "task_update" }] }
+      if (request.method === "tools/list") result = { tools: [{ name: "task_update" }, { name: "desk_save" }] }
       if (request.params?.name === "desk_status") result = { content: [{ type: "text", text: JSON.stringify(statusOf()) }] }
-      if (request.params?.name === "task_update") result = { content: [{ type: "text", text: JSON.stringify(answer()) }] }
+      if (["task_update", "desk_save"].includes(request.params?.name)) result = { content: [{ type: "text", text: JSON.stringify(answer()) }] }
       output.write(JSON.stringify({ jsonrpc: "2.0", id: request.id, result }) + "\n")
     })
     return { input, output, close: async () => input.end() }
@@ -647,4 +648,89 @@ test("the command line answers a wrong argument with one usage line and --help w
   const help = spawnSync(process.execPath, [script, "--help"], { encoding: "utf8" })
   assert.equal(help.status, 0)
   assert.match(help.stdout, /--operation/u)
+})
+
+const CARD_MESSAGE = "task_update: greenhouse/watering-api"
+const routeFor = (message = CARD_MESSAGE, captureId = "77f47d62-db74-4900-bb68-48cb02a1b0d5", paths = ["task.md"]) => {
+  const argv = (commit) => [process.execPath, path.join(root, "cache/abcdef0123456789abcdef0123456789abcdef01/scripts/finish-commit.js"), "--root", path.join(root, "desks/ari/greenhouse/watering-api"), "--capture-id", captureId, "--message", message, ...paths.flatMap((p) => ["--path", p]), ...(commit ? ["--commit"] : [])]
+  const at = path.join(root, "desks/ari/greenhouse/watering-api")
+  const git = (...rest) => ["git", "-C", at, ...rest]
+  return {
+    summary: "Desk's commit of the card greenhouse/watering-api did not land.",
+    steps: [{ step: "Read back.", argv: argv(false) }, { step: "Commit once.", argv: argv(true) }, { step: "Publish.", argv: [process.execPath, path.join(root, "cache/scripts/sync-push.js"), "--root", root, "--debounce-ms", "0"] }, { step: "Newer?", argv: [git("diff", "--quiet", "HEAD", "--", ...paths)] }],
+    committed_locally_when: { argv: [git("diff", "--exit-code", "HEAD", "--", ...paths), git("log", "-1", "--format=%s", "--", ...paths)], expect: "exits 0" },
+    published_when: { argv: [git("fetch", "--quiet"), git("diff", "--exit-code", "HEAD", "@{u}", "--", ...paths)], expect: "both exit 0" },
+    newer_unsaved_when: { argv: [git("diff", "--quiet", "HEAD", "--", ...paths)], expect: "exits 0" },
+  }
+}
+const failedCommit = (route) => () => ({ status: "updated", commit: { status: "failed", reason: "hook refused", route_around: route } })
+const runRoute = async (route, argv = [], input = { track: "greenhouse", slug: "watering-api", note: "SECRET_TEXT" }) => {
+  const transport = mockTransport(failedCommit(route))
+  return recovery({ ...(argv.length ? { argv } : {}), input: stream(JSON.stringify(input)), launch: transport.launch })
+}
+
+test("a failed card commit's recovery route keeps its runnable argv while the user's own text stays redacted", async () => {
+  const secret = "SECRET_NOTE_ghp_0123456789abcdefghijklmnopqrstuvwxyz"
+  const route = routeFor()
+  const result = await runRoute(route, [], { track: "greenhouse", slug: "watering-api", title: secret, note: secret })
+  const shown = result.report.result.commit.route_around
+  assert.deepEqual(shown.steps.map((step) => step.argv), route.steps.map((step) => step.argv))
+  for (const key of ["committed_locally_when", "published_when", "newer_unsaved_when"]) assert.deepEqual(shown[key].argv, route[key].argv)
+  assert.equal(shown.argv_usable, undefined)
+  assert.doesNotMatch(JSON.stringify(result.report), /SECRET_NOTE|ghp_/u)
+  assert.equal(result.report.code, "commit_failed")
+})
+
+test("a card update that also changed its track row keeps its two-path route runnable, and no other parent path does", async () => {
+  const route = routeFor(CARD_MESSAGE, undefined, ["task.md", "../track.md"])
+  const result = await runRoute(route)
+  assert.deepEqual(result.report.result.commit.route_around.steps.map((step) => step.argv), route.steps.map((step) => step.argv))
+  const other = await runRoute(routeFor(CARD_MESSAGE, undefined, ["task.md", "../SECRET_TEXT.md"]))
+  assert.equal(other.report.result.commit.route_around.argv_usable, false)
+})
+
+test("the route Desk itself builds for a card update, one path or two, is kept runnable", async () => {
+  const at = path.join(root, "desks/ari/greenhouse")
+  for (const paths of [["watering-api.md"], ["watering-api.md", "../track.md"]]) {
+    const route = commitRoute({ root: at, paths, message: "task_update: greenhouse/watering-api", readback: "absent", card: "greenhouse/watering-api", deskRoot: path.join(root, "desks/ari"), capture: { before: "a".repeat(40), branch: "main", expected: [] }, captureId: "77f47d62-db74-4900-bb68-48cb02a1b0d5" })
+    const result = await runRoute(route)
+    const shown = result.report.result.commit.route_around
+    assert.equal(shown.argv_usable, undefined)
+    assert.deepEqual(shown.steps.map((step) => step.argv), route.steps.map((step) => step.argv))
+    assert.deepEqual(shown.newer_unsaved_when.argv, route.newer_unsaved_when.argv)
+  }
+})
+
+test("a route that is not exactly Desk's recorded card route stays redacted and is marked not runnable", async () => {
+  const withExtra = (mutate) => { const route = routeFor(); mutate(route); return route }
+  const cases = [
+    routeFor("task_update: greenhouse/watering-api SECRET_TEXT"),
+    routeFor(CARD_MESSAGE, "not-a-record-id"),
+    routeFor("task_update: greenhouse/SECRET_TEXT_ghp_0123456789abcdefghijklmnopqrstuvwxyz"),
+    withExtra((route) => route.steps.slice(0, 2).forEach((step) => step.argv.push("--note", "SECRET_TEXT"))),
+    withExtra((route) => route.steps[2].argv.push("--note", "SECRET_TEXT")),
+    withExtra((route) => route.steps[3].argv[0].push("SECRET_TEXT")),
+    withExtra((route) => route.committed_locally_when.argv[1].push("SECRET_TEXT")),
+    withExtra((route) => route.published_when.argv.push(["echo", "SECRET_TEXT"])),
+    withExtra((route) => route.newer_unsaved_when.argv[0].push("SECRET_TEXT")),
+    { ...routeFor(), steps: [{ step: "x", argv: ["node", "other.js", "--message", "SECRET_TEXT"] }] },
+    ...[[1, "other-script.js"], [2, "--cwd"], [4, "--id"], [6, "--text"]].map(([index, value]) => withExtra((route) => route.steps.slice(0, 2).forEach((step) => { step.argv[index] = value }))),
+  ]
+  for (const route of cases) {
+    const result = await runRoute(route)
+    const shown = result.report.result.commit.route_around
+    assert.doesNotMatch(JSON.stringify(result.report), /SECRET_TEXT|ghp_/u)
+    assert.equal(shown.argv_usable, false)
+  }
+})
+
+test("a desk_save whose message looks card-generated stays redacted", async () => {
+  const route = routeFor()
+  for (const [operation, input] of [["desk_save", { files: [{ path: "task.md", content: "x" }], message: CARD_MESSAGE }]]) {
+    const transport = mockTransport(failedCommit(route))
+    const result = await recovery({ argv: ["--root", root, "--operation", operation], input: stream(JSON.stringify(input)), launch: transport.launch })
+    const shown = result.report.result?.commit?.route_around
+    assert.equal(shown.argv_usable, false)
+    assert.notDeepEqual(shown.steps[0].argv, route.steps[0].argv)
+  }
 })
