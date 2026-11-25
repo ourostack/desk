@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { chmodSync, copyFileSync, mkdirSync, readFileSync, renameSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs"
+import { copyFileSync, mkdirSync, readFileSync, renameSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs"
 import { spawnSync } from "node:child_process"
 import { PassThrough } from "node:stream"
 import * as path from "node:path"
@@ -787,6 +787,14 @@ async function scene({ text = LOG_TEXT, files = {}, logState = "committed" } = {
   const spyFilter = () => {
     writeFileSync(path.join(root, ".git/info/attributes"), "*.md filter=spy\n")
     git(root, "config", "filter.spy.clean", `"${process.execPath.replaceAll("\\", "/")}" "${spy.replaceAll("\\", "/")}"`)
+    // Positive control on a scratch file the same attribute matches: Git must launch the spy and the filtered bytes must survive intact. Only then is the receipt reset, so a later zero is a filter that did not run because nothing read the log, not one that cannot run.
+    const probeFile = path.join(root, "control.md")
+    writeFileSync(probeFile, LOG_TEXT)
+    const filtered = git(root, "hash-object", "--path=control.md", "--", "control.md")
+    assert.equal(count(cleans, Boolean), 1, "the clean-filter spy ran for a known filtered read")
+    assert.equal(filtered, git(root, "hash-object", "--no-filters", "--", "control.md"), "the spy passed the bytes through unchanged")
+    unlinkSync(probeFile)
+    writeFileSync(cleans, "")
   }
   const relocate = (copy) => {
     const dir = path.join(root, "work/one")
