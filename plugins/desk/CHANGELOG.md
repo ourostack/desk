@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.543 — 2026-11-25
+
+`desk_status` is declared read-only. It is the session-start health check, and the admission retry it triggers only updates Desk's own in-process state and its local last-start record, never the desk's content. Hosted clients (claude.ai, ChatGPT) use `readOnlyHint` to decide whether a call needs the person's approval, so a non-read-only `desk_status` would put an approval prompt in front of the first call of every hosted session. This restores the hint hosted Desk served before the single-source change.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.542 — 2026-11-25
 
 Desk's MCP server now vendors Ouro UI v1.3.535, moved by Ouro Current.
