@@ -1,8 +1,8 @@
 name: AX X-ray
-# CI-only evidence probe: released 3.2.552 tree + the accepted local_recovery harness, not for merge.
+# CI-only evidence probe: released 3.2.552 tree + synthetic Crew consumer, not for merge.
 on:
   push:
-    branches: [recovery-queued-log-tap-rel]
+    branches: [recovery-queued-log-consumer]
 permissions:
   contents: read
 jobs:
@@ -25,10 +25,8 @@ jobs:
           cache-dependency-path: plugins/desk/mcp/package-lock.json
       - working-directory: plugins/desk/mcp
         run: npm ci
-      - name: Probe local_recovery TAP on the released tree
+      - name: Consumer probe on the released tree
         run: |
-          node -v; git --version; git rev-parse HEAD; grep '"version"' plugins/desk/plugin.json | head -1; echo "runner=$RUNNER_NAME os=$RUNNER_OS image=$ImageVersion"
-          sha256sum plugins/desk/mcp/scripts/local-recovery.js tests/desk/mcp/__tests__/runtime/local_recovery.test.js
-          cd plugins/desk/mcp
-          node --import ../../../tests/desk/mcp/__tests__/_isolated_env.mjs --test --test-concurrency=1 --test-reporter=tap ../../../tests/desk/mcp/__tests__/runtime/local_recovery.test.js 2>&1 | tee "$RUNNER_TEMP/lr.tap" || true
-          grep -E "^# (tests|pass|fail|skipped|todo|cancelled)" "$RUNNER_TEMP/lr.tap"
+          node -v; git --version; git rev-parse HEAD; echo "runner=$RUNNER_NAME os=$RUNNER_OS image=$ImageVersion"
+          sha256sum plugins/desk/mcp/scripts/local-recovery.js
+          node tests/desk/consumer/consumer.mjs 2>&1 | tee "$RUNNER_TEMP/consumer.txt" || true
