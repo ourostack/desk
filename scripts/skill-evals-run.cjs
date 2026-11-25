@@ -763,4 +763,4 @@ async function runCommand(args, api) {
   if (messages.length > 0) api.fail(messages.join("\n"));
 }
 
-module.exports = { runCommand, parseTranscript, parseVerdict, judgePrompt, changedEntries, heldOutEvidence };
+module.exports = { runCommand, parseTranscript, parseVerdict, judgePrompt, changedEntries, heldOutEvidence, commitBaseline };
