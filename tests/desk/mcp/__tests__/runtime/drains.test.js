@@ -2481,4 +2481,10 @@ test("an unreadable or vanished part of the lock is named, not called busy, and 
   assert.equal(readdirSync(dir).length, 1, "the unreachable staging directory is left for the next run's sweep, which removes it once its process is gone")
   assert.doesNotThrow(() => acquireDrainLock(lock, { alive: () => false })())
   assert.deepEqual(readdirSync(dir), [])
+  chmodSync(dir, 0o300)
+  try {
+    assert.throws(() => acquireDrainLock(lock), unavailable("the directory cannot be listed"))
+  } finally {
+    chmodSync(dir, 0o700)
+  }
 })
