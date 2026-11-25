@@ -1590,6 +1590,17 @@ try {
     }
   }
 
+  {
+    // #1780: the case only asks for an edit, so the reply check must not demand listing moves and deletions.
+    const crew = JSON.parse(fs.readFileSync(path.join(root, "evals", "crew-shared-initiatives.json"), "utf8"));
+    const checks = crew.cases.find((entry) => entry.id === "note-rules").checks;
+    const replyCheck = checks.find((check) => check.id === "states-both-rules").description;
+    assert.match(replyCheck, /left unchanged because Crew's note rule forbids editing/u);
+    assert.match(replyCheck, /does not claim to have notified Sam/u);
+    assert.doesNotMatch(replyCheck, /never edited, moved or deleted/u, "the reply check must not require restating every prohibition");
+    assert.match(checks.find((check) => check.id === "old-note-intact").description, /not edited, moved or deleted/u);
+  }
+
   require("./test-core-meeting-capture-model-choice.cjs");
   console.log("Skill eval tests passed.");
 } finally {
