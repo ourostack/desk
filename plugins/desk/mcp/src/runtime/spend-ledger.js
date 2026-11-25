@@ -45,7 +45,7 @@ export const unrecordedSends = () => unrecorded
 const count = (value, fallback) => (/^\d+$/u.test(String(value ?? "")) ? Number(value) : fallback)
 
 /** The shim's ledger folder when this host has one and may use it, else null. */
-export function ledgerDir(env = process.env) {
+function ledgerDir(env = process.env) {
   if (env.MS_DESK_QUOTA === "off" || env.MS_DESK_ROUTE === "off") return null
   if (!env.MS_DESK_QUOTA_DIR && looksLikeNodeTestRunner(env)) return null
   const base = env.XDG_STATE_HOME || (env.HOME ? path.join(env.HOME, ".local", "state") : "")
@@ -68,10 +68,10 @@ export function activeLogin(env = process.env) {
 }
 
 /** The shim's account kind for a login: a `_microsoft` login is the work account. */
-export const kindOf = (login) => (/_microsoft$/iu.test(login) ? "work" : "personal")
+const kindOf = (login) => (/_microsoft$/iu.test(login) ? "work" : "personal")
 
 /** What a call to https://api.github.com is: its route without the query, whether it is a REST read, whether it is GraphQL, and its repository. */
-export function describeCall(url, method = "GET") {
+function describeCall(url, method = "GET") {
   if (!String(url).startsWith(`${API}/`)) return null
   const route = String(url).slice(API.length).split("?")[0].replace(/^\/+/u, "")
   const graphql = route === "graphql"
@@ -160,7 +160,7 @@ async function refreshRate({ dir, kind, fetchFn, init, now }) {
 }
 
 /** Why a read must wait under the floor or an account hold, or null when it may run. The shim's rule (see the header). */
-export function heldReason({ dir, kind, session, call, env = process.env, now = Math.floor(Date.now() / 1000) }) {
+function heldReason({ dir, kind, session, call, env = process.env, now = Math.floor(Date.now() / 1000) }) {
   try {
     const [until, ...why] = readFileSync(path.join(dir, `${kind}.hold`), "utf8").trim().split("\t")
     if (count(until, 0) > now) return `Wait until ${clock(count(until, 0))}Z, then repeat: the ${kind} account is on hold (${why.join("\t") || "no reason given"}), so Desk's own GitHub reads are held back to keep its REST quota for a service that needs it`
