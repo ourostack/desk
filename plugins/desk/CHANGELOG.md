@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.587 — 2026-11-25
+
+A commit that fails while Desk checks the tree it built against HEAD now says which Git call failed and how. The reason names the `git ls-tree` or `git diff-tree` call and carries its own answer: a real `ETIMEDOUT: spawnSync git ETIMEDOUT`, or "the time budget was spent before this step, so it was not run". Before, both cases read the same ("Git could not compare it with HEAD"), so a spent budget could not be told apart from a cut-off call. The commit's deadline, authority and mutation behavior are unchanged, and this does not change the cause of any earlier private-index timeout report.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.586 — 2026-11-25
 
 Desk's MCP server now vendors Ouro UI v1.3.570, moved by Ouro Current.
