@@ -1159,10 +1159,19 @@ export async function connectGithub(account, { spawn = spawnSync, fetchImpl: raw
     if (!first.next) return first.body
     if (first.last === null) return all(route)
     const pages = []
-    for (let page = first.last; page >= 1; page--) {
-      const { body } = page === 1 ? first : await get(`${route}${join}per_page=${PAGE}&page=${page}`)
-      pages.unshift(body)
-      if (page === 1 || stop(body)) break
+    // The list may have grown since the first answer: the named last page is read as it is now, and any page its answer links on to is followed, as `all` would.
+    let top = await get(`${route}${join}per_page=${PAGE}&page=${first.last}`)
+    pages.push(top.body)
+    for (let page = first.last + 1; top.next; page++) {
+      top = await get(`${route}${join}per_page=${PAGE}&page=${page}`)
+      pages.push(top.body)
+    }
+    if (!stop(pages[0])) {
+      for (let page = first.last - 1; page >= 1; page--) {
+        const { body } = page === 1 ? first : await get(`${route}${join}per_page=${PAGE}&page=${page}`)
+        pages.unshift(body)
+        if (page === 1 || stop(body)) break
+      }
     }
     return pages.flat()
   }

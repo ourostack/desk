@@ -2788,3 +2788,19 @@ test("a reopen by the drain's own claim is still recognised when the claim sits 
   assert.deepEqual(states["o/r"].pending, [], "the claim one minute before the reopen is found on page 2, so the reopen is the drain's own")
   assert.ok(world.history().some((line) => line.endsWith("events?page=2")))
 })
+
+test("recent follows the link on the last page it was told of, so an item added to a new page after the first answer is still read", async () => {
+  const urls = []
+  const stamped = Array.from({ length: 350 }, (_, index) => ({ id: index, created_at: new Date(Date.parse("2026-11-01T00:00:00Z") + index * 60_000).toISOString() }))
+  const fetchImpl = async (url) => {
+    urls.push(url)
+    const number = Number(new URL(url).searchParams.get("page"))
+    // The first answer names page 3 as the last; by the time page 3 is read, page 4 exists.
+    const link = [number < 4 ? `<https://api.github.com/x?page=${number + 1}>; rel="next"` : null, `<https://api.github.com/x?per_page=100&page=${number === 1 ? 3 : 4}>; rel="last"`].filter(Boolean).join(", ")
+    return response(stamped.slice((number - 1) * 100, number * 100), { link })
+  }
+  const api = connectGithub("maintainer", { spawn: () => ({ status: 0, stdout: "tok" }), fetchImpl, env: { PATH: "/bin" }, login: "maintainer" })
+  const items = await (await api).timeline("o/r", 5, stamped[250].created_at)
+  assert.ok(items.some((item) => item.id === 349), "the reference on page 4 is read")
+  assert.deepEqual(urls.map((url) => new URL(url).searchParams.get("page")), ["1", "3", "4"], "page 3 reaches back far enough, so page 2 is not read")
+})
