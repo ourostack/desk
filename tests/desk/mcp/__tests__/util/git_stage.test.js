@@ -633,11 +633,94 @@ test("readBackCommit: a commit to these paths with nothing captured to compare i
   assert.deepEqual(readBackCommit(root, ["a.txt"], "save", before, null, spawnSync), { readback: "unknown" })
 })
 
-test("readBackCommit: more new commits than it reads is unknown, never a guess from the newest few", async () => {
+// Fifty-one or more commits to other paths are the stranded-create shape (#1724): they are not evidence about these paths either way.
+const unrelated = (root, count, file = "other.txt") => {
+  for (let i = 0; i < count; i++) {
+    writeFileSync(path.join(root, file), `later ${i}\n`)
+    git(root, ["add", "--", file])
+    git(root, ["commit", "-q", "-m", `later ${i}`, "--", file])
+  }
+}
+
+test("readBackCommit: more new commits than it reads, none touching these paths, is absent; a landed change among them is still found", async () => {
+  const root = await repoWithChange()
+  const before = git(root, ["rev-parse", "HEAD"]).trim()
+  unrelated(root, 51)
+  assert.deepEqual(readBackCommit(root, ["a.txt"], "save", before, [], spawnSync), { readback: "absent" })
+  const landed = await repoWithChange()
+  const { before: start, expected } = await landedSave(landed)
+  unrelated(landed, 120)
+  assert.deepEqual(readBackCommit(landed, ["a.txt"], "save", start, expected, spawnSync), { readback: "committed" })
+})
+
+test("readBackCommit: more new commits touching these paths than it reads is unknown, never a guess from the newest few", async () => {
   const root = await repoWithChange()
   const { before, expected } = await landedSave(root)
-  for (let i = 0; i < 50; i++) git(root, ["commit", "-q", "--allow-empty", "-m", `later ${i}`])
+  for (let i = 0; i < 50; i++) {
+    writeFileSync(path.join(root, "a.txt"), `edit ${i}\n`)
+    git(root, ["commit", "-q", "-m", `edit ${i}`, "--", "a.txt"])
+  }
   assert.deepEqual(readBackCommit(root, ["a.txt"], "save", before, expected, spawnSync), { readback: "unknown" })
+})
+
+test("readBackCommit: a landed change that a later commit reverted is unknown with landed, however many unrelated commits came between", async () => {
+  const root = await repoWithChange()
+  const { before, expected } = await landedSave(root)
+  const ours = git(root, ["rev-parse", "HEAD"]).trim()
+  unrelated(root, 60)
+  writeFileSync(path.join(root, "a.txt"), "one\n")
+  git(root, ["commit", "-q", "-m", "revert", "--", "a.txt"])
+  const after = git(root, ["rev-parse", "HEAD"]).trim()
+  assert.deepEqual(readBackCommit(root, ["a.txt"], "save", before, expected, spawnSync), { readback: "unknown", landed: { commit: ours, head: after } })
+})
+
+test("readBackCommit: a commit with other bytes or another message at these paths is not ours, whatever else came after", async () => {
+  const root = await repoWithChange()
+  const before = git(root, ["rev-parse", "HEAD"]).trim()
+  writeFileSync(path.join(root, "a.txt"), "theirs\n")
+  git(root, ["commit", "-q", "-m", "save", "--", "a.txt"])
+  unrelated(root, 55)
+  assert.deepEqual(readBackCommit(root, ["a.txt"], "save", before, [`100644 ${"1".repeat(40)}\ta.txt`], spawnSync), { readback: "unknown" })
+})
+
+test("readBackCommit: a change that landed on a merged side branch is found, and one the merge left out is not", async () => {
+  const root = await repoWithChange()
+  const before = git(root, ["rev-parse", "HEAD"]).trim()
+  git(root, ["switch", "-q", "-c", "side"])
+  writeFileSync(path.join(root, "a.txt"), "two\n")
+  git(root, ["commit", "-q", "-m", "save", "--", "a.txt"])
+  const expected = [`100644 ${git(root, ["rev-parse", "HEAD:a.txt"]).trim()}\ta.txt`]
+  git(root, ["switch", "-q", "main"])
+  unrelated(root, 55)
+  git(root, ["merge", "-q", "--no-ff", "-m", "merge side", "side"])
+  unrelated(root, 2)
+  assert.deepEqual(readBackCommit(root, ["a.txt"], "save", before, expected, spawnSync), { readback: "committed" })
+  const ours = git(root, ["rev-parse", "side"]).trim()
+  writeFileSync(path.join(root, "a.txt"), "one\n")
+  git(root, ["commit", "-q", "-m", "revert", "--", "a.txt"])
+  assert.deepEqual(readBackCommit(root, ["a.txt"], "save", before, expected, spawnSync), { readback: "unknown", landed: { commit: ours, head: git(root, ["rev-parse", "HEAD"]).trim() } })
+})
+
+test("readBackCommit: a merge that brings only other paths is absent, however many commits it brings", async () => {
+  const root = await repoWithChange()
+  const before = git(root, ["rev-parse", "HEAD"]).trim()
+  git(root, ["switch", "-q", "-c", "side"])
+  unrelated(root, 60)
+  git(root, ["switch", "-q", "main"])
+  unrelated(root, 1, "mine.txt")
+  git(root, ["merge", "-q", "--no-ff", "-m", "merge side", "side"])
+  assert.deepEqual(readBackCommit(root, ["a.txt"], "save", before, [], spawnSync), { readback: "absent" })
+})
+
+test("readBackCommit: a path with glob characters is read literally, so commits to files it would match are not counted", async () => {
+  const root = await repoWithChange()
+  const before = git(root, ["rev-parse", "HEAD"]).trim()
+  for (let i = 0; i < 55; i++) {
+    writeFileSync(path.join(root, "ab.txt"), `${i}\n`)
+    git(root, ["add", "--", "ab.txt"])
+    git(root, ["commit", "-q", "-m", `ab ${i}`, "--", "ab.txt"])
+  }
+  assert.deepEqual(readBackCommit(root, ["a*.txt"], "save", before, [], spawnSync), { readback: "absent" })
 })
 
 test("readBackCommit: an unborn HEAD after a born one, or a HEAD read with no output, is unknown", async () => {

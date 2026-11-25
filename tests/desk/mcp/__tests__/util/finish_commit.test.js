@@ -1018,3 +1018,157 @@ test("a card whose record cannot be written, and whose commit cannot be read bac
   assert.equal(route.held, true)
   assert.match(route.summary, /^Desk cannot tell whether its commit of the card t\/x landed/u)
 })
+
+// #1724: a card commit failed, other work then advanced HEAD by many commits, and the card stayed staged. Everything below runs on a synthetic
+// Crew in a temp folder, with its own HOME, XDG folders and Git config, no credentials and no default desk, so nothing of the machine's is read or written.
+async function sealed(run) {
+  const home = mkdtempSync(path.join(tmpdir(), "desk-sealed-home-"))
+  const clean = { PATH: process.env.PATH, TMPDIR: tmpdir(), HOME: home, USERPROFILE: home, XDG_CONFIG_HOME: path.join(home, "config"), XDG_STATE_HOME: path.join(home, "state"), XDG_CACHE_HOME: path.join(home, "cache"), GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1", GIT_TERMINAL_PROMPT: "0" }
+  const saved = { ...process.env }
+  for (const key of Object.keys(process.env)) delete process.env[key]
+  Object.assign(process.env, clean)
+  try {
+    return await run(clean)
+  } finally {
+    for (const key of Object.keys(process.env)) delete process.env[key]
+    Object.assign(process.env, saved)
+  }
+}
+
+const ARI_CARD = "desks/ari/greenhouse/watering-api"
+
+// A Crew desk with two members. Ari's new card is staged and its commit failed (as task_create does it, from the card's own folder); Bo has a staged and an edited card of their own.
+function strandedCreate(clean) {
+  const root = repo()
+  for (const dir of ["_meta", "desks/ari/greenhouse/seed", "desks/bo/orchard/pruning"]) mkdirSync(path.join(root, dir), { recursive: true })
+  writeFileSync(path.join(root, "_meta", "keep.md"), "x\n")
+  writeFileSync(path.join(root, "desks/ari/greenhouse/seed/task.md"), "---\ntitle: seed\nstatus: processing\n---\n\nseed\n")
+  writeFileSync(path.join(root, "desks/bo/orchard/pruning/task.md"), "---\ntitle: pruning\nstatus: processing\n---\n\nbo v1\n")
+  git(root, ["add", "-A"])
+  git(root, ["commit", "-q", "-m", "seed"])
+  installCardGuard(root)
+  mkdirSync(path.join(root, ARI_CARD), { recursive: true })
+  writeFileSync(path.join(root, ARI_CARD, "task.md"), "---\ntitle: watering\nstatus: drafting\n---\n\nnew card\n")
+  const dir = path.join(root, ARI_CARD)
+  const committed = capturedFailure(dir, ["task.md"], "task_create: greenhouse/watering-api", refused)
+  const failure = commitFailure({ root: dir, paths: ["task.md"], message: "task_create: greenhouse/watering-api", committed, card: "greenhouse/watering-api", deskRoot: root })
+  assert.ok(failure.route_around.steps[1].argv, JSON.stringify(failure))
+  const finish = failure.route_around.steps[1].argv.slice(2)
+  const records = path.join(clean.XDG_STATE_HOME, "ouroboros-skills", "desk", CAPTURE_DIR)
+  return { root, dir, finish, records, recorded: { ...env, ...clean } }
+}
+
+// Unrelated commits, as another session or another member makes them, written without touching the index or the working tree.
+function advance(root, count) {
+  for (let i = 0; i < count; i++) {
+    const tree = git(root, ["rev-parse", "HEAD^{tree}"]).trim()
+    const commit = git(root, ["commit-tree", "-p", "HEAD", "-m", `theirs ${i}`, tree]).trim()
+    git(root, ["update-ref", "refs/heads/main", commit])
+  }
+}
+
+for (const count of [3, 50, 51, 120]) {
+  test(`a stranded card create is finished once after ${count} unrelated commits, leaving a teammate's staged and edited card as it was`, () => sealed(async (clean) => {
+    const { root, dir, finish, records, recorded } = strandedCreate(clean)
+    const bo = "desks/bo/orchard/pruning/task.md"
+    writeFileSync(path.join(root, bo), "---\ntitle: pruning\nstatus: processing\n---\n\nbo v2 staged\n")
+    git(root, ["add", bo])
+    writeFileSync(path.join(root, bo), "---\ntitle: pruning\nstatus: processing\n---\n\nbo v3 unstaged\n")
+    advance(root, count)
+    const mine = head(root)
+    const theirs = snapshot(root, [bo])
+    const check = finish.filter((arg) => arg !== "--commit")
+    assert.equal((await runRecorded(check, { recorded })).code, 3, "the read says ready")
+    assert.equal(head(root), mine)
+    const done = await runRecorded(finish, { recorded })
+    assert.equal(done.code, 0, JSON.stringify(done.answer))
+    assert.equal(done.answer.state, "finished")
+    assert.equal(git(root, ["rev-parse", "HEAD~1"]).trim(), mine, "one commit, on the HEAD it read")
+    assert.equal(git(root, ["show", "--name-only", "--format=", "HEAD"]).trim(), `${ARI_CARD}/task.md`, "only Ari's card")
+    assert.deepEqual(snapshot(root, [bo]).index, theirs.index, "Bo's staged entry is as it was")
+    assert.equal(snapshot(root, [bo]).cached, theirs.cached)
+    assert.equal(snapshot(root, [bo]).worktree, theirs.worktree, "Bo's working bytes are as they were")
+    assert.equal(git(root, ["status", "--porcelain", "--", `${ARI_CARD}/task.md`]), "", "the card is clean, so task_update no longer refuses it")
+    assert.deepEqual(readdirSync(records), [], "the record is removed")
+    const again = await runRecorded(finish, { recorded })
+    assert.equal(again.answer.state, "held", "its record is gone, so a second finish commits nothing")
+    assert.equal(git(root, ["rev-parse", "HEAD~1"]).trim(), mine)
+    assert.ok(dir)
+  }))
+}
+
+test("a stranded card create stays unknown and changes nothing when more than 50 new commits touch the card", () => sealed(async (clean) => {
+  const { root, finish, records, recorded } = strandedCreate(clean)
+  const card = `${ARI_CARD}/task.md`
+  for (let i = 0; i < 51; i++) {
+    writeFileSync(path.join(root, card), `---\ntitle: watering\nstatus: drafting\n---\n\nother ${i}\n`)
+    git(root, ["add", card])
+    git(root, ["commit", "-q", "-m", `other ${i}`, "--", card], { env: { ...process.env, [TOOL_COMMIT_ENV]: "1" } })
+  }
+  const before = snapshot(root, [card])
+  const answer = await runRecorded(finish, { recorded })
+  assert.equal(answer.code, 5, JSON.stringify(answer.answer))
+  assert.equal(answer.answer.state, "unknown")
+  assert.deepEqual(snapshot(root, [card]), before)
+  assert.equal(readdirSync(records).length, 1, "the record stays")
+}))
+
+test("a stranded card create is unknown, not finished, when another commit changed the card's bytes, after any number of unrelated commits", () => sealed(async (clean) => {
+  const { root, finish, records, recorded } = strandedCreate(clean)
+  const card = `${ARI_CARD}/task.md`
+  const index = git(root, ["rev-parse", `:${card}`]).trim()
+  git(root, ["reset", "-q", "--", card])
+  writeFileSync(path.join(root, card), "---\ntitle: watering\nstatus: drafting\n---\n\ntheirs\n")
+  git(root, ["add", card])
+  git(root, ["commit", "-q", "-m", "theirs", "--", card], { env: { ...process.env, [TOOL_COMMIT_ENV]: "1" } })
+  advance(root, 60)
+  const before = head(root)
+  const answer = await runRecorded(finish, { recorded })
+  assert.deepEqual([answer.code, answer.answer.state], [5, "unknown"], JSON.stringify(answer.answer))
+  assert.equal(head(root), before)
+  assert.equal(readdirSync(records).length, 1, "the record stays")
+  assert.notEqual(git(root, ["rev-parse", `HEAD:${card}`]).trim(), index)
+}))
+
+test("a stranded card create is held when the card's staged bytes are no longer the captured ones, or the branch changed, and nothing is committed", () => sealed(async (clean) => {
+  const { root, finish, recorded } = strandedCreate(clean)
+  const card = `${ARI_CARD}/task.md`
+  advance(root, 60)
+  writeFileSync(path.join(root, card), "---\ntitle: watering\nstatus: drafting\n---\n\nsomeone else's edit\n")
+  git(root, ["add", card])
+  const before = snapshot(root, [card])
+  const staged = await runRecorded(finish, { recorded })
+  assert.equal(staged.code, 4, JSON.stringify(staged.answer))
+  assert.deepEqual(snapshot(root, [card]), before)
+  git(root, ["checkout", "-q", "--", card])
+  git(root, ["reset", "-q", "--", card])
+  git(root, ["switch", "-q", "-c", "elsewhere"])
+  const branch = await runRecorded(finish, { recorded })
+  assert.equal(branch.code, 4, JSON.stringify(branch.answer))
+  assert.equal(git(root, ["log", "-1", "--format=%s"]).trim(), "theirs 59", "no commit was made on the other branch")
+}))
+
+test("a recorded finish whose paths leave the Crew member's card folder, or name a teammate's card, is held and commits nothing", () => sealed(async (clean) => {
+  const { root, dir, finish, records, recorded } = strandedCreate(clean)
+  advance(root, 55)
+  const before = snapshot(root, ["desks"])
+  const answer = (argv) => runRecorded(argv, { recorded })
+  const outside = ["../../bo/orchard/pruning/task.md", "../../../../_meta/keep.md", path.join(root, "_meta", "keep.md")]
+  for (const target of outside) {
+    const result = await answer(withArg(finish, "--path", target))
+    assert.equal(result.code, 4, `${target}: ${JSON.stringify(result.answer)}`)
+    assert.equal(result.answer.state, "held")
+  }
+  // A record that itself names such a path holds no matching captured entry, so it is held too.
+  const file = path.join(records, readdirSync(records)[0])
+  const real = JSON.parse(readFileSync(file, "utf8"))
+  for (const target of outside) {
+    writeFileSync(file, `${JSON.stringify({ ...real, paths: [target] })}\n`)
+    const result = await answer(withArg(finish, "--path", target))
+    assert.equal(result.code, 4, `${target}: ${JSON.stringify(result.answer)}`)
+    assert.equal(result.answer.state, "held")
+  }
+  assert.deepEqual(snapshot(root, ["desks"]), before)
+  assert.equal(git(root, ["log", "-1", "--format=%s"]).trim(), "theirs 54")
+  assert.ok(dir)
+}))

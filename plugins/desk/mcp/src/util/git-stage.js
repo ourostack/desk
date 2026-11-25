@@ -202,7 +202,7 @@ const sameEntries = (a, b) => JSON.stringify(a) === JSON.stringify(b)
  * could not be captured). Returns `{ readback, landed }`:
  * - `committed`: a new commit on HEAD has that message, changes only those paths and holds `expected` there, and HEAD holds `expected` there now;
  * - `absent`: HEAD has not moved, or no new commit touches those paths;
- * - `unknown` otherwise, and whenever Git cannot answer. When our commit landed but HEAD no longer holds it, `landed` names both
+ * - `unknown` otherwise (including more than 50 new commits touching those paths), and whenever Git cannot answer. When our commit landed but HEAD no longer holds it, `landed` names both
  *   (`{ commit, head }`): it happened, but it is not in effect, so nothing claims completion and nothing replays it. Reads only.
  */
 export function readBackCommit(root, relPaths, message, before, expected, spawnGit) {
@@ -212,7 +212,8 @@ export function readBackCommit(root, relPaths, message, before, expected, spawnG
   if (after === null) return unknown
   if (after === before) return { readback: "absent" }
   if (after === "") return unknown
-  const listed = run(spawnGit, root, ["rev-list", `--max-count=${READBACK_LIMIT + 1}`, before === "" ? after : `${before}..${after}`])
+  // Only commits that touch these paths count toward the bound, so any number of unrelated commits (or a merge carrying none of them) cannot hide a landed change. `--full-history` keeps every side of a merge; `:(literal)` keeps a path with glob characters literal.
+  const listed = run(spawnGit, root, ["rev-list", `--max-count=${READBACK_LIMIT + 1}`, "--full-history", before === "" ? after : `${before}..${after}`, "--", ...relPaths.map((p) => `:(literal)${p}`)])
   if (listed?.status !== 0) return unknown
   const commits = String(listed.stdout).split("\n").map((line) => line.trim()).filter(Boolean)
   if (commits.length > READBACK_LIMIT) return unknown
