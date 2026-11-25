@@ -651,10 +651,12 @@ function repeatableText(body) {
 }
 
 /** Whether a bot's comment says what the same bot's previous comment on the issue said, apart from dates, times, durations and run links: a repeat is not news, a changed text is. */
-async function repeatsPrevious(api, repo, issue, comment, all) {
-  const everything = (all.list ??= await api.comments(repo, issue.number, "1970-01-01T00:00:00Z"))
+async function repeatsPrevious(api, repo, issue, comment) {
   const author = comment.user?.login?.toLowerCase()
-  const previous = everything.filter((entry) => entry.user?.login?.toLowerCase() === author && entry.id !== comment.id && entry.created_at < comment.created_at).sort((a, b) => a.created_at.localeCompare(b.created_at)).at(-1)
+  const earlier = (entry) => entry.user?.login?.toLowerCase() === author && entry.id !== comment.id && entry.created_at < comment.created_at
+  // Read from the newest comments back, only as far as the previous one by this author: the history before it cannot change the answer.
+  const everything = await api.comments(repo, issue.number, "1970-01-01T00:00:00Z", (page) => page.some(earlier))
+  const previous = everything.filter(earlier).sort((a, b) => a.created_at.localeCompare(b.created_at)).at(-1)
   return previous !== undefined && repeatableText(previous.body) === repeatableText(comment.body)
 }
 
@@ -692,12 +694,11 @@ async function changedByOthers(api, repo, issue, before, digest, ignored, rules,
   if (edited) return edited
   const since = before.updatedAt
   const comments = (await api.comments(repo, issue.number, since)).filter((comment) => comment.updated_at > since)
-  const all = {}
   for (const entry of comments) {
-    if (ownStatus(entry, api.login) || ignoredComment(entry, rules.comments) || (isBot(entry) && (await repeatsPrevious(api, repo, issue, entry, all)))) continue
+    if (ownStatus(entry, api.login) || ignoredComment(entry, rules.comments) || (isBot(entry) && (await repeatsPrevious(api, repo, issue, entry)))) continue
     return `comment ${entry.id} by ${entry.user?.login ?? "nobody"}`
   }
-  const feed = await api.issueEvents(repo, issue.number)
+  const feed = await api.issueEvents(repo, issue.number, since)
   const claims = feed.filter(isDrainLabel)
   const news = feed.filter((event) => event.created_at > since).map((event) => newsEvent(event, rules, claims, api.login, Date.parse(issue.created_at))).find(Boolean)
   return news ?? (await crossReference(api, repo, issue, since))
@@ -719,17 +720,17 @@ async function selfCaused(api, repo, issue, event) {
   // The drain's marked status comment on this issue names the source: the link between an issue and the pull request the drain opened for it.
   const ref = `${escapePattern(where)}(?:#|/(?:pull|issues)/)${source.number}(?!\\d)`
   const mention = new RegExp(where === repo ? `(?:^|[^\\w/])#${source.number}(?!\\d)|${ref}` : ref, "u")
-  const here = await api.comments(repo, issue.number, "1970-01-01T00:00:00Z").catch(() => [])
+  const here = await api.comments(repo, issue.number, "1970-01-01T00:00:00Z", (page) => page.some((comment) => ownStatus(comment, api.login) && mention.test(comment.body))).catch(() => [])
   if (here.some((comment) => ownStatus(comment, api.login) && mention.test(comment.body))) return true
   const names = new RegExp(`#${issue.number}(?!\\d)|/${escapePattern(repo)}/issues/${issue.number}(?!\\d)`, "u")
   const at = Date.parse(event.created_at)
-  const comments = await api.comments(where, source.number, "1970-01-01T00:00:00Z").catch(() => [])
+  const comments = await api.comments(where, source.number, isoSeconds(at - CROSS_REFERENCE_SLACK_MS)).catch(() => [])
   return comments.some((comment) => ownStatus(comment, api.login) && names.test(comment.body) && [comment.created_at, comment.updated_at].some((time) => Math.abs(at - Date.parse(time)) <= CROSS_REFERENCE_SLACK_MS))
 }
 
 /** An issue whose `updated_at` moved with nothing else news: a cross-reference that is not the drain's own work is, and says where from. */
 async function crossReference(api, repo, issue, since) {
-  const events = (await api.timeline(repo, issue.number)).filter((event) => event.event === "cross-referenced" && event.created_at > since)
+  const events = (await api.timeline(repo, issue.number, since)).filter((event) => event.event === "cross-referenced" && event.created_at > since)
   for (const event of events) {
     if (await selfCaused(api, repo, issue, event)) continue
     const source = event.source?.issue ?? {}
@@ -1077,6 +1078,9 @@ function heldAsRateLimit(error) {
 }
 
 /** The drain's GitHub access: its account's token from the `gh` CLI, then the REST API. `login` skips asking GitHub who the token is. */
+/** A page of an oldest-first list reaches back to `since` when any of its dated items is not newer: nothing before it can be news. */
+const reachesBack = (since) => (page) => page.some((item) => typeof item.created_at === "string" && item.created_at <= since)
+
 export async function connectGithub(account, { spawn = spawnSync, fetchImpl: rawFetch = fetch, env = process.env, login: knownLogin, pauseMs = TOKEN_PAUSE_MS } = {}) {
   const tokenArgs = ["auth", "token", "--hostname", "github.com", ...(account ? ["--user", account] : [])]
   const cleaned = { ...env, PATH: ["/opt/homebrew/bin", "/usr/local/bin", env.PATH].filter(Boolean).join(":") }
@@ -1130,7 +1134,9 @@ export async function connectGithub(account, { spawn = spawnSync, fetchImpl: raw
       }
       throw failedAnswer(response.status, route.split("?")[0])
     }
-    return { body: await response.json(), next: /rel="next"/u.test(response.headers.get("link") ?? ""), etag: response.headers.get("etag") }
+    const link = response.headers.get("link") ?? ""
+    const last = Number(/<[^>]*[?&]page=(\d+)[^>]*>;\s*rel="last"/u.exec(link)?.[1])
+    return { body: await response.json(), next: /rel="next"/u.test(link), last: Number.isInteger(last) ? last : null, etag: response.headers.get("etag") }
   }
   const all = async (route) => {
     const items = []
@@ -1142,6 +1148,22 @@ export async function connectGithub(account, { spawn = spawnSync, fetchImpl: raw
       more = next
     }
     return items
+  }
+  // The newest part of an oldest-first list, which GitHub cannot filter by time: the first page says where the list ends, then pages
+  // are read from the end backwards until `stop(page)` says the page reaches back far enough. The cost follows what is new, not the
+  // length of the history. A page that cannot be read is an error, never an empty answer; a list whose end is not known is read whole.
+  const recent = async (route, stop) => {
+    const join = route.includes("?") ? "&" : "?"
+    const first = await get(`${route}${join}per_page=${PAGE}&page=1`)
+    if (!first.next) return first.body
+    if (first.last === null) return all(route)
+    const pages = []
+    for (let page = first.last; page >= 1; page--) {
+      const { body } = page === 1 ? first : await get(`${route}${join}per_page=${PAGE}&page=${page}`)
+      pages.unshift(body)
+      if (page === 1 || stop(body)) break
+    }
+    return pages.flat()
   }
   // A write: the answer is returned, never thrown on, because a refused merge or dispatch is an outcome the caller reports.
   const send = async (method, route, payload) => {
@@ -1202,8 +1224,8 @@ export async function connectGithub(account, { spawn = spawnSync, fetchImpl: raw
   return {
     login,
     openIssues: async (repo) => (await all(`/repos/${repo}/issues?state=open&sort=updated&direction=desc`)).filter((issue) => !issue.pull_request),
-    comments: (repo, issue, since) => all(`/repos/${repo}/issues/${issue}/comments?since=${encodeURIComponent(since)}`),
-    issueEvents: (repo, issue) => all(`/repos/${repo}/issues/${issue}/events`),
+    comments: (repo, issue, since, stop) => (stop ? recent : all)(`/repos/${repo}/issues/${issue}/comments?since=${encodeURIComponent(since)}`, stop),
+    issueEvents: (repo, issue, since) => (since ? recent(`/repos/${repo}/issues/${issue}/events`, reachesBack(since)) : all(`/repos/${repo}/issues/${issue}/events`)),
     changedIssues: async (repo, since, etag) => {
       const route = `/repos/${repo}/issues?state=all&sort=updated&direction=desc&since=${encodeURIComponent(since)}&per_page=${PAGE}`
       const first = await get(`${route}&page=1`, { etag })
@@ -1223,7 +1245,7 @@ export async function connectGithub(account, { spawn = spawnSync, fetchImpl: raw
     editPage,
     graphqlCost: () => meter.graphqlCost,
     calls: () => ({ total: meter.total, notModified: meter.notModified }),
-    timeline: (repo, issue) => all(`/repos/${repo}/issues/${issue}/timeline`),
+    timeline: (repo, issue, since) => (since ? recent(`/repos/${repo}/issues/${issue}/timeline`, reachesBack(since)) : all(`/repos/${repo}/issues/${issue}/timeline`)),
     pull: async (repo, number) => (await get(`/repos/${repo}/pulls/${number}`)).body,
   }
 }
