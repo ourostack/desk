@@ -2254,7 +2254,7 @@ test("a lock that Desk cannot vouch for fails closed with its own error and noth
 
 test("a lock that cannot be used for another reason than an owner names the error code instead of calling it busy", async () => {
   const dir = await mkTempRoot("desk-drains-")
-  await assert.rejects(withDrainLock(path.join(dir, `${"x".repeat(400)}.lock`), () => "x"), (error) => /desk_drains_lock_unavailable/u.test(error.message) && /ENAMETOOLONG/u.test(error.message) && !/still working/u.test(error.message))
+  await assert.rejects(withDrainLock(path.join(dir, `${"x".repeat(400)}.lock`), () => "x"), (error) => /desk_drains_lock_unavailable/u.test(error.message) && (process.platform === "win32" ? /EINVAL|ENAMETOOLONG/u : /ENAMETOOLONG/u).test(error.message) && !/still working/u.test(error.message))
   if (process.platform === "win32" || process.getuid?.() === 0) return
   const locked = path.join(dir, "readonly")
   mkdirSync(locked)
@@ -2326,15 +2326,18 @@ test("two consecutive crashes of lock-owning processes, in each place, are recov
   const dir = await mkTempRoot("desk-drains-")
   const lock = path.join(dir, "poll.lock")
   const module = new URL("../../../../../plugins/desk/mcp/src/runtime/drains.js", import.meta.url).href
-  const child = `import { acquireDrainLock } from ${JSON.stringify(module)}
+  const child = `import { writeSync } from "node:fs"
+    import { acquireDrainLock } from ${JSON.stringify(module)}
     const at = process.env.CRASH_AT
-    const kill = () => process.kill(process.pid, "SIGKILL")
-    acquireDrainLock(process.env.LOCK, { onStep: (step) => { if (step === at) kill() } })
-    kill()`
+    const kill = (step) => { writeSync(1, "reached " + step); process.kill(process.pid, "SIGKILL") }
+    acquireDrainLock(process.env.LOCK, { onStep: (step) => { if (step === at) kill(step) } })
+    kill("held")`
   for (const cycle of [1, 2]) {
     for (const at of ["held", "staging", "staged"]) {
       const crashed = spawnSync(process.execPath, ["--input-type=module", "-e", child], { env: { ...process.env, LOCK: lock, CRASH_AT: at } })
-      assert.equal(crashed.signal, "SIGKILL", `cycle ${cycle} ${at}`)
+      assert.equal(String(crashed.stdout), `reached ${at}`, `cycle ${cycle} reached ${at} before the kill`)
+      // Windows reports a killed process as a nonzero exit status with no signal name.
+      assert.ok(crashed.signal === "SIGKILL" || (process.platform === "win32" && crashed.signal === null && crashed.status !== 0 && crashed.status !== null), `cycle ${cycle} ${at} was killed (signal ${crashed.signal}, status ${crashed.status})`)
       const left = readdirSync(dir)
       assert.equal(left.length, 1, `${at} left one entry`)
       assert.equal(left[0] === "poll.lock", at === "held", at)
