@@ -34,12 +34,15 @@ let lastTree = { key: "", lines: [] }
 const memoKey = (root, commit, paths) => `${root}\0${commit}\0${paths.join("\0")}`
 const isRealGit = (spawnGit) => spawnGit === spawnSync || spawnGit.real === spawnSync
 
-function treeLines(spawnGit, root, commit, paths) {
+function treeLines(spawnGit, root, commit, paths, failure = {}) {
   const memo = isRealGit(spawnGit)
   const key = memoKey(root, commit, paths)
   if (memo && lastTree.key === key) return [...lastTree.lines]
   const tree = git(spawnGit, root, ["ls-tree", "-r", "-z", commit, "--", ...paths])
-  if (!tree.ok) return null
+  if (!tree.ok) {
+    failure.stderr = tree.stderr
+    return null
+  }
   const lines = tree.stdout.split("\0").filter(Boolean).map((record) => {
     const [meta, entryPath] = record.split("\t")
     const [mode, , sha] = meta.split(" ")
@@ -238,13 +241,13 @@ const inScope = (scope, name) => scope.some((p) => p === "." || name === p || na
 
 /** null when `tree` holds exactly `wanted` at `paths` and HEAD's entries everywhere else; otherwise what differs. */
 function builtAgainst({ spawnGit, root, head, tree, paths, wanted, scope }) {
-  const atPaths = treeLines(spawnGit, root, tree, paths)
-  if (atPaths === null) return "Git could not read it"
+  const failure = {}
+  const atPaths = treeLines(spawnGit, root, tree, paths, failure)
+  if (atPaths === null) return `Git could not read it (git ls-tree: ${failure.stderr})`
   if (!same(atPaths, wanted)) return "at the captured paths"
-  const changed = head === ""
-    ? git(spawnGit, root, ["ls-tree", "-r", "-z", "--full-tree", "--name-only", tree])
-    : git(spawnGit, root, ["diff-tree", "-r", "-z", "--name-only", "--no-renames", head, tree])
-  if (!changed.ok) return "Git could not compare it with HEAD"
+  const compare = head === "" ? ["ls-tree", "-r", "-z", "--full-tree", "--name-only", tree] : ["diff-tree", "-r", "-z", "--name-only", "--no-renames", head, tree]
+  const changed = git(spawnGit, root, compare)
+  if (!changed.ok) return `Git could not compare it with HEAD (git ${compare[0]}: ${changed.stderr})`
   const outside = changed.stdout.split("\0").filter(Boolean).filter((name) => !inScope(scope, name))
   return outside.length === 0 ? null : `outside the captured paths: ${outside.join(", ")}`
 }
