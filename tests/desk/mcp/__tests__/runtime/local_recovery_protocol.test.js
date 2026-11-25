@@ -6,6 +6,7 @@ import { EventEmitter } from "node:events"
 import * as path from "node:path"
 import { spawnSync } from "node:child_process"
 import { runRecovery, launchBootstrap } from "../../../../../plugins/desk/mcp/scripts/local-recovery.js"
+import { commitRoute } from "../../../../../plugins/desk/mcp/src/util/route-around.js"
 
 const fixturePath = path.resolve(process.env.TMPDIR ?? ".local-recovery-evidence/scratch", `recovery-protocol-${process.pid}`)
 mkdirSync(fixturePath, { recursive: true })
@@ -686,6 +687,18 @@ test("a card update that also changed its track row keeps its two-path route run
   assert.deepEqual(result.report.result.commit.route_around.steps.map((step) => step.argv), route.steps.map((step) => step.argv))
   const other = await runRoute(routeFor(CARD_MESSAGE, undefined, ["task.md", "../SECRET_TEXT.md"]))
   assert.equal(other.report.result.commit.route_around.argv_usable, false)
+})
+
+test("the route Desk itself builds for a card update, one path or two, is kept runnable", async () => {
+  const at = path.join(root, "desks/ari/greenhouse")
+  for (const paths of [["watering-api.md"], ["watering-api.md", "../track.md"]]) {
+    const route = commitRoute({ root: at, paths, message: "task_update: greenhouse/watering-api", readback: "absent", card: "greenhouse/watering-api", deskRoot: path.join(root, "desks/ari"), capture: { before: "a".repeat(40), branch: "main", expected: [] }, captureId: "77f47d62-db74-4900-bb68-48cb02a1b0d5" })
+    const result = await runRoute(route)
+    const shown = result.report.result.commit.route_around
+    assert.equal(shown.argv_usable, undefined)
+    assert.deepEqual(shown.steps.map((step) => step.argv), route.steps.map((step) => step.argv))
+    assert.deepEqual(shown.newer_unsaved_when.argv, route.newer_unsaved_when.argv)
+  }
 })
 
 test("a route that is not exactly Desk's recorded card route stays redacted and is marked not runnable", async () => {
