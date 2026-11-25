@@ -846,6 +846,21 @@ test("a leaf symbolic link and a linked root are refused without hashing", async
   assert.equal(leaf.hashed() + linked.hashed(), 0)
 })
 
+test("a regular log swapped for a FIFO between the walk and the open is refused without blocking", async () => {
+  const { root } = await scene()
+  const helper = path.join(here, `fifo-${sequence}.mjs`)
+  const log = path.join(root, "work/one/log.md")
+  writeFileSync(helper, `import { rmSync } from "node:fs"
+import { spawnSync } from "node:child_process"
+import { logCommitState } from ${JSON.stringify(new URL("../../../../../plugins/desk/mcp/scripts/local-recovery.js", import.meta.url).href)}
+const swap = () => { rmSync(${JSON.stringify(log)}); spawnSync("mkfifo", [${JSON.stringify(log)}]) }
+console.log(logCommitState(${JSON.stringify(root)}, process.env, "work/one/log.md", ${JSON.stringify(git(root, "rev-parse", "HEAD"))}, { afterWalk: swap }))
+`)
+  const out = spawnSync(process.execPath, [helper], { encoding: "utf8", timeout: 4000, killSignal: "SIGKILL", env: isolatedEnv() })
+  assert.equal(out.error, undefined, "the open must not block on a FIFO")
+  assert.equal(out.stdout.trim(), "unknown")
+})
+
 test("a log changed while Git reads it is unknown", async () => {
   const { root, state } = await scene()
   assert.equal(state({ afterHash: () => writeFileSync(path.join(root, "work/one/log.md"), `${LOG_TEXT}appended\n`) }), "unknown")

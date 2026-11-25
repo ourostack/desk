@@ -226,7 +226,7 @@ export function logCommitState(root, env, rel, head, probe = {}) {
   probe.afterWalk?.()
   let fd
   try {
-    fd = openSync(first.file, constants.O_RDONLY | constants.O_NOFOLLOW)
+    fd = openSync(first.file, constants.O_RDONLY | constants.O_NONBLOCK | constants.O_NOFOLLOW)
     const opened = fstatSync(fd, { bigint: true })
     const leaf = first.chain.at(-1)
     if (!opened.isFile() || opened.dev !== leaf.dev || opened.ino !== leaf.ino) return "unknown"
