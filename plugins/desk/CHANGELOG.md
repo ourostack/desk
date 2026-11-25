@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.586 — 2026-11-25
+
+Desk's MCP server now vendors Ouro UI v1.3.570, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.585 — 2026-11-25
 
 ### Local recovery keeps the recorded card route runnable
