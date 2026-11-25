@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { chmodSync, copyFileSync, mkdirSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
+import { chmodSync, copyFileSync, mkdirSync, readFileSync, renameSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs"
 import { spawnSync } from "node:child_process"
 import { PassThrough } from "node:stream"
 import * as path from "node:path"
@@ -10,6 +10,7 @@ import * as server from "../../../../../plugins/desk/mcp/src/server.js"
 import { runAdmissionJob } from "../../../../../plugins/desk/mcp/src/runtime/admission-worker.js"
 import { statusObservedSince } from "./_status_observation.js"
 import { mkTempRoot } from "../_temp_roots.js"
+import { removeTreeSync } from "../_remove_tree.js"
 
 // A folder of this file's own, removed when the file ends. It was named by the process id alone and never removed, so a later run that got the same process id (Windows reuses them quickly) found the earlier run's repositories and failed 19 tests on their leftover branches, remotes and cards.
 const here = realpathSync(await mkTempRoot("local-recovery-fixtures-"))
@@ -779,7 +780,7 @@ async function scene({ text = LOG_TEXT, files = {} } = {}) {
   const hashed = () => readFileSync(calls, "utf8").split("\n").filter(Boolean).length
   const relocate = (copy) => {
     const dir = path.join(root, "work/one")
-    if (copy) { mkdirSync(path.join(sibling, "one"), { recursive: true }); copyFileSync(path.join(dir, "log.md"), path.join(sibling, "one/log.md")); rmSync(dir, { recursive: true }) }
+    if (copy) { mkdirSync(path.join(sibling, "one"), { recursive: true }); copyFileSync(path.join(dir, "log.md"), path.join(sibling, "one/log.md")); removeTreeSync(dir) }
     else renameSync(dir, path.join(sibling, "one"))
     symlinkSync(path.join(sibling, "one"), dir)
   }
@@ -836,7 +837,7 @@ test("a leaf symbolic link and a linked root are refused without hashing", async
   const leaf = await scene()
   const target = path.join(leaf.sibling, "log.md")
   writeFileSync(target, LOG_TEXT)
-  rmSync(path.join(leaf.root, "work/one/log.md"))
+  unlinkSync(path.join(leaf.root, "work/one/log.md"))
   symlinkSync(target, path.join(leaf.root, "work/one/log.md"))
   assert.equal(leaf.state(), "unknown")
   const linked = await scene()
@@ -850,11 +851,11 @@ test("a regular log swapped for a FIFO between the walk and the open is refused 
   const { root } = await scene()
   const helper = path.join(here, `fifo-${sequence}.mjs`)
   const log = path.join(root, "work/one/log.md")
-  writeFileSync(helper, `import { lstatSync, rmSync } from "node:fs"
+  writeFileSync(helper, `import { lstatSync, unlinkSync } from "node:fs"
 import { spawnSync } from "node:child_process"
 import { logCommitState } from ${JSON.stringify(new URL("../../../../../plugins/desk/mcp/scripts/local-recovery.js", import.meta.url).href)}
 const swap = () => {
-  rmSync(${JSON.stringify(log)})
+  unlinkSync(${JSON.stringify(log)})
   const made = spawnSync("mkfifo", [${JSON.stringify(log)}], { encoding: "utf8" })
   if (made.status !== 0 || !lstatSync(${JSON.stringify(log)}).isFIFO()) throw new Error("mkfifo failed: " + made.status + " " + made.stderr)
 }
