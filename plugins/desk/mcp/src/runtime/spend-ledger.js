@@ -136,7 +136,7 @@ const tightest = (observations) => {
 // A log is read whole, so the lowest remaining of the window can never fall outside what is read; logs of earlier windows are never
 // needed again and are removed. `own` are observations the caller already holds. `unreadable` is true when the folder cannot be listed or
 // a log of the latest window cannot be read: what protects the floor is then unknown, and the stored numbers alone must not decide.
-function currentRate(dir, pool, own = []) {
+function currentRate(dir, pool, own = [], retry = true) {
   const seen = [...own, ...(unlogged.get(`${dir}\0${pool}`) ?? [])]
   let unreadable = false
   const had = readRate(dir, pool)
@@ -163,8 +163,10 @@ function currentRate(dir, pool, own = []) {
           if (remaining !== null && limit !== null) seen.push({ remaining, reset, limit })
         }
       } catch (error) {
-        // A newer window's writer removing this log after the listing is benign; anything else leaves the floor unprotected.
-        if (error?.code !== "ENOENT") unreadable = true
+        // A newer window's writer may have removed this log since the listing: look again, and the newer window is then what counts. A log
+        // still missing (or unreadable) in the latest window is missing evidence, not a rotation, and leaves the floor unprotected.
+        if (error?.code === "ENOENT" && retry) return currentRate(dir, pool, own, false)
+        unreadable = true
       }
     }
   }

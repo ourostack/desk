@@ -533,14 +533,14 @@ test("an answer whose observation cannot be appended is kept by the process and 
   assert.deepEqual(warnings, ["DESK_SPEND_OBSERVATION_UNRECORDED"])
 })
 
-test("a log removed after the listing is not unreadable: the read is decided from what remains", async (t) => {
+test("a latest-window log that is missing is missing evidence: reads are held, not treated as a rotation", async (t) => {
   const { dir, env } = ledger(t)
   writeFileSync(path.join(dir, "personal.rate"), `4000 ${RESET} 5000 ${NOW}\n`)
   symlinkSync(path.join(dir, "gone"), path.join(dir, `personal.rate.obs.${RESET}`))
   let sent = 0
   const fetchFn = ledgeredFetch(async () => { sent += 1; return answer(200, {}, quota(4000)) }, { env, login: () => "ari", now: clockNow })
-  assert.equal((await fetchFn("https://api.github.com/repos/o/r/pulls/1", auth())).status, 200)
-  assert.equal(sent, 1)
+  await assert.rejects(fetchFn("https://api.github.com/repos/o/r/pulls/1", auth()), SpendHeld)
+  assert.equal(sent, 0)
 })
 
 test("a ledger folder that cannot be listed holds reads even with a cache above the floor, and a write keeps its own observation", async (t) => {
