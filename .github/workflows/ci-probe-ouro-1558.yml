@@ -1,0 +1,48 @@
+name: ci-probe-ouro-1558
+on:
+  push:
+    branches: [ci-probe-ouro-1558]
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Acquire exact package and run fixtures
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PKG: "@ouro.bot/cli@0.1.0-alpha.1558"
+        run: |
+          set -u; set +e          W="$RUNNER_TEMP/probe"; mkdir -p "$W/cache" "$W/prefix" "$W/pack" "$W/asset"
+          : > "$W/npmrc"
+          export NPM_CONFIG_USERCONFIG="$W/npmrc" NPM_CONFIG_GLOBALCONFIG="$W/npmrc" NPM_CONFIG_CACHE="$W/cache" NPM_CONFIG_REGISTRY=https://registry.npmjs.org/
+          node -v; npm -v; npm config get registry
+          echo "== registry dist =="
+          npm view "$PKG" version dist.integrity dist.tarball dist.shasum --json | tee "$W/dist.json"
+          echo "== npm pack =="
+          (cd "$W/pack" && npm pack "$PKG" --json | tee "$W/pack.json")
+          TGZ="$(ls "$W"/pack/*.tgz)"
+          echo "npm tarball sha256: $(sha256sum "$TGZ" | cut -d' ' -f1)"
+          echo "npm tarball sha512: sha512-$(openssl dgst -sha512 -binary "$TGZ" | base64 -w0)"
+          node -e 'const d=require(process.argv[1]);console.log("dist.integrity",d["dist.integrity"])' "$W/dist.json"
+          echo "== release asset =="
+          gh release download v0.1.0-alpha.1558 -R ourostack/ouroboros -p 'ouro.bot-cli-0.1.0-alpha.1558.tgz' -D "$W/asset"
+          echo "asset sha256: $(sha256sum "$W"/asset/*.tgz | cut -d' ' -f1)"
+          echo "asset sha512: sha512-$(openssl dgst -sha512 -binary "$W"/asset/*.tgz | base64 -w0)"
+          echo "== install exact package (tokenless, no scripts) =="
+          npm install --prefix "$W/prefix" --ignore-scripts --no-audit --no-fund "$PKG"
+          D="$W/prefix/node_modules/@ouro.bot/cli/vendor/desk"
+          echo "installed version: $(node -p "require('$W/prefix/node_modules/@ouro.bot/cli/package.json').version")"
+          echo "desk version: $(node -p "require('$D/.claude-plugin/plugin.json').version")"
+          echo "drains.js blob: $(git hash-object "$D/mcp/src/runtime/drains.js")"
+          mkdir -p "$W/root/plugins" && ln -s "$D" "$W/root/plugins/desk"
+          echo "== fixture consumer.mjs (#1739) =="
+          node ci-probe/consumer.mjs "$W/root"; echo "exit $?"
+          echo "== fixture consumer-1711.mjs =="
+          node ci-probe/consumer-1711.mjs "$W/root"; echo "exit $?"
+          sha256sum ci-probe/*.mjs
