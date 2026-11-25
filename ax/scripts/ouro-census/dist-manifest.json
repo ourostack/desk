@@ -1,14 +1,14 @@
 {
   "tool": "ouro-census",
   "version": "0.1.0",
-  "checker": "813bc0722e49b5b9287f5162ebb4ef5fc76084d3958e5497ed54c26b7cc53478",
+  "checker": "5336b7f89bb87ba101abc8530eafc41f44cd8216f31abff7251ab7db04d7c9ed",
   "files": {
     "base.mts": "b5ef17d10c1540c3e7007ad252e7bd23131efadcad9ba3380f6afc683845b0c0",
     "baseline.mts": "7481dec0829dd4edf7b7ee61bbb168b5786f5d7fc2baf58ba9614a45a18178ab",
     "cards.mts": "60e786192d06d4d34874ad62904f68dfd23cac02fa3fb2ee06856ef15a1aabd5",
-    "census.mts": "4b4d17a52b481029738fbd727fa3af4870caa0e8d53aeb788a2309471072c7d8",
+    "census.mts": "03a126f682bb83bcc68373ebfb9044ccaf9b7e3ded7ee94751cea837c8ccff6c",
     "checker.mts": "bc22f3c974a3ac5f912933b234cee8e889191abebc48c717b6f1f6ee9516c8fb",
-    "child.mts": "4d750174dade6503a7fa97a1c84d9243916db9c92e88c7b59e4cc1398bf99b7f",
+    "child.mts": "7c612dafcabf67eae068c35a01428da8330c4a4a5d4434ff978e726e9ee52cf3",
     "guard.mjs": "dc1f6da80c7168e042f90c3ca5333337351b7177ac476d679f34e818e0b16f0c",
     "report.mts": "8ea2498edd3ff10363ed90a32feee6c58bc0796acb0475da0afad2246e6641f4",
     "types.mts": "c22b27587188f529e2cba4313ea705889f78be04e7199dab60e6ea7666b78daa",
