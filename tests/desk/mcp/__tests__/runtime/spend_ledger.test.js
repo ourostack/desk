@@ -545,6 +545,7 @@ test("a latest-window log that is missing is missing evidence: reads are held, n
 })
 
 test("a ledger folder that cannot be listed holds reads even with a cache above the floor, and a write keeps its own observation", async (t) => {
+  if (process.getuid?.() === 0 || process.platform === "win32") return t.skip("this host lists any folder or ignores modes")
   const { dir, env } = ledger(t)
   writeFileSync(path.join(dir, "personal.rate"), `4000 ${RESET} 5000 ${NOW}\n`)
   chmodSync(dir, 0o300)
