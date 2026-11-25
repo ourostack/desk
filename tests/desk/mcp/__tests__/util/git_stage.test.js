@@ -712,6 +712,35 @@ test("readBackCommit: a merge that brings only other paths is absent, however ma
   assert.deepEqual(readBackCommit(root, ["a.txt"], "save", before, [], spawnSync), { readback: "absent" })
 })
 
+// A merge's own change (an "evil merge") is invisible to a plain per-commit diff-tree, so a card that merges added and then removed must read unknown, never absent.
+function evilMerge(root, side, change) {
+  git(root, ["merge", "-q", "--no-ff", "--no-commit", side])
+  change()
+  git(root, ["commit", "-q", "-m", `merge ${side}`])
+}
+
+test("readBackCommit: merges that alone added and then removed these paths, among more than 50 unrelated commits, are unknown, not absent", async () => {
+  const root = await repoWithChange()
+  const before = git(root, ["rev-parse", "HEAD"]).trim()
+  const expected = [`100644 ${"2".repeat(40)}\tmine.txt`]
+  for (const side of ["side1", "side2"]) {
+    git(root, ["switch", "-q", "-c", side, before])
+    writeFileSync(path.join(root, `${side}.txt`), "x\n")
+    git(root, ["add", "--", `${side}.txt`])
+    git(root, ["commit", "-q", "-m", side])
+    git(root, ["switch", "-q", "main"])
+  }
+  unrelated(root, 55)
+  evilMerge(root, "side1", () => {
+    writeFileSync(path.join(root, "mine.txt"), "theirs\n")
+    git(root, ["add", "--", "mine.txt"])
+  })
+  unrelated(root, 1)
+  evilMerge(root, "side2", () => git(root, ["rm", "-q", "--", "mine.txt"]))
+  assert.equal(git(root, ["ls-tree", "HEAD", "--", "mine.txt"]).trim(), "", "the paths are back to what they were before")
+  assert.deepEqual(readBackCommit(root, ["mine.txt"], "save", before, expected, spawnSync), { readback: "unknown" })
+})
+
 test("readBackCommit: a path with glob characters is read literally, so commits to files it would match are not counted", async () => {
   const root = await repoWithChange()
   const before = git(root, ["rev-parse", "HEAD"]).trim()

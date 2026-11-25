@@ -1172,3 +1172,18 @@ test("a recorded finish whose paths leave the Crew member's card folder, or name
   assert.equal(git(root, ["log", "-1", "--format=%s"]).trim(), "theirs 54")
   assert.ok(dir)
 }))
+
+// What the finish step guarantees about ownership: nothing beyond "Desk issued this record in this state folder". Who may change a card is decided by the tool that
+// captured the change, before it writes the record; the finish replays what was captured and has no Crew-person check of its own. Adding one is an authority decision.
+test("a finish replays any card change Desk itself recorded, even one in a teammate's folder: the guard is the record's issuer, not a person prefix", () => sealed(async (clean) => {
+  const { root, records, recorded } = strandedCreate(clean)
+  const bo = "desks/bo/orchard/pruning"
+  writeFileSync(path.join(root, bo, "task.md"), "---\ntitle: pruning\nstatus: processing\n---\n\nbo staged\n")
+  const boDir = path.join(root, bo)
+  const committed = capturedFailure(boDir, ["task.md"], "task_update: orchard/pruning", refused)
+  const failure = commitFailure({ root: boDir, paths: ["task.md"], message: "task_update: orchard/pruning", committed, card: "orchard/pruning", deskRoot: root })
+  assert.equal(readdirSync(records).length, 2, "Desk wrote a record for each failed card commit")
+  const done = await runRecorded(failure.route_around.steps[1].argv.slice(2), { recorded })
+  assert.deepEqual([done.code, done.answer.state], [0, "finished"], JSON.stringify(done.answer))
+  assert.equal(git(root, ["show", "--name-only", "--format=", "HEAD"]).trim(), `${bo}/task.md`)
+}))

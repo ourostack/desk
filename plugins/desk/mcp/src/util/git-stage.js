@@ -202,7 +202,7 @@ const sameEntries = (a, b) => JSON.stringify(a) === JSON.stringify(b)
  * could not be captured). Returns `{ readback, landed }`:
  * - `committed`: a new commit on HEAD has that message, changes only those paths and holds `expected` there, and HEAD holds `expected` there now;
  * - `absent`: HEAD has not moved, or no new commit touches those paths;
- * - `unknown` otherwise (including more than 50 new commits touching those paths), and whenever Git cannot answer. When our commit landed but HEAD no longer holds it, `landed` names both
+ * - `unknown` otherwise (including more than 50 new commits touching those paths, or a merge that itself changed them), and whenever Git cannot answer. When our commit landed but HEAD no longer holds it, `landed` names both
  *   (`{ commit, head }`): it happened, but it is not in effect, so nothing claims completion and nothing replays it. Reads only.
  */
 export function readBackCommit(root, relPaths, message, before, expected, spawnGit) {
@@ -219,7 +219,8 @@ export function readBackCommit(root, relPaths, message, before, expected, spawnG
   if (commits.length > READBACK_LIMIT) return unknown
   let touched = false
   for (const commit of commits) {
-    const ours = run(spawnGit, root, ["diff-tree", "--root", "--no-commit-id", "-r", "--name-only", "-z", commit, "--", ...relPaths])
+    // `-m` diffs a merge against each parent, so a merge that itself changed these paths counts as touching them; it is then never ours (the whole-commit diff below is empty), and the answer stays unknown.
+    const ours = run(spawnGit, root, ["diff-tree", "--root", "-m", "--no-commit-id", "-r", "--name-only", "-z", commit, "--", ...relPaths])
     if (ours?.status !== 0) return unknown
     const inside = nulList(ours).length
     if (inside === 0) continue
