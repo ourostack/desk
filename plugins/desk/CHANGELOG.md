@@ -1,5 +1,13 @@
 # desk plugin — changelog
 
+## 3.2.585 — 2026-11-25
+
+### Local recovery keeps the recorded card route runnable
+
+`local-recovery.js` rewrote the recovery commands Desk issues after a failed `task_create` or `task_update` commit, so the surfaced read-back, finish and publish commands no longer ran and the staged card stayed out of `HEAD`. It now keeps those commands verbatim, but only when the requested operation is a card operation and every command exactly matches what Desk builds for that card, including the `../track.md` path of a status change. Anything else, and every user-supplied note, title or credential, stays redacted and is marked `argv_usable: false`. The dirty-target, authority and content-home checks are unchanged.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.584 — 2026-11-25
 
 Desk's MCP server now vendors Ouro UI v1.3.569, moved by Ouro Current.
