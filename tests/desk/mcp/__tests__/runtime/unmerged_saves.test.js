@@ -293,6 +293,22 @@ test("boot hides a landed save only on exact path identity: modes and failed rea
   git(gone.seed, ["push", "-q", "origin", "HEAD:main"])
   await fetchMain(gone.desk, gone.env)
   assert.deepEqual(stuckSaves({ root: gone.desk, env: gone.env, now: later }), [], "main also deleted it")
+  // Pathspec metacharacters are literal: main keeps `a[1].md` and lost only `a1.md`, so the save's deletion of `a[1].md` is not on main.
+  const glob = await world("literal-path")
+  for (const name of ["a[1].md", "a1.md"]) await fs.writeFile(path.join(glob.desk, name), `${name}\n`)
+  git(glob.desk, ["add", "."])
+  git(glob.desk, ["commit", "-q", "-m", "add both"])
+  git(glob.desk, ["push", "-q", "origin", "HEAD:main"])
+  const globBase = git(glob.desk, ["rev-parse", "HEAD"])
+  git(glob.desk, ["rm", "-q", "a[1].md"])
+  git(glob.desk, ["commit", "-q", "-m", "delete bracket file"])
+  assert.throws(() => publish({ desk: glob.desk, env: glob.env, gh: fakeGh(glob.origin, { pending: true }), head: git(glob.desk, ["rev-parse", "HEAD"]), onto: globBase }), /checks still missing or pending/u)
+  git(glob.seed, ["pull", "-q", "origin", "main"])
+  git(glob.seed, ["rm", "-q", "a1.md"])
+  git(glob.seed, ["commit", "-q", "-m", "delete the sibling only"])
+  git(glob.seed, ["push", "-q", "origin", "HEAD:main"])
+  await fetchMain(glob.desk, glob.env)
+  assert.equal(stuckSaves({ root: glob.desk, env: glob.env, now: later }).length, 1, "a literal path main still holds is not absent")
   for (const needle of ["ls-tree", "--raw"]) {
     assert.equal(stuckSaves({ root: gone.desk, env: gone.env, now: later, spawnGit: failing(needle) }).length, 1, `a failed ${needle} read proves nothing, so the save stays listed`)
   }
