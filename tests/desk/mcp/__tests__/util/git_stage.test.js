@@ -774,6 +774,19 @@ test("readBackCommit: each read Git cannot make is unknown, never absent or comm
   assert.notEqual(ours, after)
 })
 
+test("readBackCommit: a commit the path-limited list names but a successful, empty diff does not show touching the card is unknown, never absent or committed", async () => {
+  const root = await repoWithChange()
+  const { before, expected } = await landedSave(root)
+  const dispatched = []
+  const emptyDiff = (command, args, options) => {
+    dispatched.push(args.includes("diff-tree") ? "diff-tree" : args.find((arg) => ["rev-list", "log", "ls-tree"].includes(arg)))
+    if (args.includes("diff-tree") && args.includes("-m")) return { status: 0, stdout: "" }
+    return spawnSync(command, args, options)
+  }
+  assert.deepEqual(readBackCommit(root, ["a.txt"], "save", before, expected, emptyDiff), { readback: "unknown" })
+  assert.deepEqual(dispatched.filter((verb) => verb === "diff-tree"), ["diff-tree"], "only the touching diff was asked: nothing was matched or replayed")
+})
+
 test("a commit whose branch read comes back empty carries no capture, so its route can never commit", async () => {
   const root = await repoWithChange()
   git(root, ["add", "--", "a.txt"])

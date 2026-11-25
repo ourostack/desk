@@ -1283,7 +1283,8 @@ test("a hostile launch environment present before import is neutralized for help
     const blocker = path.join(base, "blocker")
     writeFileSync(blocker, "not a directory")
     const hostile = {
-      PATH: process.env.PATH, TMPDIR: base, HOME: path.join(base, "hostile-home"), XDG_STATE_HOME: path.join(base, "hostile-state"),
+      ...Object.fromEntries(["SystemRoot", "windir"].filter((key) => process.env[key] !== undefined).map((key) => [key, process.env[key]])),
+      PATH: process.env.PATH, TMPDIR: base, TMP: base, TEMP: base, HOME: path.join(base, "hostile-home"), XDG_STATE_HOME: path.join(base, "hostile-state"),
       GIT_DIR: path.join(blocker, "gitdir"), GIT_WORK_TREE: path.join(blocker, "tree"), GIT_INDEX_FILE: path.join(blocker, "index"),
       GIT_CONFIG_COUNT: "2", GIT_CONFIG_KEY_0: "user.name", GIT_CONFIG_VALUE_0: "hostile-name", GIT_CONFIG_KEY_1: "user.email", GIT_CONFIG_VALUE_1: "hostile@example.invalid",
       GIT_CONFIG_PARAMETERS: `'core.hooksPath=${path.join(base, "hostile-hooks")}'`, GIT_AUTHOR_NAME: "hostile-author", GIT_AUTHOR_EMAIL: "hostile-author@example.invalid",
