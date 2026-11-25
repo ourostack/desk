@@ -1098,7 +1098,7 @@ test("#632: hooks that together stay inside the one 10 s budget commit", async (
 // spends the rest of the budget ("ran": it runs for real and the clock moves to the end; "cut": it is cut off at the end). The double records
 // every call that reaches Git and whether it was given time past the end. No call may be, the branch is moved at most once, and an answer the
 // budget left unread is unknown, never absent or committed.
-function spendsTheBudget(t, spends) {
+function spendsTheBudget(t, spends, saw = () => {}) {
   t.mock.timers.enable({ apis: ["Date"], now: Date.now() })
   const end = Date.now() + 10_000
   const calls = []
@@ -1112,6 +1112,7 @@ function spendsTheBudget(t, spends) {
       return cutOff()
     }
     const answer = spawnSync(command, args, options)
+    saw(verb, answer)
     if (how === "ran") toEnd()
     return answer
   }
@@ -1121,6 +1122,43 @@ function spendsTheBudget(t, spends) {
   return { spawn, past, dispatched }
 }
 const hookNamed = (name) => (verb) => verb[0] === "hook" && verb.at(-1) === name
+
+// #1734: a failed check of the built tree names the call and keeps Git's own answer, so a budget that was spent before the call (it was never run) reads differently from a call that ran and was cut off.
+test("#1734: the built-tree comparison that was cut off names diff-tree and the timeout, and nothing is committed", async () => {
+  const root = await stagedChange()
+  const before = headOf632(root)
+  const spawn = (command, args, options) => (args[2] === "diff-tree" ? cutOff() : spawnSync(command, args, options))
+  const result = commitIndexPaths(root, ["a.txt"], indexEntries(root, ["a.txt"], spawnSync), "save", spawn)
+  assert.equal(result.ok, false)
+  assert.match(result.stderr, /Git could not compare it with HEAD \(git diff-tree: ETIMEDOUT: spawnSync git ETIMEDOUT\)/u)
+  assert.equal(headOf632(root), before)
+})
+
+test("#1734: a budget spent before the built-tree comparison says the call was not run, not that it timed out", async (t) => {
+  const root = await stagedChange()
+  const before = headOf632(root)
+  let built = null
+  const budget = spendsTheBudget(t, (verb) => (verb[0] === "ls-tree" && built !== null && verb.includes(built) ? "ran" : null), (verb, answer) => { if (verb[0] === "write-tree") built = answer.stdout.trim() })
+  const result = commitIndexPaths(root, ["a.txt"], indexEntries(root, ["a.txt"], spawnSync), "save", budget.spawn)
+  assert.equal(result.ok, false)
+  assert.match(result.stderr, /Git could not compare it with HEAD \(git diff-tree: the time budget was spent before this step, so it was not run\)/u)
+  assert.doesNotMatch(result.stderr, /ETIMEDOUT/u)
+  assert.equal(headOf632(root), before)
+})
+
+test("#1734: a cut-off read of the built tree names ls-tree and the timeout", async () => {
+  const root = await stagedChange()
+  let built = null
+  const spawn = (command, args, options) => {
+    if (args[2] === "ls-tree" && built !== null && args.includes(built)) return cutOff()
+    const answer = spawnSync(command, args, options)
+    if (args[2] === "write-tree") built = answer.stdout.trim()
+    return answer
+  }
+  const result = commitIndexPaths(root, ["a.txt"], indexEntries(root, ["a.txt"], spawnSync), "save", spawn)
+  assert.equal(result.ok, false)
+  assert.match(result.stderr, /Git could not read it \(git ls-tree: ETIMEDOUT: spawnSync git ETIMEDOUT\)/u)
+})
 
 test("#632: a post-commit hook that spends the rest of the budget: HEAD is not read past the budget, and the commit is unknown, never committed", async (t) => {
   const root = await stagedChange()
