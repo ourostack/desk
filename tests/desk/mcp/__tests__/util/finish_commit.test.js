@@ -1267,7 +1267,7 @@ test("pre-import probe: hostile launch state reaches neither helper Git nor the 
   assert.equal(env.GIT_CONFIG_COUNT, "2", "the hostile state was present when this module was imported")
   assert.match(env.GIT_DIR, /blocker/u)
   const { root, finish, recorded } = strandedCreate(clean)
-  assert.equal(git(root, ["rev-parse", "--show-toplevel"]).trim(), root, "helper Git ignores the hostile GIT_DIR")
+  assert.equal(realpathSync(git(root, ["rev-parse", "--show-toplevel"]).trim()), realpathSync(root), "helper Git ignores the hostile GIT_DIR (Git spells Windows paths with forward slashes, so compare real paths)")
   assert.equal(git(root, ["config", "user.name"]).trim(), "t", "helper Git ignores the hostile config injection")
   assert.deepEqual(Object.keys(recorded).filter((key) => key.startsWith("GIT_")).sort(), ["GIT_CONFIG_GLOBAL", "GIT_CONFIG_NOSYSTEM", "GIT_TERMINAL_PROMPT"])
   advance(root, 2)
