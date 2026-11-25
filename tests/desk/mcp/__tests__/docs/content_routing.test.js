@@ -54,6 +54,7 @@ test("content routing places team tooling, team context and other repositories' 
   const skill = readFileSync(skillPath, "utf8")
   const section = skill.split("## When a team shares a workspace")[1]?.split("\n## ")[0] ?? ""
   assert.match(section, /General agent-work tooling[\s\S]+Desk, or Crew/u)
+  assert.match(section, /Shipping is the usual case[\s\S]+lives in Crew's `shared-desk-conventions`, not in one team's tooling/u)
   assert.match(section, /Employer-specific but not team-specific[\s\S]+overlay/u)
   assert.match(section, /One team's own process[\s\S]+written as skills/u)
   assert.match(section, /Shared context and evidence[\s\S]+team workspace[\s\S]+never hold team state/u)
