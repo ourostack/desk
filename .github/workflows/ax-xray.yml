@@ -1,196 +1,34 @@
 name: AX X-ray
-
-# Ouro AX's X-ray against Desk's stdio MCP server, the action claims over its ouro-actions declarations, and the Ouro AX
-# census of every agent door Desk has, on every pull request and on main. Each X-ray report is uploaded as an artifact
-# whose name contains "xray", and the census as `ax-census`, for the adoption ledger.
-
+# CI-only evidence probe: released 3.2.552 tree + the accepted local_recovery harness, not for merge.
 on:
   push:
-    branches: [main]
-  pull_request:
-  workflow_dispatch:
-
+    branches: [recovery-queued-log-tap-rel]
 permissions:
   contents: read
-
-concurrency:
-  group: ax-xray-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
-
 jobs:
   ax-xray:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    defaults:
+      run:
+        shell: bash
     steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Setup Node
-        uses: actions/setup-node@v6
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
         with:
-          node-version: 22
+          node-version: 24
           cache: npm
           cache-dependency-path: plugins/desk/mcp/package-lock.json
-
-      - name: Install the MCP server's dependencies
-        working-directory: plugins/desk/mcp
-        run: npm ci --ignore-scripts --no-audit --no-fund
-
-      # The committed projections (mcp.json and actions.json) must match the declarations, and only those two are
-      # committed: the drift gate for the files Desk serves.
-      - name: Committed projections match the declarations
+      - working-directory: plugins/desk/mcp
+        run: npm ci
+      - name: Probe local_recovery TAP on the released tree
         run: |
-          node plugins/desk/mcp/src/lib/ouro-actions/ouro-actions.mts check \
-            plugins/desk/mcp/src/actions/desk.actions.mts plugins/desk/mcp/src/actions/generated/desk --targets mcp,actions
-
-      # The inventory is the server's own tools/list, so a tool it serves without a declaration, or a declaration it
-      # doesn't serve, fails the X-ray's inventory claim.
-      - name: Inventory from the live tools/list
-        run: |
-          mkdir -p xray
-          node .github/scripts/ax-tools-list.mjs plugins/desk/mcp/index.js xray
-
-      # An empty isolated home: the X-ray's calls (initialize, tools/list, a call with no arguments, an unknown name)
-      # write nothing, and the server runs against this folder only.
-      - name: Ouro AX X-ray
-        run: |
-          set -o pipefail
-          mkdir -p "$RUNNER_TEMP/xray-home"
-          node plugins/desk/mcp/src/lib/ouro-ui/registry/ouro/ax/xray.ts \
-            --mcp "node $PWD/plugins/desk/mcp/index.js" \
-            --inventory xray/inventory.json --conformance \
-            --home "$RUNNER_TEMP/xray-home" --timeout 60000 \
-            --app "Desk MCP" --commit "$GITHUB_SHA" --json --md xray/xray.md > xray/report.json
-
-      # Desk Browser is its own server, so it gets its own inventory and report; the ledger reads each by its app name.
-      - name: Inventory from the live tools/list (desk-web)
-        run: |
-          mkdir -p xray-desk-web
-          node .github/scripts/ax-tools-list.mjs plugins/desk/mcp/web.cjs xray-desk-web
-
-      - name: Ouro AX X-ray (desk-web)
-        run: |
-          set -o pipefail
-          mkdir -p "$RUNNER_TEMP/xray-home-web"
-          node plugins/desk/mcp/src/lib/ouro-ui/registry/ouro/ax/xray.ts \
-            --mcp "node $PWD/plugins/desk/mcp/web.cjs" \
-            --inventory xray-desk-web/inventory.json --conformance \
-            --home "$RUNNER_TEMP/xray-home-web" --timeout 60000 \
-            --app "Desk Browser" --commit "$GITHUB_SHA" --json --md xray-desk-web/xray.md > xray-desk-web/report.json
-
-      # The claims are proved on a fresh generation of all seven projections from the same declarations; the drift gate
-      # above covers the two Desk commits.
-      - name: Action claims over the declarations
-        run: |
-          mkdir -p xray-actions xray-actions-desk-web
-          node plugins/desk/mcp/src/lib/ouro-actions/ouro-actions.mts generate \
-            plugins/desk/mcp/src/actions/desk.actions.mts "$RUNNER_TEMP/actions-all"
-          node plugins/desk/mcp/src/lib/ouro-actions/ouro-actions.mts check \
-            plugins/desk/mcp/src/actions/desk.actions.mts "$RUNNER_TEMP/actions-all" \
-            --report xray-actions/report.json --app "Desk MCP" --commit "$GITHUB_SHA"
-          node -e "const s = require('./xray-actions/report.json').summary; if (!s) process.exit(1); if (s.mustHolding !== s.must) { console.error('Action claims (Desk MCP): ' + s.mustHolding + ' of ' + s.must + ' must claims hold'); process.exit(1); }"
-          node plugins/desk/mcp/src/lib/ouro-actions/ouro-actions.mts check \
-            plugins/desk/mcp/src/actions/desk-web.actions.mts plugins/desk/mcp/src/actions/generated/desk-web --targets mcp,actions
-          node plugins/desk/mcp/src/lib/ouro-actions/ouro-actions.mts generate \
-            plugins/desk/mcp/src/actions/desk-web.actions.mts "$RUNNER_TEMP/actions-web-all"
-          node plugins/desk/mcp/src/lib/ouro-actions/ouro-actions.mts check \
-            plugins/desk/mcp/src/actions/desk-web.actions.mts "$RUNNER_TEMP/actions-web-all" \
-            --report xray-actions-desk-web/report.json --app "Desk Browser" --commit "$GITHUB_SHA"
-          node -e "const s = require('./xray-actions-desk-web/report.json').summary; if (!s) process.exit(1); if (s.mustHolding !== s.must) { console.error('Action claims (Desk Browser): ' + s.mustHolding + ' of ' + s.must + ' must claims hold'); process.exit(1); }"
-
-      - name: Upload the desk-web action claims
-        if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: actions-xray-desk-web
-          path: xray-actions-desk-web/
-          retention-days: 90
-
-      - name: Upload the X-ray
-        if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: xray
-          path: xray/
-          retention-days: 90
-
-      - name: Upload the desk-web X-ray
-        if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: xray-desk-web
-          path: xray-desk-web/
-          retention-days: 90
-
-      - name: Upload the action claims
-        if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: actions-xray
-          path: xray-actions/
-          retention-days: 90
-
-  # Its own job, so a census failure doesn't skip the X-ray's steps, and the X-ray doesn't wait for it.
-  ax-census:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Setup Node
-        uses: actions/setup-node@v6
-        with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: ax/package-lock.json
-
-      # The census (vendored from Ouro UI under ax/scripts/ouro-census) and Desk's walkers (ax/walkers) read TypeScript's
-      # syntax tree, so they get their own install of it.
-      - name: Install the census's dependencies
-        working-directory: ax
-        run: npm ci --ignore-scripts --no-audit --no-fund
-
-      - name: Desk's census walker tests
-        working-directory: ax
-        run: |
-          node --test --test-concurrency=3 --experimental-test-coverage \
-            --test-coverage-include='walkers/*.mts' --test-coverage-include='check-uses.mts' \
-            --test-coverage-lines=95 --test-coverage-functions=95 --test-coverage-branches=85 \
-            '../tests/ax/*.node-test.mts'
-
-      # The census counts every agent door Desk's walkers find (MCP tools, CLI commands and scripts, skills, agent files,
-      # hooks and Hosted Desk's HTTP routes) and fails when one without a valid card isn't on ax/census.baseline.json,
-      # when this pull request adds to the baseline, or when it drops a walker source. It compares with the base commit
-      # the checked-out merge ref was built on, not the base branch's tip, which can have moved since. There is no
-      # override.
-      - name: Ouro AX census
-        env:
-          BASE_REF: ${{ github.base_ref }}
-        run: |
-          set -euo pipefail
-          mkdir -p ax-census
-          base_baseline=none; base_config=absent
-          if [ -n "$BASE_REF" ]; then
-            base_sha=$(node ax/scripts/ouro-census/base.mts)
-            git fetch --depth=1 origin "$base_sha"
-            if git show FETCH_HEAD:ax/census.config.json > "$RUNNER_TEMP/base-config.json" 2>/dev/null; then base_config="$RUNNER_TEMP/base-config.json"; fi
-            if git show FETCH_HEAD:ax/census.baseline.json > "$RUNNER_TEMP/base-baseline.json" 2>/dev/null; then base_baseline="$RUNNER_TEMP/base-baseline.json"; fi
-          fi
-          node ax/scripts/ouro-census/census.mts --config ax/census.config.json --baseline ax/census.baseline.json \
-            --base-baseline "$base_baseline" --base-config "$base_config" \
-            --commit "$GITHUB_SHA" --ref "$GITHUB_REF" --repo "$GITHUB_REPOSITORY" --out ax-census/census.json \
-            --inventory ax-census/inventory.json 2>&1 | tee ax-census/census.txt
-
-      # A skill or hook card's uses must name doors the walkers find; each walker sees only its own.
-      - name: Card uses name real doors
-        run: node ax/check-uses.mts ax/census.config.json
-
-      - name: Upload the census
-        if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: ax-census
-          path: ax-census/
-          retention-days: 90
-          if-no-files-found: warn
+          node -v; git --version; git rev-parse HEAD; grep '"version"' plugins/desk/plugin.json | head -1; echo "runner=$RUNNER_NAME os=$RUNNER_OS image=$ImageVersion"
+          sha256sum plugins/desk/mcp/scripts/local-recovery.js tests/desk/mcp/__tests__/runtime/local_recovery.test.js
+          cd plugins/desk/mcp
+          node --import ../../../tests/desk/mcp/__tests__/_isolated_env.mjs --test --test-concurrency=1 --test-reporter=tap ../../../tests/desk/mcp/__tests__/runtime/local_recovery.test.js 2>&1 | tee "$RUNNER_TEMP/lr.tap" || true
+          grep -E "^# (tests|pass|fail|skipped|todo|cancelled)" "$RUNNER_TEMP/lr.tap"
