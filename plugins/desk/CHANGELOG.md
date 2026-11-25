@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.579 — 2026-11-25
+
+Desk's own direct GitHub calls (the delivery gate, issue drains and relays) now join the gh shim's spend ledger where a host keeps one: one `calls.log` row per send under the host session id and the token's own account, reads held under the shim's quota floor (refreshed from the answers' quota headers), `unknown` rows for sends that got no answer, and a `DESK_SPEND_UNRECORDED` warning when the ledger cannot be written. This covers Desk's direct calls only; a `gh` that bypasses the shim is a separate gap. See [relays](docs/relays.md#quota).
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.578 — 2026-11-25
 
 Desk's MCP server now vendors Ouro UI v1.3.565, moved by Ouro Current.
