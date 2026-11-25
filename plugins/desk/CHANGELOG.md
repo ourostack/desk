@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.553 — 2026-11-25
+
+The queued-log readback tests count Git hash-object runs with Git's own trace2 stream and a node clean-filter spy, so their hash-once and zero-read checks run on Windows as well as POSIX.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.552 — 2026-11-25
 
 - Issue drains: `Check gh auth status` is now said only for an HTTP 401 (a refused token). Any other refusal (403 permissions, 404, 422) and an unreadable GraphQL edit-history answer are recorded as GitHub's answer (`drains_github_refused`, `drains_graphql_failed`) with no credential diagnosis; quota handling and the no-retry of non-5xx answers, writes and network errors are unchanged.
