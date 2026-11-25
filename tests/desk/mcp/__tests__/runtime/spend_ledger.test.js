@@ -458,3 +458,24 @@ test("a rate-limited or synchronously failing /user lookup is held and asked aga
   assert.equal((await fetchFn(url, auth("tok-sync"))).status, 200)
   assert.equal(users, 3)
 })
+
+test("a long observation log is read from its last 64 KB without its cut first line, and header answers leave the fetched time alone", async (t) => {
+  const { dir, env } = ledger(t)
+  writeFileSync(path.join(dir, "personal.rate"), `4000 ${RESET} 5000 ${NOW - 30}\n`)
+  writeFileSync(path.join(dir, "personal.rate.obs"), `3 ${RESET} 500\n` + `4000 ${RESET} 5000\n`.repeat(5000))
+  const cut = readFileSync(path.join(dir, "personal.rate.obs"), "utf8")
+  assert.equal((cut.length - 65536) % 21, 1, "the cut falls one byte into a line, leaving a valid-looking 000 reading")
+  const fetchFn = ledgeredFetch(async () => answer(200, {}, quota(3900)), { env, login: () => "ari", now: clockNow })
+  await fetchFn("https://api.github.com/repos/o/r/pulls/1", auth())
+  const [remaining, , , fetched] = readFileSync(path.join(dir, "personal.rate"), "utf8").trim().split(" ").map(Number)
+  assert.equal(remaining, 3900)
+  assert.equal(fetched, NOW - 30)
+})
+
+test("the first numbers ever seen for an account, from a write's headers, are stored as fetched now", async (t) => {
+  const { dir, env, rate } = ledger(t)
+  const fetchFn = ledgeredFetch(async () => answer(200, {}, quota(4321)), { env, login: () => "ari", now: clockNow })
+  await fetchFn("https://api.github.com/repos/o/r/issues/1/comments", { ...auth(), method: "POST" })
+  assert.deepEqual(rate("personal").slice(0, 2), [4321, RESET])
+  assert.equal(Number(readFileSync(path.join(dir, "personal.rate"), "utf8").trim().split(" ")[3]), clockNow() / 1000)
+})

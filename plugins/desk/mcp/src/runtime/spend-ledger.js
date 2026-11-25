@@ -129,8 +129,8 @@ const tightest = (observations) => {
 // Every observation is first appended to `<kind>.rate.obs` (one small O_APPEND write is atomic across processes, so none is ever lost),
 // then `<kind>.rate` is written from the tightest of the log's tail and the stored numbers, and checked again until it matches: a writer
 // that had read the log before another's append is corrected by its own check, so the last writer to finish leaves the lowest remaining,
-// with no lock to hold, expire or reclaim. A later window replaces, an earlier one is ignored. False when the log cannot be written.
-function mergeRate(dir, kind, { remaining, reset, limit }, now) {
+// with no lock to hold, expire or reclaim. A later window replaces, an earlier one is ignored. Only the log's last 64 KB is read (the first, possibly cut, line of a longer log is dropped), and the stored `fetched` time moves only when `fresh` (a free `/rate_limit` answer), so header answers never put off the next refresh. Passes are bounded; a write that is still racing after them is corrected by the next observation.
+function mergeRate(dir, kind, { remaining, reset, limit }, now, fresh) {
   const file = path.join(dir, `${kind}.rate`)
   const log = `${file}.obs`
   try {
@@ -143,7 +143,9 @@ function mergeRate(dir, kind, { remaining, reset, limit }, now) {
         const length = Math.min(size, OBS_TAIL_BYTES)
         const buffer = Buffer.alloc(length)
         readSync(fd, buffer, 0, length, size - length)
-        for (const line of buffer.toString("utf8").split("\n")) {
+        const lines = buffer.toString("utf8").split("\n")
+        if (length < size) lines.shift()
+        for (const line of lines) {
           const [r, t, l] = line.split(" ").map((value) => (/^\d+$/u.test(value) ? Number(value) : null))
           if (r !== null && t !== null && l !== null) seen.push({ remaining: r, reset: t, limit: l })
         }
@@ -153,15 +155,14 @@ function mergeRate(dir, kind, { remaining, reset, limit }, now) {
       const had = readRate(dir, kind)
       if (had.remaining !== null && had.reset !== null && had.limit !== null) seen.push({ remaining: had.remaining, reset: had.reset, limit: had.limit })
       const want = tightest(seen)
-      if (pass > 0 && had.remaining === want.remaining && had.reset === want.reset && had.limit === want.limit) return true
+      if (pass > 0 && had.remaining === want.remaining && had.reset === want.reset && had.limit === want.limit) return
       tempCount += 1
       const temp = `${file}.${process.pid}.${tempCount}`
-      writeFileSync(temp, `${want.remaining} ${want.reset} ${want.limit} ${now}\n`)
+      writeFileSync(temp, `${want.remaining} ${want.reset} ${want.limit} ${fresh ? now : had.fetched || now}\n`)
       renameSync(temp, file)
     }
-    return true
   } catch {
-    return false
+    // The numbers stay as they were; the next observation or refresh carries them.
   }
 }
 
@@ -193,7 +194,7 @@ async function refreshRate({ dir, kind, fetchFn, init, now }) {
         try {
           const response = await fetchFn(`${API}/rate_limit`, { headers: init?.headers, signal: init?.signal })
           const core = response.status === 200 ? JSON.parse(await response.text())?.resources?.core : null
-          if (core && [core.remaining, core.reset, core.limit].every((value) => Number.isInteger(value))) mergeRate(dir, kind, core, now)
+          if (core && [core.remaining, core.reset, core.limit].every((value) => Number.isInteger(value))) mergeRate(dir, kind, core, now, true)
         } catch {
           // Without fresh numbers the stored ones (or none) decide.
         } finally {
