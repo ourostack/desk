@@ -11,8 +11,9 @@ import { spawnSync } from "node:child_process"
 import { mkTempRoot } from "../_temp_roots.js"
 import { runner } from "../../../../../plugins/desk/mcp/src/runtime/deliver.js"
 import { publishPullRequest } from "../../../../../plugins/desk/mcp/src/runtime/pr-publication.js"
-import { readSyncStatus, runPushWorker } from "../../../../../plugins/desk/mcp/src/runtime/sync-worker.js"
-import { abandonedComment, allStuckSaves, repositoryOf, savesFor, settleSaves, stuckLine, stuckSaves, withStuckSaves } from "../../../../../plugins/desk/mcp/src/runtime/unmerged-saves.js"
+import { readSyncStatus, runPushWorker, updateSyncStatus } from "../../../../../plugins/desk/mcp/src/runtime/sync-worker.js"
+import { abandonedComment, allStuckSaves, hasSettledSave, repositoryOf, savesFor, settleSaves, stuckLine, stuckSaves, withStuckSaves } from "../../../../../plugins/desk/mcp/src/runtime/unmerged-saves.js"
+import { syncWorkspace } from "../../../../../plugins/desk/mcp/src/runtime/session-sync.js"
 import { resolveDeskStateDir } from "../../../../../plugins/desk/mcp/src/runtime/last-start.js"
 import { formatBootText } from "../../../../../plugins/desk/mcp/src/runtime/boot-text.js"
 import { runDrainsCli } from "../../../../../plugins/desk/mcp/src/runtime/drains-cli.js"
@@ -169,6 +170,216 @@ test("independent publication roots preserve unmatched card candidates and settl
   assert.match(first.closedWith, /Superseded: .*already on main.*work\/saved\/task\.md is identical on main/u)
   assert.deepEqual(stuckSaves({ root: desk, env, now: () => Date.now() + 60 * MINUTE }), [])
   assert.notEqual(spawnSync("git", ["--git-dir", origin, "show-ref", "--verify", `refs/heads/${first.branch}`]).status, 0)
+})
+
+// #1749: a save whose exact content reached main as another commit is not "unmerged", and is settled without waiting for a later write.
+test("a recorded save whose content reached main through another commit is not reported unmerged, and a sync schedules its settlement", async () => {
+  const { origin, seed, desk, env } = await world("landed-elsewhere")
+  const onto = git(desk, ["rev-parse", "HEAD"])
+  const card = "work/saved/task.md"
+  const text = "---\ntitle: saved\n---\n\nLanded twice.\n"
+  await fs.mkdir(path.dirname(path.join(desk, card)), { recursive: true })
+  await fs.writeFile(path.join(desk, card), text)
+  git(desk, ["add", card])
+  git(desk, ["commit", "-q", "-m", "save card"])
+  const head = git(desk, ["rev-parse", "HEAD"])
+  const gh = fakeGh(origin, { pending: true })
+  assert.throws(() => publish({ desk, env, gh, head, onto }), /checks still missing or pending/u)
+  const later = () => Date.now() + 60 * MINUTE
+  const scheduled = []
+  // Each sync is a minute later, so none reads the previous one's fetch as fresh.
+  let tick = Date.now()
+  const sync = () => { tick += MINUTE; return syncWorkspace({ scheduleDelivery: (options) => scheduled.push(options), root: desk, env, now: () => tick }) }
+
+  await fs.mkdir(path.dirname(path.join(seed, card)), { recursive: true })
+  await fs.writeFile(path.join(seed, card), "---\ntitle: saved\n---\n\nDifferent words.\n")
+  git(seed, ["add", card])
+  git(seed, ["commit", "-q", "-m", "differing card"])
+  git(seed, ["push", "-q", "origin", "HEAD:main"])
+  await sync()
+  assert.equal(stuckSaves({ root: desk, env, now: later }).length, 1, "differing content on main keeps the save listed")
+  assert.equal(scheduled.length, 1, "this save's commit is still undelivered, so the worker runs as before")
+
+  await fs.writeFile(path.join(seed, card), text)
+  git(seed, ["add", card])
+  git(seed, ["commit", "-q", "-m", "land identical card"])
+  git(seed, ["push", "-q", "origin", "HEAD:main"])
+  const unreadable = (command, args, options) => (command === "git" && args.includes("rev-parse") ? { status: 1, stdout: "", stderr: "" } : spawnSync(command, args, options))
+  assert.equal(stuckSaves({ root: desk, env, now: later }).length, 1, "main not fetched yet: still listed")
+  await sync()
+  assert.equal(stuckSaves({ root: desk, env, now: later, spawnGit: unreadable }).length, 1, "an unreadable comparison stays listed")
+  assert.equal(stuckSaves({ root: desk, env, now: later, spawnGit: () => { throw new Error("git is gone") } }).length, 1, "a failing comparison stays listed")
+  assert.deepEqual(stuckSaves({ root: desk, env, now: later }), [], "proven equal to fetched main: not reported")
+  assert.equal(gh.prs.get(1).state, "OPEN", "boot reads only; the worker closes the pull request")
+  assert.equal(scheduled.length, 2)
+  assert.deepEqual(settleSaves({ root: desk, env, spawnGit: gh, clock: clockOf() }).closed, [gh.prs.get(1).url])
+})
+
+test("a sync with nothing to deliver schedules settlement only for a save fetched main already holds, and never when unreachable", async () => {
+  const { origin, seed, desk, env } = await world("sync-settles")
+  const onto = git(desk, ["rev-parse", "HEAD"])
+  const head = await appendTo(desk, "- landed elsewhere", "save")
+  const gh = fakeGh(origin, { pending: true })
+  assert.throws(() => publish({ desk, env, gh, head, onto }), /checks still missing or pending/u)
+  updateSyncStatus(desk, env, { delivered: [head] })
+  const scheduled = []
+  let tick = Date.now()
+  const sync = (options = {}) => { tick += MINUTE; return syncWorkspace({ scheduleDelivery: (call) => scheduled.push(call), root: desk, env, now: () => tick, ...options }) }
+  await sync()
+  assert.equal(scheduled.length, 0, "a waiting save is not on main, so nothing to settle and no worker per sync")
+
+  // Main gains every line the save adds, in another order and file shape: settlement may close it, boot must not hide it.
+  await appendTo(seed, "- other", "another")
+  await appendTo(seed, "- landed elsewhere", "same line, different file")
+  git(seed, ["push", "-q", "origin", "HEAD:main"])
+  await sync()
+  assert.equal(scheduled.length, 0, "only exact content counts as proof before settlement")
+  assert.equal(stuckSaves({ root: desk, env, now: () => tick + 60 * MINUTE }).length, 1)
+
+  const identical = await world("sync-settles-identical")
+  const same = await appendTo(identical.desk, "- landed elsewhere", "save")
+  const gh2 = fakeGh(identical.origin, { pending: true })
+  assert.throws(() => publish({ desk: identical.desk, env: identical.env, gh: gh2, head: same, onto: git(identical.desk, ["rev-parse", "HEAD~1"]) }), /checks still missing or pending/u)
+  updateSyncStatus(identical.desk, identical.env, { delivered: [same] })
+  await appendTo(identical.seed, "- landed elsewhere", "same content, another commit")
+  git(identical.seed, ["push", "-q", "origin", "HEAD:main"])
+  const again = (options) => { tick += MINUTE; return syncWorkspace({ scheduleDelivery: (call) => scheduled.push(call), root: identical.desk, env: identical.env, now: () => tick, ...options }) }
+  await again()
+  assert.equal(scheduled.length, 1, "diverged checkout with nothing undelivered")
+  git(identical.desk, ["reset", "-q", "--hard", "origin/main"])
+  await again()
+  assert.equal(scheduled.length, 2, "checkout exactly at main")
+  git(identical.desk, ["remote", "set-url", "origin", "/nonexistent/remote.git"])
+  await again()
+  assert.equal(scheduled.length, 2, "an unreachable remote cannot settle anything")
+})
+
+// #1749 review: only exact path identity hides a save; mode changes and failed reads do not, a deletion main also made does.
+test("boot hides a landed save only on exact path identity: modes and failed reads keep it listed, a shared deletion hides it", async () => {
+  const later = () => Date.now() + 60 * MINUTE
+  let tick = Date.now()
+  const fetchMain = (desk, env) => { tick += MINUTE; return syncWorkspace({ scheduleDelivery: () => {}, root: desk, env, now: () => tick }) }
+  const failing = (needle) => (command, args, options) => (command === "git" && args.includes(needle) ? { status: 1, stdout: "", stderr: "" } : spawnSync(command, args, options))
+
+  const modes = await world("mode-only")
+  const onto = git(modes.desk, ["rev-parse", "HEAD"])
+  git(modes.desk, ["update-index", "--chmod=+x", "log.md"])
+  git(modes.desk, ["commit", "-q", "-m", "make executable"])
+  const head = git(modes.desk, ["rev-parse", "HEAD"])
+  assert.throws(() => publish({ desk: modes.desk, env: modes.env, gh: fakeGh(modes.origin, { pending: true }), head, onto }), /checks still missing or pending/u)
+  await fs.writeFile(path.join(modes.seed, "other.md"), "unrelated\n")
+  git(modes.seed, ["add", "other.md"])
+  git(modes.seed, ["commit", "-q", "-m", "main moves on"])
+  git(modes.seed, ["push", "-q", "origin", "HEAD:main"])
+  await fetchMain(modes.desk, modes.env)
+  assert.equal(git(modes.desk, ["rev-parse", "origin/main"]), git(modes.origin, ["rev-parse", "refs/heads/main"]), "main was fetched")
+  assert.equal(git(modes.desk, ["rev-parse", "origin/main:log.md"]), git(modes.desk, ["rev-parse", `${head}:log.md`]), "main holds the same blob under another mode")
+  assert.equal(stuckSaves({ root: modes.desk, env: modes.env, now: later }).length, 1, "same blob text on main but a mode-only change is not on main")
+
+  const gone = await world("shared-deletion")
+  await fs.writeFile(path.join(gone.desk, "gone.md"), "bye\n")
+  git(gone.desk, ["add", "gone.md"])
+  git(gone.desk, ["commit", "-q", "-m", "add gone"])
+  git(gone.desk, ["push", "-q", "origin", "HEAD:main"])
+  const base = git(gone.desk, ["rev-parse", "HEAD"])
+  git(gone.desk, ["rm", "-q", "gone.md"])
+  git(gone.desk, ["commit", "-q", "-m", "delete gone"])
+  const deletion = git(gone.desk, ["rev-parse", "HEAD"])
+  const gh = fakeGh(gone.origin, { pending: true })
+  assert.throws(() => publish({ desk: gone.desk, env: gone.env, gh, head: deletion, onto: base }), /checks still missing or pending/u)
+  git(gone.seed, ["pull", "-q", "origin", "main"])
+  git(gone.seed, ["rm", "-q", "gone.md"])
+  git(gone.seed, ["commit", "-q", "-m", "delete gone elsewhere"])
+  git(gone.seed, ["push", "-q", "origin", "HEAD:main"])
+  await fetchMain(gone.desk, gone.env)
+  assert.deepEqual(stuckSaves({ root: gone.desk, env: gone.env, now: later }), [], "main also deleted it")
+  // Pathspec metacharacters are literal: main keeps `a[1].md` and lost only `a1.md`, so the save's deletion of `a[1].md` is not on main.
+  const glob = await world("literal-path")
+  for (const name of ["a[1].md", "a1.md"]) await fs.writeFile(path.join(glob.desk, name), `${name}\n`)
+  git(glob.desk, ["add", "."])
+  git(glob.desk, ["commit", "-q", "-m", "add both"])
+  git(glob.desk, ["push", "-q", "origin", "HEAD:main"])
+  const globBase = git(glob.desk, ["rev-parse", "HEAD"])
+  git(glob.desk, ["rm", "-q", "a[1].md"])
+  git(glob.desk, ["commit", "-q", "-m", "delete bracket file"])
+  assert.throws(() => publish({ desk: glob.desk, env: glob.env, gh: fakeGh(glob.origin, { pending: true }), head: git(glob.desk, ["rev-parse", "HEAD"]), onto: globBase }), /checks still missing or pending/u)
+  git(glob.seed, ["pull", "-q", "origin", "main"])
+  git(glob.seed, ["rm", "-q", "a1.md"])
+  git(glob.seed, ["commit", "-q", "-m", "delete the sibling only"])
+  git(glob.seed, ["push", "-q", "origin", "HEAD:main"])
+  await fetchMain(glob.desk, glob.env)
+  assert.equal(stuckSaves({ root: glob.desk, env: glob.env, now: later }).length, 1, "a literal path main still holds is not absent")
+  for (const needle of ["ls-tree", "--raw"]) {
+    assert.equal(stuckSaves({ root: gone.desk, env: gone.env, now: later, spawnGit: failing(needle) }).length, 1, `a failed ${needle} read proves nothing, so the save stays listed`)
+  }
+})
+
+test("a save whose head main contains, whose commit is gone, or whose main cannot be read is judged on local reads only", async () => {
+  const later = () => Date.now() + 60 * MINUTE
+  const { origin, desk, env } = await world("ancestor-and-unreadable")
+  const onto = git(desk, ["rev-parse", "HEAD"])
+  const head = await appendTo(desk, "- fast-forwarded", "save")
+  assert.throws(() => publish({ desk, env, gh: fakeGh(origin, { pending: true }), head, onto }), /checks still missing or pending/u)
+  const failing = (needle) => (command, args, options) => (command === "git" && args.includes(needle) ? { status: 1, stdout: "", stderr: "" } : spawnSync(command, args, options))
+  const unfetched = () => stuckSaves({ root: desk, env, now: later, spawnGit: failing("--verify") }).length
+  git(desk, ["push", "-q", "origin", "HEAD:main"])
+  git(desk, ["fetch", "-q", "origin"])
+  assert.equal(hasSettledSave({ root: desk, env }), true, "the save is an ancestor of fetched main; the real git runs by default")
+  assert.deepEqual(stuckSaves({ root: desk, env, now: later }), [])
+  assert.equal(unfetched(), 1, "an unreadable main proves nothing")
+  assert.equal(stuckSaves({ root: desk, env, now: later, spawnGit: failing("-e") }).length, 1, "a save commit that is gone from the checkout proves nothing")
+})
+
+// #1749 review: the worker a landed save schedules settles every recorded save, so each must meet the same exact-proof guards.
+test("the scheduled worker closes only the save main holds exactly; a mode-only save or one whose reads fail stays open", async () => {
+  const { origin, seed, desk, env } = await world("worker-coexisting")
+  const onto = git(desk, ["rev-parse", "HEAD"])
+  const options = { pending: true }
+  const gh = fakeGh(origin, options)
+  const savedFile = async (name, text) => { await fs.writeFile(path.join(desk, name), text); git(desk, ["add", name]); git(desk, ["commit", "-q", "-m", `save ${name}`]); return git(desk, ["rev-parse", "HEAD"]) }
+  const landed = await savedFile("landed.md", "landed\n")
+  assert.throws(() => publish({ desk, env, gh, head: landed, onto }), /checks still missing or pending/u)
+  await fs.writeFile(path.join(seed, "mode.md"), "same text\n")
+  git(seed, ["add", "mode.md"])
+  git(seed, ["commit", "-q", "-m", "main has mode.md"])
+  git(seed, ["push", "-q", "origin", "HEAD:main"])
+  git(desk, ["fetch", "-q", "origin"])
+  git(desk, ["reset", "-q", "--hard", "origin/main"])
+  const mainWithMode = git(desk, ["rev-parse", "HEAD"])
+  git(desk, ["update-index", "--chmod=+x", "mode.md"])
+  git(desk, ["commit", "-q", "-m", "make mode.md executable"])
+  const modeOnly = git(desk, ["rev-parse", "HEAD"])
+  assert.throws(() => publish({ desk, env, gh, head: modeOnly, onto: mainWithMode }), /checks still missing or pending/u)
+  await fs.writeFile(path.join(seed, "landed.md"), "landed\n")
+  git(seed, ["add", "landed.md"])
+  git(seed, ["commit", "-q", "-m", "landed.md arrives through another commit"])
+  git(seed, ["push", "-q", "origin", "HEAD:main"])
+  const [landedPr, modePr] = [...gh.prs.values()]
+  assert.notEqual(landedPr.url, modePr.url)
+
+  const failing = (needle) => (command, args, options) => (command === "git" && args.includes(needle) ? { status: 1, stdout: "", stderr: "" } : gh(command, args, options))
+  const clock = clockOf()
+  for (const needle of ["diff-tree", "ls-tree"]) {
+    assert.deepEqual(settleSaves({ root: desk, env, spawnGit: failing(needle), clock }).closed, [], `a failed ${needle} read closes nothing`)
+  }
+
+  // Either side of the landed file's blob failing to read is no proof, while the other side reads fine.
+  const blobFailing = (side) => (command, args, options) => (command === "git" && args.includes("blob") && args.at(-1).startsWith(`${landed}:`) === (side === "head") ? { status: 1, stdout: "", stderr: "" } : gh(command, args, options))
+  for (const side of ["head", "main"]) {
+    assert.deepEqual(settleSaves({ root: desk, env, spawnGit: blobFailing(side), clock }).closed, [], `a failed ${side} blob read closes nothing`)
+  }
+
+  const scheduled = []
+  let tick = Date.now()
+  await syncWorkspace({ scheduleDelivery: (options) => scheduled.push(options), root: desk, env, now: () => (tick += MINUTE) })
+  assert.equal(scheduled.length, 1, "the landed save schedules the worker")
+  // The mode-only save is left to qualification, which ends the worker once its checks fail.
+  const result = await runPushWorker({ ...scheduled[0], spawnGit: gh, retryDelaysMs: [1], publicationClock: clockOf(), clock: { now: Date.now, sleep: async () => { options.pending = false; options.failed = true } }, fileProblem: () => assert.fail("not a Desk defect") })
+  assert.equal(result.result, "blocked")
+  assert.equal(gh.prs.get(1).state, "CLOSED", "the exactly-landed save is closed")
+  assert.equal(gh.prs.get(2).state, "OPEN", "the mode-only save is not on main")
+  const recorded = readSyncStatus({ root: desk, env }).unmerged_saves.map((save) => save.url)
+  assert.ok(!recorded.includes(landedPr.url) && recorded.includes(modePr.url), "the closed save is forgotten and the mode-only save stays recorded")
 })
 
 test("publication qualifies its checks and merges without asking gh for auto-merge", async () => {

@@ -51,9 +51,36 @@ function clearUnmerged({ root, env, url }) {
 
 const stuckOf = (list, at) => list.map((save) => ({ ...save, minutes: Math.floor((at - Date.parse(save.since)) / 60_000) })).filter((save) => save.minutes * 60_000 >= STUCK_AFTER_MS)
 
-/** The desk's saves still unmerged after ten minutes, oldest first, each `{ url, head, branch, base, since, minutes }`. Local read. */
-export function stuckSaves({ root, env, now }) {
-  return stuckOf(entries(readSyncStatus({ root, env })), now()).sort((a, b) => Date.parse(a.since) - Date.parse(b.since))
+/** Whether fetched main already holds a recorded save of the desk (see `onFetchedMain`), so settling it would close its pull request. Local reads. */
+export function hasSettledSave({ root, env, spawnGit = spawnSync }) {
+  return entries(readSyncStatus({ root, env })).some((save) => onFetchedMain({ root, save, spawnGit }))
+}
+
+// Whether the fetched main already holds the save: it is an ancestor, or every path it changed has the same mode and object on main (or
+// a deletion is proven absent) because the same content landed as another commit. Looser evidence is left to settlement, which closes with it. Local
+// reads only; anything unreadable is "not proven", so the save stays named.
+function onFetchedMain({ root, save, spawnGit }) {
+  try {
+    const git = runner(spawnGit, root)
+    const upstream = upstreamOf(git)
+    if (upstream === null) return false
+    const main = git(["rev-parse", "--verify", "--quiet", `${upstream.tracking}^{commit}`]).stdout.trim()
+    if (!OBJECT_ID.test(main) || git(["cat-file", "-e", `${save.head}^{commit}`]).status !== 0) return false
+    if (git(["merge-base", "--is-ancestor", save.head, main]).status === 0) return true
+    return exactlyOnMain(git, save.head, main)
+  } catch {
+    return false
+  }
+}
+
+/**
+ * The desk's saves still unmerged after ten minutes, oldest first, each `{ url, head, branch, base, since, minutes }`. Local read.
+ * A save the fetched main already holds (even as a different commit) is not listed: its pull request is closed by settlement.
+ */
+export function stuckSaves({ root, env, now, spawnGit = spawnSync }) {
+  return stuckOf(entries(readSyncStatus({ root, env })), now())
+    .filter((save) => !onFetchedMain({ root, save, spawnGit }))
+    .sort((a, b) => Date.parse(a.since) - Date.parse(b.since))
 }
 
 /** The stuck saves of every desk on this machine, for `drains status`. Never throws. */
@@ -102,6 +129,16 @@ export function withStuckSaves(reply, { root, env, now }) {
 // The lines a save's pull request adds, and the file's text on `commit`, for the supersession check.
 const FRONTMATTER_KEY = /^([A-Za-z][\w-]*):(?:\s|$)/u
 
+// The mode, type and object of `file` in `commit`'s tree; null when the tree reads fine and has no such path; undefined when the read failed.
+function treeEntry(git, commit, file) {
+  const read = git(["ls-tree", "-z", commit, "--", file])
+  if (read.status !== 0) return undefined
+  const line = read.stdout.split("\0").find((entry) => entry.endsWith(`\t${file}`))
+  if (line === undefined) return null
+  const [mode, type, oid] = line.split("\t")[0].split(" ")
+  return { mode, type, oid }
+}
+
 /**
  * Evidence that everything a pull request commit changes is already on `main`, or null. A file counts when it is the same on
  * main, when every line the commit adds is on main, or when the commit only sets frontmatter fields that a newer commit on
@@ -109,17 +146,26 @@ const FRONTMATTER_KEY = /^([A-Za-z][\w-]*):(?:\s|$)/u
  */
 function supersession(git, head, main, link) {
   const parent = `${head}^`
-  const files = git(["diff-tree", "--root", "-r", "--name-only", "--no-renames", "--no-commit-id", "-z", head]).stdout.split("\0").filter(Boolean)
+  const changed = git(["diff-tree", "--root", "-r", "--name-only", "--no-renames", "--no-commit-id", "-z", head])
+  const files = changed.stdout.split("\0").filter(Boolean)
+  // A failed or empty read of what the commit changes is no evidence at all.
+  if (changed.status !== 0 || files.length === 0) return null
   const headTime = Number(git(["log", "-1", "--format=%ct", head]).stdout.trim())
   const evidence = []
   for (const file of files) {
-    const onMain = git(["cat-file", "blob", `${main}:${file}`])
-    const onHead = git(["cat-file", "blob", `${head}:${file}`])
-    if (onMain.status !== 0 || onHead.status !== 0) {
-      // Deleted by the save: superseded only when main has it gone too.
-      if (onMain.status !== 0 && onHead.status !== 0) { evidence.push(`${file} is absent on main, as the save left it`); continue }
+    const mainEntry = treeEntry(git, main, file)
+    const headEntry = treeEntry(git, head, file)
+    if (mainEntry === undefined || headEntry === undefined) return null
+    // Deleted by the save: superseded only when main has it gone too, as read successfully from both trees.
+    if (mainEntry === null || headEntry === null) {
+      if (mainEntry === null && headEntry === null) { evidence.push(`${file} is absent on main, as the save left it`); continue }
       return null
     }
+    // A mode or type change is a change even when the text is the same.
+    if (mainEntry.mode !== headEntry.mode || mainEntry.type !== headEntry.type) return null
+    const onMain = git(["cat-file", "blob", `${main}:${file}`])
+    const onHead = git(["cat-file", "blob", `${head}:${file}`])
+    if (onMain.status !== 0 || onHead.status !== 0) return null
     if (onMain.stdout === onHead.stdout) { evidence.push(`${file} is identical on main (${link(file)})`); continue }
     const had = new Set(git(["cat-file", "blob", `${parent}:${file}`]).stdout.split("\n"))
     const added = onHead.stdout.split("\n").filter((line) => line.trim() !== "" && !had.has(line))
@@ -135,6 +181,26 @@ function supersession(git, head, main, link) {
     return null
   }
   return evidence
+}
+
+// Whether every path the save's commit (a single commit on the commit it was published onto) changes has on `main` the same mode,
+// type and object, or is proven absent there when the commit deletes it. A failed read proves nothing.
+function exactlyOnMain(git, head, main) {
+  const raw = git(["diff-tree", "--root", "-r", "--raw", "--no-renames", "--no-commit-id", "-z", head])
+  if (raw.status !== 0) return false
+  const fields = raw.stdout.split("\0")
+  let changes = 0
+  for (let at = 0; fields[at]; at += 2) {
+    const [, mode, , oid, status] = fields[at].split(/[ ]/u)
+    const file = fields[at + 1]
+    const onMain = git(["ls-tree", "-z", main, "--", file])
+    if (onMain.status !== 0) return false
+    const entry = onMain.stdout.split("\0").find((line) => line.endsWith(`\t${file}`))
+    const same = status === "D" ? entry === undefined : entry !== undefined && (entry.startsWith(`${mode} blob ${oid}\t`) || entry.startsWith(`${mode} commit ${oid}\t`))
+    if (!same) return false
+    changes += 1
+  }
+  return changes > 0
 }
 
 const short = (sha) => sha.slice(0, 12)
