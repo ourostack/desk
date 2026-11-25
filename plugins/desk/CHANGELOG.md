@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.541 — 2026-11-25
+
+A Desk MCP server ends when its host sends it SIGTERM, SIGINT or SIGHUP while no Desk server is running behind its idle proxy. Before, the [idle proxy](mcp/idle-proxy.cjs) re-raised the signal while still listening for it, so the signal came straight back and was raised again, forever. The process never ended and used most of a core. On one Ouro host, six of these ran for almost four hours after their servers failed to start. The proxy now stops listening before it re-raises, so the signal's default action ends it.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.540 — 2026-11-25
 
 Desk's MCP server now vendors Ouro UI v1.3.534, moved by Ouro Current.
