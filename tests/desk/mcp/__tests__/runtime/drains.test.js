@@ -1,15 +1,17 @@
 // Issue drains: what the poll records, what it ignores and what it hands a runner to deliver. The GitHub side is a fake; every
 // state, config and lock file lives under a temporary root.
 import assert from "node:assert/strict"
-import { createHash } from "node:crypto"
+import { createHash, randomUUID } from "node:crypto"
 import { spawnSync } from "node:child_process"
-import { promises as fs, mkdirSync, readFileSync, utimesSync, writeFileSync } from "node:fs"
+import { chmodSync, closeSync, existsSync, mkdirSync, mkdtempSync, openSync, promises as fs, readdirSync, readFileSync, renameSync, rmdirSync, rmSync, statSync, symlinkSync, unlinkSync, utimesSync, writeFileSync } from "node:fs"
+import * as os from "node:os"
 import path from "node:path"
 import { test } from "node:test"
 import { fileURLToPath } from "node:url"
 import { mkTempRoot } from "../_temp_roots.js"
+import { removeTreeSync } from "../_remove_tree.js"
 import {
-  ackWake, connectGithub, DRAIN_STATUS_MARKER, drainPaths, drainsHome, deskInUse, drainStatusLines, installLauncher, parseDrainConfig, pollDrain, pollDrains, quotaHold, quotaLines, recoverDrainTarget, startSuccessor, successorKickoff,
+  acquireDrainLock, moveWithoutReplace, ackWake, connectGithub, DRAIN_STATUS_MARKER, drainPaths, drainsHome, deskInUse, drainStatusLines, installLauncher, parseDrainConfig, pollDrain, pollDrains, quotaHold, quotaLines, recoverDrainTarget, startSuccessor, successorKickoff,
   readDrainConfig, readDrainStates, wakeId, wakeMessage, whyOf, withDrainLock,
 } from "../../../../../plugins/desk/mcp/src/runtime/drains.js"
 import { runDrainsCli } from "../../../../../plugins/desk/mcp/src/runtime/drains-cli.js"
@@ -177,7 +179,7 @@ for (const [name, changed, events] of [
 for (const [name, comments, events] of [
   ["a status comment older than the issue's last change", [statusComment(10, T(3))], []],
   ["a comment from before the recorded revision", [statusComment(10, T(0))], []],
-  ["a close, an assignment and the drain's labels", [], [{ id: 1, event: "closed", created_at: T(5) }, { id: 2, event: "assigned", created_at: T(5) }, labelEvent(T(5), "drain: triaged")]],
+  ["a close and the drain's labels", [], [{ id: 1, event: "closed", created_at: T(5) }, labelEvent(T(5), "drain: triaged")]],
   ["events from before the recorded revision", [], [{ id: 1, event: "reopened", created_at: T(0) }, labelEvent(T(0), "bug")]],
   ["a change with no comment and no event", [], []],
 ]) {
@@ -208,18 +210,6 @@ for (const [name, label, minutes, woken] of [
     assert.equal(w.sent.length, 1 + woken)
   })
 }
-
-test("a bot rewriting the body of its own issue does not wake the drain, but a new bot issue and a human edit still do", async () => {
-  const bot = (number, updated_at, body) => ({ ...issue(number, updated_at, `Issue ${number}`, body), user: { login: "github-actions[bot]", type: "Bot" } })
-  const w = await world([bot(1, T(0), "health: 1"), issue(2, T(0))])
-  await w.poll()
-  w.issues.splice(0, 2, bot(1, T(5), "health: 2"), issue(2, T(5), "Issue 2", "edited"))
-  await w.poll()
-  assert.deepEqual(w.sent, [[DRAIN.session, "New or changed issues in acme/widgets: #2 Issue 2 (title or body edited). Drain them."]])
-  w.issues.push(bot(3, T(6), "health: 1"))
-  await w.poll()
-  assert.match(w.sent.at(-1)[1], /#3 Issue 3 \(new issue\)/u)
-})
 
 test("never wakes for a closed issue the drain handled, and drops its waiting event", async () => {
   const w = await world([issue(1, T(0)), issue(2, T(0))])
@@ -763,6 +753,7 @@ test("a label or state change by the polling account during the drain's turn is 
     ["a label the drain's scripts apply", [byDrain(labelEvent("2026-11-13T02:04:00Z", "waiting:external")), byDrain(labelEvent("2026-11-13T02:04:00Z", "lane:window")), byDrain(labelEvent("2026-11-13T02:04:00Z", "agent:drain"))], "2026-11-13T02:04:00Z", false],
     ["a label it removes", [byDrain(labelEvent("2026-11-13T02:10:00Z", "waiting:external", "unlabeled"))], "2026-11-13T02:10:00Z", false],
     ["a reopen it does", [byDrain(lifecycle("reopened", "2026-11-13T02:20:00Z"))], "2026-11-13T02:20:00Z", false],
+    ["an assignment it makes", [byDrain(lifecycle("assigned", "2026-11-13T02:04:00Z", "maintainer", { assignee: { login: "maintainer" } }))], "2026-11-13T02:04:00Z", false],
     ["a label just before the wake was acknowledged", [byDrain(labelEvent("2026-11-13T01:59:30Z", "lane:window"))], "2026-11-13T02:00:30Z", false],
     ["a label by someone else in the turn", [labelEvent("2026-11-13T02:04:00Z", "lane:window"), { ...labelEvent("2026-11-13T02:04:00Z", "lane:window"), actor: { login: "someone" } }], "2026-11-13T02:04:00Z", true],
     ["a reopen by someone else in the turn", [{ ...lifecycle("reopened", "2026-11-13T02:20:00Z"), actor: { login: "someone" } }], "2026-11-13T02:20:00Z", true],
@@ -963,7 +954,7 @@ test("a failure on the very first poll leaves the drain unseeded, so the next go
   matches(w.state(), { seeded: true, openCount: 1 })
 })
 
-test("a failure while reading comments leaves the markers where they were", async () => {
+test("a failure while reading one issue's comments leaves that issue's marker where it was, tells the poll's status and lets the other issues go on", async () => {
   const w = await world([issue(1, "2026-11-13T01:00:00Z"), issue(2, "2026-11-13T01:00:00Z")])
   await w.poll()
   w.issues.splice(0, 2, issue(1, "2026-11-13T02:00:00Z"), issue(2, "2026-11-13T02:00:00Z"))
@@ -972,11 +963,16 @@ test("a failure while reading comments leaves the markers where they were", asyn
     if (calls++ === 0) throw new Error("GitHub answered HTTP 403")
     return [{ id: 1, body: "me too", updated_at: "2026-11-13T02:00:00Z", user: { login: "someone" } }]
   }
-  await w.poll()
-  assert.deepEqual(w.sent, [])
-  assert.deepEqual(w.state().seen, { 1: { updatedAt: "2026-11-13T01:00:00Z", digest: w.state().seen["1"].digest }, 2: { updatedAt: "2026-11-13T01:00:00Z", digest: w.state().seen["2"].digest } })
-  await w.poll()
-  assert.equal(w.sent.length, 1)
+  let out = await w.poll()
+  assert.equal(w.sent.length, 1, "the other issue was judged and woken in the same poll")
+  assert.match(w.sent[0][1], /#2 Issue 2 \(comment 1 by someone\)/u)
+  assert.deepEqual(out.errors, [{ repo: DRAIN.repo, code: "drains_issues_deferred", error: "Wait for the next poll: 1 issue(s) were left for it: #1 (GitHub answered HTTP 403)" }])
+  assert.equal(w.state().seen["1"].updatedAt, "2026-11-13T01:00:00Z")
+  assert.equal(w.state().seen["2"].updatedAt, "2026-11-13T02:00:00Z")
+  out = await w.poll()
+  assert.equal(w.sent.length, 2)
+  assert.match(w.sent[1][1], /#1 Issue 1/u)
+  assert.deepEqual(out.errors, [])
 })
 
 test("keeps recorded events when the wake is refused, then sends them with the next poll's changes in one message", async () => {
@@ -1130,37 +1126,6 @@ test("state and config live in Desk's state folder, from XDG_STATE_HOME or the h
   assert.ok(drainsHome().endsWith(path.join("ouroboros-skills", "desk", "drains")))
   assert.equal(drainPaths().config, path.join(drainsHome(), "config.json"))
   assert.deepEqual(drainPaths({ env: { XDG_STATE_HOME: "/x" } }), { config: path.join("/x", "ouroboros-skills", "desk", "drains", "config.json"), state: path.join("/x", "ouroboros-skills", "desk", "drains", "state.json"), lock: path.join("/x", "ouroboros-skills", "desk", "drains", "poll.lock") })
-})
-
-test("the lock refuses a second live owner, takes over an abandoned or stale one and is released afterwards", async () => {
-  const dir = await mkTempRoot("desk-drains-")
-  const lock = path.join(dir, "poll.lock")
-  assert.equal(await withDrainLock(lock, async () => "done"), "done")
-  assert.throws(() => readFileSync(lock), { code: "ENOENT" })
-  await assert.rejects(withDrainLock(lock, () => withDrainLock(lock, () => "inner")), /process \d+ holds .* and is still working/u)
-  assert.throws(() => readFileSync(lock), { code: "ENOENT" })
-  writeFileSync(lock, "999999")
-  assert.equal(await withDrainLock(lock, () => "took over", { alive: () => false }), "took over")
-  writeFileSync(lock, String(spawnSync(process.execPath, ["-e", ""]).pid))
-  assert.equal(await withDrainLock(lock, () => "dead owner"), "dead owner")
-  writeFileSync(lock, String(process.pid))
-  const old = new Date(Date.now() - 3_600_000)
-  utimesSync(lock, old, old)
-  assert.equal(await withDrainLock(lock, () => "stale", { now: Date.now() }), "stale")
-  writeFileSync(lock, "not a pid")
-  assert.equal(await withDrainLock(lock, () => "garbage"), "garbage")
-  await assert.rejects(withDrainLock(lock, () => { throw new Error("work failed") }), /work failed/u)
-  await fs.mkdir(path.join(dir, "dir.lock"))
-  await assert.rejects(withDrainLock(path.join(dir, "dir.lock"), () => "never"))
-  assert.throws(() => readFileSync(lock), { code: "ENOENT" })
-  writeFileSync(lock, "999999")
-  await assert.rejects(withDrainLock(lock, () => "never", { alive: () => true }), /holds .* and is still working/u)
-  await fs.rm(lock)
-})
-
-test("a lock that cannot be created for another reason than an existing owner is reported as it is", async () => {
-  const dir = await mkTempRoot("desk-drains-")
-  await assert.rejects(withDrainLock(path.join(dir, `${"x".repeat(400)}.lock`), () => "x"), (error) => error.code !== "EEXIST")
 })
 
 const response = (body, { status = 200, link = null, headers = {} } = {}) => ({ ok: status < 400, status, json: async () => body, text: async () => JSON.stringify(body), headers: { get: (name) => (name === "link" ? link : headers[name] ?? null), has: (name) => name in headers } })
@@ -1520,7 +1485,12 @@ test("the command line says what is wrong: usage, a busy lock and a bad config",
   const busy = await cli(["status", "--config", config, "--state", state], { now: () => NOW })
   assert.equal(busy.code, 1)
   const locked = await cli(["poll", "--config", config, "--state", state])
-  assert.match(locked.err, /holds .* and is still working/u)
+  assert.match(locked.err, /cannot tell whether a poll still holds it/u)
+  assert.match(locked.err, /desk_drains_lock_legacy/u)
+  rmSync(`${state}.lock`)
+  mkdirSync(`${state}.lock`)
+  writeFileSync(path.join(`${state}.lock`, `owner-${"0".repeat(8)}-0000-0000-0000-${"0".repeat(12)}`), `${process.pid}\n`)
+  assert.match((await cli(["poll", "--config", config, "--state", state])).err, /holds .* and is still working/u)
 })
 
 test("the Desk in use is named by its version, and by the release commit when the launcher's own copy runs", async () => {
@@ -1769,4 +1739,918 @@ test("a failed successor start keeps its reason when the next wake is refused as
   recoverDrainTarget({ paths: w.paths, repo: DRAIN.repo, now: NOW, start: () => ({ ok: false, error: "no project" }) })
   ackWake({ paths: w.paths, repo: DRAIN.repo, wake, error: ARCHIVED, now: NOW + 1000 })
   assert.match(w.state().targetGone.error, /starting its successor failed: no project/u)
+})
+
+// Bot body edits. The fake GitHub keeps one edit history per issue in `w.hist[number]`, answers `editPage` one page at a time in
+// either order and keeps the GraphQL quota in virtual windows of an hour: nothing sleeps and no real quota is spent.
+const BOT = "github-actions[bot]"
+const iso = (ms) => new Date(ms).toISOString().replace(/\.\d{3}Z$/u, "Z")
+const LONG_AGO = Date.parse("2026-01-01T00:00:00Z")
+const botEdit = (id, editedAt) => ({ id, editedAt, deletedAt: null, editor: { type: "Bot", login: BOT } })
+const personEdit = (id, editedAt) => ({ id, editedAt, deletedAt: null, editor: { type: "User", login: "ari" } })
+
+/** `count` old bot edits, made long before any poll and made up as they are asked for, then the `extra` edits that arrive. */
+const history = (count, { order = "asc", extra = [] } = {}) => ({
+  count, order, extra,
+  get total() { return this.count + this.extra.length },
+  at(index) { return index < this.count ? botEdit(`o${index}`, iso(LONG_AGO + index * 1000)) : this.extra[index - this.count] },
+})
+
+/** The page of up to 100 edits that follows `cursor` in a direction; a cursor is the position of the last edit of the page before it, so it stays valid as edits arrive. */
+function pageOf(h, { backward, cursor }) {
+  const step = (backward ? -1 : 1) * (h.order === "asc" ? 1 : -1)
+  let index = cursor === null ? (step > 0 ? 0 : h.total - 1) : Number(cursor.slice(1)) + step
+  const nodes = []
+  let last = null
+  while (nodes.length < 100 && index >= 0 && index < h.total) {
+    nodes.push(h.at(index))
+    last = index
+    index += step
+  }
+  return { nodes, hasMore: index >= 0 && index < h.total, cursor: `c${last}` }
+}
+
+async function editsWorld(issues, { limit = 5000 } = {}) {
+  const w = await deltaWorld(issues)
+  w.delta = async () => ({ issues: w.issues, etag: '"t"' })
+  w.hist = {}
+  w.reads = []
+  w.clock = NOW
+  w.window = { limit, remaining: limit, reset: Math.floor(NOW / 1000) + 3600 }
+  const refresh = () => {
+    if (w.clock < w.window.reset * 1000) return
+    w.window.remaining = w.window.limit
+    w.window.reset = Math.floor(w.clock / 1000) + 3600
+  }
+  w.api.graphqlQuota = () => { refresh(); return { ...w.window, at: iso(w.clock) } }
+  w.api.graphqlCost = () => 1
+  w.api.editPage = async (repo, number, { backward = false, cursor = null } = {}) => {
+    refresh()
+    w.reads.push({ number, backward, cursor })
+    if (w.window.remaining <= 0) throw Object.assign(new Error("Wait for the quota to reset: GraphQL limit used up"), { code: "drains_rate_limited" })
+    w.window.remaining -= 1
+    const h = w.hist[number]
+    if (h instanceof Error) throw h
+    const found = w.issues.find((item) => item.number === number)
+    const page = h.page ? h.page({ backward, cursor }) : pageOf(h, { backward, cursor })
+    return { updatedAt: h.stamp ?? found.updated_at, total: h.total, edits: page.nodes, hasMore: page.hasMore, cursor: page.cursor }
+  }
+  const poll = w.poll
+  w.poll = async (at = NOW) => { w.clock = at; return poll(at) }
+  /** The issue's body changes at `at`, with an `edit` to show for it (or none). */
+  w.change = (number, at, edit) => {
+    if (edit) w.hist[number].extra.push(edit)
+    const index = w.issues.findIndex((item) => item.number === number)
+    w.issues[index] = { ...w.issues[index], updated_at: iso(at), body: `health: ${at}` }
+  }
+  return w
+}
+
+const ISSUE = () => issue(1, T(0), "Health", "health: 0")
+
+test("a history of 5,001 pages (500,100 edits) is read across quota windows from where it stopped, while a bot rewrites the body every six minutes: no restart, no wake, and the next change costs a page or two", async () => {
+  for (const order of ["asc", "desc"]) {
+    const w = await editsWorld([ISSUE()])
+    w.hist[1] = history(500_100, { order })
+    await w.poll()
+    const wakes = []
+    for (let k = 1; k <= 14; k++) {
+      const at = NOW + k * 360_000
+      w.change(1, at, botEdit(`n${k}`, iso(at)))
+      wakes.push(...(await w.poll(at)).wakes)
+      if (k < 10) {
+        assert.ok(w.state().scans[1], `${order}: still reading at poll ${k}`)
+        assert.match(w.state().lastError, /were left for it/u)
+        assert.equal(w.state().lastErrorCode, "drains_rate_limited")
+        assert.equal(w.state().seen[1].updatedAt, T(0), "the marker stays while the scan is open")
+        assert.equal(w.state().etag, undefined, "no 304 for a list with a change still being read")
+      }
+      if (k === 9) {
+        assert.equal(w.reads.filter((read) => !read.backward && read.cursor === null).length, 1, `${order}: the history was started once`)
+        assert.ok(w.reads.length <= 5000 - 25, "the reserve of the quota is kept")
+      }
+    }
+    assert.deepEqual(wakes, [], order)
+    assert.equal(w.state().scans[1], undefined)
+    assert.equal(w.state().lastError, undefined)
+    assert.equal(w.state().seen[1].edits.total, 500_114)
+    assert.ok(w.reads.length <= 5002 + 10 + 4 * 2 + 2, `${order}: ${w.reads.length} pages read in all, about one pass`)
+  }
+})
+
+test("a person's edit among a bot's changes is not hidden by them, however long the scan takes: one wake, when the scan reaches it", async () => {
+  for (const order of ["asc", "desc"]) {
+    const w = await editsWorld([ISSUE()])
+    w.hist[1] = history(500_100, { order })
+    await w.poll()
+    const wakes = []
+    for (let k = 1; k <= 10; k++) {
+      const at = NOW + k * 360_000
+      w.change(1, at, k === 5 ? personEdit("human", iso(at)) : botEdit(`n${k}`, iso(at)))
+      wakes.push(...(await w.poll(at)).wakes)
+      if (k < 10) assert.deepEqual(wakes, [], `${order}: nothing woke while the scan was reading (poll ${k})`)
+    }
+    assert.equal(wakes.length, 1, order)
+    assert.deepEqual(wakes[0].events.map((event) => event.why), ["title or body edited"])
+    assert.equal(w.state().scans[1], undefined)
+  }
+})
+
+test("scans that outnumber the pages the quota allows take turns, so none is starved and each finishes", async () => {
+  const w = await editsWorld([issue(1, T(0), "A"), issue(2, T(0), "B"), issue(3, T(0), "C")], { limit: 25 + 1 + 450 })
+  for (const n of [1, 2, 3]) w.hist[n] = history(40_000)
+  await w.poll()
+  for (const n of [1, 2, 3]) w.change(n, NOW + 3_600_000, botEdit(`n${n}`, iso(NOW + 3_600_000)))
+  await w.poll(NOW + 3_600_000)
+  const progress = [1, 2, 3].map((n) => w.state().scans[n].fwd.pages)
+  assert.ok(Math.max(...progress) - Math.min(...progress) <= 1, `evenly served: ${progress}`)
+  assert.equal(progress.reduce((a, b) => a + b), 450)
+  await w.poll(NOW + 7_200_000)
+  await w.poll(NOW + 10_800_000)
+  const out = await w.poll(NOW + 14_400_000)
+  assert.deepEqual(out.wakes, [])
+  assert.deepEqual(w.state().scans, {})
+  for (const n of [1, 2, 3]) assert.equal(w.state().seen[n].edits.total, 40_001)
+})
+
+test("a cheap issue a person edited is woken in the first poll, whatever an expensive scan or a failing read beside it does, and a new issue is not held back", async () => {
+  for (const failure of ["quota", "network"]) {
+    const w = await editsWorld([issue(1, T(0), "Big"), issue(2, T(0), "Small")], { limit: failure === "quota" ? 60 : 5000 })
+    w.hist[1] = failure === "quota" ? history(500_100) : Object.assign(new Error("Check gh auth status, then try again: GitHub answered HTTP 502 for /graphql"), { code: "drains_check_gh_auth_status_then" })
+    w.hist[2] = history(2)
+    await w.poll()
+    if (failure === "network") w.hist[1] = Object.assign(new Error("Check gh auth status, then try again: GitHub answered HTTP 502 for /graphql"), { code: "drains_check_gh_auth_status_then" })
+    const big = w.hist[1]
+    if (failure === "quota") w.change(1, NOW + 360_000, botEdit("n1", iso(NOW + 360_000)))
+    else w.issues[0] = { ...w.issues[0], updated_at: iso(NOW + 360_000), body: "health: 1" }
+    w.change(2, NOW + 360_000, personEdit("human", iso(NOW + 360_000)))
+    w.issues.push(issue(3, iso(NOW + 360_000), "Fresh"))
+    const out = await w.poll(NOW + 360_000)
+    assert.deepEqual(out.wakes[0].events.map((event) => `${event.number} ${event.why}`).sort(), ["2 title or body edited", "3 new issue"], failure)
+    assert.equal(w.state().seen[1].updatedAt, T(0), "the expensive issue keeps its marker")
+    assert.equal(w.state().etag, undefined)
+    assert.equal(out.errors.length, 1)
+    assert.match(out.errors[0].error, /1 issue\(s\) were left for it: #1/u)
+    assert.equal(w.state().lastErrorCode, failure === "quota" ? "drains_rate_limited" : "drains_check_gh_auth_status_then")
+    assert.deepEqual(w.state().pending, [])
+    if (failure === "network") {
+      w.hist[1] = history(3)
+      w.change(1, NOW + 720_000, botEdit("n1", iso(NOW + 720_000)))
+      const again = await w.poll(NOW + 720_000)
+      assert.deepEqual(again.wakes, [], "the issue that could not be read is judged on the next poll, and a bot's edit is quiet")
+      assert.deepEqual(again.errors, [])
+      assert.equal(w.state().seen[1].updatedAt, iso(NOW + 720_000))
+    }
+    void big
+  }
+})
+
+test("a failed read alone wakes nobody, and keeps the marker, and lists the issue again next poll", async () => {
+  const w = await editsWorld([ISSUE()])
+  w.hist[1] = history(3)
+  await w.poll()
+  w.hist[1] = Object.assign(new Error("Check gh auth status, then try again: GitHub answered HTTP 401 for /graphql"), { code: "drains_check_gh_auth_status_then" })
+  w.issues[0] = { ...w.issues[0], updated_at: T(5), body: "health: 2" }
+  const out = await w.poll(NOW + 360_000)
+  assert.deepEqual(out.wakes, [])
+  assert.deepEqual(out.errors, [{ repo: DRAIN.repo, code: "drains_check_gh_auth_status_then", error: "Wait for the next poll: 1 issue(s) were left for it: #1 (Check gh auth status, then try again: GitHub answered HTTP 401 for /graphql)" }])
+  assert.equal(w.state().seen[1].updatedAt, T(0))
+  assert.equal(w.state().cursor, T(5), "the next poll lists the issue again: the cursor is held at its change")
+})
+
+test("a history whose cursors cycle, across polls, or that stands still is refused as news, never read for ever", async () => {
+  const cycling = async (cursors) => {
+    const w = await editsWorld([ISSUE()], { limit: 25 + 1 + 2 })
+    w.hist[1] = Object.assign(history(250), { page: ({ cursor }) => ({ nodes: Array.from({ length: 100 }, (_, i) => botEdit(`${cursor}-${i}`, iso(LONG_AGO + i * 1000))), hasMore: true, cursor: cursors(cursor) }) })
+    await w.poll()
+    w.change(1, NOW + 360_000, null)
+    return w
+  }
+  const w = await cycling((cursor) => (cursor === "a" ? "b" : "a"))
+  let out = await w.poll(NOW + 360_000)
+  assert.deepEqual(out.wakes, [])
+  assert.equal(w.state().scans[1].fwd.pages, 2, "two pages of the quota were read, the cursor is kept")
+  out = await w.poll(NOW + 3_960_000)
+  assert.equal(out.wakes.length, 1, "the third and fourth page went round: the scan ends, as news")
+  assert.deepEqual(out.wakes[0].events.map((event) => event.why), ["title or body edited"])
+  assert.equal(w.state().scans[1], undefined)
+  const still = await cycling((cursor) => cursor ?? "a")
+  out = await still.poll(NOW + 360_000)
+  assert.equal(out.wakes.length, 1, "a cursor that does not move is news")
+})
+
+test("once an issue has a baseline, the next bot edit costs one or two pages in either order and wakes nobody", async () => {
+  for (const order of ["asc", "desc"]) {
+    const w = await editsWorld([ISSUE()])
+    w.hist[1] = history(250, { order })
+    await w.poll()
+    w.change(1, NOW + 360_000, botEdit("n1", iso(NOW + 360_000)))
+    assert.deepEqual((await w.poll(NOW + 360_000)).wakes, [])
+    assert.deepEqual({ ...w.state().seen[1].edits, tail: undefined }, { total: 251, at: iso(NOW + 360_000), tail: undefined })
+    const before = w.reads.length
+    w.change(1, NOW + 720_000, botEdit("n2", iso(NOW + 720_000)))
+    assert.deepEqual((await w.poll(NOW + 720_000)).wakes, [])
+    assert.ok(w.reads.length - before <= 2, `${order}: ${w.reads.length - before} pages`)
+    assert.equal(w.state().seen[1].edits.total, 252)
+    w.change(1, NOW + 1_080_000, personEdit("human", iso(NOW + 1_080_000)))
+    assert.equal((await w.poll(NOW + 1_080_000)).wakes.length, 1, `${order}: a person's edit after the baseline wakes`)
+  }
+})
+
+test("a history that lags the issue is read again next poll and settles then; the issue is not woken for the lag", async () => {
+  const w = await editsWorld([ISSUE()])
+  w.hist[1] = history(3)
+  await w.poll()
+  w.change(1, NOW + 360_000, botEdit("n1", iso(NOW + 360_000)))
+  w.hist[1].stamp = T(0)
+  let out = await w.poll(NOW + 360_000)
+  assert.deepEqual(out.wakes, [])
+  assert.match(out.errors[0].error, /were left for it: #1 \(Wait for the next poll: GitHub's edit history is behind the issue/u)
+  assert.equal(w.state().seen[1].updatedAt, T(0))
+  w.hist[1].stamp = undefined
+  out = await w.poll(NOW + 720_000)
+  assert.deepEqual(out.errors, [])
+  assert.equal(w.state().seen[1].updatedAt, iso(NOW + 360_000))
+})
+
+test("a change is news unless every new edit is a bot's: a person, a person before or after a bot, an unknown or deleted edit, an edit with no time or id, no new edit at all", async () => {
+  const at = iso(NOW + 360_000)
+  const cases = [
+    ["a person", [personEdit("p", at)]],
+    ["a person, then a bot", [personEdit("p", at), botEdit("b", at)]],
+    ["a bot, then a person", [botEdit("b", at), personEdit("p", at)]],
+    ["a person at the second of the last poll", [personEdit("p", T(0)), botEdit("b", at)]],
+    ["an edit whose editor is gone", [{ id: "x", editedAt: at, deletedAt: null, editor: null }, botEdit("b", at)]],
+    ["a deleted edit", [{ ...botEdit("d", at), deletedAt: at }]],
+    ["an edit with no time", [botEdit("t", null)]],
+    ["an edit with no id", [{ ...botEdit("i", at), id: null }]],
+    ["an editor with no type or login", [{ id: "e", editedAt: at, deletedAt: null, editor: { login: null, type: null } }]],
+    ["no new edit at all", []],
+  ]
+  for (const [name, extra] of cases) {
+    const w = await editsWorld([ISSUE()])
+    w.hist[1] = history(3, { extra: [] })
+    await w.poll()
+    w.hist[1].extra.push(...extra)
+    w.change(1, NOW + 360_000, null)
+    const out = await w.poll(NOW + 360_000)
+    assert.equal(out.wakes.length, 1, name)
+    assert.deepEqual(out.wakes[0].events.map((event) => event.why), ["title or body edited"], name)
+  }
+})
+
+test("a title change is news with no history read; a record without a title is news; so is a reader that is not there", async () => {
+  const w = await editsWorld([ISSUE()])
+  w.hist[1] = history(3)
+  await w.poll()
+  w.issues[0] = issue(1, T(5), "Renamed", "health: 2")
+  const out = await w.poll(NOW + 360_000)
+  assert.deepEqual(out.wakes[0].events.map((event) => `${event.number} ${event.why}`), ["1 title or body edited"])
+  assert.deepEqual(w.reads, [])
+  const legacy = await editsWorld([ISSUE()])
+  await legacy.poll()
+  const stored = JSON.parse(readFileSync(legacy.paths.state, "utf8"))
+  delete stored[DRAIN.repo].seen[1].title
+  writeFileSync(legacy.paths.state, JSON.stringify(stored))
+  legacy.hist[1] = history(3)
+  legacy.change(1, NOW + 360_000, botEdit("b", iso(NOW + 360_000)))
+  assert.equal((await legacy.poll(NOW + 360_000)).wakes.length, 1)
+  const none = await world([ISSUE()])
+  await none.poll()
+  none.issues[0] = issue(1, T(5), "Health", "health: 2")
+  assert.equal((await none.poll(NOW + 360_000)).wakes.length, 1)
+})
+
+test("who created the issue is no veto: on a bot-created issue a bot-only rewrite is quiet, a person's edit wakes, and so does a person's edit followed by a bot's", async () => {
+  const mine = () => ({ ...ISSUE(), user: { login: BOT, type: "Bot" } })
+  const setup = async () => {
+    const w = await editsWorld([mine()])
+    w.hist[1] = history(3)
+    await w.poll()
+    return w
+  }
+  const quiet = await setup()
+  quiet.change(1, NOW + 360_000, botEdit("b1", iso(NOW + 360_000)))
+  quiet.issues[0] = { ...quiet.issues[0], user: { login: BOT, type: "Bot" } }
+  await quiet.poll(NOW + 360_000)
+  assert.deepEqual(quiet.sent, [])
+  assert.ok(quiet.reads.length > 0, "the history was read")
+  const human = await setup()
+  human.change(1, NOW + 360_000, personEdit("p1", iso(NOW + 360_000)))
+  human.issues[0] = { ...human.issues[0], user: { login: BOT, type: "Bot" } }
+  assert.equal((await human.poll(NOW + 360_000)).wakes.length, 1)
+  const both = await setup()
+  both.change(1, NOW + 300_000, personEdit("p1", iso(NOW + 300_000)))
+  both.change(1, NOW + 360_000, botEdit("b1", iso(NOW + 360_000)))
+  both.issues[0] = { ...both.issues[0], user: { login: BOT, type: "Bot" } }
+  const out = await both.poll(NOW + 360_000)
+  assert.deepEqual(out.wakes[0].events.map((event) => event.number), [1])
+})
+
+test("a bot's body edit does not hide the rest: a person's comment, an outside label, a reopen, a cross-reference and an assignment still wake", async () => {
+  const quietEdit = async (setup) => {
+    const w = await editsWorld([ISSUE()])
+    w.hist[1] = history(3)
+    await w.poll()
+    w.change(1, NOW + 360_000, botEdit("n1", iso(NOW + 360_000)))
+    setup(w)
+    await w.poll(NOW + 360_000)
+    return w
+  }
+  const quiet = await quietEdit(() => {})
+  assert.deepEqual(quiet.sent, [])
+  const comment = await quietEdit((w) => { w.comments = async () => [{ id: 7, body: "please look", updated_at: iso(NOW + 300_000), user: { login: "ari", type: "User" } }] })
+  assert.match(comment.sent[0][1], /comment 7 by ari/u)
+  const label = await quietEdit((w) => { w.events = async () => [{ ...labelEvent(iso(NOW + 300_000), "bug"), actor: { login: "ari" } }] })
+  assert.match(label.sent[0][1], /labeled bug/u)
+  const reopen = await quietEdit((w) => { w.events = async () => [lifecycle("reopened", iso(NOW + 300_000), "ari")] })
+  assert.match(reopen.sent[0][1], /reopened/u)
+  const reference = await quietEdit((w) => { w.timeline = async () => [{ event: "cross-referenced", created_at: iso(NOW + 300_000), source: { issue: { number: 9, repository_url: "https://api.github.com/repos/acme/other" } } }] })
+  assert.match(reference.sent[0][1], /cross-reference from acme\/other#9/u)
+  const assigned = await quietEdit((w) => { w.events = async () => [lifecycle("assigned", iso(NOW + 300_000), "ari", { assignee: { login: "dev" } })] })
+  assert.match(assigned.sent[0][1], /assigned dev/u)
+  const unassigned = await quietEdit((w) => { w.events = async () => [lifecycle("unassigned", iso(NOW + 300_000), "ari", { assignee: { login: "dev" } })] })
+  assert.match(unassigned.sent[0][1], /unassigned dev/u)
+  const nobody = await quietEdit((w) => { w.events = async () => [lifecycle("unassigned", iso(NOW + 300_000), "ari")] })
+  assert.match(nobody.sent[0][1], /unassigned nobody/u)
+  const opening = await quietEdit((w) => { w.issues[0] = { ...w.issues[0], created_at: iso(NOW + 299_000) }; w.events = async () => [lifecycle("assigned", iso(NOW + 300_000), "ari", { assignee: { login: "dev" } })] })
+  assert.deepEqual(opening.sent, [], "an assignment made as the issue was opened is not news")
+  const own = await quietEdit((w) => { w.comments = async () => [statusComment(8, iso(NOW + 300_000))] })
+  assert.deepEqual(own.sent, [], "the drain's own comment still wakes nobody")
+})
+
+const editAnswer = (nodes, { total = nodes.length, next = false, prev = false, start = "s", end = "e", updatedAt = T(5), cost = 1, headers = {} } = {}) =>
+  response({ data: { rateLimit: { cost }, repository: { issue: { updatedAt, userContentEdits: { totalCount: total, pageInfo: { hasNextPage: next, hasPreviousPage: prev, startCursor: start, endCursor: end }, nodes } } } } }, { headers })
+
+test("editPage reads one page from the start or the end with the account's token, and keeps GraphQL's quota and cost apart from REST's", async () => {
+  const calls = []
+  const answers = [
+    response([issue(1, "u1")], { headers: { "x-ratelimit-remaining": "4000", "x-ratelimit-limit": "5000", "x-ratelimit-reset": "1900000000", "x-ratelimit-resource": "core" } }),
+    editAnswer([{ id: "E1", editedAt: T(5), deletedAt: null, editor: { __typename: "Bot", login: "app[bot]" } }, { id: "E2", editedAt: T(1), deletedAt: T(2), editor: null }], { total: 250, next: true, end: "after-2", cost: 2, headers: { "x-ratelimit-remaining": "4990", "x-ratelimit-limit": "5000", "x-ratelimit-reset": "1900000100", "x-ratelimit-resource": "graphql" } }),
+    editAnswer([], { total: 250, prev: true, start: "before-1" }),
+  ]
+  const api = await connectGithub("maintainer", { spawn: () => ({ status: 0, stdout: "tok\n" }), fetchImpl: async (url, init) => { calls.push([url, init]); return answers.shift() }, env: { PATH: "/bin" }, login: "maintainer" })
+  await api.openIssues("o/r")
+  assert.equal(api.graphqlCost(), 1, "one call until a page says otherwise")
+  const first = await api.editPage("o/r", 5)
+  assert.equal(api.graphqlCost(), 2, "the cost GitHub charged for the page")
+  assert.equal(calls[1][0], "https://api.github.com/graphql")
+  assert.equal(calls[1][1].headers.Authorization, "Bearer tok")
+  assert.deepEqual(JSON.parse(calls[1][1].body).variables, { owner: "o", name: "r", number: 5, cursor: null })
+  assert.match(JSON.parse(calls[1][1].body).query, /userContentEdits\(first: 100, after: \$cursor\)/u)
+  assert.deepEqual(first, {
+    updatedAt: T(5), total: 250, hasMore: true, cursor: "after-2",
+    edits: [{ id: "E1", editedAt: T(5), deletedAt: null, editor: { type: "Bot", login: "app[bot]" } }, { id: "E2", editedAt: T(1), deletedAt: T(2), editor: null }],
+  })
+  const last = await api.editPage("o/r", 5, { backward: true, cursor: "x" })
+  assert.match(JSON.parse(calls[2][1].body).query, /userContentEdits\(last: 100, before: \$cursor\)/u)
+  assert.equal(JSON.parse(calls[2][1].body).variables.cursor, "x")
+  assert.deepEqual({ hasMore: last.hasMore, cursor: last.cursor }, { hasMore: true, cursor: "before-1" })
+  assert.equal(api.quota().remaining, 4000)
+  assert.equal(api.graphqlQuota().remaining, 4990)
+  assert.equal(api.graphqlCost(), 1)
+  assert.deepEqual(api.calls(), { total: 3, notModified: 0 })
+})
+
+test("editPage: a missing issue is null and a page that is not a connection has no edits; failures say why: HTTP errors, GraphQL errors, no data, a spent quota", async () => {
+  const connect = (answer) => connectGithub("maintainer", { spawn: () => ({ status: 0, stdout: "tok" }), fetchImpl: async () => answer, env: { PATH: "/bin" }, login: "maintainer" })
+  assert.equal(await (await connect(response({ data: { repository: { issue: null } } }))).editPage("o/r", 1), null)
+  assert.deepEqual(await (await connect(response({ data: { repository: { issue: { updatedAt: T(1), userContentEdits: {} } } } }))).editPage("o/r", 1), { edits: null })
+  await assert.rejects((await connect(response({}, { status: 502 }))).editPage("o/r", 1), /HTTP 502 for \/graphql/u)
+  await assert.rejects((await connect(response({ errors: [{ message: "Something went wrong" }] }))).editPage("o/r", 1), /Something went wrong/u)
+  await assert.rejects((await connect(response({ data: null }))).editPage("o/r", 1), /refused or unreadable/u)
+  await assert.rejects((await connect(response({ errors: [null, {}] }))).editPage("o/r", 1), /refused or unreadable \(; \)/u)
+  await assert.rejects((await connect({ ...response({}), json: async () => { throw new Error("not json") } })).editPage("o/r", 1), /refused or unreadable \(no data\)/u)
+  assert.deepEqual((await (await connect(editAnswer([null, { editor: { __typename: null, login: null } }], { next: true }))).editPage("o/r", 1)).edits, [
+    { id: null, editedAt: null, deletedAt: null, editor: null },
+    { id: null, editedAt: null, deletedAt: null, editor: { type: null, login: null } },
+  ])
+  const limited = response({ errors: [{ type: "RATE_LIMITED", message: "API rate limit exceeded" }] }, { headers: { "x-ratelimit-reset": "1900000000" } })
+  await assert.rejects((await connect(limited)).editPage("o/r", 1), (error) => error.code === "drains_rate_limited" && /GraphQL limit is used up/u.test(error.message))
+  await assert.rejects((await connect(response({}, { status: 403, headers: { "x-ratelimit-remaining": "0" } }))).editPage("o/r", 1), (error) => error.rateLimited === true)
+})
+
+test("the state keeps GraphQL's quota beside REST's", async () => {
+  const w = await world([issue(1, T(0))])
+  const graphqlQuota = { remaining: 4990, limit: 5000, reset: Math.floor(NOW / 1000) + 600, at: new Date(NOW).toISOString() }
+  w.api.graphqlQuota = () => graphqlQuota
+  await w.poll()
+  matches(w.state(), { graphqlQuota })
+  assert.equal(w.state().quota, undefined)
+})
+
+const DEAD = 999999
+const ownerFiles = (lock) => readdirSync(lock).filter((name) => name.startsWith("owner-"))
+const plant = (lock, pid, content = `${pid}\n`) => {
+  mkdirSync(lock)
+  const name = `owner-${randomUUID()}`
+  writeFileSync(path.join(lock, name), content)
+  return name
+}
+const liveExceptDead = (pid) => pid !== DEAD
+
+test("the lock is published whole and never taken from a live owner, however long it has held it", async () => {
+  const dir = await mkTempRoot("desk-drains-")
+  const lock = path.join(dir, "poll.lock")
+  const seen = []
+  assert.equal(await withDrainLock(lock, () => {
+    const [name] = ownerFiles(lock)
+    assert.equal(Number.parseInt(readFileSync(path.join(lock, name), "utf8"), 10), process.pid)
+    return "done"
+  }, { onStep: (step) => seen.push([step, existsSync(lock)]) }), "done")
+  assert.deepEqual(seen, [["staging", false], ["staged", false]], "the lock does not exist until it is complete")
+  assert.deepEqual(readdirSync(dir), [], "release leaves neither the lock nor a staging directory")
+  const name = plant(lock, process.pid)
+  for (const minutes of [16, 60, 600]) {
+    const old = new Date(Date.now() - minutes * 60_000)
+    utimesSync(path.join(lock, name), old, old)
+    utimesSync(lock, old, old)
+    await assert.rejects(withDrainLock(lock, () => "never"), (error) => /desk_drains_busy/u.test(error.message) && /process \d+ holds .* and is still working/u.test(error.message) && !/remove|delete/u.test(error.message), `${minutes} minutes`)
+    assert.deepEqual(ownerFiles(lock), [name])
+  }
+})
+
+test("a run releases only its own owner file: a lock that has passed to a later owner is left alone", async () => {
+  const dir = await mkTempRoot("desk-drains-")
+  const lock = path.join(dir, "poll.lock")
+  let release
+  const gate = new Promise((resolve) => { release = resolve })
+  const slow = withDrainLock(lock, () => gate)
+  const [mine] = ownerFiles(lock)
+  unlinkSync(path.join(lock, mine))
+  rmdirSync(lock)
+  const next = plant(lock, process.pid)
+  release("done")
+  assert.equal(await slow, "done")
+  assert.deepEqual(ownerFiles(lock), [next])
+})
+
+test("a contender that stages its lock while another publishes first gets nothing and leaves the published lock whole", async () => {
+  const dir = await mkTempRoot("desk-drains-")
+  const lock = path.join(dir, "poll.lock")
+  let other
+  assert.throws(() => acquireDrainLock(lock, { onStep: (step) => { if (step === "staged") other ??= acquireDrainLock(lock) } }), /desk_drains_busy/u)
+  assert.equal(ownerFiles(lock).length, 1, "the published lock is exactly the other contender's")
+  assert.equal(readdirSync(dir).filter((name) => name.includes(".new-")).length, 0, "the loser removed its staging directory")
+  other()
+  assert.deepEqual(readdirSync(dir), [])
+})
+
+test("two contenders for a dead owner's lock cannot both take it: one that holds a stale view removes nothing of the winner's", () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "desk-drains-"))
+  try {
+    const lock = path.join(dir, "poll.lock")
+    plant(lock, DEAD)
+    let winner
+    assert.throws(() => acquireDrainLock(lock, {
+      alive: liveExceptDead,
+      onStep: (step) => { if (step === "inspected") winner ??= acquireDrainLock(lock, { alive: liveExceptDead }) },
+    }), /desk_drains_busy/u)
+    assert.equal(ownerFiles(lock).length, 1, "the winner's lock is intact")
+    assert.equal(Number.parseInt(readFileSync(path.join(lock, ownerFiles(lock)[0]), "utf8"), 10), process.pid)
+    winner()
+    assert.deepEqual(readdirSync(dir), [])
+    // The same dead owner, found by two contenders that both finish their takeover in turn.
+    plant(lock, DEAD)
+    const first = acquireDrainLock(lock, { alive: liveExceptDead })
+    assert.throws(() => acquireDrainLock(lock, { alive: liveExceptDead }), /desk_drains_busy/u)
+    first()
+    assert.deepEqual(readdirSync(dir), [])
+  } finally {
+    removeTreeSync(dir)
+  }
+})
+
+test("what a crash leaves is recovered without a marker: an empty lock, and staging directories of dead processes (not of live ones)", async () => {
+  const dir = await mkTempRoot("desk-drains-")
+  const lock = path.join(dir, "poll.lock")
+  mkdirSync(lock)
+  const noOwnerYet = path.join(dir, `poll.lock.new-${DEAD}-${randomUUID()}`)
+  mkdirSync(noOwnerYet)
+  const emptyOwner = path.join(dir, `poll.lock.new-${DEAD}-${randomUUID()}`)
+  mkdirSync(emptyOwner)
+  writeFileSync(path.join(emptyOwner, `owner-${randomUUID()}`), "")
+  const livesStill = path.join(dir, `poll.lock.new-${process.pid}-${randomUUID()}`)
+  mkdirSync(livesStill)
+  const stranger = path.join(dir, "poll.lock.new-notmine")
+  mkdirSync(stranger)
+  assert.equal(await withDrainLock(lock, () => "ran", { alive: liveExceptDead }), "ran")
+  assert.deepEqual(readdirSync(dir).sort(), [path.basename(livesStill), "poll.lock.new-notmine"].sort())
+})
+
+test("a lock that Desk cannot vouch for fails closed with its own error and nothing is removed", async () => {
+  const dir = await mkTempRoot("desk-drains-")
+  const lock = path.join(dir, "poll.lock")
+  const refuses = async (code, pattern) => {
+    await assert.rejects(withDrainLock(lock, () => "never", { alive: liveExceptDead }), (error) => error.message.includes(code) && pattern.test(error.message) && !/process \d+ holds/u.test(error.message))
+  }
+  for (const pid of [process.pid, DEAD]) {
+    writeFileSync(lock, `${pid}`)
+    await refuses("desk_drains_lock_legacy", /cannot tell whether a poll still holds it/u)
+    assert.equal(readFileSync(lock, "utf8"), `${pid}`, "a legacy lock file is never replaced")
+    rmSync(lock)
+  }
+  writeFileSync(lock, "not a pid")
+  await refuses("desk_drains_lock_legacy", /cannot tell/u)
+  rmSync(lock)
+  const name = plant(lock, process.pid, "not a pid")
+  await refuses("desk_drains_lock_unrecognized", /does not name a process/u)
+  writeFileSync(path.join(lock, "stranger"), "x")
+  await refuses("desk_drains_lock_unrecognized", /stranger/u)
+  rmSync(path.join(lock, "stranger"))
+  writeFileSync(path.join(lock, `owner-${randomUUID()}`), `${DEAD}\n`)
+  await refuses("desk_drains_lock_unrecognized", /owner-/u)
+  assert.equal(ownerFiles(lock).length, 2)
+  assert.equal(readFileSync(path.join(lock, name), "utf8"), "not a pid")
+})
+
+test("a lock that cannot be used for another reason than an owner names the error code instead of calling it busy", async () => {
+  const dir = await mkTempRoot("desk-drains-")
+  await assert.rejects(withDrainLock(path.join(dir, `${"x".repeat(400)}.lock`), () => "x"), (error) => /desk_drains_lock_unavailable/u.test(error.message) && (process.platform === "win32" ? /EINVAL|ENAMETOOLONG/u : /ENAMETOOLONG/u).test(error.message) && !/still working/u.test(error.message))
+  if (process.platform === "win32" || process.getuid?.() === 0) return
+  const locked = path.join(dir, "readonly")
+  mkdirSync(locked)
+  chmodSync(locked, 0o500)
+  try {
+    await assert.rejects(withDrainLock(path.join(locked, "poll.lock"), () => "x"), (error) => /desk_drains_lock_unavailable/u.test(error.message) && /EACCES/u.test(error.message) && !/still working/u.test(error.message))
+  } finally {
+    chmodSync(locked, 0o700)
+  }
+})
+
+test("a platform that reports an occupied lock with another error code (Windows: EPERM) is judged by inspecting the lock, not by the code", () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "desk-drains-"))
+  try {
+    const lock = path.join(dir, "poll.lock")
+    // Windows semantics: a rename onto any existing target fails with EPERM (or EEXIST), whatever it holds.
+    const windows = (code) => (from, to) => {
+      if (existsSync(to)) throw Object.assign(new Error(`${code}: rename`), { code })
+      renameSync(from, to)
+    }
+    const options = (code) => ({ alive: liveExceptDead, rename: windows(code) })
+    for (const code of ["EPERM", "EEXIST", "EACCES"]) {
+      const live = plant(lock, process.pid)
+      assert.throws(() => acquireDrainLock(lock, options(code)), (error) => /desk_drains_busy/u.test(error.message) && !/unavailable/u.test(error.message), `${code} live`)
+      assert.deepEqual(ownerFiles(lock), [live])
+      unlinkSync(path.join(lock, live))
+      rmdirSync(lock)
+      plant(lock, DEAD)
+      acquireDrainLock(lock, options(code))()
+      assert.deepEqual(readdirSync(dir), [], `${code} dead owner recovered`)
+      mkdirSync(lock)
+      acquireDrainLock(lock, options(code))()
+      assert.deepEqual(readdirSync(dir), [], `${code} empty lock recovered`)
+      writeFileSync(lock, `${DEAD}`)
+      assert.throws(() => acquireDrainLock(lock, options(code)), /desk_drains_lock_legacy/u, `${code} file`)
+      assert.equal(readFileSync(lock, "utf8"), `${DEAD}`)
+      rmSync(lock)
+      mkdirSync(lock)
+      writeFileSync(path.join(lock, "stranger"), "x")
+      assert.throws(() => acquireDrainLock(lock, options(code)), /desk_drains_lock_unrecognized/u, `${code} unknown`)
+      removeTreeSync(lock)
+      assert.equal(readdirSync(dir).length, 0, `${code} staging removed`)
+    }
+    // A real permission failure has nothing in the way, so it is named, not called busy.
+    const denied = () => { throw Object.assign(new Error("EPERM: rename"), { code: "EPERM" }) }
+    assert.throws(() => acquireDrainLock(lock, { rename: denied }), (error) => /desk_drains_lock_unavailable/u.test(error.message) && /EPERM/u.test(error.message) && !/still working/u.test(error.message))
+    assert.deepEqual(readdirSync(dir), [], "its staging is removed")
+  } finally {
+    removeTreeSync(dir)
+  }
+})
+
+const SHELLS = ["pwsh", "powershell"].filter((shell) => !spawnSync(shell, ["-NoProfile", "-NonInteractive", "-Command", "exit 0"], { timeout: 30_000 }).error)
+const TARGETS = {
+  absent: () => {},
+  file: (to) => writeFileSync(to, "OLD-FILE-LOCK"),
+  "file held open": (to) => { writeFileSync(to, "OLD-FILE-LOCK"); return openSync(to, "r+") },
+  "empty directory": (to) => mkdirSync(to),
+  "nonempty directory": (to) => { mkdirSync(to); writeFileSync(path.join(to, "owner-old"), "old") },
+}
+const readback = (target) => {
+  try {
+    return statSync(target).isDirectory() ? `dir[${readdirSync(target).join(",")}]` : `file[${readFileSync(target, "utf8")}]`
+  } catch (error) {
+    return `absent(${error.code})`
+  }
+}
+
+for (const shell of SHELLS) {
+  for (const [name, make] of Object.entries(TARGETS)) {
+    test(`${shell} moves a prepared directory onto ${name} without replacing what is there`, async () => {
+      const dir = await mkTempRoot("desk-drains-")
+      const from = path.join(dir, "from")
+      const to = path.join(dir, "poll.lock")
+      mkdirSync(from)
+      writeFileSync(path.join(from, "owner-new"), "new")
+      const handle = make(to)
+      const before = readback(to)
+      try {
+        if (name === "absent") {
+          moveWithoutReplace(from, to, { shells: [shell] })
+          assert.equal(readback(to), "dir[owner-new]")
+          assert.equal(readback(from), "absent(ENOENT)")
+        } else {
+          assert.throws(() => moveWithoutReplace(from, to, { shells: [shell] }), (error) => error.code === "desk_move_refused" && /refused \w+ -?\d+ (inner \w+ -?\d+|no-inner)/u.test(error.message))
+          assert.equal(readback(to), before, "the target is exactly as it was")
+          assert.equal(readback(from), "dir[owner-new]", "the prepared directory is untouched")
+        }
+      } finally {
+        if (handle !== undefined) closeSync(handle)
+      }
+    })
+  }
+}
+
+test("the lock is retired from an empty directory and published, and a legacy file that appears just before publication is refused, through a real no-replace move", { skip: SHELLS.length === 0 && "no PowerShell here" }, async () => {
+  const dir = await mkTempRoot("desk-drains-")
+  const lock = path.join(dir, "poll.lock")
+  const move = (from, to) => moveWithoutReplace(from, to, { shells: SHELLS })
+  mkdirSync(lock)
+  acquireDrainLock(lock, { rename: move })()
+  assert.deepEqual(readdirSync(dir), [], "an empty lock was removed, then the retry published and released")
+  assert.throws(() => acquireDrainLock(lock, { rename: (from, to) => { writeFileSync(to, "OLD-FILE-LOCK"); move(from, to) } }), /desk_drains_lock_legacy/u)
+  assert.equal(readFileSync(lock, "utf8"), "OLD-FILE-LOCK", "the earlier Desk's file is untouched")
+  assert.deepEqual(readdirSync(dir), ["poll.lock"], "our staging was removed")
+})
+
+test("only a shell that cannot be launched hands over to the next, and a move that ran is never repeated or replaced by rename", { skip: SHELLS.length === 0 && "no PowerShell here" }, async () => {
+  const dir = await mkTempRoot("desk-drains-")
+  const from = path.join(dir, "from")
+  mkdirSync(from)
+  writeFileSync(path.join(from, "owner-new"), "new")
+  const to = path.join(dir, "poll.lock")
+  assert.throws(() => moveWithoutReplace(from, to, { shells: ["desk-no-such-shell"] }), { code: "desk_move_no_shell" })
+  assert.throws(() => moveWithoutReplace(from, to, { shells: [SHELLS[0]], timeoutMs: 1 }), { code: "ETIMEDOUT" }, "a timeout is an error of its own")
+  moveWithoutReplace(from, to, { shells: ["desk-no-such-shell", SHELLS[0]] })
+  assert.equal(readback(to), "dir[owner-new]")
+})
+
+test("a publication that was cut short but happened is recognised as ours", async () => {
+  const dir = await mkTempRoot("desk-drains-")
+  const lock = path.join(dir, "poll.lock")
+  const release = acquireDrainLock(lock, { rename: (from, to) => { renameSync(from, to); throw Object.assign(new Error("timed out after the move"), { code: "ETIMEDOUT" }) } })
+  assert.equal(ownerFiles(lock).length, 1)
+  release()
+  assert.deepEqual(readdirSync(dir), [])
+})
+
+test("a cut-short publication whose target is not our own directory is never taken as ours", async () => {
+  const timedOut = () => Object.assign(new Error("timed out"), { code: "ETIMEDOUT" })
+  const foreign = await mkTempRoot("desk-drains-")
+  const foreignLock = path.join(foreign, "poll.lock")
+  const foreignOwner = path.join(foreignLock, "owner-11111111-1111-1111-1111-111111111111")
+  assert.throws(() => acquireDrainLock(foreignLock, { rename: (from) => { removeTreeSync(from); mkdirSync(foreignLock); writeFileSync(foreignOwner, `${process.pid}\n`); throw timedOut() } }), /desk_drains_busy/u)
+  assert.equal(readFileSync(foreignOwner, "utf8"), `${process.pid}\n`, "a live foreign owner is left untouched")
+  assert.deepEqual(readdirSync(foreignLock), ["owner-11111111-1111-1111-1111-111111111111"])
+
+  const legacy = await mkTempRoot("desk-drains-")
+  const legacyLock = path.join(legacy, "poll.lock")
+  assert.throws(() => acquireDrainLock(legacyLock, { rename: (from) => { removeTreeSync(from); writeFileSync(legacyLock, `${process.pid}\n`); throw timedOut() } }), /desk_drains_lock_legacy/u)
+  assert.equal(readFileSync(legacyLock, "utf8"), `${process.pid}\n`, "a legacy file is left untouched")
+})
+
+test("the file system does what the lock relies on, and an earlier Desk's file-only operations fail closed on the directory", { skip: process.platform === "win32" && "the lock's behaviour on Windows is not verified" }, async () => {
+  const dir = await mkTempRoot("desk-drains-")
+  const made = (name, file = "x") => { mkdirSync(path.join(dir, name)); writeFileSync(path.join(dir, name, "f"), file); return path.join(dir, name) }
+  const full = made("full")
+  assert.throws(() => renameSync(made("staged"), full), { code: "ENOTEMPTY" }, "a staged lock cannot replace a lock that has an owner")
+  mkdirSync(path.join(dir, "empty"))
+  renameSync(path.join(dir, "staged"), path.join(dir, "empty"))
+  writeFileSync(path.join(dir, "legacy"), "1")
+  assert.throws(() => renameSync(made("staged2"), path.join(dir, "legacy")), { code: "ENOTDIR" })
+  assert.throws(() => closeSync(openSync(full, "wx")), { code: "EEXIST" }, "an earlier Desk cannot create its lock over the directory")
+  assert.throws(() => readFileSync(full, "utf8"), { code: "EISDIR" })
+  assert.throws(() => rmSync(full, { force: true }), { code: "ERR_FS_EISDIR" }, "nor remove it")
+  assert.throws(() => unlinkSync(full), (error) => ["EISDIR", "EPERM"].includes(error.code))
+})
+
+test("two consecutive crashes of lock-owning processes, in each place, are recovered by the next poll", async () => {
+  const dir = await mkTempRoot("desk-drains-")
+  const lock = path.join(dir, "poll.lock")
+  const module = new URL("../../../../../plugins/desk/mcp/src/runtime/drains.js", import.meta.url).href
+  const child = `import { writeSync } from "node:fs"
+    import { acquireDrainLock } from ${JSON.stringify(module)}
+    const at = process.env.CRASH_AT
+    const kill = (step) => { writeSync(1, "reached " + step); process.kill(process.pid, "SIGKILL") }
+    acquireDrainLock(process.env.LOCK, { onStep: (step) => { if (step === at) kill(step) } })
+    kill("held")`
+  for (const cycle of [1, 2]) {
+    for (const at of ["held", "staging", "staged"]) {
+      const crashed = spawnSync(process.execPath, ["--input-type=module", "-e", child], { env: { ...process.env, LOCK: lock, CRASH_AT: at } })
+      assert.equal(String(crashed.stdout), `reached ${at}`, `cycle ${cycle} reached ${at} before the kill`)
+      // Windows reports a killed process as a nonzero exit status with no signal name.
+      assert.equal(crashed.error, undefined, `cycle ${cycle} ${at} spawned`)
+      assert.equal(String(crashed.stderr), "", `cycle ${cycle} ${at} threw nothing before the kill`)
+      assert.ok(crashed.signal === "SIGKILL" || (process.platform === "win32" && crashed.signal === null && crashed.status !== 0 && crashed.status !== null), `cycle ${cycle} ${at} was killed (signal ${crashed.signal}, status ${crashed.status})`)
+      const left = readdirSync(dir)
+      assert.equal(left.length, 1, `${at} left one entry`)
+      assert.equal(left[0] === "poll.lock", at === "held", at)
+      assert.equal(await withDrainLock(lock, () => ownerFiles(lock).length), 1, `cycle ${cycle} recovered from ${at}`)
+      assert.deepEqual(readdirSync(dir), [], `cycle ${cycle} left nothing after ${at}`)
+    }
+  }
+})
+
+test("an unreadable or vanished part of the lock is named, not called busy, and nothing the lock holds is taken", async (t) => {
+  if (process.platform === "win32" || process.getuid?.() === 0) return t.skip("needs POSIX permissions as an ordinary user")
+  const dir = await mkTempRoot("desk-drains-")
+  const lock = path.join(dir, "poll.lock")
+  const unavailable = (what) => (error) => /desk_drains_lock_unavailable/u.test(error.message) && /EACCES|ENOENT/u.test(error.message) && !/still working/u.test(error.message) && what !== ""
+  assert.throws(() => acquireDrainLock(path.join(dir, "missing", "poll.lock")), unavailable("no parent directory"))
+  const unreadable = plant(lock, DEAD)
+  chmodSync(path.join(lock, unreadable), 0o000)
+  try {
+    assert.throws(() => acquireDrainLock(lock, { alive: liveExceptDead }), unavailable("owner file cannot be read"))
+  } finally {
+    chmodSync(path.join(lock, unreadable), 0o600)
+  }
+  const vanished = path.join(lock, unreadable)
+  unlinkSync(vanished)
+  symlinkSync(path.join(dir, "nowhere"), vanished)
+  assert.throws(() => acquireDrainLock(lock, { alive: liveExceptDead }), /desk_drains_busy/u, "an owner that vanished while being read is left to whoever is removing it, and the lock is judged busy")
+  unlinkSync(vanished)
+  rmdirSync(lock)
+  writeFileSync(lock, `${DEAD}`)
+  chmodSync(lock, 0o000)
+  try {
+    assert.throws(() => acquireDrainLock(lock, { alive: liveExceptDead }), /desk_drains_lock_legacy/u)
+  } finally {
+    chmodSync(lock, 0o600)
+  }
+  rmSync(lock)
+  const timedOut = () => Object.assign(new Error("timed out"), { code: "ETIMEDOUT" })
+  assert.throws(() => acquireDrainLock(lock, { rename: (from) => { removeTreeSync(from); mkdirSync(lock); chmodSync(lock, 0o000); throw timedOut() } }), unavailable("our own directory cannot be inspected"))
+  chmodSync(lock, 0o700)
+  rmdirSync(lock)
+  let staging
+  assert.throws(() => acquireDrainLock(lock, { rename: (from) => { staging = from; chmodSync(from, 0o000); throw timedOut() } }), unavailable("staging cannot be cleaned"))
+  chmodSync(staging, 0o700)
+  removeTreeSync(staging)
+  assert.throws(() => acquireDrainLock(lock, { rename: () => { chmodSync(dir, 0o000); throw timedOut() } }), unavailable("staging cannot be looked at"))
+  chmodSync(dir, 0o700)
+  assert.equal(readdirSync(dir).length, 1, "the unreachable staging directory is left for the next run's sweep, which removes it once its process is gone")
+  assert.doesNotThrow(() => acquireDrainLock(lock, { alive: () => false })())
+  assert.deepEqual(readdirSync(dir), [])
+  chmodSync(dir, 0o300)
+  try {
+    assert.throws(() => acquireDrainLock(lock), unavailable("the directory cannot be listed"))
+  } finally {
+    chmodSync(dir, 0o700)
+  }
+})
+
+test("the lock's remaining failure paths name what failed: an error without a code, a stranger in staging, a leftover of process 0, a refusal with no message", async (t) => {
+  const dir = await mkTempRoot("desk-drains-")
+  const lock = path.join(dir, "poll.lock")
+  assert.throws(() => acquireDrainLock(lock, { rename: () => { throw new Error("boom") } }), (error) => /desk_drains_lock_unavailable/u.test(error.message) && /boom/u.test(error.message) && /error code unknown/u.test(error.message))
+  let staging
+  assert.throws(() => acquireDrainLock(lock, { rename: (from) => { staging = from; writeFileSync(path.join(from, "stranger"), "x"); throw Object.assign(new Error("timed out"), { code: "ETIMEDOUT" }) } }), /desk_drains_lock_unavailable/u)
+  assert.deepEqual(readdirSync(staging), ["stranger"], "a file that is not this run's owner file is not removed")
+  removeTreeSync(staging)
+  const orphan = path.join(dir, `poll.lock.new-0-${randomUUID()}`)
+  mkdirSync(orphan)
+  acquireDrainLock(lock)()
+  assert.deepEqual(readdirSync(dir), [], "a staging directory of process 0 is a leftover, never a live process")
+  if (process.platform === "win32") return
+  const from = path.join(dir, "from")
+  mkdirSync(from)
+  assert.throws(() => moveWithoutReplace(from, path.join(dir, "to"), { shells: ["false"] }), (error) => error.code === "desk_move_refused" && /exit 1\): no message/u.test(error.message), "a refusal that says nothing is still reported")
+  assert.equal(existsSync(from), true)
+  if (process.getuid?.() === 0) return t.skip("needs POSIX permissions as an ordinary user")
+  const locked = (setup, act, what) => {
+    const sub = mkdtempSync(path.join(dir, "case-"))
+    const target = path.join(sub, "poll.lock")
+    const finish = setup(sub, target)
+    try {
+      assert.throws(() => act(target, sub), (error) => /desk_drains_lock_unavailable/u.test(error.message) && /EACCES/u.test(error.message) && !/still working/u.test(error.message), what)
+    } finally {
+      chmodSync(sub, 0o700)
+      if (existsSync(target)) chmodSync(target, 0o700)
+    }
+    return finish
+  }
+  locked((sub, target) => { plant(target, DEAD); chmodSync(target, 0o500) }, (target) => acquireDrainLock(target, { alive: liveExceptDead }), "a dead owner's file that cannot be removed")
+  locked((sub, target) => { mkdirSync(target); writeFileSync(path.join(target, "a"), "x"); chmodSync(target, 0o000) }, (target) => acquireDrainLock(target), "a lock directory that cannot be read")
+  locked((sub, target) => mkdirSync(target), (target, sub) => acquireDrainLock(target, { rename: (staged) => { removeTreeSync(staged); chmodSync(sub, 0o500); throw Object.assign(new Error("not empty"), { code: "ENOTEMPTY" }) } }), "an empty lock that cannot be removed")
+  const sub = mkdtempSync(path.join(dir, "case-"))
+  const release = acquireDrainLock(path.join(sub, "poll.lock"))
+  chmodSync(path.join(sub, "poll.lock"), 0o500)
+  try {
+    assert.throws(release, (error) => /desk_drains_lock_unavailable/u.test(error.message) && /EACCES/u.test(error.message))
+  } finally {
+    chmodSync(path.join(sub, "poll.lock"), 0o700)
+  }
+  release()
+})
+
+test("edit histories that are unusable, behind, unexplained or already at a baseline's second are judged conservatively, and a failing issue holds the cursor back", async () => {
+  const BASE = iso(NOW + 60_000)
+  const based = async (issues = [ISSUE()], options, baseline = true) => {
+    const w = await editsWorld(issues, options)
+    for (const item of issues) w.hist[item.number] = history(3)
+    await w.poll()
+    if (baseline) {
+      w.change(1, NOW + 60_000, botEdit("n0", BASE))
+      await w.poll(NOW + 60_000)
+    }
+    return w
+  }
+  const pages = (w, answer) => { w.hist[1] = { count: 0, extra: [], total: 5, page: answer } }
+  const old = (index) => botEdit(`o${index}`, iso(LONG_AGO + index * 1000))
+  const n0 = botEdit("n0", BASE)
+  const outcome = async (name, setup, wakes) => {
+    const w = await based()
+    w.change(1, NOW + 360_000, null)
+    setup(w)
+    const out = await w.poll(NOW + 360_000)
+    assert.equal(out.wakes.length, wakes, name)
+    return w
+  }
+  await outcome("a new bot edit in the baseline's own second", (w) => pages(w, () => ({ nodes: [old(0), old(1), old(2), n0, botEdit("x", BASE)], hasMore: false, cursor: "c" })), 0)
+  await outcome("more new edits than the count allows", (w) => pages(w, () => ({ nodes: [old(0), botEdit("x", iso(NOW + 120_000)), botEdit("y", iso(NOW + 120_000))], hasMore: true, cursor: "c" })), 1)
+  await outcome("a count that cannot be explained", (w) => pages(w, () => ({ nodes: [old(0), old(1), old(2), n0], hasMore: false, cursor: "c" })), 1)
+  await outcome("an unreadable page", (w) => pages(w, () => ({ nodes: null, hasMore: true, cursor: "c" })), 1)
+  await outcome("an edit that is not an object", (w) => pages(w, () => ({ nodes: [null], hasMore: true, cursor: "c" })), 1)
+  let call = 0
+  await outcome("edits that arrive while the history is read, which nothing explains", (w) => {
+    pages(w, function () {
+      call += 1
+      this.total = call === 1 ? 5 : 6
+      return { nodes: call === 1 ? [old(0)] : call === 2 ? [n0] : [old(0)], hasMore: call === 1, cursor: "c" }
+    })
+  }, 1)
+  const lagging = await based()
+  lagging.change(1, NOW + 360_000, botEdit("n", iso(NOW + 360_000)))
+  lagging.hist[1].stamp = T(0)
+  await lagging.poll(NOW + 360_000)
+  assert.equal((await lagging.poll(NOW + 720_000)).errors.length, 1, "still behind: read again next poll")
+  lagging.hist[1].stamp = undefined
+  lagging.hist[1].page = () => ({ nodes: null, hasMore: true, cursor: "c" })
+  assert.equal((await lagging.poll(NOW + 1_080_000)).wakes.length, 1, "an unreadable page after the lag is news")
+  const limited = await outcome("a quota error from the page", (w) => { w.hist[1] = Object.assign(new Error("Wait for the quota to reset: used up"), { code: "drains_rate_limited" }) }, 0)
+  assert.equal(limited.state().lastErrorCode, "drains_rate_limited")
+  const bare = await based([ISSUE()], { limit: 25 }, false)
+  bare.change(1, NOW + 360_000, botEdit("n", iso(NOW + 360_000)))
+  delete bare.api.graphqlQuota
+  delete bare.api.graphqlCost
+  const held = await bare.poll(NOW + 360_000)
+  assert.match(held.errors[0].error, /quota/u, "a connection that reports no quota is held by the last reading")
+  const gone = await based([issue(1, T(0), "A", "health: 0"), issue(2, T(0), "B")], { limit: 26 }, false)
+  gone.hist[1] = history(500_100)
+  gone.change(1, NOW + 360_000, botEdit("n", iso(NOW + 360_000)))
+  await gone.poll(NOW + 360_000)
+  assert.ok(gone.state().scans[1])
+  gone.issues.splice(0, 1)
+  gone.change(2, NOW + 720_000, personEdit("p", iso(NOW + 720_000)))
+  await gone.poll(NOW + 720_000)
+  assert.equal(gone.state().scans[1], undefined, "a scan for an issue that is no longer changed is dropped")
+  const many = await based([1, 2, 3, 4, 5].map((n) => issue(n, T(0), `I${n}`, "health: 0")), undefined, false)
+  for (const n of [1, 2, 3, 4, 5]) {
+    many.hist[n] = Object.assign(new Error("Check gh auth status, then try again: HTTP 502"), { code: "drains_check_gh_auth_status_then" })
+    many.issues[n - 1] = { ...many.issues[n - 1], updated_at: iso(NOW + n * 60_000), body: `changed ${n}` }
+  }
+  many.issues.push(issue(9, iso(NOW + 600_000)))
+  const out = await many.poll(NOW + 600_000)
+  assert.match(out.errors[0].error, /5 issue\(s\) were left for it: .*\), …/u)
+  assert.equal(many.state().cursor, iso(NOW + 60_000), "the cursor stays at the earliest failure, though a later issue was read")
+})
+
+test("a GitHub 5xx is asked once more and, if it persists, worded as the server's fault with no auth advice; a 401 is not retried and still says to check auth", async () => {
+  const connect = (answers) => {
+    const asked = []
+    const fetchImpl = async (url) => { asked.push(url); return answers.shift() ?? response({}, { status: 599 }) }
+    return connectGithub("maintainer", { spawn: () => ({ status: 0, stdout: "tok" }), fetchImpl, login: "maintainer" }).then((api) => ({ api, asked }))
+  }
+  for (const status of [500, 502, 503, 504]) {
+    const { api, asked } = await connect([response({}, { status }), response({}, { status })])
+    await assert.rejects(api.openIssues("o/r"), (error) => error.code === "drains_github_server_error" && error.status === status && new RegExp(`server answered HTTP ${status} for /repos/o/r/issues`, "u").test(error.message) && !/gh auth/u.test(error.message))
+    assert.equal(asked.length, 2, `${status}: exactly one retry`)
+    assert.equal(api.calls().total, 2)
+  }
+  const recovers = await connect([response({}, { status: 502 }), response([])])
+  assert.deepEqual(await recovers.api.openIssues("o/r"), [])
+  assert.equal(recovers.asked.length, 2)
+  const refused = await connect([response({}, { status: 401 })])
+  await assert.rejects(refused.api.openIssues("o/r"), (error) => error.code === "drains_check_gh_auth_status_then" && /Check gh auth status/u.test(error.message))
+  assert.equal(refused.asked.length, 1, "a refused credential is not retried")
+  const graph = await connect([response({}, { status: 503 }), response({}, { status: 503 })])
+  await assert.rejects(graph.api.editPage("o/r", 1), (error) => error.code === "drains_github_server_error" && /for \/graphql/u.test(error.message))
+  assert.equal(graph.asked.length, 2)
+  const bad = await connect([response({}, { status: 401 })])
+  await assert.rejects(bad.api.editPage("o/r", 1), (error) => error.code === "drains_check_gh_auth_status_then")
+  assert.equal(bad.asked.length, 1)
+})
+
+test("a persistent 5xx is recorded as the drain's last error, wakes nobody and leaves what was seen as it was", async () => {
+  const w = await world([issue(1, T(0))])
+  await w.poll()
+  const before = JSON.stringify(w.state().seen)
+  w.api.changedIssues = async () => { throw Object.assign(new Error("Wait for the next poll: GitHub's server answered HTTP 502 for /repos/acme/widgets/issues (asked twice); this usually clears on its own and needs nothing from you"), { code: "drains_github_server_error", status: 502 }) }
+  const out = await w.poll(NOW + 360_000)
+  assert.deepEqual(out.wakes, [])
+  assert.equal(out.errors[0].code, "drains_github_server_error")
+  assert.match(out.errors[0].error, /server answered HTTP 502/u)
+  assert.equal(w.state().lastErrorCode, "drains_github_server_error")
+  assert.equal(JSON.stringify(w.state().seen), before)
 })

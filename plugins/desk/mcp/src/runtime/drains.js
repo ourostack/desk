@@ -4,9 +4,9 @@
 //
 // `updated_at` alone is not a revision: the drain's own label edits and status comment move it too. An issue is news only when
 // something other than the drain changed it since the revision last recorded for that issue.
-import { createHash } from "node:crypto"
+import { createHash, randomUUID } from "node:crypto"
 import { spawnSync } from "node:child_process"
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs"
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, rmdirSync, unlinkSync, writeFileSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 import * as os from "node:os"
 import * as path from "node:path"
@@ -26,9 +26,11 @@ const TURN_MS = 90 * 60_000
 const TURNS_KEPT = 50
 /** A closed issue's record is kept this long, so one that comes back unchanged is not mistaken for a new issue. */
 const GONE_MS = 30 * 24 * 3_600_000
-const LOCK_STALE_MS = 15 * 60_000
 const MAX_TITLES = 20
 const PAGE = 100
+const EDIT_FIELDS = "totalCount pageInfo { hasNextPage hasPreviousPage startCursor endCursor } nodes { id editedAt deletedAt editor { __typename login } }"
+const EDITS_FORWARD = `query($owner: String!, $name: String!, $number: Int!, $cursor: String) { rateLimit { cost } repository(owner: $owner, name: $name) { issue(number: $number) { updatedAt userContentEdits(first: 100, after: $cursor) { ${EDIT_FIELDS} } } } }`
+const EDITS_BACKWARD = `query($owner: String!, $name: String!, $number: Int!, $cursor: String) { rateLimit { cost } repository(owner: $owner, name: $name) { issue(number: $number) { updatedAt userContentEdits(last: 100, before: $cursor) { ${EDIT_FIELDS} } } } }`
 /** A full listing of the open issues is read again this often; between them only issues updated since the last change are read. */
 const FULL_SYNC_MS = 3_600_000
 /** The list is read from a little before the newest change it knew, so an update GitHub lists late is still seen. */
@@ -225,38 +227,207 @@ function writeDrainStates(file, states) {
   renameSync(temporary, file)
 }
 
-function create(lockFile) {
-  closeSync(openSync(lockFile, "wx"))
-  writeFileSync(lockFile, String(process.pid))
+const OWNER_FILE = /^owner-[0-9a-f-]{36}$/u
+const busy = (lockFile, who) => problem("desk_drains_busy", "drains lock", `${who} holds ${lockFile} and is still working`, `check that process; it releases the lock itself when it finishes, and a lock whose process has died is taken over by the next run`, "run the command again once it finishes")
+const lockProblem = (code, lockFile, probably, look, fix) => problem(code, "drains lock", probably, look, fix)
+const unavailable = (lockFile, error) => lockProblem("desk_drains_lock_unavailable", lockFile, `${lockFile} cannot be created or read because of ${error.code ?? error.message}`, `the permissions and free space of ${path.dirname(lockFile)}, and the error code ${error.code ?? "unknown"}`, "fix that, then run the command again")
+
+/**
+ * Takes the lock, or throws. The lock is a directory that is published whole: a sibling `<lock>.new-<pid>-<token>` is filled with
+ * the one file `owner-<token>` (this process's id) and then renamed onto the lock, which succeeds only where the lock is absent or
+ * an empty directory. So the lock is never visible empty or half-written, and a live owner is never taken from, however long it
+ * works. A dead owner is retired by removing its own `owner-<token>` file, a name no later owner reuses, so a contender holding a
+ * stale view finds nothing to remove (ENOENT) instead of a newer owner's lock; the empty directory is then removed with `rmdir`,
+ * which refuses a directory that has become someone's. Nothing is aged out, renamed away or removed recursively. An earlier Desk's
+ * lock is a plain file: it is never replaced, because replacing it by name cannot be made safe against that Desk's own takeover.
+ * `onStep` is a test seam called at "staging" (the sibling exists, the owner file is not written), "staged" and "inspected".
+ */
+export function acquireDrainLock(lockFile, { alive = processAlive, onStep = () => {}, rename = publishDirectory } = {}) {
+  const dir = path.dirname(lockFile)
+  const base = path.basename(lockFile)
+  sweepStaging(dir, base, alive)
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const token = randomUUID()
+    const staging = path.join(dir, `${base}.new-${process.pid}-${token}`)
+    const owner = path.join(staging, `owner-${token}`)
+    let renamed = false
+    try {
+      try {
+        mkdirSync(staging)
+        onStep("staging")
+        writeFileSync(owner, `${process.pid}\n`)
+        onStep("staged")
+      } catch (error) {
+        throw unavailable(lockFile, error)
+      }
+      try {
+        rename(staging, lockFile)
+        renamed = true
+      } catch (error) {
+        // Platforms name an occupied target differently (POSIX ENOTEMPTY, ENOTDIR, EEXIST; Windows EPERM), so the error code is not
+        // trusted: the target itself is inspected next. Only a rename that failed with nothing in the way is a failure to use the lock.
+        // A move that was cut short (Windows, a timeout) may still have happened. It is ours only if the lock is a directory holding this
+        // acquisition's own `owner-<token>` (a name nothing else uses); any other target, live or legacy, is left alone.
+        if (!existsAt(staging) && holdsOwner(lockFile, `owner-${token}`)) renamed = true
+        else if (!existsAt(lockFile)) throw unavailable(lockFile, error)
+      }
+    } finally {
+      if (!renamed) removeStaging(staging)
+    }
+    if (renamed) return () => releaseDrainLock(lockFile, `owner-${token}`)
+    retireDeadOwner(lockFile, alive, onStep)
+  }
+  throw busy(lockFile, "another poll, which started while this one looked,")
 }
 
-function lockOwner(lockFile, now) {
+/** The one step that must never replace what is at the lock: POSIX `rename` refuses all but an absent or empty directory, but Windows' replaces a plain file. */
+function publishDirectory(from, to) {
+  // Only Windows runs the first branch; the native Windows suite (desk-windows-suite.yml) exercises it, a Linux or macOS run cannot.
+  /* istanbul ignore if */
+  if (process.platform === "win32") moveWithoutReplace(from, to, { shells: ["pwsh", "powershell"] })
+  else renameSync(from, to)
+}
+
+// Fixed script, paths as data (environment), never interpolated. Directory.Move ends in MoveFileExW without MOVEFILE_REPLACE_EXISTING
+// (dotnet/runtime, Interop.MoveFileEx.cs and FileSystem.Windows.cs: MoveFile(..., overwrite: false)), so an existing target is refused
+// by the system, not by a check made first. Windows PowerShell 5.1 runs .NET Framework, whose Directory.InternalMove makes no existence
+// check either: it validates paths and the shared root, then calls Win32Native.MoveFile, i.e. MoveFileEx(src, dst, 2 /* MOVEFILE_COPY_ALLOWED */)
+// or MoveFileW, neither of which replaces (microsoft/referencesource@ec9fa9ae770d, mscorlib/system/io/directory.cs InternalMove and
+// mscorlib/microsoft/win32/win32native.cs MoveFile). The native per-shell target tests are evidence, not a proof of every interleaving. Exit 3 means "refused", with the outer exception, and its inner one if any, named on stderr.
+const MOVE_SCRIPT = "try { [System.IO.Directory]::Move($env:DESK_MOVE_FROM, $env:DESK_MOVE_TO) } catch { $e = $_.Exception; $i = $e.InnerException; [Console]::Error.Write('refused ' + $e.GetType().Name + ' ' + $e.HResult + $(if ($i) { ' inner ' + $i.GetType().Name + ' ' + $i.HResult } else { ' no-inner' })); exit 3 }"
+
+/**
+ * Moves a directory to a path that must not exist, failing (and changing nothing) if anything is there. The next shell is tried only
+ * when the first cannot be launched at all; a move that ran, was refused or timed out is never retried and never falls back to `rename`.
+ */
+export function moveWithoutReplace(from, to, { shells, timeoutMs = TOKEN_MS }) {
+  for (const shell of shells) {
+    const result = spawnSync(shell, ["-NoProfile", "-NonInteractive", "-Command", MOVE_SCRIPT], { env: { ...process.env, DESK_MOVE_FROM: from, DESK_MOVE_TO: to }, encoding: "utf8", timeout: timeoutMs, windowsHide: true })
+    if (result.error?.code === "ENOENT") continue
+    if (result.error) throw Object.assign(new Error(`${shell}: ${result.error.message}`), { code: result.error.code })
+    if (result.status === 0) return
+    throw Object.assign(new Error(`Run the command again once what is at the lock is dealt with: ${shell} did not move it (exit ${result.status}): ${String(result.stderr).trim() || "no message"}`), { code: "desk_move_refused" })
+  }
+  throw Object.assign(new Error(`Install PowerShell (pwsh) or put powershell on PATH: none of ${shells.join(", ")} could be started`), { code: "desk_move_no_shell" })
+}
+
+function holdsOwner(lockFile, ownerName) {
   try {
-    return { pid: Number.parseInt(readFileSync(lockFile, "utf8"), 10), ageMs: now - statSync(lockFile).mtimeMs }
-  } catch {
-    return null
+    return lstatSync(lockFile).isDirectory() && lstatSync(path.join(lockFile, ownerName)).isFile()
+  } catch (error) {
+    if (error.code === "ENOENT" || error.code === "ENOTDIR") return false
+    throw unavailable(lockFile, error)
   }
 }
 
-/** Runs `work`, which may be async, while this process owns the lock file. A live owner means another poll or ack is mid-write, so this one stops instead of racing it. */
-export async function withDrainLock(lockFile, work, { now = Date.now(), alive = processAlive } = {}) {
+function existsAt(target) {
+  try {
+    lstatSync(target)
+    return true
+  } catch (error) {
+    if (error.code === "ENOENT") return false
+    throw unavailable(target, error)
+  }
+}
+
+function legacyLock(lockFile) {
+  let pid = "an unknown process"
+  try {
+    pid = `process ${Number.parseInt(readFileSync(lockFile, "utf8"), 10)}`
+  } catch {
+    // A file that cannot be read is named by its path alone.
+  }
+  return lockProblem("desk_drains_lock_legacy", lockFile, `${lockFile} is a file, the lock of an earlier Desk, and Desk cannot tell whether a poll still holds it (it names ${pid})`, `whether ${pid}, or any drains poll or ack started by an earlier Desk, is still running`, `once none is, remove ${lockFile} yourself and run the command again; Desk never replaces it, because that could take the lock from a poll that is still working`)
+}
+
+function removeStaging(staging) {
+  try {
+    for (const name of readdirSync(staging)) if (OWNER_FILE.test(name)) unlinkSync(path.join(staging, name))
+    rmdirSync(staging)
+  } catch (error) {
+    if (!["ENOENT", "ENOTEMPTY"].includes(error.code)) throw unavailable(staging, error)
+  }
+}
+
+/** A staging directory is never shared, so one whose creating process has died is a crash leftover and is removed by its exact name. */
+function sweepStaging(dir, base, alive) {
+  let names
+  try {
+    names = readdirSync(dir)
+  } catch (error) {
+    if (error.code === "ENOENT") return
+    throw unavailable(path.join(dir, base), error)
+  }
+  for (const name of names) {
+    const match = name.startsWith(`${base}.new-`) ? /^(\d+)-[0-9a-f-]{36}$/u.exec(name.slice(base.length + 5)) : null
+    if (match && !alive(Number(match[1]))) removeStaging(path.join(dir, name))
+  }
+}
+
+function retireDeadOwner(lockFile, alive, onStep) {
+  let names = null
+  try {
+    if (lstatSync(lockFile).isDirectory()) names = readdirSync(lockFile)
+  } catch (error) {
+    // A lock that vanished since the publish failed belongs to someone who just released it: the next attempt publishes.
+    /* istanbul ignore if -- a race with another process's release */
+    if (error.code === "ENOENT") return
+    throw unavailable(lockFile, error)
+  }
+  if (names === null) throw legacyLock(lockFile)
+  if (names.length === 0) return removeEmptyLock(lockFile)
+  if (names.length !== 1 || !OWNER_FILE.test(names[0])) {
+    throw lockProblem("desk_drains_lock_unrecognized", lockFile, `${lockFile} holds ${names.slice(0, 5).join(", ")}, which is not one owner file of this Desk's lock`, `${lockFile}, and whether another tool or a newer Desk made it`, "leave it, or ask its owner; Desk removes nothing it did not make")
+  }
+  let pid
+  try {
+    pid = Number.parseInt(readFileSync(path.join(lockFile, names[0]), "utf8"), 10)
+  } catch (error) {
+    /* istanbul ignore if -- a race with another process's release */
+    if (error.code === "ENOENT") return
+    throw unavailable(lockFile, error)
+  }
+  if (!Number.isInteger(pid) || pid <= 0) {
+    throw lockProblem("desk_drains_lock_unrecognized", lockFile, `${path.join(lockFile, names[0])} does not name a process`, `${lockFile}, and whether another tool or a newer Desk made it`, "leave it, or ask its owner; Desk removes nothing it did not make")
+  }
+  if (alive(pid)) throw busy(lockFile, `process ${pid}`)
+  onStep("inspected")
+  try {
+    unlinkSync(path.join(lockFile, names[0]))
+  } catch (error) {
+    if (error.code !== "ENOENT") throw unavailable(lockFile, error)
+  }
+  removeEmptyLock(lockFile)
+}
+
+/** `rmdir` fails on a directory that has an owner, so it cannot remove a lock published after it was looked at. */
+function removeEmptyLock(lockFile) {
+  try {
+    rmdirSync(lockFile)
+  } catch (error) {
+    if (!["ENOENT", "ENOTEMPTY", "EEXIST"].includes(error.code)) throw unavailable(lockFile, error)
+  }
+}
+
+/** Removes only this run's own owner file, so a lock that has since passed to another owner is left alone. */
+function releaseDrainLock(lockFile, ownerName) {
+  try {
+    unlinkSync(path.join(lockFile, ownerName))
+  } catch (error) {
+    if (error.code !== "ENOENT") throw unavailable(lockFile, error)
+  }
+  removeEmptyLock(lockFile)
+}
+
+/** Runs `work`, which may be async, while this process holds the lock (see acquireDrainLock). Only this run's owner file is removed afterwards. */
+export async function withDrainLock(lockFile, work, { alive = processAlive, onStep } = {}) {
   assertNotRealStateUnderTest(path.dirname(lockFile))
   mkdirSync(path.dirname(lockFile), { recursive: true })
-  try {
-    create(lockFile)
-  } catch (error) {
-    if (error.code !== "EEXIST") throw error
-    const owner = lockOwner(lockFile, now)
-    if (owner && owner.ageMs <= LOCK_STALE_MS && alive(owner.pid)) {
-      throw problem("desk_drains_busy", "drains lock", `process ${owner.pid} holds ${lockFile} and is still working`, `check that process, then look at ${lockFile}`, "run the command again once it finishes")
-    }
-    rmSync(lockFile, { force: true })
-    create(lockFile)
-  }
+  const release = acquireDrainLock(lockFile, { alive, onStep })
   try {
     return await work()
   } finally {
-    rmSync(lockFile, { force: true })
+    release()
   }
 }
 
@@ -307,6 +478,162 @@ const ownStatus = (comment, login) => comment.user?.login?.toLowerCase() === log
 const ignoredComment = (comment, rules) => rules.some((rule) => comment.user?.login?.toLowerCase() === rule.author && (rule.match === null || rule.match.test(comment.body ?? "")))
 
 const isBot = (item) => item.user?.type === "Bot" || (item.user?.login ?? "").toLowerCase().endsWith("[bot]")
+const isBotActor = (actor) => actor?.type === "Bot" || (actor?.login ?? "").toLowerCase().endsWith("[bot]")
+
+// ── Who edited an issue's body ──
+//
+// An issue whose body changed is news unless every edit made since it was last recorded was a bot's. The proof reads the issue's
+// edit history one GraphQL page at a time, and the progress is kept in `state.scans[number]`, so a history of any length is read
+// across polls and quota windows without starting over. No order of the history is assumed. What is counted instead:
+//   - `base`: how many edits were already judged when the issue was last recorded (null when that is not known: the first pass
+//     then counts the edits older than `floor` as it reads forward, and knows `base` once it reaches the end);
+//   - an edit is new when it is not older than `floor` and is not one of the `tail` ids already judged at that second;
+//   - `total` is read from every page, so the new edits still to find are `total - base`, wherever they sit and however many more
+//     arrive while the scan runs (an edit that arrives behind the cursor makes `total` grow, and the scan reads on until it has found them).
+// The scan stops at once on an edit that is not a bot's (or has no editor, no id, no time, or is deleted): that is news.
+
+const pagesFor = (total) => Math.ceil(total / PAGE) + 1
+const emptySide = () => ({ cursor: null, pages: 0, done: false })
+
+function newScan(before) {
+  const edits = before.edits
+  return { of: before.updatedAt, floor: edits?.at ?? before.updatedAt, base: edits ? edits.total : null, tail: edits ? [...edits.tail] : [], old: 0, found: {}, total: 0, passTotal: null, fwd: emptySide(), bwd: emptySide(), next: "fwd", stamp: null, served: 0 }
+}
+
+const restartPass = (scan) => Object.assign(scan, { fwd: emptySide(), bwd: emptySide(), passTotal: scan.total, old: 0, next: "fwd" })
+
+const isNewEdit = (scan, edit) => !(Date.parse(edit.editedAt) < Date.parse(scan.floor)) && !scan.tail.includes(edit.id)
+
+const botEdit = (edit) => typeof edit.id === "string" && Number.isFinite(Date.parse(edit.editedAt)) && !edit.deletedAt && Boolean(edit.editor) && isBotActor(edit.editor)
+
+/** What a finished scan leaves on the issue's record: how many edits are now judged, when the newest was made and which ones were made then. */
+function baselineOf(scan) {
+  const at = Object.values(scan.found).reduce((top, editedAt) => (Date.parse(editedAt) > Date.parse(top) ? editedAt : top))
+  const same = (editedAt) => Date.parse(editedAt) === Date.parse(at)
+  return { total: scan.total, at, tail: [...(same(scan.floor) ? scan.tail : []), ...Object.entries(scan.found).filter(([, editedAt]) => same(editedAt)).map(([id]) => id)] }
+}
+
+const NEWS = { kind: "news" }
+
+const validPage = (page) => Array.isArray(page.edits) && Number.isInteger(page.total) && typeof page.updatedAt === "string" && typeof page.hasMore === "boolean"
+
+/** What the pages read so far settle: the issue's new edits are all found (a bot-only proof, once a page is as fresh as the issue), not all found yet (null), or cannot be explained (news). */
+function conclude(scan, issue) {
+  const found = Object.keys(scan.found).length
+  const exhausted = scan.base === null ? scan.fwd.done : scan.fwd.done || scan.bwd.done
+  const expected = scan.total - (scan.base ?? scan.old)
+  if (found === expected && (scan.base !== null || exhausted)) {
+    if (found === 0) return NEWS
+    if (Date.parse(scan.stamp) < Date.parse(issue.updated_at)) {
+      scan.base ??= scan.old
+      scan.lag = true
+      return { kind: "deferred", message: "Wait for the next poll: GitHub's edit history is behind the issue and is read again then", code: "drains_edit_history_behind" }
+    }
+    return { kind: "bot", baseline: baselineOf(scan) }
+  }
+  if (found > expected && scan.base !== null) return NEWS
+  if (exhausted) {
+    // Edits that arrived while the history was being read make `total` grow past the pass, and another pass finds them. When nothing new arrived the count cannot be explained.
+    if (scan.total <= scan.passTotal || found + (scan.base === null ? scan.old : 0) > scan.total) return NEWS
+    scan.base ??= scan.old
+    restartPass(scan)
+  }
+  return null
+}
+
+/** Reads one page of the scan and says what it settled, or null when it is not settled yet: news, a bot-only proof with the record it leaves, or waiting for GitHub's history to catch up with the issue. */
+async function advance(api, repo, issue, scan) {
+  if (!Number.isFinite(Date.parse(scan.floor)) || typeof api.editPage !== "function") return NEWS
+  if (scan.lag) {
+    // The history was behind the issue: the first page, read again, tells whether it has caught up and whether more edits arrived.
+    const page = await api.editPage(repo, issue.number, { backward: false, cursor: null })
+    if (!page || !validPage(page)) return NEWS
+    scan.total = page.total
+    scan.stamp = page.updatedAt
+    if (Date.parse(scan.stamp) < Date.parse(issue.updated_at)) return { kind: "deferred", message: "Wait for the next poll: GitHub's edit history is behind the issue and is read again then", code: "drains_edit_history_behind" }
+    scan.lag = false
+    return conclude(scan, issue)
+  }
+  let direction = scan.base !== null && scan.next === "bwd" ? "bwd" : "fwd"
+  // A finished side ends the pass in `conclude`, which either settles it or restarts both sides, so this only guards a state no page can produce.
+  /* istanbul ignore if */
+  if (scan[direction].done) direction = direction === "fwd" ? "bwd" : "fwd"
+  const side = scan[direction]
+  const page = await api.editPage(repo, issue.number, { backward: direction === "bwd", cursor: side.cursor })
+  if (!page || !validPage(page)) return NEWS
+  scan.total = page.total
+  scan.stamp = page.updatedAt
+  scan.passTotal ??= page.total
+  side.pages += 1
+  scan.next = direction === "fwd" ? "bwd" : "fwd"
+  for (const edit of page.edits) {
+    if (!edit || typeof edit !== "object") return NEWS
+    if (!isNewEdit(scan, edit)) {
+      if (scan.base === null) scan.old += 1
+      continue
+    }
+    if (!botEdit(edit)) return NEWS
+    scan.found[edit.id] = edit.editedAt
+  }
+  if (page.hasMore) {
+    // A cursor that does not move, or more pages than the history can hold, is a cycle: it would never end.
+    if (typeof page.cursor !== "string" || page.cursor === side.cursor || side.pages >= pagesFor(scan.total)) return NEWS
+    side.cursor = page.cursor
+  } else {
+    side.done = true
+  }
+  return conclude(scan, issue)
+}
+
+/** Whether the GraphQL quota allows another page now: the same reserve as REST's, read from the connection's own headers, else from the last poll's reading while its window is open. */
+function canSpend(api, state, now) {
+  const quota = api.graphqlQuota?.() ?? state.graphqlQuota
+  if (!quota || now >= quota.reset * 1000) return true
+  return quota.remaining - (api.graphqlCost?.() ?? 1) > QUOTA_RESERVE
+}
+
+/**
+ * Settles, for the issues whose body changed, whether bots alone made the edits. Every open scan gets one page per round, the one
+ * served longest ago first (`served` is kept with the scan), so scans that outnumber the pages the quota allows still take turns,
+ * and an issue with a short history is settled in the first round. A scan that cannot go on keeps its progress and is deferred,
+ * never settled by a guess.
+ */
+async function attribute(api, repo, state, needs, now) {
+  const verdicts = new Map()
+  const scans = state.scans ?? (state.scans = {})
+  const wanted = new Set(needs.map(({ issue }) => String(issue.number)))
+  for (const key of Object.keys(scans)) if (!wanted.has(key)) delete scans[key]
+  const pending = new Set()
+  for (const { issue, before } of needs) {
+    const key = String(issue.number)
+    if (scans[key]?.of !== before.updatedAt) scans[key] = newScan(before)
+    pending.add({ issue, key, scan: scans[key] })
+  }
+  let halted = null
+  while (pending.size > 0 && !halted) {
+    for (const item of [...pending].sort((a, b) => a.scan.served - b.scan.served || a.issue.number - b.issue.number)) {
+      if (!canSpend(api, state, now)) {
+        const quota = api.graphqlQuota?.() ?? state.graphqlQuota
+        halted = { message: `Wait for the quota to reset: GitHub's GraphQL limit leaves ${quota.remaining}/${quota.limit} calls until ${new Date(quota.reset * 1000).toISOString()}`, code: "drains_rate_limited" }
+        break
+      }
+      item.scan.served = state.scanTurn = (state.scanTurn ?? 0) + 1
+      try {
+        const verdict = await advance(api, repo, item.issue, item.scan)
+        if (!verdict) continue
+        verdicts.set(item.issue.number, verdict)
+        pending.delete(item)
+        if (verdict.kind !== "deferred") delete scans[item.key]
+      } catch (error) {
+        pending.delete(item)
+        verdicts.set(item.issue.number, { kind: "deferred", message: error.message, code: error.code })
+        if (error.code === "drains_rate_limited") halted = { message: error.message, code: error.code }
+      }
+    }
+  }
+  for (const item of pending) verdicts.set(item.issue.number, { kind: "deferred", ...halted })
+  return verdicts
+}
 
 /** A bot comment's text without what changes from run to run: run URLs and IDs, dates, times and durations. */
 function repeatableText(body) {
@@ -338,11 +665,15 @@ const duringTurn = (event, login, turns) => {
   return event.actor?.login?.toLowerCase() === login.toLowerCase() && turns.some((from) => at >= from - TURN_LEAD_MS && at <= from + TURN_MS)
 }
 
-/** What made a reopen or a label change news, or null: a label outside the drain's namespace, ignored list and ignored patterns, or a reopen that is not the drain claiming the issue (its own `drain:` label change within a minute). A label applied within a minute of the issue being opened was part of filing it, and the "new issue" wake shows it. A label or reopen by the polling account during the drain's turn is its own work. Closes, assignments and mentions are not news. */
+/** What made a reopen or a label change news, or null: a label outside the drain's namespace, ignored list and ignored patterns, a reopen that is not the drain claiming the issue, or an assignment change (assigned or unassigned) outside the drain's turn (its own `drain:` label change within a minute). A label or assignee applied within a minute of the issue being opened was part of filing it, and the "new issue" wake shows it. A label, reopen or assignment change by the polling account during the drain's turn is its own work. Closes and mentions are not news. */
 function newsEvent(event, rules, claims, login, openedAt) {
   if (event.event === "reopened") {
     const own = event.actor?.login?.toLowerCase() === login.toLowerCase() && claims.some((claim) => claim.actor?.login?.toLowerCase() === login.toLowerCase() && Math.abs(Date.parse(claim.created_at) - Date.parse(event.created_at)) <= CLAIM_SLACK_MS)
     return own || duringTurn(event, login, rules.turns) ? null : "reopened"
+  }
+  if (event.event === "assigned" || event.event === "unassigned") {
+    if (event.event === "assigned" && Date.parse(event.created_at) <= openedAt + OPENING_LABEL_MS) return null
+    return duringTurn(event, login, rules.turns) ? null : `${event.event} ${event.assignee?.login ?? "nobody"}`
   }
   if (event.event !== "labeled" && event.event !== "unlabeled") return null
   if (event.event === "labeled" && Date.parse(event.created_at) <= openedAt + OPENING_LABEL_MS) return null
@@ -354,10 +685,10 @@ function newsEvent(event, rules, claims, login, openedAt) {
 /** An issue the drain filed or already triaged: a label in its `drain:` namespace, or its status marker in the body, is there before the poll first sees it, so it is already seen. */
 const filedByDrain = (issue) => (issue.labels ?? []).some((label) => (label?.name ?? "").toLowerCase().startsWith(DRAIN_LABEL_PREFIX)) || (issue.body ?? "").includes(DRAIN_STATUS_MARKER)
 
-/** What someone but the drain changed since `before` (a new issue, an edit to a human's issue (a bot that rewrites its own issue's body, such as a health table, is not news), an edit, another comment, a reopen or a label outside the drain's own), or null. The reason travels with the event. */
-async function changedByOthers(api, repo, issue, before, digest, ignored, rules) {
+/** What someone but the drain changed since `before` (a new issue, a title or body edit (an edit that only bots made to the body, such as a health table's refresh, is not news), an edit, another comment, a reopen or a label outside the drain's own), or null. The reason travels with the event. */
+async function changedByOthers(api, repo, issue, before, digest, ignored, rules, edited) {
   if (!before) return filedByDrain(issue) ? null : "new issue"
-  if (before.digest && (before.ignored ?? "") === ignored && before.digest !== digest && !isBot(issue)) return "title or body edited"
+  if (edited) return edited
   const since = before.updatedAt
   const comments = (await api.comments(repo, issue.number, since)).filter((comment) => comment.updated_at > since)
   const all = {}
@@ -415,8 +746,7 @@ async function listIssues(api, drain, state, now) {
   const since = isoSeconds(Date.parse(state.cursor) - DELTA_SLACK_MS)
   const changed = await api.changedIssues(drain.repo, since, state.etag?.since === since ? state.etag.tag : undefined)
   if (changed.notModified) return { full: false, issues: [], untouched: true }
-  state.etag = changed.etag ? { since, tag: changed.etag } : undefined
-  return { full: false, issues: changed.issues }
+  return { full: false, issues: changed.issues, etag: changed.etag ? { since, tag: changed.etag } : undefined, newEtag: true }
 }
 
 /** What the account's quota says to do about this drain now: null to poll, or why not (until the window resets, or for a while). */
@@ -433,6 +763,7 @@ export function quotaHold(quota, lastPollAt, now) {
 export async function pollDrain(drain, states, { connect, now, desk }) {
   const state = states[drain.repo] ?? (states[drain.repo] = blank())
   let api = null
+  let left = null
   try {
     const knownLogin = state.loginAt && now - Date.parse(state.loginAt) < LOGIN_MS ? state.login : undefined
     api = await connect(drain.account, { login: knownLogin })
@@ -441,10 +772,25 @@ export async function pollDrain(drain, states, { connect, now, desk }) {
       state.loginAt = new Date(now).toISOString()
     }
     const listed = await listIssues(api, drain, state, now)
-    if (!listed.untouched) await recordChanges(api, drain, state, listed, { now, desk })
+    if (!listed.untouched) {
+      const { deferred } = await recordChanges(api, drain, state, listed, { now, desk })
+      // The tag of the list is kept only once every change in it is recorded: a failed poll, or an issue left for the next one, asks for the same list again, never a 304 for it.
+      if (deferred.length > 0) delete state.etag
+      else if (listed.newEtag) state.etag = listed.etag
+      if (deferred.length > 0) {
+        const shown = deferred.slice(0, 3).map((item) => `#${item.number} (${item.message})`).join(", ")
+        left = { message: `Wait for the next poll: ${deferred.length} issue(s) were left for it: ${shown}${deferred.length > 3 ? ", …" : ""}`, code: "drains_issues_deferred" }
+        const specific = deferred.find((item) => item.code)?.code
+        if (specific) left.code = specific
+      }
+    }
     state.lastOkAt = new Date(now).toISOString()
     delete state.lastError
     delete state.lastErrorCode
+    if (left) {
+      state.lastError = left.message
+      state.lastErrorCode = left.code
+    }
   } catch (error) {
     state.lastError = error.message
     if (typeof error.code === "string") state.lastErrorCode = error.code
@@ -452,6 +798,8 @@ export async function pollDrain(drain, states, { connect, now, desk }) {
   }
   const quota = api?.quota?.()
   if (quota) state.quota = quota
+  const graphqlQuota = api?.graphqlQuota?.()
+  if (graphqlQuota) state.graphqlQuota = graphqlQuota
   state.calls = api?.calls?.() ?? { total: 0, notModified: 0 }
   delete state.hold
   state.lastPollAt = new Date(now).toISOString()
@@ -466,6 +814,9 @@ async function recordChanges(api, drain, state, { full, issues }, { now, desk })
   const seen = full ? {} : { ...state.seen }
   const recorded = []
   const closed = new Set()
+  const todo = []
+  const deferred = []
+  let held = null
   let cursor = state.cursor ?? ""
   for (const issue of issues) {
     if (!full && issue.updated_at > cursor) cursor = issue.updated_at
@@ -479,10 +830,31 @@ async function recordChanges(api, drain, state, { full, issues }, { now, desk })
     }
     if (full && issue.updated_at > cursor) cursor = issue.updated_at
     const digest = digestOf(issue, trailers)
-    seen[key] = { updatedAt: issue.updated_at, digest, ...(ignored ? { ignored } : {}) }
+    seen[key] = { updatedAt: issue.updated_at, digest, title: issue.title, ...(ignored ? { ignored } : {}), ...(before?.edits && before.digest === digest ? { edits: before.edits } : {}) }
     if (!state.seeded || before?.updatedAt === issue.updated_at) continue
-    const why = await changedByOthers(api, drain.repo, issue, before, digest, ignored, rules)
-    if (why) recorded.push({ number: issue.number, title: issue.title, updatedAt: issue.updated_at, seenAt: new Date(now).toISOString(), why })
+    // A body that changed is news unless bots alone edited it, whoever created the issue.
+    const bodyChanged = Boolean(before?.digest) && (before.ignored ?? "") === ignored && before.digest !== digest
+    // A record from before titles were kept cannot show the title is unchanged, so its first changed poll is news as it always was.
+    const edited = bodyChanged && before.title !== issue.title ? "title or body edited" : null
+    todo.push({ issue, key, before, digest, edited, scan: bodyChanged && !edited })
+  }
+  const verdicts = await attribute(api, drain.repo, state, todo.filter((item) => item.scan), now)
+  for (const item of todo) {
+    const { issue, key, before, digest } = item
+    const verdict = verdicts.get(issue.number)
+    try {
+      if (verdict?.kind === "deferred") throw Object.assign(new Error(verdict.message), { code: verdict.code })
+      if (verdict?.kind === "news") item.edited = "title or body edited"
+      const why = await changedByOthers(api, drain.repo, issue, before, digest, ignored, rules, item.edited)
+      if (verdict?.kind === "bot") seen[key].edits = verdict.baseline
+      if (why) recorded.push({ number: issue.number, title: issue.title, updatedAt: issue.updated_at, seenAt: new Date(now).toISOString(), why })
+    } catch (error) {
+      // This issue's marker stays where it was, so the next poll judges the same change again; the others go on.
+      // Only an issue that was seen before can fail here (a new one is judged without a read), so there is always a marker to restore.
+      seen[key] = before
+      deferred.push({ number: issue.number, message: error.message, code: error.code })
+      if (!held || issue.updated_at < held) held = issue.updated_at
+    }
   }
   for (const [key, entry] of Object.entries(state.seen)) {
     const gone = seenIssue(entry)
@@ -497,8 +869,10 @@ async function recordChanges(api, drain, state, { full, issues }, { now, desk })
   state.seen = seen
   state.seeded = true
   state.openCount = Object.values(seen).filter((entry) => !seenIssue(entry).goneAt).length
+  if (held && (!cursor || held < cursor)) cursor = held
   if (cursor) state.cursor = cursor
   if (full) state.syncedAt = new Date(now).toISOString()
+  return { deferred }
 }
 
 function span(ms) {
@@ -688,6 +1062,12 @@ export function recoverDrainTarget({ paths, repo, now, start = startSuccessor })
 
 // ── GitHub ──
 
+/** What a non-OK answer means: GitHub's own server failing (5xx) clears by itself; only a refused credential is for the person to fix. */
+function failedAnswer(status, route) {
+  if (status >= 500) return Object.assign(new Error(`Wait for the next poll: GitHub's server answered HTTP ${status} for ${route} (asked twice); this usually clears on its own and needs nothing from you`), { code: "drains_github_server_error", status })
+  return Object.assign(new Error(`Check gh auth status, then try again: GitHub answered HTTP ${status} for ${route}`), { code: "drains_check_gh_auth_status_then", status })
+}
+
 /** The drain's GitHub access: its account's token from the `gh` CLI, then the REST API. `login` skips asking GitHub who the token is. */
 export async function connectGithub(account, { spawn = spawnSync, fetchImpl = fetch, env = process.env, login: knownLogin, pauseMs = TOKEN_PAUSE_MS } = {}) {
   const tokenArgs = ["auth", "token", "--hostname", "github.com", ...(account ? ["--user", account] : [])]
@@ -708,15 +1088,24 @@ export async function connectGithub(account, { spawn = spawnSync, fetchImpl = fe
   if (!token && transient) throw Object.assign(new Error(`Wait for the next poll, which reads the token again: the GitHub CLI's token read for ${account ?? "its active account"} gave no answer, probably because the keyring was busy or slow (${transient.slice(0, 160)})`), { code: "drains_github_cli_token_unavailable", transient: true })
   if (!token) throw Object.assign(new Error(`Sign in the GitHub CLI: the GitHub CLI has no token for ${account ?? "its active account"} (run \`gh auth login --hostname github.com\`)`), { code: "drains_sign_in_the_github_cli" })
   // What this connection spent and what GitHub says is left in the account's window; a 304 answer costs nothing against it.
-  const meter = { total: 0, notModified: 0, quota: null }
+  const meter = { total: 0, notModified: 0, quota: null, graphqlQuota: null, graphqlCost: 1 }
+  // A read that GitHub answers with a 5xx is asked once more, at once: its own server failing usually clears. Only reads are repeated, never a write.
+  const readTwice = async (url, init) => {
+    let response = await fetchImpl(url, init())
+    meter.total += 1
+    if (response.status >= 500) {
+      response = await fetchImpl(url, init())
+      meter.total += 1
+    }
+    return response
+  }
   const get = async (route, { etag } = {}) => {
-    const response = await fetchImpl(`https://api.github.com${route}`, {
+    const response = await readTwice(`https://api.github.com${route}`, () => ({
       headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json", "User-Agent": "desk-issue-drains", ...(etag ? { "If-None-Match": etag } : {}) },
       signal: AbortSignal.timeout(30_000),
-    })
-    meter.total += 1
+    }))
     const remaining = response.headers.get("x-ratelimit-remaining")
-    if (remaining !== null) meter.quota = { remaining: Number(remaining), limit: Number(response.headers.get("x-ratelimit-limit")), reset: Number(response.headers.get("x-ratelimit-reset")), at: new Date().toISOString() }
+    if (remaining !== null && response.headers.get("x-ratelimit-resource") !== "graphql") meter.quota = { remaining: Number(remaining), limit: Number(response.headers.get("x-ratelimit-limit")), reset: Number(response.headers.get("x-ratelimit-reset")), at: new Date().toISOString() }
     if (response.status === 304) {
       meter.notModified += 1
       return { notModified: true }
@@ -729,7 +1118,7 @@ export async function connectGithub(account, { spawn = spawnSync, fetchImpl = fe
         const until = Number.isFinite(reset) && reset > 0 ? new Date(reset * 1000).toISOString() : "the next window"
         throw Object.assign(new Error(`Wait for the quota to reset: GitHub's hourly API limit is used up, rate limited until ${until} (HTTP ${response.status} for ${route.split("?")[0]})`), { code: "drains_rate_limited", status: response.status, rateLimited: true })
       }
-      throw Object.assign(new Error(`Check gh auth status, then try again: GitHub answered HTTP ${response.status} for ${route.split("?")[0]}`), { code: "drains_check_gh_auth_status_then", status: response.status })
+      throw failedAnswer(response.status, route.split("?")[0])
     }
     return { body: await response.json(), next: /rel="next"/u.test(response.headers.get("link") ?? ""), etag: response.headers.get("etag") }
   }
@@ -755,6 +1144,49 @@ export async function connectGithub(account, { spawn = spawnSync, fetchImpl = fe
     meter.total += 1
     return { ok: response.ok, status: response.status, body: await response.json().catch(() => ({})) }
   }
+  // GraphQL has its own quota window: its headers are kept apart from the REST reading, and a failure names this API.
+  const graphql = async (query, variables) => {
+    const response = await readTwice("https://api.github.com/graphql", () => ({
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json", "User-Agent": "desk-issue-drains", "Content-Type": "application/json" },
+      body: JSON.stringify({ query, variables }),
+      signal: AbortSignal.timeout(30_000),
+    }))
+    const remaining = response.headers.get("x-ratelimit-remaining")
+    if (remaining !== null) meter.graphqlQuota = { remaining: Number(remaining), limit: Number(response.headers.get("x-ratelimit-limit")), reset: Number(response.headers.get("x-ratelimit-reset")), at: new Date().toISOString() }
+    const payload = response.ok ? await response.json().catch(() => null) : null
+    const limited = response.status === 429 || (response.status === 403 && remaining === "0") || (payload?.errors ?? []).some((error) => error?.type === "RATE_LIMITED")
+    if (limited) {
+      const reset = Number(response.headers.get("x-ratelimit-reset"))
+      const until = Number.isFinite(reset) && reset > 0 ? new Date(reset * 1000).toISOString() : "the next window"
+      throw Object.assign(new Error(`Wait for the quota to reset: GitHub's hourly GraphQL limit is used up, rate limited until ${until} (HTTP ${response.status} for /graphql)`), { code: "drains_rate_limited", status: response.status, rateLimited: true })
+    }
+    if (!response.ok) throw failedAnswer(response.status, "/graphql")
+    if (!payload || (Array.isArray(payload.errors) && payload.errors.length > 0) || typeof payload.data !== "object" || payload.data === null) {
+      const said = Array.isArray(payload?.errors) ? payload.errors.map((error) => String(error?.message ?? "")).join("; ").slice(0, 160) : "no data"
+      throw Object.assign(new Error(`Check gh auth status, then try again: GitHub's GraphQL answer for the issue's edit history was refused or unreadable (${said})`), { code: "drains_graphql_failed" })
+    }
+    return payload.data
+  }
+  // One page of an issue's edit history, from its start or, with `backward`, from its end, after `cursor`. `hasMore` says whether
+  // more lies beyond in that direction; `total` and `updatedAt` are the issue's as this page saw them.
+  const editPage = async (repo, number, { backward = false, cursor = null } = {}) => {
+    const [owner, name] = repo.split("/")
+    const data = await graphql(backward ? EDITS_BACKWARD : EDITS_FORWARD, { owner, name, number, cursor })
+    if (Number.isFinite(data.rateLimit?.cost)) meter.graphqlCost = data.rateLimit.cost
+    const found = data.repository?.issue
+    if (!found) return null
+    const connection = found.userContentEdits
+    const info = connection?.pageInfo
+    if (!Array.isArray(connection?.nodes) || typeof info?.[backward ? "hasPreviousPage" : "hasNextPage"] !== "boolean") return { edits: null }
+    return {
+      updatedAt: found.updatedAt,
+      total: connection.totalCount,
+      edits: connection.nodes.map((node) => ({ id: node?.id ?? null, editedAt: node?.editedAt ?? null, deletedAt: node?.deletedAt ?? null, editor: node?.editor ? { type: node.editor.__typename ?? null, login: node.editor.login ?? null } : null })),
+      hasMore: backward ? info.hasPreviousPage : info.hasNextPage,
+      cursor: backward ? info.startCursor : info.endCursor,
+    }
+  }
   // Who the token really is decides which comments are the drain's own, so each drain's account is resolved from the token that polls its repository.
   const login = knownLogin || (await get("/user").then(({ body }) => String(body.login ?? ""), () => "")) || account || ""
   return {
@@ -777,6 +1209,9 @@ export async function connectGithub(account, { spawn = spawnSync, fetchImpl = fe
     get,
     send,
     quota: () => meter.quota,
+    graphqlQuota: () => meter.graphqlQuota,
+    editPage,
+    graphqlCost: () => meter.graphqlCost,
     calls: () => ({ total: meter.total, notModified: meter.notModified }),
     timeline: (repo, issue) => all(`/repos/${repo}/issues/${issue}/timeline`),
     pull: async (repo, number) => (await get(`/repos/${repo}/pulls/${number}`)).body,

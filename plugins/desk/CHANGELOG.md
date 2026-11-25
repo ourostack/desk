@@ -1,5 +1,33 @@
 # desk plugin — changelog
 
+## 3.2.550 — 2026-11-25
+
+Local recovery no longer reports a queued card log as `unexpected_tool_result`. A `task_update` that only logs (or logs alongside other fields) writes the entry before it returns and leaves the commit to Desk's background writer, so recovery now says so: exit `2`, `status: "partial"`, `code: "commit_queued"`, `effects.mutation: "reported_applied"`, `effects.commit: "queued"` and a `queued` object with the log path, whether Git still shows it uncommitted (`pending`) and who commits it. A mixed update keeps the card's observed commit in `effects.commit` and reports the log separately in `effects.log`. If the writer has already committed the entry when recovery looks, the result is the usual completed `observed` result. The receipt says not to resend, because a resend duplicates the entry. With `--publication deferred` no background commit is scheduled, and the receipt says the next Desk session start commits it or the caller must. Unknown results and refusals still end `unexpected_tool_result` or `tool_error` and are never resent. See [the recovery contract](mcp/README.md).
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.549 — 2026-11-25
+
+### Issue drains: a GitHub 5xx is no longer worded as an auth problem
+
+When GitHub answers a drain's read with a 5xx (500, 502, 503, 504), the poll now asks once more in the same poll. If the retry fails too, the drain's last error says GitHub's server failed and needs nothing from you (`drains_github_server_error`) instead of sending an agent to `Check gh auth status`, which stays for a refused credential. Writes are never retried, and a persistent failure still wakes nobody and leaves what the drain has seen untouched. See [issue drains](docs/issue-drains.md).
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.548 — 2026-11-25
+
+The issue-drain poller now decides whether a body change is a bot's from the issue's edit history, on any issue whoever created it. A body that only bots edited since the last poll, such as a health table refreshed every few minutes, wakes nobody, and a person's edit among a bot's still wakes the drain. Anything the history cannot prove (an unknown or deleted edit, a history that cycles, a changed title, a revision recorded before titles were kept) stays news. The history is read page by page with progress kept in the poll state, so a very long one is finished across GraphQL quota windows, scans share the pages fairly, and an issue that needs no read is never held behind one. A read that fails or runs out of quota leaves only that issue for the next poll and is shown as the poll's error without waking the drain. The GraphQL quota is kept apart from the REST quota. See [issue drains](docs/issue-drains.md).
+
+Someone else assigning or unassigning an issue now wakes the drain (`assigned <login>`, `unassigned <login>`), while the drain's own assignment during its turn stays quiet. A poll lock is no longer taken from a live owner however long it holds it, is published whole as a directory, and is released only by its owner; a lock file left by an earlier Desk is never replaced, and the poll says so instead of calling it busy.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.547 — 2026-11-25
+
+Desk's MCP server now vendors Ouro UI v1.3.539, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.546 — 2026-11-25
 
 Desk's MCP server now vendors Ouro UI v1.3.538, moved by Ouro Current.
