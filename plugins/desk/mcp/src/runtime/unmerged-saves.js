@@ -51,9 +51,35 @@ function clearUnmerged({ root, env, url }) {
 
 const stuckOf = (list, at) => list.map((save) => ({ ...save, minutes: Math.floor((at - Date.parse(save.since)) / 60_000) })).filter((save) => save.minutes * 60_000 >= STUCK_AFTER_MS)
 
-/** The desk's saves still unmerged after ten minutes, oldest first, each `{ url, head, branch, base, since, minutes }`. Local read. */
-export function stuckSaves({ root, env, now }) {
-  return stuckOf(entries(readSyncStatus({ root, env })), now()).sort((a, b) => Date.parse(a.since) - Date.parse(b.since))
+/** Whether the desk has any save recorded as waiting to merge. Local read. */
+export function hasRecordedSaves({ root, env }) {
+  return entries(readSyncStatus({ root, env })).length > 0
+}
+
+// Whether the fetched main already holds the save, by ancestry or by the same content landing as another commit. Local reads
+// only; anything unreadable is "not proven", so the save stays named.
+function onFetchedMain({ root, save, spawnGit }) {
+  try {
+    const git = runner(spawnGit, root)
+    const upstream = upstreamOf(git)
+    if (upstream === null) return false
+    const main = git(["rev-parse", "--verify", "--quiet", `${upstream.tracking}^{commit}`]).stdout.trim()
+    if (!OBJECT_ID.test(main) || git(["cat-file", "-e", `${save.head}^{commit}`]).status !== 0) return false
+    if (git(["merge-base", "--is-ancestor", save.head, main]).status === 0) return true
+    return (supersession(git, save.head, main, () => "")?.length ?? 0) > 0
+  } catch {
+    return false
+  }
+}
+
+/**
+ * The desk's saves still unmerged after ten minutes, oldest first, each `{ url, head, branch, base, since, minutes }`. Local read.
+ * A save the fetched main already holds (even as a different commit) is not listed: its pull request is closed by settlement.
+ */
+export function stuckSaves({ root, env, now, spawnGit = spawnSync }) {
+  return stuckOf(entries(readSyncStatus({ root, env })), now())
+    .filter((save) => !onFetchedMain({ root, save, spawnGit }))
+    .sort((a, b) => Date.parse(a.since) - Date.parse(b.since))
 }
 
 /** The stuck saves of every desk on this machine, for `drains status`. Never throws. */

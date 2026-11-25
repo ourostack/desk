@@ -14,6 +14,7 @@ import { deskFailure } from "./desk-failure.js"
 import { clearLogsPending, hasRemoteConfigured, logsMayBePending, readSyncStatus, recordPullOutcome, schedulePush, updateSyncStatus } from "./sync-worker.js"
 import { readUpstreamRefs } from "./fast-refs.js"
 import { catchUpBehind, classifyPullFailure, undeliveredCommits, upstreamOf } from "./deliver.js"
+import { hasRecordedSaves } from "./unmerged-saves.js"
 import { remoteIdentityEnv } from "./remote-identity.js"
 import { applyPublicationMode } from "./publication-mode.js"
 import { commitWaitingLogs } from "./append-lane.js"
@@ -188,11 +189,19 @@ function withDelivery({ root, env, spawnGit = spawnSync, scheduleDelivery = sche
   if (result.nothingToSync !== undefined) return result
   // Nothing the remote lacks: the checkout is exactly at its upstream, which two file reads can say without starting Git.
   const refs = spawnGit === spawnSync ? readUpstreamRefs(root) : null
-  if (refs !== null && refs.head === refs.target) return result
+  const offline = result.state === "unresolved" && OFFLINE.has(result.cause)
+  // Saves waiting as pull requests are settled by the worker too, so one whose content reached main another way is closed now.
+  const waiting = !offline && hasRecordedSaves({ root, env })
+  if (refs !== null && refs.head === refs.target) {
+    if (waiting) scheduleDelivery({ root, env, debounceMs: 0 })
+    return result
+  }
   const recorded = readSyncStatus({ root, env })
   const left = undeliveredCommits({ root, spawnGit, delivered: Array.isArray(recorded?.delivered) ? recorded.delivered : [] })
-  if (left === null || left.length === 0) return result
-  const offline = result.state === "unresolved" && OFFLINE.has(result.cause)
+  if (left === null || left.length === 0) {
+    if (waiting) scheduleDelivery({ root, env, debounceMs: 0 })
+    return result
+  }
   if (!offline) scheduleDelivery({ root, env, debounceMs: 0 })
   const reason = recorded?.blocked === true ? recorded.reason ?? null : offline ? result.cause : null
   const paths = recorded?.blocked === true && Array.isArray(recorded.paths) ? recorded.paths : []

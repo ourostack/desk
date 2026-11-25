@@ -11,8 +11,9 @@ import { spawnSync } from "node:child_process"
 import { mkTempRoot } from "../_temp_roots.js"
 import { runner } from "../../../../../plugins/desk/mcp/src/runtime/deliver.js"
 import { publishPullRequest } from "../../../../../plugins/desk/mcp/src/runtime/pr-publication.js"
-import { readSyncStatus, runPushWorker } from "../../../../../plugins/desk/mcp/src/runtime/sync-worker.js"
+import { readSyncStatus, runPushWorker, updateSyncStatus } from "../../../../../plugins/desk/mcp/src/runtime/sync-worker.js"
 import { abandonedComment, allStuckSaves, repositoryOf, savesFor, settleSaves, stuckLine, stuckSaves, withStuckSaves } from "../../../../../plugins/desk/mcp/src/runtime/unmerged-saves.js"
+import { syncWorkspace } from "../../../../../plugins/desk/mcp/src/runtime/session-sync.js"
 import { resolveDeskStateDir } from "../../../../../plugins/desk/mcp/src/runtime/last-start.js"
 import { formatBootText } from "../../../../../plugins/desk/mcp/src/runtime/boot-text.js"
 import { runDrainsCli } from "../../../../../plugins/desk/mcp/src/runtime/drains-cli.js"
@@ -169,6 +170,67 @@ test("independent publication roots preserve unmatched card candidates and settl
   assert.match(first.closedWith, /Superseded: .*already on main.*work\/saved\/task\.md is identical on main/u)
   assert.deepEqual(stuckSaves({ root: desk, env, now: () => Date.now() + 60 * MINUTE }), [])
   assert.notEqual(spawnSync("git", ["--git-dir", origin, "show-ref", "--verify", `refs/heads/${first.branch}`]).status, 0)
+})
+
+// #1749: a save whose exact content reached main as another commit is not "unmerged", and is settled without waiting for a later write.
+test("a recorded save whose content reached main through another commit is not reported unmerged, and a sync schedules its settlement", async () => {
+  const { origin, seed, desk, env } = await world("landed-elsewhere")
+  const onto = git(desk, ["rev-parse", "HEAD"])
+  const card = "work/saved/task.md"
+  const text = "---\ntitle: saved\n---\n\nLanded twice.\n"
+  await fs.mkdir(path.dirname(path.join(desk, card)), { recursive: true })
+  await fs.writeFile(path.join(desk, card), text)
+  git(desk, ["add", card])
+  git(desk, ["commit", "-q", "-m", "save card"])
+  const head = git(desk, ["rev-parse", "HEAD"])
+  const gh = fakeGh(origin, { pending: true })
+  assert.throws(() => publish({ desk, env, gh, head, onto }), /checks still missing or pending/u)
+  const later = () => Date.now() + 60 * MINUTE
+  const scheduled = []
+  // Each sync is a minute later, so none reads the previous one's fetch as fresh.
+  let tick = Date.now()
+  const sync = () => { tick += MINUTE; return syncWorkspace({ scheduleDelivery: (options) => scheduled.push(options), root: desk, env, now: () => tick }) }
+
+  await fs.mkdir(path.dirname(path.join(seed, card)), { recursive: true })
+  await fs.writeFile(path.join(seed, card), "---\ntitle: saved\n---\n\nDifferent words.\n")
+  git(seed, ["add", card])
+  git(seed, ["commit", "-q", "-m", "differing card"])
+  git(seed, ["push", "-q", "origin", "HEAD:main"])
+  await sync()
+  assert.equal(stuckSaves({ root: desk, env, now: later }).length, 1, "differing content on main keeps the save listed")
+  assert.equal(scheduled.length, 1, "a recorded save is settled by the background worker even with nothing to deliver")
+
+  await fs.writeFile(path.join(seed, card), text)
+  git(seed, ["add", card])
+  git(seed, ["commit", "-q", "-m", "land identical card"])
+  git(seed, ["push", "-q", "origin", "HEAD:main"])
+  const unreadable = (command, args, options) => (command === "git" && args.includes("rev-parse") ? { status: 1, stdout: "", stderr: "" } : spawnSync(command, args, options))
+  assert.equal(stuckSaves({ root: desk, env, now: later }).length, 1, "main not fetched yet: still listed")
+  await sync()
+  assert.equal(stuckSaves({ root: desk, env, now: later, spawnGit: unreadable }).length, 1, "an unreadable comparison stays listed")
+  assert.equal(stuckSaves({ root: desk, env, now: later, spawnGit: () => { throw new Error("git is gone") } }).length, 1, "a failing comparison stays listed")
+  assert.deepEqual(stuckSaves({ root: desk, env, now: later }), [], "proven equal to fetched main: not reported")
+  assert.equal(gh.prs.get(1).state, "OPEN", "boot reads only; the worker closes the pull request")
+  assert.equal(scheduled.length, 2)
+  assert.deepEqual(settleSaves({ root: desk, env, spawnGit: gh, clock: clockOf() }).closed, [gh.prs.get(1).url])
+})
+
+test("a sync with nothing to deliver still schedules settlement of a recorded save, unless the remote is unreachable", async () => {
+  const { desk, env } = await world("sync-settles")
+  const scheduled = []
+  const schedule = (options) => scheduled.push(options)
+  await syncWorkspace({ scheduleDelivery: schedule, root: desk, env })
+  assert.equal(scheduled.length, 0, "no recorded save, nothing to settle")
+  const head = await appendTo(desk, "- delivered elsewhere", "save")
+  savesFor({ root: desk, env, now: Date.now }).record({ url: "https://github.example/team/workspace/pull/9", head, branch: "desk/publish/x", base: "main" })
+  await syncWorkspace({ scheduleDelivery: schedule, root: desk, env })
+  assert.equal(scheduled.length, 1, "the checkout holds a commit the worker already delivered")
+  updateSyncStatus(desk, env, { delivered: [head] })
+  await syncWorkspace({ scheduleDelivery: schedule, root: desk, env, now: () => Date.now() + 120_000 })
+  assert.equal(scheduled.length, 2)
+  git(desk, ["remote", "set-url", "origin", "/nonexistent/remote.git"])
+  await syncWorkspace({ scheduleDelivery: schedule, root: desk, env, now: () => Date.now() + 240_000 })
+  assert.equal(scheduled.length, 2, "an unreachable remote cannot settle anything")
 })
 
 test("publication qualifies its checks and merges without asking gh for auto-merge", async () => {
