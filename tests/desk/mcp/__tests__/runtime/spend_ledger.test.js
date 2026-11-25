@@ -1,10 +1,10 @@
 import test from "node:test"
 import assert from "node:assert/strict"
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, existsSync, chmodSync } from "node:fs"
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, existsSync, unlinkSync, chmodSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 import { removeTreeSync } from "../_remove_tree.js"
-import { ledgeredFetch, SpendHeld, unrecordedSends } from "../../../../../plugins/desk/mcp/src/runtime/spend-ledger.js"
+import { activeLogin, ledgerDir, ledgeredFetch, SpendHeld, unrecordedSends } from "../../../../../plugins/desk/mcp/src/runtime/spend-ledger.js"
 import { connectGithub } from "../../../../../plugins/desk/mcp/src/runtime/drains.js"
 import { prDelivery } from "../../../../../plugins/desk/mcp/src/tools/delivery-gate.js"
 
@@ -235,4 +235,84 @@ test("a drain's read under the floor halts the poll as rate limited, and its sen
   writeFileSync(path.join(dir, "personal.rate"), `10 ${now + 600} 5000 ${now}\n`)
   await assert.rejects(api.changedIssues("o/r", "2026-11-13T00:58:00Z"), (e) => e.code === "drains_rate_limited" && e.rateLimited === true && /under the floor/u.test(e.message))
   assert.equal(sent, 1)
+})
+
+test("the signed-in account is read from gh's hosts.yml for a drain with no account, and a gate token from gh", async (t) => {
+  const { dir, env, rows, root } = ledger(t)
+  const config = path.join(root, "gh")
+  mkdirSync(config)
+  writeFileSync(path.join(config, "hosts.yml"), "github.com:\n    users:\n        a:\n    user: ari_microsoft\n")
+  const now = Math.floor(Date.now() / 1000)
+  writeFileSync(path.join(dir, "work.rate"), `4000 ${now + 600} 5000 ${now}\n`)
+  const withConfig = { ...env, GH_CONFIG_DIR: config }
+  const api = await connectGithub(undefined, { spawn: () => ({ status: 0, stdout: "tok" }), fetchImpl: async () => answer(200, [], quota(4000, { "x-ratelimit-reset": String(now + 600) })), env: withConfig })
+  await api.changedIssues("o/r", "2026-11-13T00:58:00Z")
+  assert.equal(rows().at(-1)[1], "work")
+  await prDelivery({ repo: "o/r", number: 1, env: withConfig, ghRunner: async () => ({ status: 0, stdout: "tok" }), fetchFn: async () => answer(200, { merged_at: null, state: "open" }, quota(4000, { "x-ratelimit-reset": String(now + 600) })) })
+  assert.ok(rows().filter((r) => r[1] === "work").length >= 2)
+  for (const home of [{ XDG_CONFIG_HOME: path.join(root, "x") }, { HOME: root }, {}]) assert.equal(activeLogin(home), "")
+  assert.equal(activeLogin({ XDG_CONFIG_HOME: path.dirname(config) }), "ari_microsoft")
+  assert.equal(activeLogin({ HOME: path.join(root, "nothing") }), "")
+})
+
+test("an error that is not a hold keeps its own shape for a drain and for the delivery gate", async (t) => {
+  const { dir, env } = ledger(t)
+  const now = Math.floor(Date.now() / 1000)
+  writeFileSync(path.join(dir, "personal.rate"), `4000 ${now + 600} 5000 ${now}\n`)
+  const api = await connectGithub("ari", { spawn: () => ({ status: 0, stdout: "tok" }), fetchImpl: async () => { throw new Error("socket closed") }, env, login: "ari" })
+  await assert.rejects(api.changedIssues("o/r", "2026-11-13T00:58:00Z"), /socket closed/u)
+  await assert.rejects(prDelivery({ repo: "o/r", number: 1, env: null }), TypeError)
+})
+
+test("quota numbers that cannot be stored never stop a call", async (t) => {
+  if (process.getuid?.() === 0 || process.platform === "win32") return t.skip("this host can write anywhere or ignores modes")
+  const { dir, env } = ledger(t)
+  chmodSync(dir, 0o500)
+  const fetchFn = ledgeredFetch(async (url) => (url.endsWith("/rate_limit") ? answer(200, { resources: { core: { remaining: 4000, reset: RESET, limit: 5000 } } }) : answer(200, {}, quota(4000))), { env, login: () => "ari", now: clockNow })
+  assert.equal((await fetchFn("https://api.github.com/repos/o/r", auth())).status, 200)
+})
+
+test("the ledger folder is found from the state folder or home, and is left alone when it is missing, not a folder or unknown", (t) => {
+  const { root, dir } = ledger(t)
+  const state = path.join(root, "state")
+  mkdirSync(path.join(state, "ms-desk", "gh-quota"), { recursive: true })
+  const home = path.join(root, "home")
+  mkdirSync(path.join(home, ".local", "state", "ms-desk", "gh-quota"), { recursive: true })
+  writeFileSync(path.join(root, "afile"), "")
+  assert.equal(ledgerDir({ XDG_STATE_HOME: state }, false), path.join(state, "ms-desk", "gh-quota"))
+  assert.equal(ledgerDir({ HOME: home }, false), path.join(home, ".local", "state", "ms-desk", "gh-quota"))
+  assert.equal(ledgerDir({ MS_DESK_QUOTA_DIR: dir }, true), dir, "an explicit folder is used even in a test run")
+  assert.equal(ledgerDir({ HOME: home }, true), null, "a test run never touches the real state folder")
+  for (const env of [{}, { MS_DESK_QUOTA_DIR: path.join(root, "missing") }, { MS_DESK_QUOTA_DIR: path.join(root, "afile") }, { MS_DESK_QUOTA: "off", MS_DESK_QUOTA_DIR: dir }]) assert.equal(ledgerDir(env, false), null)
+})
+
+test("odd ledger files are read for what they hold: a hold with no reason, a short rate file, a garbled one, poller rows and a log longer than the tail", async (t) => {
+  const { dir, env } = ledger(t)
+  const now = Math.floor(Date.now() / 1000)
+  const send = (name) => ledgeredFetch(async (url) => (url.endsWith("/rate_limit") ? answer(500) : answer(200)), { env: { ...env, COPILOT_AGENT_SESSION_ID: name }, login: () => "ari" })("https://api.github.com/repos/o/r/pulls/1", auth())
+  writeFileSync(path.join(dir, "personal.hold"), `${now + 600}\n`)
+  await assert.rejects(send("s"), /no reason given/u)
+  unlinkSync(path.join(dir, "personal.hold"))
+  writeFileSync(path.join(dir, "personal.rate"), `10 ${now + 600}\n`)
+  const filler = `${now}\tpersonal\tapi repos/o/r\tother\to/r\tapiget\n`
+  writeFileSync(path.join(dir, "calls.log"), `${filler.repeat(Math.ceil((2 * 1024 * 1024) / filler.length) + 2)}${now}\tpersonal\tapi x\tother\to/r\tpollcalls\t7\n`)
+  await assert.rejects(send("s"), /10 of \? REST calls left/u)
+  writeFileSync(path.join(dir, "personal.rate"), "garbled\n")
+  assert.equal((await send("s")).status, 200, "a garbled rate file is no floor, and a refresh that fails leaves it so")
+})
+
+test("answers about another API resource or an older window do not change the stored numbers", async (t) => {
+  const { dir, env, rate } = ledger(t)
+  writeFileSync(path.join(dir, "personal.rate"), `4000 ${RESET} 5000 ${NOW}\n`)
+  const answers = [answer(200, {}, quota(100, { "x-ratelimit-resource": "search" })), answer(200, {}, quota(100, { "x-ratelimit-reset": String(RESET - 100) }))]
+  const fetchFn = ledgeredFetch(async () => answers.shift(), { env, login: () => "ari", now: clockNow })
+  await fetchFn("https://api.github.com/repos/o/r", auth())
+  await fetchFn("https://api.github.com/repos/o/r", auth())
+  assert.deepEqual(rate("personal").slice(0, 3), [4000, RESET, 5000])
+})
+
+test("a hosts.yml with no signed-in user gives no account", (t) => {
+  const { root } = ledger(t)
+  writeFileSync(path.join(root, "hosts.yml"), "github.com:\n    git_protocol: https\n")
+  assert.equal(activeLogin({ GH_CONFIG_DIR: root }), "")
 })

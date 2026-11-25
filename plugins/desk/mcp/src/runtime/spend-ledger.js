@@ -45,9 +45,9 @@ export const unrecordedSends = () => unrecorded
 const count = (value, fallback) => (/^\d+$/u.test(String(value ?? "")) ? Number(value) : fallback)
 
 /** The shim's ledger folder when this host has one and may use it, else null. */
-function ledgerDir(env = process.env) {
+export function ledgerDir(env = process.env, underTest = looksLikeNodeTestRunner(env)) {
   if (env.MS_DESK_QUOTA === "off" || env.MS_DESK_ROUTE === "off") return null
-  if (!env.MS_DESK_QUOTA_DIR && looksLikeNodeTestRunner(env)) return null
+  if (!env.MS_DESK_QUOTA_DIR && underTest) return null
   const base = env.XDG_STATE_HOME || (env.HOME ? path.join(env.HOME, ".local", "state") : "")
   const dir = env.MS_DESK_QUOTA_DIR || (base ? path.join(base, "ms-desk", "gh-quota") : "")
   try {
@@ -236,7 +236,7 @@ export function ledgeredFetch(fetchFn, { env = process.env, login = () => "", la
         unrecorded += 1
         if (!warned) {
           warned = true
-          process.emitWarning(`Fix the permissions of the gh spend ledger folder ${dir} (${error.code ?? error.message}), then repeat: Desk's GitHub calls are being sent without being recorded, so the spend report is incomplete`, { code: "DESK_SPEND_UNRECORDED" })
+          process.emitWarning(`Fix the permissions of the gh spend ledger folder ${dir} (${error.code}), then repeat: Desk's GitHub calls are being sent without being recorded, so the spend report is incomplete`, { code: "DESK_SPEND_UNRECORDED" })
         }
       }
     }
