@@ -714,6 +714,7 @@ test("a route that is not exactly Desk's recorded card route stays redacted and 
     withExtra((route) => route.published_when.argv.push(["echo", "SECRET_TEXT"])),
     withExtra((route) => route.newer_unsaved_when.argv[0].push("SECRET_TEXT")),
     { ...routeFor(), steps: [{ step: "x", argv: ["node", "other.js", "--message", "SECRET_TEXT"] }] },
+    ...[[1, "other-script.js"], [2, "--cwd"], [4, "--id"], [6, "--text"]].map(([index, value]) => withExtra((route) => route.steps.slice(0, 2).forEach((step) => { step.argv[index] = value }))),
   ]
   for (const route of cases) {
     const result = await runRoute(route)
