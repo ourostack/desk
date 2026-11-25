@@ -145,7 +145,9 @@ function setupGitEnvironment() {
     fs.writeFileSync(setupGitConfig, isolatedGitConfig);
     process.once("exit", () => fs.rmSync(directory, { recursive: true, force: true }));
   }
-  return { ...process.env, GIT_CONFIG_GLOBAL: setupGitConfig, GIT_CONFIG_NOSYSTEM: "1" };
+  // Ambient GIT_* variables (a template dir, injected config, or a GIT_DIR from a hook that runs these tests) outrank the config file.
+  const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^GIT_/iu.test(key)));
+  return { ...env, GIT_CONFIG_GLOBAL: setupGitConfig, GIT_CONFIG_NOSYSTEM: "1" };
 }
 
 function scratchGit(cwd, args) {

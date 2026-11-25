@@ -1438,7 +1438,7 @@ try {
           suite.sources = ["source.txt", "evals/fixtures/repo/src/code.js", "evals/worlds/fixture/case-1/desk/seeded.md", "evals/worlds/fixture/case-1/repo/src/code.js", "evals/worlds/fixture/case-1/desk-origin-ahead/card.md"];
           suite.reviewedSourceFingerprint = sourceFingerprint(suite.sources, root);
         });
-        const result = run(["fixture", ...fake, "--concurrency", "1"], { GIT_CONFIG_GLOBAL: path.join(hostile, "gitconfig"), HOME: hostile, XDG_CONFIG_HOME: hostile });
+        const result = run(["fixture", ...fake, "--concurrency", "1"], { GIT_CONFIG_GLOBAL: path.join(hostile, "gitconfig"), HOME: hostile, XDG_CONFIG_HOME: hostile, GIT_TEMPLATE_DIR: slashed(path.join(hostile, "template")), GIT_CONFIG_PARAMETERS: `'core.hookspath=${slashed(hooksPath)}'` });
         assert.equal(result.status, 0, result.stderr);
         assert.equal(fs.existsSync(marker), false, "no global hook ran during setup");
         assert.deepEqual(calls()[0].commits, ["Scenario world", "Baseline"]);
