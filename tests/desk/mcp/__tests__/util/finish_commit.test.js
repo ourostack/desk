@@ -4,7 +4,7 @@ import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import { spawnSync } from "node:child_process"
 import { randomUUID } from "node:crypto"
-import { existsSync, mkdtempSync, readFileSync, readdirSync, realpathSync, utimesSync, writeFileSync, mkdirSync } from "node:fs"
+import { existsSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, utimesSync, writeFileSync, mkdirSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 
@@ -16,14 +16,19 @@ import { installCardGuard, TOOL_COMMIT_ENV } from "../../../../../plugins/desk/m
 
 const env = (() => { const { [TOOL_COMMIT_ENV]: _drop, ...rest } = process.env; return rest })()
 
+// Set only while sealed() runs: the exact clean environment, never merged with the one captured at import.
+let sealedEnv = null
+const owned = []
+
 function git(root, args, options = {}) {
-  const result = spawnSync("git", ["-C", root, ...args], { encoding: "utf8", env, ...options })
+  const result = spawnSync("git", ["-C", root, ...args], { encoding: "utf8", env: sealedEnv ?? env, ...options })
   assert.equal(result.status, 0, `git ${args.join(" ")}: ${result.stderr}`)
   return result.stdout
 }
 
 function repo() {
   const root = realpathSync(mkdtempSync(path.join(tmpdir(), "finish-commit-")))
+  if (sealedEnv) owned.push(root)
   git(root, ["init", "-q", "-b", "main"])
   git(root, ["config", "user.name", "t"])
   git(root, ["config", "user.email", "t@example.com"])
@@ -1027,9 +1032,12 @@ async function sealed(run) {
   const saved = { ...process.env }
   for (const key of Object.keys(process.env)) delete process.env[key]
   Object.assign(process.env, clean)
+  sealedEnv = clean
   try {
     return await run(clean)
   } finally {
+    sealedEnv = null
+    for (const dir of [home, ...owned.splice(0)]) rmSync(dir, { recursive: true, force: true })
     for (const key of Object.keys(process.env)) delete process.env[key]
     Object.assign(process.env, saved)
   }
@@ -1055,7 +1063,7 @@ function strandedCreate(clean) {
   assert.ok(failure.route_around.steps[1].argv, JSON.stringify(failure))
   const finish = failure.route_around.steps[1].argv.slice(2)
   const records = path.join(clean.XDG_STATE_HOME, "ouroboros-skills", "desk", CAPTURE_DIR)
-  return { root, dir, finish, records, recorded: { ...env, ...clean } }
+  return { root, dir, finish, records, recorded: clean }
 }
 
 // Unrelated commits, as another session or another member makes them, written without touching the index or the working tree.
@@ -1187,3 +1195,22 @@ test("a finish replays any card change Desk itself recorded, even one in a teamm
   assert.deepEqual([done.code, done.answer.state], [0, "finished"], JSON.stringify(done.answer))
   assert.equal(git(root, ["show", "--name-only", "--format=", "HEAD"]).trim(), `${bo}/task.md`)
 }))
+
+// A hostile but synthetic parent environment (Git repository and config injection, a hooks path, a foreign home) never reaches the fixtures' Git calls or the recorded finish.
+test("sealed fixtures drop an inherited Git repository and config injection instead of merging it back", () => {
+  const planted = { GIT_DIR: "/nonexistent-synthetic", GIT_WORK_TREE: "/nonexistent-synthetic", GIT_INDEX_FILE: "/nonexistent-synthetic/index", GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "core.hooksPath", GIT_CONFIG_VALUE_0: "/nonexistent-synthetic/hooks", GIT_CONFIG_PARAMETERS: "'core.hooksPath=/nonexistent-synthetic/hooks'", DESK_SYNTHETIC_PROBE: "leak" }
+  const saved = Object.fromEntries(Object.keys(planted).map((key) => [key, process.env[key]]))
+  Object.assign(process.env, planted)
+  let seen = null
+  return sealed(async (clean) => {
+    const { root, recorded } = strandedCreate(clean)
+    seen = { clean, recorded, hooks: spawnSync("git", ["-C", root, "config", "--get", "core.hooksPath"], { encoding: "utf8", env: sealedEnv }).stdout }
+    assert.equal(git(root, ["rev-parse", "--show-toplevel"]).trim(), root)
+  }).finally(() => {
+    for (const [key, value] of Object.entries(saved)) value === undefined ? delete process.env[key] : (process.env[key] = value)
+    for (const key of Object.keys(planted)) assert.equal(seen.recorded[key], undefined, `${key} must not reach the recorded finish`)
+    assert.equal(seen.hooks, "")
+    assert.equal(existsSync(seen.clean.HOME), false, "the sealed home is removed")
+    assert.equal(sealedEnv, null)
+  })
+})
