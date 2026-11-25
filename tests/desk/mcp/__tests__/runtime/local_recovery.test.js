@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs"
+import { chmodSync, copyFileSync, mkdirSync, readFileSync, renameSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs"
 import { spawnSync } from "node:child_process"
 import { PassThrough } from "node:stream"
 import * as path from "node:path"
@@ -10,6 +10,7 @@ import * as server from "../../../../../plugins/desk/mcp/src/server.js"
 import { runAdmissionJob } from "../../../../../plugins/desk/mcp/src/runtime/admission-worker.js"
 import { statusObservedSince } from "./_status_observation.js"
 import { mkTempRoot } from "../_temp_roots.js"
+import { removeTreeSync } from "../_remove_tree.js"
 
 // A folder of this file's own, removed when the file ends. It was named by the process id alone and never removed, so a later run that got the same process id (Windows reuses them quickly) found the earlier run's repositories and failed 19 tests on their leftover branches, remotes and cards.
 const here = realpathSync(await mkTempRoot("local-recovery-fixtures-"))
@@ -213,7 +214,7 @@ test("state-branch options cannot override undeclared branch policy", async () =
 
 // A fake server that answers every request, after `statusDelayMs` for desk_status, and answers task_update after `updateDelayMs`
 // (never, when it is null). It records each task_update it receives and applies an effect before answering.
-function fakeServer(root, { statusDelayMs = 0, updateDelayMs = null, onDispatch, onStatus }) {
+function fakeServer(root, { statusDelayMs = 0, updateDelayMs = null, onDispatch, onStatus, result = { status: "nothing_to_commit" } }) {
   return async () => {
     const toServer = new PassThrough()
     const fromServer = new PassThrough()
@@ -232,7 +233,7 @@ function fakeServer(root, { statusDelayMs = 0, updateDelayMs = null, onDispatch,
       if (request.params?.name === "task_update") {
         onDispatch()
         writeFileSync(path.join(root, "applied.txt"), "effect before answer")
-        if (updateDelayMs !== null) reply(request.id, { content: [{ type: "text", text: JSON.stringify({ status: "nothing_to_commit" }) }] }, updateDelayMs)
+        if (updateDelayMs !== null) reply(request.id, { content: [{ type: "text", text: JSON.stringify(result) }] }, updateDelayMs)
         return
       }
       reply(request.id, {}, 0)
@@ -557,3 +558,440 @@ if (threads.isMainThread) {
   assert.equal(Number(git(root, "rev-list", "--count", "HEAD")), beforeCount + 1, "no mutation replay")
   assert.match(readFileSync(path.join(root, "work/one/task.md"), "utf8"), /status: processing/u)
 })
+
+// A queued log is in the working tree when the call returns. Its commit belongs to Desk's background writer, so the tests below accept either moment and only assert what holds at both.
+async function commitOfLog(root, rel, headBefore) {
+  const stop = Date.now() + 30000
+  while (Date.now() < stop) {
+    if (git(root, "rev-parse", "HEAD") !== headBefore && git(root, "status", "--porcelain", "--", rel) === "") return git(root, "show", "--format=", "--name-only", "HEAD")
+    await new Promise((resolve) => setTimeout(resolve, 200))
+  }
+  return null
+}
+const logOnly = { track: "work", slug: "one", log: "Diagnosed: the P0 cause is the stale index." }
+
+function assertQueuedOrObserved(result, rel, headBefore, root) {
+  const { report } = result
+  assert.equal(report.effects.mutation, "reported_applied", JSON.stringify(report))
+  assert.equal(report.queued.path, rel)
+  assert.match(readFileSync(path.join(root, rel), "utf8"), /stale index/u, "the entry is in the log whichever moment this reads")
+  assert.notEqual(report.code, "unexpected_tool_result")
+  if (report.effects.log === "queued") {
+    assert.equal(result.exitCode, 2)
+    assert.equal(report.status, "partial")
+    assert.equal(report.code, "commit_queued")
+    assert.equal(report.effects.commit, "queued")
+    assert.equal(report.git.headBefore, report.git.headAfter, "nothing committed at return")
+    assert.match(report.readback, /Do not resend/u)
+  } else {
+    assert.equal(report.effects.log, "observed")
+    assert.equal(report.effects.commit, "observed")
+    assert.notEqual(report.git.headAfter, headBefore)
+  }
+}
+
+test("a log-only update is reported as an admitted queued write, not unexpected_tool_result", async () => {
+  const root = fixture()
+  const headBefore = git(root, "rev-parse", "HEAD")
+  const result = await recover(root, logOnly)
+  assertQueuedOrObserved(result, "work/one/log.md", headBefore, root)
+  assert.equal(result.report.effects.push, "not_applicable")
+  assert.equal(await commitOfLog(root, "work/one/log.md", headBefore), "work/one/log.md")
+  assert.equal(Number(git(root, "rev-list", "--count", `${headBefore}..HEAD`)), 1, "one commit, no replay")
+})
+
+test("a log-only update in a published member desk is queued under the default coordination purpose", async () => {
+  const root = fixture()
+  mkdirSync(path.join(root, "desks/ari/work/one"), { recursive: true })
+  mkdirSync(path.join(root, ".desk"))
+  writeFileSync(path.join(root, "desks/ari/work/one/task.md"), readFileSync(path.join(root, "work/one/task.md"), "utf8"))
+  writeFileSync(path.join(root, ".desk/content-home.json"), JSON.stringify({
+    schema_version: 1, mode: "declared-purpose", repository: "sample/context",
+    context_purposes: ["coordination", "project-plan", "metadata", "source-context", "historical-evidence", "migration-pointer"],
+    product_purposes: ["product-contract", "product-tool", "product-run-artifact"],
+  }))
+  git(root, "add", ".")
+  git(root, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-m", "member desk")
+  const remote = path.join(here, `remote-${process.pid}-${++sequence}.git`)
+  git(root, "init", "--bare", "-b", "main", remote)
+  git(root, "remote", "add", "origin", remote)
+  git(root, "push", "--quiet", "-u", "origin", "main")
+  const headBefore = git(root, "rev-parse", "HEAD")
+  const rel = "desks/ari/work/one/log.md"
+  const result = await recover(root, logOnly, ["--person", "ari"], (options) => launch({
+    ...options, readinessPolicy: { semantic: "unsupported", write_authority: "person" },
+  }))
+  assertQueuedOrObserved(result, rel, headBefore, root)
+  assert.equal(result.report.effects.push, "pending")
+  assert.equal(await commitOfLog(root, rel, headBefore), rel)
+  assert.equal(readFileSync(path.join(root, "work/one/task.md"), "utf8").includes("log"), false)
+})
+
+test("a mixed update keeps the observed card commit and the queued log separate, at either timing", async () => {
+  const root = fixture()
+  const headBefore = git(root, "rev-parse", "HEAD")
+  const result = await recover(root, { ...logOnly, status: "processing" })
+  const { report } = result
+  // Under heavy host load the real card commit can exhaust its own time budget; recovery then correctly says commit_unknown, and the deterministic cases below cover the observed path.
+  if (report.result.commit?.status === "unknown") return assert.equal(report.code, "commit_unknown")
+  assert.equal(report.effects.commit, "observed", JSON.stringify(report))
+  assert.equal(report.queued.path, "work/one/log.md")
+  assert.ok(["queued", "observed"].includes(report.effects.log), JSON.stringify(report))
+  assert.equal(result.exitCode, report.effects.log === "queued" ? 2 : 0)
+  if (report.effects.log === "queued") assert.equal(report.code, "commit_queued")
+  assert.match(readFileSync(path.join(root, "work/one/task.md"), "utf8"), /status: processing/u)
+  // Whichever commit lands first, the log ends committed once, under its own path.
+  const stop = Date.now() + 30000
+  while (Date.now() < stop && spawnSync("git", ["cat-file", "-e", "HEAD:work/one/log.md"], { cwd: root }).status !== 0) await new Promise((resolve) => setTimeout(resolve, 200))
+  assert.equal(git(root, "status", "--porcelain", "--", "work/one/log.md"), "")
+  assert.equal(Number(git(root, "rev-list", "--count", `${headBefore}..HEAD`)), 2)
+  assert.equal(git(root, "log", "--format=%H", "--", "work/one/log.md").split("\n").length, 1)
+})
+
+// The fake server's tool call applies `during` to the fixture before answering, so each timing is exact rather than raced.
+const MIXED = { status: "updated", commit: { status: "committed" }, log: { path: "work/one/log.md", commit: "queued" } }
+function commitCard(root) {
+  writeFileSync(path.join(root, "work/one/task.md"), "---\nname: One\nstatus: processing\n---\n\n# One\n")
+  git(root, "add", "work/one/task.md")
+  git(root, "commit", "-m", "card")
+}
+async function mixed(during, answer = MIXED, extra = []) {
+  const root = fixture()
+  const { runRecovery } = await import("../../../../../plugins/desk/mcp/scripts/local-recovery.js")
+  const result = await runRecovery({
+    argv: [...args(root), ...extra], env: env(), cwd: root, input: input(logOnly),
+    launch: fakeServer(root, { onDispatch: () => during(root), updateDelayMs: 0, result: answer }),
+  })
+  return { root, ...result }
+}
+const writeLog = (root) => writeFileSync(path.join(root, "work/one/log.md"), "# Log\n\n## entry\n")
+
+test("mixed update, log still pending after the card commit: card observed, log queued, exit 2", async () => {
+  const { report, exitCode } = await mixed((root) => { commitCard(root); writeLog(root) })
+  assert.equal(report.effects.commit, "observed")
+  assert.equal(report.effects.log, "queued")
+  assert.equal(report.code, "commit_queued")
+  assert.equal(exitCode, 2)
+  assert.match(report.readback, /Do not resend/u)
+})
+
+test("mixed update, log committed before readback: both observed, exit 0", async () => {
+  const { report, exitCode } = await mixed((root) => {
+    commitCard(root)
+    writeLog(root)
+    git(root, "add", "work/one/log.md")
+    git(root, "commit", "--allow-empty", "-m", "log")
+  })
+  assert.equal(report.effects.commit, "observed")
+  assert.equal(report.effects.log, "observed")
+  assert.equal(exitCode, 0, JSON.stringify(report))
+})
+
+for (const [name, during, answer] of [
+  ["a missing log path", (root) => commitCard(root), MIXED],
+  ["an ignored untracked log (a blank status)", (root) => {
+    writeFileSync(path.join(root, ".gitignore"), "log.md\n")
+    git(root, "add", ".gitignore")
+    commitCard(root)
+    writeLog(root)
+  }, MIXED],
+  ["an invalid log path", (root) => commitCard(root), { ...MIXED, log: { path: "../outside.md", commit: "queued" } }],
+]) {
+  test(`mixed update with ${name} keeps the card observation but never claims the log observed`, async () => {
+    const { report, exitCode } = await mixed(during, answer)
+    assert.equal(report.effects.commit, "observed", "the card observation is preserved")
+    assert.equal(report.effects.log, "unknown")
+    assert.equal(report.status, "partial")
+    assert.equal(report.code, "log_evidence_unknown")
+    assert.equal(exitCode, 2)
+    assert.match(report.readback, /Do not resend/u)
+  })
+}
+
+// A tracked log that differs from HEAD while Git's status is told to ignore it: the readback compares content with the blob at the reported HEAD.
+for (const flag of ["--assume-unchanged", "--skip-worktree"]) {
+  test(`a tracked log changed behind ${flag} is pending, not observed`, async () => {
+    const { report, exitCode } = await mixed((root) => {
+      writeLog(root)
+      git(root, "add", "work/one/log.md")
+      commitCard(root)
+      git(root, "update-index", flag, "work/one/log.md")
+      writeFileSync(path.join(root, "work/one/log.md"), "# Log\n\n## entry\n\n## newer queued entry\n")
+      assert.equal(git(root, "status", "--porcelain", "--", "work/one/log.md"), "", "status is blind to the change")
+    })
+    assert.equal(report.effects.log, "queued", JSON.stringify(report.effects))
+    assert.equal(report.code, "commit_queued")
+    assert.equal(exitCode, 2)
+  })
+}
+
+// The log lives in a directory literally named "[ab]"; an unrelated dirty file matches that name as a glob.
+const globFixture = (root) => {
+  mkdirSync(path.join(root, "work/[ab]"), { recursive: true })
+  writeFileSync(path.join(root, "work/[ab]/log.md"), "# Log\n\n## entry\n")
+}
+const globAnswer = { ...MIXED, log: { path: "work/[ab]/log.md", commit: "queued" } }
+const dirtyGlobMatch = (root) => {
+  mkdirSync(path.join(root, "work/a"), { recursive: true })
+  writeFileSync(path.join(root, "work/a/log.md"), "unrelated dirty file\n")
+}
+
+test("an unrelated dirty path matching the log path as a glob does not make a committed log pending", async () => {
+  const { report, exitCode } = await mixed((root) => {
+    globFixture(root)
+    git(root, "add", "-f", "work/[ab]/log.md")
+    commitCard(root)
+    dirtyGlobMatch(root)
+  }, globAnswer)
+  assert.equal(report.effects.log, "observed", JSON.stringify(report.effects))
+  assert.equal(exitCode, 0, JSON.stringify(report))
+})
+
+test("an unrelated dirty path matching an ignored log path as a glob does not make it pending", async () => {
+  const { report, exitCode } = await mixed((root) => {
+    commitCard(root)
+    writeFileSync(path.join(root, ".git/info/exclude"), "work/[[]ab]/\n")
+    globFixture(root)
+    dirtyGlobMatch(root)
+  }, globAnswer)
+  assert.equal(report.effects.log, "unknown", JSON.stringify(report.effects))
+  assert.equal(exitCode, 2)
+})
+
+// Descriptor-bound acquisition, exercised directly. A `git` shim records every hash-object call, so "refused without hashing" is observed.
+// The git shim is a POSIX script: Windows resolves `git` to git.exe and never runs it, so the hash receipt cannot be observed there and its zero-count assertions would pass vacuously.
+const RECEIPT = { skip: process.platform === "win32" && "the git receipt shim is POSIX-only" }
+const LOG_TEXT = "# Log\n\n## entry\n"
+async function scene({ text = LOG_TEXT, files = {}, logState = "committed" } = {}) {
+  const { logCommitState } = await import("../../../../../plugins/desk/mcp/scripts/local-recovery.js")
+  const root = fixture()
+  for (const [name, body] of Object.entries(files)) writeFileSync(path.join(root, name), body)
+  if (logState === "committed") writeFileSync(path.join(root, "work/one/log.md"), text)
+  git(root, "add", "-A")
+  git(root, "commit", "--allow-empty", "-m", "log")
+  if (logState !== "committed") {
+    writeFileSync(path.join(root, "work/one/log.md"), text)
+    if (logState === "staged") git(root, "add", "work/one/log.md")
+    if (logState === "ignored") { writeFileSync(path.join(root, ".gitignore"), "work/one/log.md\n"); }
+  }
+  const shim = path.join(here, `shim-${sequence}`)
+  mkdirSync(shim, { recursive: true })
+  const calls = path.join(shim, "calls.txt")
+  writeFileSync(calls, "")
+  writeFileSync(path.join(shim, "git"), `#!/bin/sh\ncase " $* " in *" hash-object "*) echo hash >> "${calls}";; esac\nPATH='${process.env.PATH}' exec git "$@"\n`)
+  chmodSync(path.join(shim, "git"), 0o755)
+  const sibling = path.join(here, `sibling-${sequence}`)
+  mkdirSync(sibling, { recursive: true })
+  const head = git(root, "rev-parse", "HEAD")
+  const state = (probe, at = root) => logCommitState(at, { ...env(), PATH: `${shim}:${process.env.PATH}` }, "work/one/log.md", head, probe)
+  const hashed = () => readFileSync(calls, "utf8").split("\n").filter(Boolean).length
+  const spyFilter = () => {
+    writeFileSync(path.join(root, ".git/info/attributes"), "*.md filter=spy\n")
+    git(root, "config", "filter.spy.clean", `sh -c 'echo clean >> "${calls}"; cat'`)
+  }
+  const relocate = (copy) => {
+    const dir = path.join(root, "work/one")
+    if (copy) { mkdirSync(path.join(sibling, "one"), { recursive: true }); copyFileSync(path.join(dir, "log.md"), path.join(sibling, "one/log.md")); removeTreeSync(dir) }
+    else renameSync(dir, path.join(sibling, "one"))
+    symlinkSync(path.join(sibling, "one"), dir)
+  }
+  return { root, sibling, state, hashed, relocate, spyFilter }
+}
+
+test("an in-root log equal to the HEAD blob is committed and hashed once", RECEIPT, async () => {
+  const { state, hashed } = await scene()
+  assert.equal(state(), "committed")
+  assert.equal(hashed(), 1)
+})
+
+test("a CRLF working log under an eol=lf attribute still equals its HEAD blob", async () => {
+  const { root, state } = await scene({ text: "# Log\n", files: { ".gitattributes": "*.md text eol=lf\n" } })
+  writeFileSync(path.join(root, "work/one/log.md"), "# Log\r\n")
+  assert.equal(state(), "committed")
+})
+
+test("a changed in-root log is pending", async () => {
+  const { root, state } = await scene()
+  writeFileSync(path.join(root, "work/one/log.md"), `${LOG_TEXT}more\n`)
+  assert.equal(state(), "pending")
+})
+
+for (const [name, text] of [["matching", LOG_TEXT], ["changed", `${LOG_TEXT}other\n`]]) {
+  test(`a task directory relocated outside the root and linked from its old parent is refused without hashing (${name} bytes)`, RECEIPT, async () => {
+    const { sibling, state, hashed, relocate } = await scene()
+    relocate(false)
+    writeFileSync(path.join(sibling, "one/log.md"), text)
+    assert.equal(state(), "unknown")
+    assert.equal(hashed(), 0)
+  })
+}
+
+test("a different object swapped in between the walk and the open is refused without hashing", RECEIPT, async () => {
+  const { state, hashed, relocate } = await scene()
+  assert.equal(state({ afterWalk: () => relocate(true) }), "unknown")
+  assert.equal(hashed(), 0)
+})
+
+test("the very directory walked, relocated and linked from its old parent between walk and open, is refused without hashing", RECEIPT, async () => {
+  const { state, hashed, relocate } = await scene()
+  assert.equal(state({ afterOpen: () => relocate(false), afterWalk: () => {} }), "unknown")
+  assert.equal(hashed(), 0)
+})
+
+test("the same directory relocated before the open (same inode reached through a link) is refused without hashing", RECEIPT, async () => {
+  const { state, hashed, relocate } = await scene()
+  assert.equal(state({ afterWalk: () => relocate(false) }), "unknown")
+  assert.equal(hashed(), 0)
+})
+
+test("a leaf symbolic link and a linked root are refused without hashing", RECEIPT, async () => {
+  const leaf = await scene()
+  const target = path.join(leaf.sibling, "log.md")
+  writeFileSync(target, LOG_TEXT)
+  unlinkSync(path.join(leaf.root, "work/one/log.md"))
+  symlinkSync(target, path.join(leaf.root, "work/one/log.md"))
+  assert.equal(leaf.state(), "unknown")
+  const linked = await scene()
+  const alias = path.join(here, `alias-${sequence}`)
+  symlinkSync(linked.root, alias)
+  assert.equal(linked.state(undefined, alias), "unknown")
+  assert.equal(leaf.hashed() + linked.hashed(), 0)
+})
+
+test("a regular log swapped for a FIFO between the walk and the open is refused without blocking", { skip: process.platform === "win32" && "POSIX FIFOs only" }, async () => {
+  const { root } = await scene()
+  const helper = path.join(here, `fifo-${sequence}.mjs`)
+  const log = path.join(root, "work/one/log.md")
+  writeFileSync(helper, `import { lstatSync, unlinkSync } from "node:fs"
+import { spawnSync } from "node:child_process"
+import { logCommitState } from ${JSON.stringify(new URL("../../../../../plugins/desk/mcp/scripts/local-recovery.js", import.meta.url).href)}
+const swap = () => {
+  unlinkSync(${JSON.stringify(log)})
+  const made = spawnSync("mkfifo", [${JSON.stringify(log)}], { encoding: "utf8" })
+  if (made.status !== 0 || !lstatSync(${JSON.stringify(log)}).isFIFO()) throw new Error("mkfifo failed: " + made.status + " " + made.stderr)
+}
+console.log(logCommitState(${JSON.stringify(root)}, process.env, "work/one/log.md", ${JSON.stringify(git(root, "rev-parse", "HEAD"))}, { afterWalk: swap }))
+`)
+  const out = spawnSync(process.execPath, [helper], { encoding: "utf8", timeout: 4000, killSignal: "SIGKILL", env: isolatedEnv() })
+  assert.equal(out.error, undefined, "the open must not block on a FIFO")
+  assert.equal(out.status, 0, out.stderr)
+  assert.equal(out.signal, null)
+  assert.equal(out.stderr, "")
+  assert.equal(out.stdout.trim(), "unknown")
+})
+
+test("a log removed between the walk and the open is unknown without hashing", RECEIPT, async () => {
+  const { root, state, hashed } = await scene()
+  assert.equal(state({ afterWalk: () => unlinkSync(path.join(root, "work/one/log.md")) }), "unknown")
+  assert.equal(hashed(), 0)
+})
+
+test("a log changed while Git reads it is unknown", async () => {
+  const { root, state } = await scene()
+  assert.equal(state({ afterHash: () => writeFileSync(path.join(root, "work/one/log.md"), `${LOG_TEXT}appended\n`) }), "unknown")
+})
+
+test("log-only update with a missing log path is unknown evidence, not observed", async () => {
+  const { report, exitCode } = await mixed(() => {}, { status: "logged", path: "work/one/log.md", commit: "queued" })
+  assert.equal(report.effects.log, "unknown")
+  assert.equal(exitCode, 2)
+  assert.match(report.readback, /Do not resend/u)
+})
+
+for (const [name, answer] of [
+  ["a log without the queued marker", { status: "logged", path: "work/one/log.md" }],
+  ["an unknown status", { status: "SOMETHING_NEW" }],
+]) {
+  test(`${name} still ends unexpected and is never resent`, async () => {
+    const root = fixture()
+    let dispatches = 0
+    const { runRecovery } = await import("../../../../../plugins/desk/mcp/scripts/local-recovery.js")
+    const result = await runRecovery({
+      argv: args(root), env: env(), cwd: root, input: input(logOnly),
+      launch: fakeServer(root, { onDispatch: () => dispatches++, updateDelayMs: 0, result: answer }),
+    })
+    assert.equal(result.report.code, "unexpected_tool_result")
+    assert.equal(result.report.effects.mutation, "unknown")
+    assert.equal(result.exitCode, 2)
+    assert.equal(dispatches, 1)
+  })
+}
+
+test("deferred publication reports that no background commit is scheduled for a queued log", async () => {
+  const root = fixture()
+  const headBefore = git(root, "rev-parse", "HEAD")
+  const result = await recover(root, logOnly, ["--publication", "deferred"])
+  assert.equal(result.report.queued.committer, "next_session_start")
+  assert.equal(result.report.effects.log, "queued")
+  assert.equal(result.report.code, "commit_queued")
+  assert.match(result.report.readback, /no background commit is scheduled/u)
+  assert.equal(git(root, "rev-parse", "HEAD"), headBefore)
+})
+
+test("a log refused for a missing card changes nothing", async () => {
+  const root = fixture()
+  const headBefore = git(root, "rev-parse", "HEAD")
+  const result = await recover(root, { ...logOnly, slug: "absent" })
+  assert.equal(result.report.code, "tool_error")
+  assert.equal(git(root, "rev-parse", "HEAD"), headBefore)
+  assert.equal(git(root, "status", "--porcelain", "--", "work"), "")
+})
+
+// Only PATH is inherited: no tokens, hosts, Git config or default-desk profile reach the real spawned process.
+function isolatedEnv() {
+  const home = path.join(here, "spawned-home")
+  mkdirSync(home, { recursive: true })
+  return {
+    PATH: process.env.PATH,
+    HOME: home, USERPROFILE: home, TMPDIR: home,
+    XDG_CACHE_HOME: path.join(home, "cache"), XDG_STATE_HOME: path.join(home, "state"),
+    XDG_CONFIG_HOME: path.join(home, "config"), XDG_DATA_HOME: path.join(home, "data"),
+    DESK_STATE_HOME: path.join(home, "desk-state"),
+    GIT_CONFIG_GLOBAL: path.join(home, "gitconfig"), GIT_CONFIG_NOSYSTEM: "1",
+    GIT_AUTHOR_NAME: "Fixture", GIT_COMMITTER_NAME: "Fixture",
+    GIT_AUTHOR_EMAIL: "fixture@example.invalid", GIT_COMMITTER_EMAIL: "fixture@example.invalid",
+  }
+}
+
+test("the queued commit survives a real spawned bootstrap being closed", async () => {
+  const root = fixture()
+  const headBefore = git(root, "rev-parse", "HEAD")
+  const { runRecovery, launchBootstrap } = await import("../../../../../plugins/desk/mcp/scripts/local-recovery.js")
+  const spawnedEnv = isolatedEnv()
+  const allowed = /^(PATH|HOME|USERPROFILE|TMPDIR|XDG_[A-Z]+_HOME|DESK_STATE_HOME|GIT_CONFIG_GLOBAL|GIT_CONFIG_NOSYSTEM|GIT_(AUTHOR|COMMITTER)_(NAME|EMAIL))$/u
+  assert.deepEqual(Object.keys(spawnedEnv).filter((key) => !allowed.test(key)), [], "only controlled variables reach the spawned bootstrap")
+  for (const key of ["HOME", "TMPDIR", "XDG_CACHE_HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "DESK_STATE_HOME", "GIT_CONFIG_GLOBAL"]) {
+    assert.ok(spawnedEnv[key].startsWith(here), `${key} stays under the synthetic temp root`)
+  }
+  const result = await runRecovery({
+    argv: args(root), env: spawnedEnv, cwd: root,
+    input: input(logOnly), launch: launchBootstrap, timeoutMs: 60000,
+  })
+  assert.equal(result.report.transport.shutdown, "closed", JSON.stringify(result.report))
+  assertQueuedOrObserved(result, "work/one/log.md", headBefore, root)
+  assert.equal(await commitOfLog(root, "work/one/log.md", headBefore), "work/one/log.md", "the detached worker commits after the child is gone")
+})
+
+// Before HEAD holds the log, readback may list Git's names but must not run Git over the file's bytes (a clean filter or hash is a read of them), nor through a namespace that did not qualify.
+for (const [logState, expected] of [["staged", "pending"], ["untracked", "pending"], ["ignored", "unknown"], ["missing", "unknown"]]) {
+  test(`a ${logState} log not at HEAD is ${expected} without any read of its bytes`, RECEIPT, async () => {
+    const { root, state, hashed, spyFilter } = await scene({ logState: logState === "missing" ? "ignored" : logState })
+    if (logState === "missing") removeTreeSync(path.join(root, "work/one/log.md"))
+    spyFilter()
+    writeFileSync(path.join(root, "work/one"  , "log.md"), LOG_TEXT.replace("entry", "ENTRY"), { flag: logState === "missing" ? "a" : "w" })
+    if (logState === "missing") removeTreeSync(path.join(root, "work/one/log.md"))
+    assert.equal(state(), expected)
+    assert.equal(hashed(), 0, "no filter or hash ran over the log")
+  })
+}
+
+for (const [name, when] of [["linked before the readback", null], ["relocated between the walk and the listing", "afterWalk"]]) {
+  test(`a staged log not at HEAD, its directory ${name}, is unknown without any read of its bytes`, RECEIPT, async () => {
+    const { root, sibling, state, hashed, relocate, spyFilter } = await scene({ logState: "staged" })
+    spyFilter()
+    writeFileSync(path.join(root, "work/one/log.md"), LOG_TEXT.replace("entry", "ENTRY"))
+    if (when === null) { relocate(false); assert.equal(state(), "unknown") } else assert.equal(state({ afterWalk: () => relocate(false) }), "unknown")
+    assert.equal(hashed(), 0)
+    assert.ok(sibling)
+  })
+}
