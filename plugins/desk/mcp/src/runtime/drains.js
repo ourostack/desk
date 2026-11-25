@@ -516,12 +516,6 @@ function baselineOf(scan) {
 
 const NEWS = { kind: "news" }
 
-/** A person's edit is news, and still leaves the record of how many edits the history holds, so the next change is not read from the start of it again. The count can only be too high (an edit newer than this one that was not read): a later scan then finds more new edits than it expects and is news, never quiet. */
-function newsAt(scan, edit) {
-  if (typeof edit.id !== "string" || !Number.isFinite(Date.parse(edit.editedAt))) return NEWS
-  return { kind: "news", baseline: baselineOf({ ...scan, found: { ...scan.found, [edit.id]: edit.editedAt } }) }
-}
-
 const validPage = (page) => Array.isArray(page.edits) && Number.isInteger(page.total) && typeof page.updatedAt === "string" && typeof page.hasMore === "boolean"
 
 /** What the pages read so far settle: the issue's new edits are all found (a bot-only proof, once a page is as fresh as the issue), not all found yet (null), or cannot be explained (news). */
@@ -573,14 +567,26 @@ async function advance(api, repo, issue, scan) {
   scan.passTotal ??= page.total
   side.pages += 1
   scan.next = direction === "fwd" ? "bwd" : "fwd"
+  let person = false
   for (const edit of page.edits) {
     if (!edit || typeof edit !== "object") return NEWS
     if (!isNewEdit(scan, edit)) {
       if (scan.base === null) scan.old += 1
       continue
     }
-    if (!botEdit(edit)) return newsAt(scan, edit)
+    if (!botEdit(edit)) {
+      if (typeof edit.id !== "string" || !Number.isFinite(Date.parse(edit.editedAt))) return NEWS
+      person = true
+    }
     scan.found[edit.id] = edit.editedAt
+  }
+  if (person) {
+    // A person's edit is news. It also leaves a baseline, so the next change is not read from the start again, but only when every edit is accounted for:
+    // the whole page was judged, and the new edits found are exactly the ones the count says exist (or the side was read to its end and every edit was old or found).
+    // Otherwise an unread person's edit could sit under the count and be passed over later as a bot-only change.
+    const found = Object.keys(scan.found).length
+    const accounted = scan.base === null ? !page.hasMore && scan.old + found === scan.total : found === scan.total - scan.base
+    return accounted ? { kind: "news", baseline: baselineOf(scan) } : NEWS
   }
   if (page.hasMore) {
     // A cursor that does not move, or more pages than the history can hold, is a cycle: it would never end.

@@ -2861,23 +2861,61 @@ test("repeated bot comments from two authors each find their own previous commen
 })
 
 test("a person's body edit leaves a baseline, so the next body change on a long history reads a page or two, not the whole history again (#1798)", async () => {
-  for (const order of ["asc", "desc"]) {
-    const w = await editsWorld([ISSUE()])
-    w.hist[1] = history(30_000, { order })
-    await w.poll()
-    const reads = []
-    const step = async (k, edit) => {
-      const at = NOW + k * 360_000
-      const before = w.reads.length
-      w.change(1, at, edit)
-      const { wakes } = await w.poll(at)
-      reads.push(w.reads.length - before)
-      return wakes
-    }
-    assert.equal((await step(1, personEdit("h1", iso(NOW + 360_000)))).length, 1, `${order}: a person's edit wakes`)
-    assert.equal((await step(2, botEdit("b2", iso(NOW + 720_000)))).length, 0, `${order}: a bot's edit after it is quiet`)
-    assert.equal((await step(3, personEdit("h3", iso(NOW + 1_080_000)))).length, 1, `${order}: a second person's edit wakes`)
-    assert.equal((await step(4, botEdit("b4", iso(NOW + 1_440_000)))).length, 0, order)
-    assert.ok(reads.slice(1).every((count) => count <= 4), `${order}: later changes read a few pages, got ${reads}`)
+  const w = await editsWorld([ISSUE()])
+  w.hist[1] = history(30_000, { order: "asc" })
+  await w.poll()
+  const reads = []
+  const step = async (k, edit) => {
+    const at = NOW + k * 360_000
+    const before = w.reads.length
+    w.change(1, at, edit)
+    const { wakes } = await w.poll(at)
+    reads.push(w.reads.length - before)
+    return wakes.length
   }
+  assert.deepEqual([
+    await step(1, personEdit("h1", iso(NOW + 360_000))),
+    await step(2, botEdit("b2", iso(NOW + 720_000))),
+    await step(3, personEdit("h3", iso(NOW + 1_080_000))),
+    await step(4, botEdit("b4", iso(NOW + 1_440_000))),
+  ], [1, 0, 1, 0])
+  assert.ok(reads.slice(1).every((count) => count <= 4), `later changes read a few pages, got ${reads}`)
+  assert.equal(w.state().seen[1].edits.total, 30_004)
+})
+
+test("a newest-first history is cheap without a baseline, and still wakes for what a person edited before (#1798)", async () => {
+  const w = await editsWorld([ISSUE()])
+  w.hist[1] = history(30_000, { order: "desc" })
+  await w.poll()
+  w.change(1, NOW + 360_000, personEdit("h1", iso(NOW + 360_000)))
+  assert.equal((await w.poll(NOW + 360_000)).wakes.length, 1)
+  const before = w.reads.length
+  w.change(1, NOW + 720_000, botEdit("b2", iso(NOW + 720_000)))
+  await w.poll(NOW + 720_000)
+  assert.ok(w.reads.length - before <= 4)
+})
+
+test("a person's edit found early leaves no baseline that hides one that was not read (#1798)", async () => {
+  const w = await editsWorld([ISSUE()])
+  const h = history(250, { order: "asc" })
+  const old = h.at.bind(h)
+  // The first page reaches h1, the issue's own edit; a later person's edit h2 sits unread on a middle page.
+  h.at = (index) => (index === 0 ? personEdit("h1", iso(NOW + 360_000)) : index === 150 ? personEdit("h2", iso(NOW + 400_000)) : old(index))
+  w.hist[1] = h
+  await w.poll()
+  w.change(1, NOW + 360_000, personEdit("h1", iso(NOW + 360_000)))
+  assert.equal((await w.poll(NOW + 360_000)).wakes.length, 1)
+  assert.equal(w.state().seen[1].edits, undefined)
+  h.extra.push(botEdit("b4", iso(NOW + 720_000)))
+  w.change(1, NOW + 720_000, null)
+  assert.equal((await w.poll(NOW + 720_000)).wakes.length, 1)
+})
+
+test("a person's edit with no id or time is news and leaves no baseline (#1798)", async () => {
+  const w = await editsWorld([ISSUE()])
+  w.hist[1] = history(3, { extra: [{ id: null, editedAt: iso(NOW + 360_000), deletedAt: null, editor: { type: "User", login: "ari" } }] })
+  await w.poll()
+  w.change(1, NOW + 360_000, null)
+  assert.equal((await w.poll(NOW + 360_000)).wakes.length, 1)
+  assert.equal(w.state().seen[1].edits, undefined)
 })
