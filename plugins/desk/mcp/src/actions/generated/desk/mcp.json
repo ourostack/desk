@@ -181,7 +181,7 @@
         "additionalProperties": false
       },
       "annotations": {
-        "readOnlyHint": false,
+        "readOnlyHint": true,
         "destructiveHint": false,
         "openWorldHint": false
       }

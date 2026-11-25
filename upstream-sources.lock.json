@@ -361,7 +361,7 @@
     {
       "id": "ourostack-ouro-ui-ax",
       "repository": "ourostack/ouro-ui",
-      "commit": "184c032d8b87d5a34168ed66f7c35d567bcef39e",
+      "commit": "188be02e1a31b1754834b0993211ccd79a495d28",
       "license": "MIT",
       "files": [
         {
@@ -482,14 +482,14 @@
         {
           "sourcePath": "registry/ouro/ax/xray.ts",
           "generatedPath": "plugins/desk/mcp/src/lib/ouro-ui/registry/ouro/ax/xray.ts",
-          "sha256": "6ecbbba865b76cffe60d1f760b84ff95888c07e86d611f0eeb875fb4a7e42479"
+          "sha256": "ba04c7afe78b480e4fb5d285d705c55342c1e8126bfcceb3d789affdf7751250"
         }
       ]
     },
     {
       "id": "ourostack-ouro-ui-census",
       "repository": "ourostack/ouro-ui",
-      "commit": "184c032d8b87d5a34168ed66f7c35d567bcef39e",
+      "commit": "188be02e1a31b1754834b0993211ccd79a495d28",
       "license": "MIT",
       "files": [
         {

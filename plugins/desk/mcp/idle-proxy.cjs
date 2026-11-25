@@ -306,12 +306,19 @@ function createIdleProxy(options) {
     // A host that is gone cannot be answered: end like a closed stdin rather than keep a server alive with no client.
     if (options.stdout.on) options.stdout.on("error", onClientEnd);
     if (options.watchParent) options.watchParent(onClientEnd);
+    var signalHandlers = {};
     FORWARDED_SIGNALS.forEach(function (signal) {
-      options.signals.on(signal, function () {
+      signalHandlers[signal] = function () {
         signalled = true;
-        if (child !== null) child.kill(signal);
-        else options.kill(process.pid, signal);
-      });
+        if (child !== null) return child.kill(signal);
+        // Stop listening first, so the re-raised signal takes its default action and ends the proxy instead of coming
+        // back to this listener, which would raise it again forever.
+        FORWARDED_SIGNALS.forEach(function (name) {
+          options.signals.removeListener(name, signalHandlers[name]);
+        });
+        options.kill(process.pid, signal);
+      };
+      options.signals.on(signal, signalHandlers[signal]);
     });
     options.stdin.resume();
     return start();
