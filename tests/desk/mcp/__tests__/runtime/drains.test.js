@@ -9,6 +9,7 @@ import path from "node:path"
 import { test } from "node:test"
 import { fileURLToPath } from "node:url"
 import { mkTempRoot } from "../_temp_roots.js"
+import { removeTreeSync } from "../_remove_tree.js"
 import {
   acquireDrainLock, moveWithoutReplace, ackWake, connectGithub, DRAIN_STATUS_MARKER, drainPaths, drainsHome, deskInUse, drainStatusLines, installLauncher, parseDrainConfig, pollDrain, pollDrains, quotaHold, quotaLines, recoverDrainTarget, startSuccessor, successorKickoff,
   readDrainConfig, readDrainStates, wakeId, wakeMessage, whyOf, withDrainLock,
@@ -2205,7 +2206,7 @@ test("two contenders for a dead owner's lock cannot both take it: one that holds
     first()
     assert.deepEqual(readdirSync(dir), [])
   } finally {
-    rmSync(dir, { recursive: true, force: true })
+    removeTreeSync(dir)
   }
 })
 
@@ -2295,7 +2296,7 @@ test("a platform that reports an occupied lock with another error code (Windows:
       mkdirSync(lock)
       writeFileSync(path.join(lock, "stranger"), "x")
       assert.throws(() => acquireDrainLock(lock, options(code)), /desk_drains_lock_unrecognized/u, `${code} unknown`)
-      rmSync(lock, { recursive: true })
+      removeTreeSync(lock)
       assert.equal(readdirSync(dir).length, 0, `${code} staging removed`)
     }
     // A real permission failure has nothing in the way, so it is named, not called busy.
@@ -2303,7 +2304,7 @@ test("a platform that reports an occupied lock with another error code (Windows:
     assert.throws(() => acquireDrainLock(lock, { rename: denied }), (error) => /desk_drains_lock_unavailable/u.test(error.message) && /EPERM/u.test(error.message) && !/still working/u.test(error.message))
     assert.deepEqual(readdirSync(dir), [], "its staging is removed")
   } finally {
-    rmSync(dir, { recursive: true, force: true })
+    removeTreeSync(dir)
   }
 })
 
@@ -2388,13 +2389,13 @@ test("a cut-short publication whose target is not our own directory is never tak
   const foreign = await mkTempRoot("desk-drains-")
   const foreignLock = path.join(foreign, "poll.lock")
   const foreignOwner = path.join(foreignLock, "owner-11111111-1111-1111-1111-111111111111")
-  assert.throws(() => acquireDrainLock(foreignLock, { rename: (from) => { rmSync(from, { recursive: true }); mkdirSync(foreignLock); writeFileSync(foreignOwner, `${process.pid}\n`); throw timedOut() } }), /desk_drains_busy/u)
+  assert.throws(() => acquireDrainLock(foreignLock, { rename: (from) => { removeTreeSync(from); mkdirSync(foreignLock); writeFileSync(foreignOwner, `${process.pid}\n`); throw timedOut() } }), /desk_drains_busy/u)
   assert.equal(readFileSync(foreignOwner, "utf8"), `${process.pid}\n`, "a live foreign owner is left untouched")
   assert.deepEqual(readdirSync(foreignLock), ["owner-11111111-1111-1111-1111-111111111111"])
 
   const legacy = await mkTempRoot("desk-drains-")
   const legacyLock = path.join(legacy, "poll.lock")
-  assert.throws(() => acquireDrainLock(legacyLock, { rename: (from) => { rmSync(from, { recursive: true }); writeFileSync(legacyLock, `${process.pid}\n`); throw timedOut() } }), /desk_drains_lock_legacy/u)
+  assert.throws(() => acquireDrainLock(legacyLock, { rename: (from) => { removeTreeSync(from); writeFileSync(legacyLock, `${process.pid}\n`); throw timedOut() } }), /desk_drains_lock_legacy/u)
   assert.equal(readFileSync(legacyLock, "utf8"), `${process.pid}\n`, "a legacy file is left untouched")
 })
 

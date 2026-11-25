@@ -230,7 +230,7 @@ function writeDrainStates(file, states) {
 const OWNER_FILE = /^owner-[0-9a-f-]{36}$/u
 const busy = (lockFile, who) => problem("desk_drains_busy", "drains lock", `${who} holds ${lockFile} and is still working`, `check that process; it releases the lock itself when it finishes, and a lock whose process has died is taken over by the next run`, "run the command again once it finishes")
 const lockProblem = (code, lockFile, probably, look, fix) => problem(code, "drains lock", probably, look, fix)
-const unavailable = (lockFile, error) => lockProblem("desk_drains_lock_unavailable", lockFile, `${lockFile} could not be used (${error.code ?? error.message})`, `the permissions and free space of ${path.dirname(lockFile)}, and the error code ${error.code ?? "unknown"}`, "fix that, then run the command again")
+const unavailable = (lockFile, error) => lockProblem("desk_drains_lock_unavailable", lockFile, `${lockFile} cannot be created or read because of ${error.code ?? error.message}`, `the permissions and free space of ${path.dirname(lockFile)}, and the error code ${error.code ?? "unknown"}`, "fix that, then run the command again")
 
 /**
  * Takes the lock, or throws. The lock is a directory that is published whole: a sibling `<lock>.new-<pid>-<token>` is filled with
