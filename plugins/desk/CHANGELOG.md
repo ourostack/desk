@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.554 — 2026-11-25
+
+Desk's MCP server now vendors Ouro UI v1.3.541, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.553 — 2026-11-25
 
 The queued-log readback tests count Git hash-object runs with Git's own trace2 stream and a node clean-filter spy, so their hash-once and zero-read checks run on Windows as well as POSIX.
