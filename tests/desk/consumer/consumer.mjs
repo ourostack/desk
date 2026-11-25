@@ -54,7 +54,7 @@ const sha = (file) => (existsSync(file) ? createHash("sha256").update(readFileSy
 const snap = (d) => ({ head: git(d.root, "rev-parse", "HEAD"), status: git(d.root, "status", "--porcelain"), card: sha(d.card), log: sha(d.log) })
 
 const results = []
-function run(label, rootDesk, input, { person = true } = {}) {
+function run(label, rootDesk, input, { person = true, extraEnv = {} } = {}) {
   const before = { personal: snap(personal), crew: snap(crew) }
   const file = path.join(sandbox, `input-${results.length}.json`)
   writeFileSync(file, JSON.stringify(input))
@@ -63,7 +63,7 @@ function run(label, rootDesk, input, { person = true } = {}) {
   const started = Date.now()
   const r = spawnSync(process.execPath, args, {
     cwd: rootDesk.root, encoding: "utf8", timeout: 100000,
-    env: { ...process.env, ...ident, HOME: home, USERPROFILE: home, DESK_REGISTRY: registry, ...(person ? { DESK_PERSON: "ari" } : {}), XDG_CACHE_HOME: path.join(home, "cache"), XDG_STATE_HOME: path.join(home, "state"), XDG_CONFIG_HOME: path.join(home, "config"), XDG_DATA_HOME: path.join(home, "data") },
+    env: { ...process.env, ...ident, HOME: home, USERPROFILE: home, DESK_REGISTRY: registry, ...(person ? { DESK_PERSON: "ari" } : { DESK_PERSON: "ari" }), ...extraEnv, XDG_CACHE_HOME: path.join(home, "cache"), XDG_STATE_HOME: path.join(home, "state"), XDG_CONFIG_HOME: path.join(home, "config"), XDG_DATA_HOME: path.join(home, "data") },
   })
   let report = null
   try { report = JSON.parse(r.stdout) } catch {}
@@ -78,11 +78,16 @@ console.log(`release=${git(repo, "rev-parse", "HEAD")} platform=${process.platfo
 console.log(`local-recovery.js sha256=${sha(script)}`)
 
 const LOG = "- progress entry from the consumer probe"
-run("A ordinary: Crew card log-only from a person-scoped personal root via `desk`", personal, { desk: "team", track: "t", slug: "work", log: LOG })
-run("B ordinary: Crew card status change without content_home (refusal atomicity)", personal, { desk: "team", track: "t", slug: "work", status: "processing" })
+const CH = { purpose: "coordination", lifecycle: "current" }
+// The bound session is a solo personal desk (no --person); the card is in a registered Crew desk, written as the member this machine's sign-in resolves (DESK_PERSON stands in for the sign-in).
+const viaDesk = { person: false }
+run("B refusal atomicity: Crew card status change via `desk` without content_home", personal, { desk: "team", track: "t", slug: "work", status: "processing" }, viaDesk)
+run("G ordinary: Crew card status change via `desk` with content_home commits as the member", personal, { desk: "team", track: "t", slug: "work", status: "processing", note: "ordinary write", content_home: CH }, viaDesk)
+run("F non-member sign-in is refused before any write", personal, { desk: "team", track: "t", slug: "work", note: "x", content_home: CH }, { person: false, extraEnv: { DESK_PERSON: "", DESK_IDENTITY: "nobody" } })
+run("E unregistered desk refused", personal, { desk: "nowhere", track: "t", slug: "work", log: LOG }, viaDesk)
+run("A ordinary: Crew card log-only via `desk` (content_home defaulted)", personal, { desk: "team", track: "t", slug: "work", log: LOG }, viaDesk)
 run("C recovery: log-only on the Crew desk itself as its member", crew, { track: "t", slug: "work", log: LOG })
 run("D recovery: log + status mixed on the Crew desk (content_home still required)", crew, { track: "t", slug: "work", status: "processing", log: LOG })
-run("E ordinary: unregistered desk refused", personal, { desk: "nowhere", track: "t", slug: "work", log: LOG })
 
 console.log("\n=== SUMMARY ===")
 for (const r of results) console.log(`${r.label}\n  exit=${r.exit} result=${r.result ? `${r.result.status}/${r.result.code ?? ""}` : "none"} crewHead ${r.before.crew.head.slice(0, 8)}->${r.after.crew.head.slice(0, 8)} personalHead ${r.before.personal.head.slice(0, 8)}->${r.after.personal.head.slice(0, 8)}`)
