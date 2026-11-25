@@ -184,6 +184,36 @@ function redact(value, input) {
   return visit(value)
 }
 
+const RECORDED_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u
+// A card operation's commit message is built from the tool name and the card's folder, never from user text.
+const CARD_MESSAGE = /^task_(?:create|update|archive): [A-Za-z0-9][A-Za-z0-9._/-]*$/u
+
+/**
+ * `redact` rewrites the route a failed card commit hands back (the card's folder, the interpreter and the cache path), so its
+ * argv cannot run. The argv is Desk's own, not user text, so it is carried through exactly, but only for a route Desk built for
+ * a recorded card change: the finish names a Desk record by id, its message is the card message, and its second step is the
+ * same command plus --commit. Any other shape keeps the redacted copy.
+ */
+function restoreRecordedRoute(redacted, original) {
+  const route = original?.commit?.route_around
+  const shown = redacted?.commit?.route_around
+  if (!route || !shown || !Array.isArray(route.steps) || route.steps.length !== shown.steps?.length) return redacted
+  const strings = (argv) => Array.isArray(argv) && argv.every((arg) => typeof arg === "string")
+  const [check, finish] = route.steps.map((step) => step?.argv)
+  if (!strings(check) || !strings(finish) || path.basename(check[1] ?? "") !== "finish-commit.js") return redacted
+  const value = (flag) => check[check.indexOf(flag) + 1]
+  if (check.includes("--commit") || !RECORDED_ID.test(value("--capture-id") ?? "") || !CARD_MESSAGE.test(value("--message") ?? "")) return redacted
+  if (JSON.stringify(finish) !== JSON.stringify([...check, "--commit"])) return redacted
+  const commands = (argv) => strings(argv) || (Array.isArray(argv) && argv.every(strings))
+  const argvLists = [route.committed_locally_when, route.published_when, route.newer_unsaved_when].map((when) => when?.argv)
+  if (!route.steps.every((step) => commands(step?.argv)) || !argvLists.every((list) => list === undefined || commands(list))) return redacted
+  route.steps.forEach((step, index) => { shown.steps[index].argv = step.argv })
+  for (const key of ["committed_locally_when", "published_when", "newer_unsaved_when"]) {
+    if (route[key]?.argv) shown[key].argv = route[key].argv
+  }
+  return redacted
+}
+
 function gitHead(root, env) {
   const result = spawnSync("git", ["rev-parse", "--verify", "HEAD"], {
     cwd: root, env, encoding: "utf8", timeout: 5000, windowsHide: true,
@@ -366,7 +396,7 @@ export async function runRecovery({
     // deadline. With the defaults the preflight ends within 60 s, so the write always has at least 40 s.
     const response = await client.request("tools/call", { name: report.operation, arguments: payload }, Math.min(Date.now() + dispatchTimeoutMs, totalDeadline))
     const result = toolPayload(response)
-    report.result = redact(result, payload)
+    report.result = restoreRecordedRoute(redact(result, payload), result)
     // Only an admitted queued log is accepted; a bare "logged" without it stays unexpected.
     const queuedPath = result.status === "logged" && result.commit === "queued" ? result.path
       : result.status === "updated" && result.log?.commit === "queued" ? result.log.path : null

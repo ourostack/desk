@@ -648,3 +648,39 @@ test("the command line answers a wrong argument with one usage line and --help w
   assert.equal(help.status, 0)
   assert.match(help.stdout, /--operation/u)
 })
+
+const routeFor = (message, captureId = "77f47d62-db74-4900-bb68-48cb02a1b0d5") => {
+  const argv = (commit) => [process.execPath, path.join(root, "cache/abcdef0123456789abcdef0123456789abcdef01/scripts/finish-commit.js"), "--root", path.join(root, "desks/ari/greenhouse/watering-api"), "--capture-id", captureId, "--message", message, "--path", "task.md", ...(commit ? ["--commit"] : [])]
+  return {
+    summary: "Desk's commit of the card greenhouse/watering-api did not land.",
+    steps: [{ step: "Read back.", argv: argv(false) }, { step: "Commit once.", argv: argv(true) }, { step: "Publish.", argv: [process.execPath, "sync-push.js", "--root", root] }, { step: "Newer?", argv: [["git", "-C", root, "diff", "--quiet", "HEAD", "--", "task.md"]] }],
+    committed_locally_when: { argv: [["git", "-C", root, "diff", "--exit-code", "HEAD", "--", "task.md"]], expect: "exits 0" },
+  }
+}
+const failedCommit = (route) => () => ({ status: "updated", commit: { status: "failed", reason: "hook refused", route_around: route } })
+
+test("a failed card commit's recovery route keeps its runnable argv while the user's own text stays redacted", async () => {
+  const secret = "SECRET_NOTE_ghp_0123456789abcdefghijklmnopqrstuvwxyz"
+  const route = routeFor("task_create: greenhouse/watering-api")
+  const transport = mockTransport(failedCommit(route))
+  const result = await recovery({ input: stream(JSON.stringify({ track: "greenhouse", slug: "watering-api", title: secret, note: secret })), launch: transport.launch })
+  const shown = result.report.result.commit.route_around
+  assert.deepEqual(shown.steps.map((step) => step.argv), route.steps.map((step) => step.argv))
+  assert.deepEqual(shown.committed_locally_when.argv, route.committed_locally_when.argv)
+  assert.doesNotMatch(JSON.stringify(result.report), /SECRET_NOTE|ghp_/u)
+  assert.equal(result.report.code, "commit_failed")
+})
+
+test("a route whose message could carry user text, or whose shape is not a recorded card change, stays redacted", async () => {
+  const typed = "task_create: greenhouse/watering-api SECRET_TEXT"
+  for (const route of [
+    routeFor(typed),
+    routeFor("task_create: greenhouse/watering-api", "not-a-record-id"),
+    { ...routeFor("task_create: greenhouse/watering-api"), steps: [{ step: "x", argv: ["node", "other.js", "--message", typed] }] },
+  ]) {
+    const transport = mockTransport(failedCommit(route))
+    const result = await recovery({ input: stream(JSON.stringify({ track: "greenhouse", slug: "watering-api", note: "SECRET_TEXT" })), launch: transport.launch })
+    assert.doesNotMatch(JSON.stringify(result.report), /SECRET_TEXT/u)
+    assert.notDeepEqual(result.report.result.commit.route_around.steps[0].argv, route.steps[0].argv)
+  }
+})
