@@ -1409,6 +1409,45 @@ try {
     }
 
     {
+      // Setup Git (scratch desk, fixture repository, world baselines, origin overlays) uses the subject's isolated config, never the contributor's global hooks or templates.
+      const hostile = fs.mkdtempSync(path.join(os.tmpdir(), "skill-eval-hostile-"));
+      try {
+        const marker = path.join(hostile, "hook-ran");
+        const failingHook = `#!/bin/sh\necho "$0" >> "${marker.replaceAll("\\", "/")}"\nexit 1\n`;
+        const hookNames = ["pre-commit", "commit-msg", "pre-push", "post-checkout", "post-commit"];
+        const hooksPath = path.join(hostile, "hooks");
+        const templateHooks = path.join(hostile, "template", "hooks");
+        for (const folder of [hooksPath, templateHooks]) {
+          fs.mkdirSync(folder, { recursive: true });
+          for (const name of hookNames) fs.writeFileSync(path.join(folder, name), failingHook, { mode: 0o755 });
+        }
+        const slashed = (file) => file.replaceAll("\\", "/");
+        fs.writeFileSync(path.join(hostile, "gitconfig"), `[core]\n\thooksPath = ${slashed(hooksPath)}\n[init]\n\ttemplateDir = ${slashed(path.join(hostile, "template"))}\n[commit]\n\tgpgsign = true\n[gpg]\n\tprogram = skill-eval-no-such-gpg\n`);
+        const { run, calls } = runFixture((suite, root) => {
+          const repo = path.join(root, "evals", "fixtures", "repo", "src");
+          fs.mkdirSync(repo, { recursive: true });
+          fs.writeFileSync(path.join(repo, "code.js"), "original\n");
+          const world = path.join(root, "evals", "worlds", "fixture", "case-1");
+          fs.mkdirSync(path.join(world, "desk"), { recursive: true });
+          fs.mkdirSync(path.join(world, "repo", "src"), { recursive: true });
+          fs.mkdirSync(path.join(world, "desk-origin-ahead"), { recursive: true });
+          fs.writeFileSync(path.join(world, "desk", "seeded.md"), "seeded\n");
+          fs.writeFileSync(path.join(world, "repo", "src", "code.js"), "scenario\n");
+          fs.writeFileSync(path.join(world, "desk-origin-ahead", "card.md"), "another writer\n");
+          suite.cases[0].world = "evals/worlds/fixture/case-1";
+          suite.sources = ["source.txt", "evals/fixtures/repo/src/code.js", "evals/worlds/fixture/case-1/desk/seeded.md", "evals/worlds/fixture/case-1/repo/src/code.js", "evals/worlds/fixture/case-1/desk-origin-ahead/card.md"];
+          suite.reviewedSourceFingerprint = sourceFingerprint(suite.sources, root);
+        });
+        const result = run(["fixture", ...fake, "--concurrency", "1"], { GIT_CONFIG_GLOBAL: path.join(hostile, "gitconfig"), HOME: hostile, XDG_CONFIG_HOME: hostile });
+        assert.equal(result.status, 0, result.stderr);
+        assert.equal(fs.existsSync(marker), false, "no global hook ran during setup");
+        assert.deepEqual(calls()[0].commits, ["Scenario world", "Baseline"]);
+      } finally {
+        fs.rmSync(hostile, { recursive: true, force: true });
+      }
+    }
+
+    {
       // The world's origin overlays land on the case's origin: a newer main that the desk has not fetched, and a pending branch.
       const { run, calls } = runFixture((suite, root) => {
         const world = path.join(root, "evals", "worlds", "fixture", "case-1");
