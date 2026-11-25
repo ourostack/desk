@@ -1,5 +1,13 @@
 # desk plugin — changelog
 
+## 3.2.549 — 2026-11-25
+
+### Issue drains: a GitHub 5xx is no longer worded as an auth problem
+
+When GitHub answers a drain's read with a 5xx (500, 502, 503, 504), the poll now asks once more in the same poll. If the retry fails too, the drain's last error says GitHub's server failed and needs nothing from you (`drains_github_server_error`) instead of sending an agent to `Check gh auth status`, which stays for a refused credential. Writes are never retried, and a persistent failure still wakes nobody and leaves what the drain has seen untouched. See [issue drains](docs/issue-drains.md).
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.548 — 2026-11-25
 
 The issue-drain poller now decides whether a body change is a bot's from the issue's edit history, on any issue whoever created it. A body that only bots edited since the last poll, such as a health table refreshed every few minutes, wakes nobody, and a person's edit among a bot's still wakes the drain. Anything the history cannot prove (an unknown or deleted edit, a history that cycles, a changed title, a revision recorded before titles were kept) stays news. The history is read page by page with progress kept in the poll state, so a very long one is finished across GraphQL quota windows, scans share the pages fairly, and an issue that needs no read is never held behind one. A read that fails or runs out of quota leaves only that issue for the next poll and is shown as the poll's error without waking the drain. The GraphQL quota is kept apart from the REST quota. See [issue drains](docs/issue-drains.md).
