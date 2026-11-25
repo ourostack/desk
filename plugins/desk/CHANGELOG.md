@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.551 — 2026-11-25
+
+Desk's MCP server now vendors Ouro UI v1.3.540, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.550 — 2026-11-25
 
 Local recovery no longer reports a queued card log as `unexpected_tool_result`. A `task_update` that only logs (or logs alongside other fields) writes the entry before it returns and leaves the commit to Desk's background writer, so recovery now says so: exit `2`, `status: "partial"`, `code: "commit_queued"`, `effects.mutation: "reported_applied"`, `effects.commit: "queued"` and a `queued` object with the log path, whether Git still shows it uncommitted (`pending`) and who commits it. A mixed update keeps the card's observed commit in `effects.commit` and reports the log separately in `effects.log`. If the writer has already committed the entry when recovery looks, the result is the usual completed `observed` result. The receipt says not to resend, because a resend duplicates the entry. With `--publication deferred` no background commit is scheduled, and the receipt says the next Desk session start commits it or the caller must. Unknown results and refusals still end `unexpected_tool_result` or `tool_error` and are never resent. See [the recovery contract](mcp/README.md).
