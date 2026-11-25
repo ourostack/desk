@@ -28,13 +28,18 @@ The team's plugin is in a separate tooling repository (dual-repo: `_meta/crew.js
 
 Read all of `desks/*/` and `_shared/`. Routine writes go to your own `desks/<alias>/`, committed and pushed straight to `main`: nobody else writes there, so nothing can conflict. Desk takes your person from the desk-list row whose `identity` is the GitHub login you act as (`DESK_PERSON` wins), and its own writes land under that desk. `desk_status` `write_scope` and `crew.js status --identity <login>` say who a session is.
 
-A path anyone may write (`_shared/`, `plugins/`, the roster, the root `AGENTS.md`; never `_meta/desks.md`) goes through a short pull request: fetch the latest `main`, branch, write, open the pull request and merge it at once, retrying if `main` moved. The pull request only serializes writers; it is not a review.
+A path anyone may write (`_shared/`, `plugins/`, the roster, the root `AGENTS.md`; never `_meta/desks.md`) goes through a short pull request that you merge yourself on green. The pull request only serializes writers; it is not a review. A write Desk saves or publishes opens its own pull request; let Desk finish it. A write made with plain Git:
+
+1. Fetch the latest `main` and branch from it. Commit only what was asked, with no AI attribution, and push without force or `--no-verify`.
+2. Open the pull request, or reuse the branch's open one. Take `SHA=$(git rev-parse HEAD)` and check that the pushed branch holds that commit.
+3. Wait for green on `$SHA`. The checks are the `required_checks` in `main`'s `.desk/publication.json` (`git show origin/main:.desk/publication.json`; the same floor Desk's publication uses) and any check the branch rules require. A check that hasn't reported is not green. With no policy and no required check, merge at once. A check the team's plugin posts from your machine runs as that plugin says.
+4. Merge with `gh pr merge <n> --match-head-commit "$SHA"`, the repository's merge method and a message without AI credit lines. Never merge over red or re-run a red check without a cause: fix it in a new commit and wait again. If `main` moved and the pull request no longer merges, merge `main` in, push and wait again on the new head.
 
 When a member asks you to change another member's desk, do it: their request is the authorization. Use the same path in an isolated worktree, change only what was asked, keep the owner's other work and any concurrent edit, and say in the commit and pull request whose desk it is and who asked. It is not the owner's endorsement.
 
 ### Saved means on the remote `main`
 
-Work is saved only when the remote `main` has it; a local commit, a branch in a worktree or an unmerged pull request is not. Land each durable write as you go: push, or push the branch and merge its pull request straight away. Before saying "saved", "done" or "ready", and before ending a turn that wrote files, run `git fetch origin main`, `git status --short --branch` and `git branch --no-merged origin/main` in the workspace checkout and your worktree, and finish whatever they show. `git merge-base --is-ancestor <your-commit> origin/main` proves a commit landed. If a push or merge fails, name the error and what is still at risk. Never call it saved.
+Work is saved only when the remote `main` has it; a local commit, a branch in a worktree or an unmerged pull request is not. Land each durable write as you go: push, or push the branch and merge its pull request straight away once it is green. Before saying "saved", "done" or "ready", and before ending a turn that wrote files, run `git fetch origin main`, `git status --short --branch` and `git branch --no-merged origin/main` in the workspace checkout and your worktree, and finish whatever they show. `git merge-base --is-ancestor <your-commit> origin/main` proves a commit landed. If a push or merge fails, name the error and what is still at risk. Never call it saved.
 
 ## Facts, perspectives, decisions
 

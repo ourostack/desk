@@ -9,7 +9,7 @@ operator's workspace, `crew` is what turns one git repo into a shared workspace 
   person's view, in their desk, attributed) vs decisions (what the team actually agreed, in
   `_shared/decisions/`). Never present one person's view as the team's.
 - **the conflict-safe write protocol** -- direct push to your own desk; a shared path goes through a
-  pull-latest -> branch -> PR -> merge-now serialization (no human review gate; the PR is a concurrency
+  pull-latest -> branch -> PR -> merge-on-green serialization (green on the checks `main`'s `.desk/publication.json` names; no human review gate; the PR is a concurrency
   primitive).
 - **team lessons** -- a correction that holds for the whole team goes, attributed and sourced, into the root `AGENTS.md` of the repository the team works in, which Desk's session start, Copilot CLI and Codex load (Claude Code through `CLAUDE.md`), so nobody teaches it twice; a personal one goes into that person's `desks/<alias>/AGENTS.md`. `lesson_add` routes each one and writes a team lesson through a pull request it merges.
 - **teammate notes** -- `note` puts a dated, attributed note in a teammate's `desks/<alias>/_inbox/` through a pull request it merges; their session start lists it until they acknowledge it with `note` and `ack`.
