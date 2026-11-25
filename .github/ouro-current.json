@@ -1,3 +1,0 @@
-{
-  "changelog": { "path": "plugins/desk/changelog.d/ouro-ui-{version}.md", "text": "Desk's MCP server now vendors {releases}, moved by Ouro Current.\n" }
-}

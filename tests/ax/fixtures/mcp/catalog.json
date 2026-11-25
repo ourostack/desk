@@ -1,7 +1,0 @@
-{
-  "schemaVersion": 1,
-  "tools": [
-    { "name": "browser_context", "annotations": { "readOnlyHint": false }, "description": "Open or close a browser." },
-    { "name": "browser_peek", "annotations": { "readOnlyHint": true }, "description": "Look." }
-  ]
-}

@@ -1,2 +1,0 @@
-# tests/desk/<package>/node_modules links to plugins/desk/<package>/node_modules (see desk/link-dependencies.mjs).
-node_modules

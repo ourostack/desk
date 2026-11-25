@@ -1,5 +1,0 @@
-{ "doors": [
-  { "id": "cli:src/theirs.sh", "group": "g", "when": "w", "effect": "write", "errors": [{ "code": "bad-input", "means": "m", "fix": "f" }] },
-  { "id": "cli:node src/theirs-read.js", "group": "g", "when": "w", "effect": "read", "errors": [{ "code": "bad-input", "means": "m", "fix": "f" }] },
-  { "id": "cli:src/ours.sh", "group": "g", "when": "w", "effect": "write", "errors": [{ "code": "bad-input", "means": "m", "fix": "f" }, { "code": "unprinted", "means": "m", "fix": "f" }] }
-] }

@@ -1,8 +1,0 @@
-{
-  "doors": [
-    { "id": "cli:tasks add", "group": "g", "when": "w", "effect": "write", "errors": [{ "code": "raised-here", "means": "m", "fix": "f" }, { "code": "slug-invalid", "means": "m", "fix": "f" }, { "code": "chain-code", "means": "m", "fix": "f" }, { "code": "borrowed", "means": "m", "fix": "f" }, { "code": "nowhere", "means": "m", "fix": "f" }] },
-    { "id": "cli:session-boot", "group": "g", "when": "w", "effect": "read", "errors": [{ "code": "raised-here", "means": "m", "fix": "f" }] },
-    { "id": "cli:tests/ax/fixtures/cli/plug/scripts/task-done", "group": "g", "when": "w", "effect": "write", "errors": [{ "code": "x", "means": "m", "fix": "f" }] },
-    { "id": "cli:gone", "group": "g", "when": "w", "effect": "read", "errors": [] }
-  ]
-}

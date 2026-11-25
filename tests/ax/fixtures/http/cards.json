@@ -1,4 +1,0 @@
-{ "doors": [
-  { "id": "http:gw POST /hooks/:id", "errors": [{ "code": "hook-not-found", "means": "m", "fix": "f" }, { "code": "from-imported-page", "means": "m", "fix": "f" }, { "code": "declared-only", "means": "m", "fix": "f" }] },
-  { "id": "http:gw GET /gone" }
-] }

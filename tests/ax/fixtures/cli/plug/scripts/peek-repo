@@ -1,3 +1,0 @@
-#!/usr/bin/env bash
-# ax: read-only
-git rev-parse --show-toplevel
