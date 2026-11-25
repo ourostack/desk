@@ -133,8 +133,10 @@ function pluginDirectories(suite, root) {
 // (and, for a suite whose sources include `evals/fixtures/<name>/`, a scratch copy of that repository) that nothing real shares.
 const baselineCommit = ["-c", "user.name=Skill eval", "-c", "user.email=skill-eval@example.invalid", "-c", "commit.gpgsign=false"];
 
+// The operator's global Git config (hooks, templates, aliases) must not shape the scratch commits, so a receipt depends only on the suite and the models.
 function scratchGit(cwd, args) {
-  return spawnSync("git", [...baselineCommit, ...args], { cwd, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
+  const env = { ...process.env, GIT_CONFIG_GLOBAL: os.devNull, GIT_CONFIG_NOSYSTEM: "1" };
+  return spawnSync("git", [...baselineCommit, "-c", `core.hooksPath=${os.devNull}`, ...args], { cwd, env, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
 }
 
 function commitBaseline(directory) {

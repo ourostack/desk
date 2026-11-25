@@ -1209,6 +1209,18 @@ try {
       assert.match(judgeCall.prompt, /Production-code diff against the baseline:\n\(none\)/u);
       assert.equal(fs.existsSync(path.join(dir, "evals", "fixtures", "repo", "written.txt")), false, "the fixture itself is never written");
 
+      {
+        // The operator's global Git config (here a hook that always fails) never reaches the harness's own setup commits.
+        const hooks = path.join(dir, "global-hooks");
+        fs.mkdirSync(hooks);
+        fs.writeFileSync(path.join(hooks, "pre-commit"), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+        const globalConfig = path.join(dir, "global-gitconfig");
+        fs.writeFileSync(globalConfig, `[core]\n\thooksPath = ${hooks.replaceAll("\\", "/")}\n`);
+        const hooked = runFixture(withRepo(files));
+        const hookedResult = hooked.run(["fixture", ...fake, "--concurrency", "1"], { FAKE_MODE: "write", GIT_CONFIG_GLOBAL: globalConfig });
+        assert.equal(hookedResult.status, 0, hookedResult.stderr);
+      }
+
       const big = runFixture(withRepo(files));
       assert.equal(big.run(["fixture", ...fake, "--concurrency", "1"], { FAKE_MODE: "bigdiff" }).status, 0);
       assert.match(big.calls()[1].prompt, /Production-code diff against the baseline:\n[\s\S]*\[truncated\]/u);
