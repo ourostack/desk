@@ -1062,6 +1062,12 @@ export function recoverDrainTarget({ paths, repo, now, start = startSuccessor })
 
 // ── GitHub ──
 
+/** What a non-OK answer means: GitHub's own server failing (5xx) clears by itself; only a refused credential is for the person to fix. */
+function failedAnswer(status, route) {
+  if (status >= 500) return Object.assign(new Error(`Wait for the next poll: GitHub's server answered HTTP ${status} for ${route} (asked twice); this usually clears on its own and needs nothing from you`), { code: "drains_github_server_error", status })
+  return Object.assign(new Error(`Check gh auth status, then try again: GitHub answered HTTP ${status} for ${route}`), { code: "drains_check_gh_auth_status_then", status })
+}
+
 /** The drain's GitHub access: its account's token from the `gh` CLI, then the REST API. `login` skips asking GitHub who the token is. */
 export async function connectGithub(account, { spawn = spawnSync, fetchImpl = fetch, env = process.env, login: knownLogin, pauseMs = TOKEN_PAUSE_MS } = {}) {
   const tokenArgs = ["auth", "token", "--hostname", "github.com", ...(account ? ["--user", account] : [])]
@@ -1083,12 +1089,21 @@ export async function connectGithub(account, { spawn = spawnSync, fetchImpl = fe
   if (!token) throw Object.assign(new Error(`Sign in the GitHub CLI: the GitHub CLI has no token for ${account ?? "its active account"} (run \`gh auth login --hostname github.com\`)`), { code: "drains_sign_in_the_github_cli" })
   // What this connection spent and what GitHub says is left in the account's window; a 304 answer costs nothing against it.
   const meter = { total: 0, notModified: 0, quota: null, graphqlQuota: null, graphqlCost: 1 }
+  // A read that GitHub answers with a 5xx is asked once more, at once: its own server failing usually clears. Only reads are repeated, never a write.
+  const readTwice = async (url, init) => {
+    let response = await fetchImpl(url, init())
+    meter.total += 1
+    if (response.status >= 500) {
+      response = await fetchImpl(url, init())
+      meter.total += 1
+    }
+    return response
+  }
   const get = async (route, { etag } = {}) => {
-    const response = await fetchImpl(`https://api.github.com${route}`, {
+    const response = await readTwice(`https://api.github.com${route}`, () => ({
       headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json", "User-Agent": "desk-issue-drains", ...(etag ? { "If-None-Match": etag } : {}) },
       signal: AbortSignal.timeout(30_000),
-    })
-    meter.total += 1
+    }))
     const remaining = response.headers.get("x-ratelimit-remaining")
     if (remaining !== null && response.headers.get("x-ratelimit-resource") !== "graphql") meter.quota = { remaining: Number(remaining), limit: Number(response.headers.get("x-ratelimit-limit")), reset: Number(response.headers.get("x-ratelimit-reset")), at: new Date().toISOString() }
     if (response.status === 304) {
@@ -1103,7 +1118,7 @@ export async function connectGithub(account, { spawn = spawnSync, fetchImpl = fe
         const until = Number.isFinite(reset) && reset > 0 ? new Date(reset * 1000).toISOString() : "the next window"
         throw Object.assign(new Error(`Wait for the quota to reset: GitHub's hourly API limit is used up, rate limited until ${until} (HTTP ${response.status} for ${route.split("?")[0]})`), { code: "drains_rate_limited", status: response.status, rateLimited: true })
       }
-      throw Object.assign(new Error(`Check gh auth status, then try again: GitHub answered HTTP ${response.status} for ${route.split("?")[0]}`), { code: "drains_check_gh_auth_status_then", status: response.status })
+      throw failedAnswer(response.status, route.split("?")[0])
     }
     return { body: await response.json(), next: /rel="next"/u.test(response.headers.get("link") ?? ""), etag: response.headers.get("etag") }
   }
@@ -1131,13 +1146,12 @@ export async function connectGithub(account, { spawn = spawnSync, fetchImpl = fe
   }
   // GraphQL has its own quota window: its headers are kept apart from the REST reading, and a failure names this API.
   const graphql = async (query, variables) => {
-    const response = await fetchImpl("https://api.github.com/graphql", {
+    const response = await readTwice("https://api.github.com/graphql", () => ({
       method: "POST",
       headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json", "User-Agent": "desk-issue-drains", "Content-Type": "application/json" },
       body: JSON.stringify({ query, variables }),
       signal: AbortSignal.timeout(30_000),
-    })
-    meter.total += 1
+    }))
     const remaining = response.headers.get("x-ratelimit-remaining")
     if (remaining !== null) meter.graphqlQuota = { remaining: Number(remaining), limit: Number(response.headers.get("x-ratelimit-limit")), reset: Number(response.headers.get("x-ratelimit-reset")), at: new Date().toISOString() }
     const payload = response.ok ? await response.json().catch(() => null) : null
@@ -1147,7 +1161,7 @@ export async function connectGithub(account, { spawn = spawnSync, fetchImpl = fe
       const until = Number.isFinite(reset) && reset > 0 ? new Date(reset * 1000).toISOString() : "the next window"
       throw Object.assign(new Error(`Wait for the quota to reset: GitHub's hourly GraphQL limit is used up, rate limited until ${until} (HTTP ${response.status} for /graphql)`), { code: "drains_rate_limited", status: response.status, rateLimited: true })
     }
-    if (!response.ok) throw Object.assign(new Error(`Check gh auth status, then try again: GitHub answered HTTP ${response.status} for /graphql`), { code: "drains_check_gh_auth_status_then", status: response.status })
+    if (!response.ok) throw failedAnswer(response.status, "/graphql")
     if (!payload || (Array.isArray(payload.errors) && payload.errors.length > 0) || typeof payload.data !== "object" || payload.data === null) {
       const said = Array.isArray(payload?.errors) ? payload.errors.map((error) => String(error?.message ?? "")).join("; ").slice(0, 160) : "no data"
       throw Object.assign(new Error(`Check gh auth status, then try again: GitHub's GraphQL answer for the issue's edit history was refused or unreadable (${said})`), { code: "drains_graphql_failed" })
