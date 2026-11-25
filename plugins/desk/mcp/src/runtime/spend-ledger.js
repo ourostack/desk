@@ -191,22 +191,24 @@ const bearer = (init) => {
 
 const identities = new Map()
 
-// Which account a token belongs to: the login the caller knows, else what GitHub says for `GET /user` (one call per token per process,
-// kept by the token's digest, never the token). "" when it cannot be told.
+// Which account a token belongs to: the login the caller knows, else what GitHub says for `GET /user` (one call per token per process
+// once answered, kept by the token's digest, never the token). A failed lookup is not kept, so the next call asks again. `probe` is how
+// the lookup went (null when none was sent): "apiget" when answered, "unknown" when it got no answer.
 async function loginOf({ token, hint, fetchFn, init }) {
-  if (hint) return { login: hint, probed: false }
+  if (hint) return { login: hint, probe: null }
   const id = createHash("sha256").update(token).digest("hex")
-  const probed = !identities.has(id)
-  if (probed) {
-    try {
-      const response = await fetchFn(`${API}/user`, { headers: init?.headers, signal: init?.signal })
-      const login = response.status === 200 ? JSON.parse(await response.text())?.login : ""
-      identities.set(id, typeof login === "string" ? login : "")
-    } catch {
-      identities.set(id, "")
+  if (identities.has(id)) return { login: identities.get(id), probe: null }
+  try {
+    const response = await fetchFn(`${API}/user`, { headers: init?.headers, signal: init?.signal })
+    const login = response.status === 200 ? JSON.parse(await response.text())?.login : ""
+    if (typeof login === "string" && login !== "") {
+      identities.set(id, login)
+      return { login, probe: "apiget" }
     }
+    return { login: "", probe: response.status >= 500 || response.status === 0 ? "unknown" : "apiget" }
+  } catch {
+    return { login: "", probe: "unknown" }
   }
-  return { login: identities.get(id), probed }
 }
 
 /**
@@ -224,7 +226,7 @@ export function ledgeredFetch(fetchFn, { env = process.env, login = () => "", la
     const token = call === null ? "" : bearer(init)
     const dir = token === "" ? null : ledgerDir(env)
     if (dir === null) return fetchFn(url, init)
-    const { login: account, probed } = await loginOf({ token, hint: login(), fetchFn, init })
+    const { login: account, probe } = await loginOf({ token, hint: login(), fetchFn, init })
     const kind = account === "" ? "unresolved" : kindOf(account)
     const at = () => Math.floor(now() / 1000)
     const log = (mode, route = call.route, repo = call.repo) => {
@@ -238,7 +240,7 @@ export function ledgeredFetch(fetchFn, { env = process.env, login = () => "", la
         }
       }
     }
-    if (probed) log("apiget", "user", "")
+    if (probe !== null) log(probe, "user", "")
     if (call.read && kind !== "unresolved") {
       await refreshRate({ dir, kind, fetchFn, init, now: at() })
       const held = heldReason({ dir, kind, session, call, env, now: at() })

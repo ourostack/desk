@@ -67,6 +67,29 @@ test("the account is the token's, never the repository owner's: an env token is 
   ])
 })
 
+test("a lookup that gets no answer is recorded unknown and asked again, not kept as unresolved for the process", async (t) => {
+  const { env, rows } = ledger(t)
+  let users = 0
+  const inner = async (url) => {
+    if (url.endsWith("/user")) {
+      users += 1
+      if (users === 1) throw new Error("socket hang up")
+      if (users === 2) return answer(502)
+      return answer(200, { login: "ari_microsoft" })
+    }
+    if (url.endsWith("/rate_limit")) return answer(200, { resources: { core: { remaining: 4000, reset: RESET, limit: 5000 } } })
+    return answer(200, {}, quota(4000))
+  }
+  const fetchFn = ledgeredFetch(inner, { env, now: clockNow })
+  const url = "https://api.github.com/repos/o/r/pulls/1"
+  await fetchFn(url, auth("tok")).catch(() => {})
+  await fetchFn(url, auth("tok"))
+  await fetchFn(url, auth("tok"))
+  assert.equal(users, 3)
+  const seen = rows().map((r) => [r[1], r[2], r[5]]).filter((r) => r[1] === "api user")
+  assert.deepEqual(seen, [["unresolved", "api user", "unknown"], ["unresolved", "api user", "unknown"], ["work", "api user", "apiget"]])
+})
+
 test("no ledger folder, MS_DESK_QUOTA=off, other hosts and anonymous requests leave the ledger alone", async (t) => {
   const { env, rows, root } = ledger(t)
   let sent = 0
