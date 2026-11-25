@@ -151,7 +151,7 @@ function currentRate(dir, pool, own = []) {
       } catch {
         // Already gone.
       }
-    } else if (reset === latest) {
+    } else {
       try {
         for (const line of readFileSync(path.join(dir, name), "utf8").split("\n")) {
           const [remaining, , limit] = numbers(line, " ")

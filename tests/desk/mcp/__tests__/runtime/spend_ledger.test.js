@@ -541,3 +541,11 @@ test("a ledger folder that cannot be listed still decides reads from the stored 
   chmodSync(dir, 0o700)
   assert.equal(readFileSync(path.join(dir, "personal.rate"), "utf8").split(" ")[0], "90")
 })
+
+test("a /user answer whose login is not text leaves the token unresolved", async (t) => {
+  const { env, rows } = ledger(t)
+  const inner = async (url) => (url.endsWith("/user") ? answer(200, { login: 5 }) : answer(200, {}, quota(4000)))
+  const fetchFn = ledgeredFetch(inner, { env, now: clockNow })
+  await fetchFn("https://api.github.com/repos/o/r/pulls/1", auth("tok-odd"))
+  assert.deepEqual(rows().map((r) => [r[1], r[2]]), [["unresolved", "api user"], ["unresolved", "api repos/o/r/pulls/1"]])
+})
