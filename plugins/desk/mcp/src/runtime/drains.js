@@ -651,12 +651,12 @@ function repeatableText(body) {
 }
 
 /** Whether a bot's comment says what the same bot's previous comment on the issue said, apart from dates, times, durations and run links: a repeat is not news, a changed text is. */
-async function repeatsPrevious(api, repo, issue, comment) {
+async function repeatsPrevious(api, repo, issue, comment, tail) {
   const author = comment.user?.login?.toLowerCase()
   const earlier = (entry) => entry.user?.login?.toLowerCase() === author && entry.id !== comment.id && entry.created_at < comment.created_at
-  // Read from the newest comments back, only as far as the previous one by this author: the history before it cannot change the answer.
-  const everything = await api.comments(repo, issue.number, "1970-01-01T00:00:00Z", (page) => page.some(earlier))
-  const previous = everything.filter(earlier).sort((a, b) => a.created_at.localeCompare(b.created_at)).at(-1)
+  // Read from the newest comments back, only as far as the previous one by this author: the history before it cannot change the answer. The newest part read is kept for the issue's other comments: a match inside it is newer than anything left unread.
+  if (!tail.list?.some(earlier)) tail.list = await api.comments(repo, issue.number, "1970-01-01T00:00:00Z", (page) => page.some(earlier))
+  const previous = tail.list.filter(earlier).sort((a, b) => a.created_at.localeCompare(b.created_at)).at(-1)
   return previous !== undefined && repeatableText(previous.body) === repeatableText(comment.body)
 }
 
@@ -694,8 +694,9 @@ async function changedByOthers(api, repo, issue, before, digest, ignored, rules,
   if (edited) return edited
   const since = before.updatedAt
   const comments = (await api.comments(repo, issue.number, since)).filter((comment) => comment.updated_at > since)
+  const tail = {}
   for (const entry of comments) {
-    if (ownStatus(entry, api.login) || ignoredComment(entry, rules.comments) || (isBot(entry) && (await repeatsPrevious(api, repo, issue, entry)))) continue
+    if (ownStatus(entry, api.login) || ignoredComment(entry, rules.comments) || (isBot(entry) && (await repeatsPrevious(api, repo, issue, entry, tail)))) continue
     return `comment ${entry.id} by ${entry.user?.login ?? "nobody"}`
   }
   // A reopen is the drain's own when its claim (a `drain:` label event) came up to CLAIM_SLACK_MS before it, so the read reaches back that far past the revision.
