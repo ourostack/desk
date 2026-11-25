@@ -1371,9 +1371,9 @@ test("conditional requests: a stored tag goes out as If-None-Match, a 304 is cou
   assert.deepEqual({ remaining: api.quota().remaining, limit: api.quota().limit, reset: api.quota().reset }, { remaining: 4989, limit: 5000, reset: 1794600000 })
   await assert.rejects(api.changedIssues("o/r", "2026-11-13T00:58:00Z"), (error) => error.rateLimited === true && error.code === "drains_rate_limited" && /rate limited until 2026-/u.test(error.message) && !/gh auth/u.test(error.message))
   assert.equal(api.quota().remaining, 0, "the quota is read from the refusal too")
-  await assert.rejects(api.changedIssues("o/r", "2026-11-13T00:58:00Z"), /Check gh auth status, then try again: GitHub answered HTTP 403 for \/repos\/o\/r\/issues$/u)
+  await assert.rejects(api.changedIssues("o/r", "2026-11-13T00:58:00Z"), (error) => error.code === "drains_github_refused" && /GitHub refused the request with HTTP 403 for \/repos\/o\/r\/issues/u.test(error.message) && !/gh auth/u.test(error.message))
   await assert.rejects(api.changedIssues("o/r", "2026-11-13T00:58:00Z"), /rate limited until the next window \(HTTP 429/u)
-  await assert.rejects(api.changedIssues("o/r", "2026-11-13T00:58:00Z"), /Check gh auth status/u, "a refusal whose body cannot be read is not called a rate limit")
+  await assert.rejects(api.changedIssues("o/r", "2026-11-13T00:58:00Z"), (error) => error.code === "drains_github_refused" && !error.rateLimited, "a refusal whose body cannot be read is not called a rate limit, nor a credential problem")
 })
 
 test("asks GitHub who the active account is when none is configured", async () => {
@@ -1398,7 +1398,7 @@ test("fails with a fix when the CLI has no token, and names the HTTP status with
   const answers = [response({ login: "x" })]
   const fetchImpl = async () => answers.shift() ?? response({}, { status: 403 })
   const ok = await connectGithub(undefined, { spawn: () => ({ status: 0, stdout: "tok" }), fetchImpl })
-  await assert.rejects(ok.openIssues("o/r"), /GitHub answered HTTP 403 for \/repos\/o\/r\/issues$/u)
+  await assert.rejects(ok.openIssues("o/r"), /GitHub refused the request with HTTP 403 for \/repos\/o\/r\/issues;/u)
 })
 
 test("a CLI with no token for the account is a failure that says what to run, with the real defaults", async () => {
@@ -2653,4 +2653,24 @@ test("a persistent 5xx is recorded as the drain's last error, wakes nobody and l
   assert.match(out.errors[0].error, /server answered HTTP 502/u)
   assert.equal(w.state().lastErrorCode, "drains_github_server_error")
   assert.equal(JSON.stringify(w.state().seen), before)
+})
+
+test("only a 401 is worded as a credential problem; other refusals and an unreadable GraphQL answer are not, and none is retried", async () => {
+  const connect = (answers) => {
+    const asked = []
+    const fetchImpl = async (url) => { asked.push(url); return answers.shift() ?? response({}, { status: 599 }) }
+    return connectGithub("maintainer", { spawn: () => ({ status: 0, stdout: "tok" }), fetchImpl, login: "maintainer" }).then((api) => ({ api, asked }))
+  }
+  for (const status of [403, 404, 422]) {
+    const { api, asked } = await connect([response({}, { status }), response([])])
+    await assert.rejects(api.openIssues("o/r"), (error) => error.code === "drains_github_refused" && error.status === status && !/gh auth/u.test(error.message))
+    assert.equal(asked.length, 1, `${status} is not retried`)
+  }
+  const graph = await connect([response({ errors: [{ message: "Field 'x' doesn't exist" }] })])
+  await assert.rejects(graph.api.editPage("o/r", 1), (error) => error.code === "drains_graphql_failed" && !/gh auth/u.test(error.message) && /Field 'x'/u.test(error.message))
+  const forbidden = await connect([response({}, { status: 403 })])
+  await assert.rejects(forbidden.api.editPage("o/r", 1), (error) => error.code === "drains_github_refused" && !/gh auth/u.test(error.message))
+  assert.equal(forbidden.asked.length, 1)
+  const unauthorized = await connect([response({}, { status: 401 })])
+  await assert.rejects(unauthorized.api.openIssues("o/r"), (error) => error.code === "drains_check_gh_auth_status_then" && /token was refused/u.test(error.message))
 })
