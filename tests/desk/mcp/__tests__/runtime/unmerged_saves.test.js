@@ -12,7 +12,7 @@ import { mkTempRoot } from "../_temp_roots.js"
 import { runner } from "../../../../../plugins/desk/mcp/src/runtime/deliver.js"
 import { publishPullRequest } from "../../../../../plugins/desk/mcp/src/runtime/pr-publication.js"
 import { readSyncStatus, runPushWorker, updateSyncStatus } from "../../../../../plugins/desk/mcp/src/runtime/sync-worker.js"
-import { abandonedComment, allStuckSaves, repositoryOf, savesFor, settleSaves, stuckLine, stuckSaves, withStuckSaves } from "../../../../../plugins/desk/mcp/src/runtime/unmerged-saves.js"
+import { abandonedComment, allStuckSaves, hasSettledSave, repositoryOf, savesFor, settleSaves, stuckLine, stuckSaves, withStuckSaves } from "../../../../../plugins/desk/mcp/src/runtime/unmerged-saves.js"
 import { syncWorkspace } from "../../../../../plugins/desk/mcp/src/runtime/session-sync.js"
 import { resolveDeskStateDir } from "../../../../../plugins/desk/mcp/src/runtime/last-start.js"
 import { formatBootText } from "../../../../../plugins/desk/mcp/src/runtime/boot-text.js"
@@ -314,6 +314,22 @@ test("boot hides a landed save only on exact path identity: modes and failed rea
   }
 })
 
+test("a save whose head main contains, whose commit is gone, or whose main cannot be read is judged on local reads only", async () => {
+  const later = () => Date.now() + 60 * MINUTE
+  const { origin, desk, env } = await world("ancestor-and-unreadable")
+  const onto = git(desk, ["rev-parse", "HEAD"])
+  const head = await appendTo(desk, "- fast-forwarded", "save")
+  assert.throws(() => publish({ desk, env, gh: fakeGh(origin, { pending: true }), head, onto }), /checks still missing or pending/u)
+  const failing = (needle) => (command, args, options) => (command === "git" && args.includes(needle) ? { status: 1, stdout: "", stderr: "" } : spawnSync(command, args, options))
+  const unfetched = () => stuckSaves({ root: desk, env, now: later, spawnGit: failing("--verify") }).length
+  git(desk, ["push", "-q", "origin", "HEAD:main"])
+  git(desk, ["fetch", "-q", "origin"])
+  assert.equal(hasSettledSave({ root: desk, env }), true, "the save is an ancestor of fetched main; the real git runs by default")
+  assert.deepEqual(stuckSaves({ root: desk, env, now: later }), [])
+  assert.equal(unfetched(), 1, "an unreadable main proves nothing")
+  assert.equal(stuckSaves({ root: desk, env, now: later, spawnGit: failing("-e") }).length, 1, "a save commit that is gone from the checkout proves nothing")
+})
+
 // #1749 review: the worker a landed save schedules settles every recorded save, so each must meet the same exact-proof guards.
 test("the scheduled worker closes only the save main holds exactly; a mode-only save or one whose reads fail stays open", async () => {
   const { origin, seed, desk, env } = await world("worker-coexisting")
@@ -345,6 +361,12 @@ test("the scheduled worker closes only the save main holds exactly; a mode-only 
   const clock = clockOf()
   for (const needle of ["diff-tree", "ls-tree"]) {
     assert.deepEqual(settleSaves({ root: desk, env, spawnGit: failing(needle), clock }).closed, [], `a failed ${needle} read closes nothing`)
+  }
+
+  // Either side of the landed file's blob failing to read is no proof, while the other side reads fine.
+  const blobFailing = (side) => (command, args, options) => (command === "git" && args.includes("blob") && args.at(-1).startsWith(`${landed}:`) === (side === "head") ? { status: 1, stdout: "", stderr: "" } : gh(command, args, options))
+  for (const side of ["head", "main"]) {
+    assert.deepEqual(settleSaves({ root: desk, env, spawnGit: blobFailing(side), clock }).closed, [], `a failed ${side} blob read closes nothing`)
   }
 
   const scheduled = []
