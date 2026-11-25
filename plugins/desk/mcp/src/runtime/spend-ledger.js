@@ -131,12 +131,18 @@ const tightest = (observations) => {
 // The quota numbers every process has observed so far, not what the cache file happens to hold at this instant: the stored numbers and
 // the whole observation log of the latest window (`<pool>.rate.obs.<reset>`), whose size is one window's sends (about 20 bytes each).
 // A log is read whole, never from a cut tail, so the lowest remaining of the window can never fall outside what is read; logs of earlier
-// windows are never needed again and are removed. Null when nothing has been observed.
-function currentRate(dir, pool) {
-  const seen = []
+// windows are never needed again and are removed. `own` are observations the caller already holds. Null when there are none.
+function currentRate(dir, pool, own = []) {
+  const seen = [...own]
   const had = readRate(dir, pool)
   if (had.remaining !== null && had.reset !== null && had.limit !== null) seen.push({ remaining: had.remaining, reset: had.reset, limit: had.limit })
-  const windows = readdirSync(dir).filter((name) => name.startsWith(`${pool}${OBS}`)).map((name) => ({ name, reset: numbers(name.slice(pool.length + OBS.length), " ")[0] })).filter((w) => w.reset !== null)
+  let names = []
+  try {
+    names = readdirSync(dir)
+  } catch {
+    // A folder that cannot be listed leaves the stored numbers and the caller's own observation.
+  }
+  const windows = names.filter((name) => name.startsWith(`${pool}${OBS}`)).map((name) => ({ name, reset: numbers(name.slice(pool.length + OBS.length), " ")[0] })).filter((w) => w.reset !== null)
   const latest = Math.max(had.reset ?? 0, ...windows.map((w) => w.reset))
   for (const { name, reset } of windows) {
     if (reset < latest) {
@@ -172,7 +178,7 @@ function mergeRate(dir, pool, { remaining, reset, limit }, now, fresh, hooks = {
     appendFileSync(`${file}.obs.${reset}`, `${remaining} ${reset} ${limit}\n`)
     let force = fresh
     for (let writes = 0; writes < SETTLE_LIMIT; writes += 1) {
-      const want = currentRate(dir, pool)
+      const want = currentRate(dir, pool, [{ remaining, reset, limit }])
       const had = readRate(dir, pool)
       if (!force && had.remaining === want.remaining && had.reset === want.reset && had.limit === want.limit) return
       hooks.beforeWrite?.()

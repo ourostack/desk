@@ -530,3 +530,14 @@ test("the first numbers ever seen for an account, from a write's headers, are st
   assert.deepEqual(rate("personal").slice(0, 2), [4321, RESET])
   assert.equal(Number(readFileSync(path.join(dir, "personal.rate"), "utf8").trim().split(" ")[3]), clockNow() / 1000)
 })
+
+test("a ledger folder that cannot be listed still decides reads from the stored numbers and keeps the writer's own observation", async (t) => {
+  const { dir, env } = ledger(t)
+  writeFileSync(path.join(dir, "personal.rate"), `100 ${RESET} 5000 ${NOW}\n`)
+  chmodSync(dir, 0o300)
+  const fetchFn = ledgeredFetch(async () => answer(200, {}, quota(90)), { env, login: () => "ari", now: clockNow })
+  await assert.rejects(fetchFn("https://api.github.com/repos/o/r/issues/1", auth()), SpendHeld)
+  assert.equal((await fetchFn("https://api.github.com/repos/o/r/issues/1/comments", { ...auth(), method: "POST" })).status, 200)
+  chmodSync(dir, 0o700)
+  assert.equal(readFileSync(path.join(dir, "personal.rate"), "utf8").split(" ")[0], "90")
+})
