@@ -346,9 +346,10 @@ test("racing processes never lose the lowest remaining any of them saw: the read
   await Promise.all(starts.map((first) => new Promise((resolve, reject) => {
     let stderr = ""
     const run = spawn(process.execPath, [child, dir, String(RESET), String(first), "150"], { stdio: ["ignore", "ignore", "pipe"] })
+    run.stderr.setEncoding("utf8")
     run.stderr.on("data", (chunk) => { stderr += chunk })
     run.on("error", reject)
-    run.on("exit", (code) => (code === 0 ? resolve() : reject(new Error(`child exited ${code}: ${stderr.slice(0, 1500)}`))))
+    run.on("close", (code, signal) => (code === 0 ? resolve() : reject(new Error(`child exited ${code ?? signal}: ${stderr.slice(0, 1500)}`))))
   })))
   // The stored file is a cache the shim also writes and may briefly sit above the lowest; reads are decided from the observations.
   const lowest = 3400 - 149
