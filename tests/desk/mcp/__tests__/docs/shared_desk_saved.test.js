@@ -17,3 +17,15 @@ test("shared-desk-conventions defines saved as merged on the remote main", () =>
   assert.match(section, /before ending a turn that wrote files[\s\S]+git status --short --branch[\s\S]+git branch --no-merged origin\/main/u)
   assert.match(section, /Never call it saved/u)
 })
+
+test("shared-desk-conventions merges a shared write on the workspace's required checks, not over red", () => {
+  const section = skill.split("## Read across, write your own")[1]?.split("### Saved means")[0] ?? ""
+  assert.doesNotMatch(section, /merge it at once, retrying/u)
+  assert.match(section, /merge yourself on green/u)
+  assert.match(section, /`required_checks` in `main`'s `\.desk\/publication\.json`/u)
+  assert.match(section, /hasn't reported is not green/u)
+  assert.match(section, /With no policy and no required check, merge at once/u)
+  assert.match(section, /gh pr merge <n> --match-head-commit "\$SHA"/u)
+  assert.match(section, /Never merge over red/u)
+  assert.match(section, /no AI attribution/u)
+})

@@ -32,7 +32,7 @@ So content lives in exactly one of four homes: the product repository, a workspa
 
 A team on Crew adds two homes: its **team workspace** and its own **team tooling** (a plugin in its tooling repository, or in the workspace's `plugins/` folder). Route tooling and team content to the lowest layer where it is honest:
 
-- **General agent-work tooling**, useful to any operator anywhere → Desk, or Crew when it is about working in a shared workspace.
+- **General agent-work tooling**, useful to any operator anywhere → Desk, or Crew when it is about working in a shared workspace. Shipping is the usual case: "open a pull request, wait for the required checks, merge, verify on `main`" works the same for every team, so it lives in Crew's `shared-desk-conventions`, not in one team's tooling, and a team that needs more says so there. The team's tooling keeps only what is its own, such as how to run its own check.
 - **Employer-specific but not team-specific** → that employer's overlay. For example, meeting capture that drives the employer's meeting service belongs in the overlay, so every team there inherits it.
 - **One team's own process** → that team's tooling, written as skills, because skills are how agents carry process. It composes the layers below instead of rebuilding them. For example, a team's way of digesting customer meetings lives in its tooling, built on the overlay's meeting capture.
 - **Shared context and evidence** → the team workspace. Tooling repositories never hold team state.
