@@ -846,18 +846,25 @@ test("a leaf symbolic link and a linked root are refused without hashing", async
   assert.equal(leaf.hashed() + linked.hashed(), 0)
 })
 
-test("a regular log swapped for a FIFO between the walk and the open is refused without blocking", async () => {
+test("a regular log swapped for a FIFO between the walk and the open is refused without blocking", { skip: process.platform === "win32" && "POSIX FIFOs only" }, async () => {
   const { root } = await scene()
   const helper = path.join(here, `fifo-${sequence}.mjs`)
   const log = path.join(root, "work/one/log.md")
-  writeFileSync(helper, `import { rmSync } from "node:fs"
+  writeFileSync(helper, `import { lstatSync, rmSync } from "node:fs"
 import { spawnSync } from "node:child_process"
 import { logCommitState } from ${JSON.stringify(new URL("../../../../../plugins/desk/mcp/scripts/local-recovery.js", import.meta.url).href)}
-const swap = () => { rmSync(${JSON.stringify(log)}); spawnSync("mkfifo", [${JSON.stringify(log)}]) }
+const swap = () => {
+  rmSync(${JSON.stringify(log)})
+  const made = spawnSync("mkfifo", [${JSON.stringify(log)}], { encoding: "utf8" })
+  if (made.status !== 0 || !lstatSync(${JSON.stringify(log)}).isFIFO()) throw new Error("mkfifo failed: " + made.status + " " + made.stderr)
+}
 console.log(logCommitState(${JSON.stringify(root)}, process.env, "work/one/log.md", ${JSON.stringify(git(root, "rev-parse", "HEAD"))}, { afterWalk: swap }))
 `)
   const out = spawnSync(process.execPath, [helper], { encoding: "utf8", timeout: 4000, killSignal: "SIGKILL", env: isolatedEnv() })
   assert.equal(out.error, undefined, "the open must not block on a FIFO")
+  assert.equal(out.status, 0, out.stderr)
+  assert.equal(out.signal, null)
+  assert.equal(out.stderr, "")
   assert.equal(out.stdout.trim(), "unknown")
 })
 
