@@ -759,6 +759,8 @@ test("an unrelated dirty path matching an ignored log path as a glob does not ma
 })
 
 // Descriptor-bound acquisition, exercised directly. A `git` shim records every hash-object call, so "refused without hashing" is observed.
+// The git shim is a POSIX script: Windows resolves `git` to git.exe and never runs it, so the hash receipt cannot be observed there and its zero-count assertions would pass vacuously.
+const RECEIPT = { skip: process.platform === "win32" && "the git receipt shim is POSIX-only" }
 const LOG_TEXT = "# Log\n\n## entry\n"
 async function scene({ text = LOG_TEXT, files = {}, logState = "committed" } = {}) {
   const { logCommitState } = await import("../../../../../plugins/desk/mcp/scripts/local-recovery.js")
@@ -796,7 +798,7 @@ async function scene({ text = LOG_TEXT, files = {}, logState = "committed" } = {
   return { root, sibling, state, hashed, relocate, spyFilter }
 }
 
-test("an in-root log equal to the HEAD blob is committed and hashed once", async () => {
+test("an in-root log equal to the HEAD blob is committed and hashed once", RECEIPT, async () => {
   const { state, hashed } = await scene()
   assert.equal(state(), "committed")
   assert.equal(hashed(), 1)
@@ -815,7 +817,7 @@ test("a changed in-root log is pending", async () => {
 })
 
 for (const [name, text] of [["matching", LOG_TEXT], ["changed", `${LOG_TEXT}other\n`]]) {
-  test(`a task directory relocated outside the root and linked from its old parent is refused without hashing (${name} bytes)`, async () => {
+  test(`a task directory relocated outside the root and linked from its old parent is refused without hashing (${name} bytes)`, RECEIPT, async () => {
     const { sibling, state, hashed, relocate } = await scene()
     relocate(false)
     writeFileSync(path.join(sibling, "one/log.md"), text)
@@ -824,25 +826,25 @@ for (const [name, text] of [["matching", LOG_TEXT], ["changed", `${LOG_TEXT}othe
   })
 }
 
-test("a different object swapped in between the walk and the open is refused without hashing", async () => {
+test("a different object swapped in between the walk and the open is refused without hashing", RECEIPT, async () => {
   const { state, hashed, relocate } = await scene()
   assert.equal(state({ afterWalk: () => relocate(true) }), "unknown")
   assert.equal(hashed(), 0)
 })
 
-test("the very directory walked, relocated and linked from its old parent between walk and open, is refused without hashing", async () => {
+test("the very directory walked, relocated and linked from its old parent between walk and open, is refused without hashing", RECEIPT, async () => {
   const { state, hashed, relocate } = await scene()
   assert.equal(state({ afterOpen: () => relocate(false), afterWalk: () => {} }), "unknown")
   assert.equal(hashed(), 0)
 })
 
-test("the same directory relocated before the open (same inode reached through a link) is refused without hashing", async () => {
+test("the same directory relocated before the open (same inode reached through a link) is refused without hashing", RECEIPT, async () => {
   const { state, hashed, relocate } = await scene()
   assert.equal(state({ afterWalk: () => relocate(false) }), "unknown")
   assert.equal(hashed(), 0)
 })
 
-test("a leaf symbolic link and a linked root are refused without hashing", async () => {
+test("a leaf symbolic link and a linked root are refused without hashing", RECEIPT, async () => {
   const leaf = await scene()
   const target = path.join(leaf.sibling, "log.md")
   writeFileSync(target, LOG_TEXT)
@@ -878,7 +880,7 @@ console.log(logCommitState(${JSON.stringify(root)}, process.env, "work/one/log.m
   assert.equal(out.stdout.trim(), "unknown")
 })
 
-test("a log removed between the walk and the open is unknown without hashing", async () => {
+test("a log removed between the walk and the open is unknown without hashing", RECEIPT, async () => {
   const { root, state, hashed } = await scene()
   assert.equal(state({ afterWalk: () => unlinkSync(path.join(root, "work/one/log.md")) }), "unknown")
   assert.equal(hashed(), 0)
@@ -972,7 +974,7 @@ test("the queued commit survives a real spawned bootstrap being closed", async (
 
 // Before HEAD holds the log, readback may list Git's names but must not run Git over the file's bytes (a clean filter or hash is a read of them), nor through a namespace that did not qualify.
 for (const [logState, expected] of [["staged", "pending"], ["untracked", "pending"], ["ignored", "unknown"], ["missing", "unknown"]]) {
-  test(`a ${logState} log not at HEAD is ${expected} without any read of its bytes`, async () => {
+  test(`a ${logState} log not at HEAD is ${expected} without any read of its bytes`, RECEIPT, async () => {
     const { root, state, hashed, spyFilter } = await scene({ logState: logState === "missing" ? "ignored" : logState })
     if (logState === "missing") removeTreeSync(path.join(root, "work/one/log.md"))
     spyFilter()
@@ -984,7 +986,7 @@ for (const [logState, expected] of [["staged", "pending"], ["untracked", "pendin
 }
 
 for (const [name, when] of [["linked before the readback", null], ["relocated between the walk and the listing", "afterWalk"]]) {
-  test(`a staged log not at HEAD, its directory ${name}, is unknown without any read of its bytes`, async () => {
+  test(`a staged log not at HEAD, its directory ${name}, is unknown without any read of its bytes`, RECEIPT, async () => {
     const { root, sibling, state, hashed, relocate, spyFilter } = await scene({ logState: "staged" })
     spyFilter()
     writeFileSync(path.join(root, "work/one/log.md"), LOG_TEXT.replace("entry", "ENTRY"))
