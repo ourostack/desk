@@ -4,7 +4,7 @@ import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import { spawnSync } from "node:child_process"
 import { randomUUID } from "node:crypto"
-import { existsSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, utimesSync, writeFileSync, mkdirSync } from "node:fs"
+import { existsSync, mkdtempSync, readFileSync, readdirSync, realpathSync, utimesSync, writeFileSync, mkdirSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
@@ -13,6 +13,7 @@ import { finishCommit, runFinishCommitCli } from "../../../../../plugins/desk/mc
 import { commitIndexPaths, commitPaths, indexEntries } from "../../../../../plugins/desk/mcp/src/util/git-stage.js"
 import { commitFailure, commitFailureWords, commitRoute, heldFileRouteFor } from "../../../../../plugins/desk/mcp/src/util/route-around.js"
 import { CAPTURE_DIR, readCaptureRecord, writeCaptureRecord } from "../../../../../plugins/desk/mcp/src/util/capture-record.js"
+import { removeTreeSync } from "../_remove_tree.js"
 import { installCardGuard, TOOL_COMMIT_ENV } from "../../../../../plugins/desk/mcp/src/desk/card-commit-guard.js"
 
 const env = (() => { const { [TOOL_COMMIT_ENV]: _drop, ...rest } = process.env; return rest })()
@@ -21,7 +22,7 @@ const env = (() => { const { [TOOL_COMMIT_ENV]: _drop, ...rest } = process.env; 
 let sealedEnv = null
 const owned = []
 // The removal sealed() performs; a test swaps it to make one named root fail deterministically.
-let removeRoot = (dir) => rmSync(dir, { recursive: true, force: true })
+let removeRoot = (dir) => removeTreeSync(dir)
 
 function git(root, args, options = {}) {
   const result = spawnSync("git", ["-C", root, ...args], { encoding: "utf8", env: sealedEnv ?? env, ...options })
@@ -1255,7 +1256,7 @@ test("a sealed root that cannot be removed stays registered and reported, and th
     removeRoot = real
     const at = owned.indexOf(stuck)
     if (at >= 0) owned.splice(at, 1)
-    rmSync(stuck, { recursive: true, force: true })
+    removeTreeSync(stuck)
   }
 })
 
@@ -1293,6 +1294,6 @@ test("a hostile launch environment present before import is neutralized for help
     assert.equal(existsSync(hostile.XDG_STATE_HOME), false, "the hostile state folder was never written")
     assert.equal(existsSync(hostile.HOME), false, "the hostile home was never written")
   } finally {
-    rmSync(base, { recursive: true, force: true })
+    removeTreeSync(base)
   }
 })
