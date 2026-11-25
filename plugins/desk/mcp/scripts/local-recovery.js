@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { spawn, spawnSync } from "node:child_process"
-import { lstatSync, realpathSync, statSync, promises as fs } from "node:fs"
+import { closeSync, constants, fstatSync, lstatSync, openSync, realpathSync, statSync, promises as fs } from "node:fs"
 import * as path from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import { resolveStartupStateBranch } from "../src/runtime/startup-resolve.js"
@@ -191,24 +191,58 @@ function gitHead(root, env) {
   return result.status === 0 ? result.stdout.trim() : null
 }
 
-// A queued log is already in the working tree. It counts as committed only when the working file, hashed with the path's own Git filters (EOL included), is the very blob `head` holds at that path. Status flags such as assume-unchanged cannot hide a difference from that comparison, and every path is literal. A path Git neither tracks at `head` nor shows as untracked (missing, ignored) stays unknown. This observes content at `head`; it does not attribute who wrote it.
-function logCommitState(root, env, rel, head) {
-  if (typeof rel !== "string" || !rel || path.isAbsolute(rel) || rel.split(/[\\/]/u).includes("..") || !head) return "unknown"
-  const git = (args) => spawnSync("git", ["--literal-pathspecs", ...args], { cwd: root, env, encoding: "utf8", timeout: 5000, windowsHide: true })
-  let file
+// The qualified namespace of one log: the root and every directory below it down to the leaf, each by exact (dev, ino). Any symbolic link, non-directory parent or non-regular leaf, and a root that is not its own real path, disqualifies it.
+function qualifyLog(root, rel) {
   try {
-    file = path.join(root, rel)
-    if (!lstatSync(file).isFile()) return "unknown"
-  } catch { file = null }
+    if (realpathSync(root) !== path.resolve(root)) return null
+    const identity = (stat) => ({ dev: stat.dev, ino: stat.ino })
+    const chain = []
+    let current = path.resolve(root)
+    const parts = rel.split(/[\\/]/u)
+    for (const [index, part] of [null, ...parts].entries()) {
+      if (part !== null) current = path.join(current, part)
+      const stat = lstatSync(current, { bigint: true })
+      const last = index === parts.length
+      if (stat.isSymbolicLink() || (last ? !stat.isFile() : !stat.isDirectory())) return null
+      chain.push(identity(stat))
+    }
+    return { file: current, chain }
+  } catch { return null }
+}
+const sameChain = (a, b) => a.chain.length === b.chain.length && a.chain.every((entry, i) => entry.dev === b.chain[i].dev && entry.ino === b.chain[i].ino)
+
+// A queued log is already in the working tree. It counts as committed only when the working file, hashed with the path's own Git filters (EOL included), is the very blob `head` holds at that path. Status flags such as assume-unchanged cannot hide a difference from that comparison, and every path is literal. A path Git neither tracks at `head` nor shows as untracked (missing, ignored) stays unknown.
+// Acquisition: the qualified namespace is walked, the leaf opened with O_NOFOLLOW, and the descriptor must be the walked leaf (exact bigint dev/ino) and the walk must repeat unchanged BEFORE Git is handed the descriptor, and again after. Git then reads that descriptor; `--path` only supplies the logical attribute/filter context. This pins what is hashed to the object the qualified path named; it does not keep the namespace unchanged while reading, and Node has no race-free openat. It observes content at `head`; it does not attribute who wrote it. `probe` is a test seam between the steps.
+export function logCommitState(root, env, rel, head, probe = {}) {
+  if (typeof rel !== "string" || !rel || path.isAbsolute(rel) || rel.split(/[\\/]/u).includes("..") || !head) return "unknown"
+  const git = (args, stdio) => spawnSync("git", ["--literal-pathspecs", ...args], { cwd: root, env, encoding: "utf8", timeout: 5000, windowsHide: true, ...(stdio ? { stdio } : {}) })
+  const first = qualifyLog(root, rel)
   const blob = git(["rev-parse", "--verify", `${head}:${rel}`])
   if (blob.status !== 0) {
     const status = git(["status", "--porcelain", "--", rel])
-    return status.status === 0 && status.stdout.trim() !== "" && file !== null ? "pending" : "unknown"
+    return status.status === 0 && status.stdout.trim() !== "" && first !== null ? "pending" : "unknown"
   }
-  if (file === null) return "unknown"
-  const working = git(["hash-object", `--path=${rel}`, "--", file])
-  if (working.status !== 0) return "unknown"
-  return working.stdout.trim() === blob.stdout.trim() ? "committed" : "pending"
+  if (first === null) return "unknown"
+  probe.afterWalk?.()
+  let fd
+  try {
+    fd = openSync(first.file, constants.O_RDONLY | constants.O_NOFOLLOW)
+    const opened = fstatSync(fd, { bigint: true })
+    const leaf = first.chain.at(-1)
+    if (!opened.isFile() || opened.dev !== leaf.dev || opened.ino !== leaf.ino) return "unknown"
+    probe.afterOpen?.()
+    const again = qualifyLog(root, rel)
+    if (again === null || !sameChain(first, again)) return "unknown"
+    const working = git(["hash-object", `--path=${rel}`, "--stdin"], [fd, "pipe", "pipe"])
+    probe.afterHash?.()
+    const after = fstatSync(fd, { bigint: true })
+    const last = qualifyLog(root, rel)
+    if (working.status !== 0 || last === null || !sameChain(first, last)
+      || after.size !== opened.size || after.mtimeNs !== opened.mtimeNs || after.ctimeNs !== opened.ctimeNs) return "unknown"
+    return working.stdout.trim() === blob.stdout.trim() ? "committed" : "pending"
+  } catch { return "unknown" } finally {
+    if (fd !== undefined) closeSync(fd)
+  }
 }
 
 /** One mutation at most, through the ordinary MCP bootstrap and admission. */

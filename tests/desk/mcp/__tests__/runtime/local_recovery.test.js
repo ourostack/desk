@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs"
+import { chmodSync, copyFileSync, mkdirSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import { spawnSync } from "node:child_process"
 import { PassThrough } from "node:stream"
 import * as path from "node:path"
@@ -755,6 +755,100 @@ test("an unrelated dirty path matching an ignored log path as a glob does not ma
   }, globAnswer)
   assert.equal(report.effects.log, "unknown", JSON.stringify(report.effects))
   assert.equal(exitCode, 2)
+})
+
+// Descriptor-bound acquisition, exercised directly. A `git` shim records every hash-object call, so "refused without hashing" is observed.
+const LOG_TEXT = "# Log\n\n## entry\n"
+async function scene({ text = LOG_TEXT, files = {} } = {}) {
+  const { logCommitState } = await import("../../../../../plugins/desk/mcp/scripts/local-recovery.js")
+  const root = fixture()
+  for (const [name, body] of Object.entries(files)) writeFileSync(path.join(root, name), body)
+  writeFileSync(path.join(root, "work/one/log.md"), text)
+  git(root, "add", "-A")
+  git(root, "commit", "-m", "log")
+  const shim = path.join(here, `shim-${sequence}`)
+  mkdirSync(shim, { recursive: true })
+  const calls = path.join(shim, "calls.txt")
+  writeFileSync(calls, "")
+  writeFileSync(path.join(shim, "git"), `#!/bin/sh\ncase " $* " in *" hash-object "*) echo hash >> "${calls}";; esac\nPATH='${process.env.PATH}' exec git "$@"\n`)
+  chmodSync(path.join(shim, "git"), 0o755)
+  const sibling = path.join(here, `sibling-${sequence}`)
+  mkdirSync(sibling, { recursive: true })
+  const head = git(root, "rev-parse", "HEAD")
+  const state = (probe, at = root) => logCommitState(at, { ...env(), PATH: `${shim}:${process.env.PATH}` }, "work/one/log.md", head, probe)
+  const hashed = () => readFileSync(calls, "utf8").split("\n").filter(Boolean).length
+  const relocate = (copy) => {
+    const dir = path.join(root, "work/one")
+    if (copy) { mkdirSync(path.join(sibling, "one"), { recursive: true }); copyFileSync(path.join(dir, "log.md"), path.join(sibling, "one/log.md")); rmSync(dir, { recursive: true }) }
+    else renameSync(dir, path.join(sibling, "one"))
+    symlinkSync(path.join(sibling, "one"), dir)
+  }
+  return { root, sibling, state, hashed, relocate }
+}
+
+test("an in-root log equal to the HEAD blob is committed and hashed once", async () => {
+  const { state, hashed } = await scene()
+  assert.equal(state(), "committed")
+  assert.equal(hashed(), 1)
+})
+
+test("a CRLF working log under an eol=lf attribute still equals its HEAD blob", async () => {
+  const { root, state } = await scene({ text: "# Log\n", files: { ".gitattributes": "*.md text eol=lf\n" } })
+  writeFileSync(path.join(root, "work/one/log.md"), "# Log\r\n")
+  assert.equal(state(), "committed")
+})
+
+test("a changed in-root log is pending", async () => {
+  const { root, state } = await scene()
+  writeFileSync(path.join(root, "work/one/log.md"), `${LOG_TEXT}more\n`)
+  assert.equal(state(), "pending")
+})
+
+for (const [name, text] of [["matching", LOG_TEXT], ["changed", `${LOG_TEXT}other\n`]]) {
+  test(`a task directory relocated outside the root and linked from its old parent is refused without hashing (${name} bytes)`, async () => {
+    const { sibling, state, hashed, relocate } = await scene()
+    relocate(false)
+    writeFileSync(path.join(sibling, "one/log.md"), text)
+    assert.equal(state(), "unknown")
+    assert.equal(hashed(), 0)
+  })
+}
+
+test("a different object swapped in between the walk and the open is refused without hashing", async () => {
+  const { state, hashed, relocate } = await scene()
+  assert.equal(state({ afterWalk: () => relocate(true) }), "unknown")
+  assert.equal(hashed(), 0)
+})
+
+test("the very directory walked, relocated and linked from its old parent between walk and open, is refused without hashing", async () => {
+  const { state, hashed, relocate } = await scene()
+  assert.equal(state({ afterOpen: () => relocate(false), afterWalk: () => {} }), "unknown")
+  assert.equal(hashed(), 0)
+})
+
+test("the same directory relocated before the open (same inode reached through a link) is refused without hashing", async () => {
+  const { state, hashed, relocate } = await scene()
+  assert.equal(state({ afterWalk: () => relocate(false) }), "unknown")
+  assert.equal(hashed(), 0)
+})
+
+test("a leaf symbolic link and a linked root are refused without hashing", async () => {
+  const leaf = await scene()
+  const target = path.join(leaf.sibling, "log.md")
+  writeFileSync(target, LOG_TEXT)
+  rmSync(path.join(leaf.root, "work/one/log.md"))
+  symlinkSync(target, path.join(leaf.root, "work/one/log.md"))
+  assert.equal(leaf.state(), "unknown")
+  const linked = await scene()
+  const alias = path.join(here, `alias-${sequence}`)
+  symlinkSync(linked.root, alias)
+  assert.equal(linked.state(undefined, alias), "unknown")
+  assert.equal(leaf.hashed() + linked.hashed(), 0)
+})
+
+test("a log changed while Git reads it is unknown", async () => {
+  const { root, state } = await scene()
+  assert.equal(state({ afterHash: () => writeFileSync(path.join(root, "work/one/log.md"), `${LOG_TEXT}appended\n`) }), "unknown")
 })
 
 test("log-only update with a missing log path is unknown evidence, not observed", async () => {
