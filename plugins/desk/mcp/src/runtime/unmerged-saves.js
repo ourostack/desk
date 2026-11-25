@@ -129,6 +129,16 @@ export function withStuckSaves(reply, { root, env, now }) {
 // The lines a save's pull request adds, and the file's text on `commit`, for the supersession check.
 const FRONTMATTER_KEY = /^([A-Za-z][\w-]*):(?:\s|$)/u
 
+// The mode, type and object of `file` in `commit`'s tree; null when the tree reads fine and has no such path; undefined when the read failed.
+function treeEntry(git, commit, file) {
+  const read = git(["ls-tree", "-z", commit, "--", file])
+  if (read.status !== 0) return undefined
+  const line = read.stdout.split("\0").find((entry) => entry.endsWith(`\t${file}`))
+  if (line === undefined) return null
+  const [mode, type, oid] = line.split("\t")[0].split(" ")
+  return { mode, type, oid }
+}
+
 /**
  * Evidence that everything a pull request commit changes is already on `main`, or null. A file counts when it is the same on
  * main, when every line the commit adds is on main, or when the commit only sets frontmatter fields that a newer commit on
@@ -136,17 +146,26 @@ const FRONTMATTER_KEY = /^([A-Za-z][\w-]*):(?:\s|$)/u
  */
 function supersession(git, head, main, link) {
   const parent = `${head}^`
-  const files = git(["diff-tree", "--root", "-r", "--name-only", "--no-renames", "--no-commit-id", "-z", head]).stdout.split("\0").filter(Boolean)
+  const changed = git(["diff-tree", "--root", "-r", "--name-only", "--no-renames", "--no-commit-id", "-z", head])
+  const files = changed.stdout.split("\0").filter(Boolean)
+  // A failed or empty read of what the commit changes is no evidence at all.
+  if (changed.status !== 0 || files.length === 0) return null
   const headTime = Number(git(["log", "-1", "--format=%ct", head]).stdout.trim())
   const evidence = []
   for (const file of files) {
-    const onMain = git(["cat-file", "blob", `${main}:${file}`])
-    const onHead = git(["cat-file", "blob", `${head}:${file}`])
-    if (onMain.status !== 0 || onHead.status !== 0) {
-      // Deleted by the save: superseded only when main has it gone too.
-      if (onMain.status !== 0 && onHead.status !== 0) { evidence.push(`${file} is absent on main, as the save left it`); continue }
+    const mainEntry = treeEntry(git, main, file)
+    const headEntry = treeEntry(git, head, file)
+    if (mainEntry === undefined || headEntry === undefined) return null
+    // Deleted by the save: superseded only when main has it gone too, as read successfully from both trees.
+    if (mainEntry === null || headEntry === null) {
+      if (mainEntry === null && headEntry === null) { evidence.push(`${file} is absent on main, as the save left it`); continue }
       return null
     }
+    // A mode or type change is a change even when the text is the same.
+    if (mainEntry.mode !== headEntry.mode || mainEntry.type !== headEntry.type) return null
+    const onMain = git(["cat-file", "blob", `${main}:${file}`])
+    const onHead = git(["cat-file", "blob", `${head}:${file}`])
+    if (onMain.status !== 0 || onHead.status !== 0) return null
     if (onMain.stdout === onHead.stdout) { evidence.push(`${file} is identical on main (${link(file)})`); continue }
     const had = new Set(git(["cat-file", "blob", `${parent}:${file}`]).stdout.split("\n"))
     const added = onHead.stdout.split("\n").filter((line) => line.trim() !== "" && !had.has(line))

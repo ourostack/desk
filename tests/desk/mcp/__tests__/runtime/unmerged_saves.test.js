@@ -314,6 +314,52 @@ test("boot hides a landed save only on exact path identity: modes and failed rea
   }
 })
 
+// #1749 review: the worker a landed save schedules settles every recorded save, so each must meet the same exact-proof guards.
+test("the scheduled worker closes only the save main holds exactly; a mode-only save or one whose reads fail stays open", async () => {
+  const { origin, seed, desk, env } = await world("worker-coexisting")
+  const onto = git(desk, ["rev-parse", "HEAD"])
+  const options = { pending: true }
+  const gh = fakeGh(origin, options)
+  const savedFile = async (name, text) => { await fs.writeFile(path.join(desk, name), text); git(desk, ["add", name]); git(desk, ["commit", "-q", "-m", `save ${name}`]); return git(desk, ["rev-parse", "HEAD"]) }
+  const landed = await savedFile("landed.md", "landed\n")
+  assert.throws(() => publish({ desk, env, gh, head: landed, onto }), /checks still missing or pending/u)
+  await fs.writeFile(path.join(seed, "mode.md"), "same text\n")
+  git(seed, ["add", "mode.md"])
+  git(seed, ["commit", "-q", "-m", "main has mode.md"])
+  git(seed, ["push", "-q", "origin", "HEAD:main"])
+  git(desk, ["fetch", "-q", "origin"])
+  git(desk, ["reset", "-q", "--hard", "origin/main"])
+  const mainWithMode = git(desk, ["rev-parse", "HEAD"])
+  git(desk, ["update-index", "--chmod=+x", "mode.md"])
+  git(desk, ["commit", "-q", "-m", "make mode.md executable"])
+  const modeOnly = git(desk, ["rev-parse", "HEAD"])
+  assert.throws(() => publish({ desk, env, gh, head: modeOnly, onto: mainWithMode }), /checks still missing or pending/u)
+  await fs.writeFile(path.join(seed, "landed.md"), "landed\n")
+  git(seed, ["add", "landed.md"])
+  git(seed, ["commit", "-q", "-m", "landed.md arrives through another commit"])
+  git(seed, ["push", "-q", "origin", "HEAD:main"])
+  const [landedPr, modePr] = [...gh.prs.values()]
+  assert.notEqual(landedPr.url, modePr.url)
+
+  const failing = (needle) => (command, args, options) => (command === "git" && args.includes(needle) ? { status: 1, stdout: "", stderr: "" } : gh(command, args, options))
+  const clock = clockOf()
+  for (const needle of ["diff-tree", "ls-tree"]) {
+    assert.deepEqual(settleSaves({ root: desk, env, spawnGit: failing(needle), clock }).closed, [], `a failed ${needle} read closes nothing`)
+  }
+
+  const scheduled = []
+  let tick = Date.now()
+  await syncWorkspace({ scheduleDelivery: (options) => scheduled.push(options), root: desk, env, now: () => (tick += MINUTE) })
+  assert.equal(scheduled.length, 1, "the landed save schedules the worker")
+  // The mode-only save is left to qualification, which ends the worker once its checks fail.
+  const result = await runPushWorker({ ...scheduled[0], spawnGit: gh, retryDelaysMs: [1], publicationClock: clockOf(), clock: { now: Date.now, sleep: async () => { options.pending = false; options.failed = true } }, fileProblem: () => assert.fail("not a Desk defect") })
+  assert.equal(result.result, "blocked")
+  assert.equal(gh.prs.get(1).state, "CLOSED", "the exactly-landed save is closed")
+  assert.equal(gh.prs.get(2).state, "OPEN", "the mode-only save is not on main")
+  const recorded = readSyncStatus({ root: desk, env }).unmerged_saves.map((save) => save.url)
+  assert.ok(!recorded.includes(landedPr.url) && recorded.includes(modePr.url), "the closed save is forgotten and the mode-only save stays recorded")
+})
+
 test("publication qualifies its checks and merges without asking gh for auto-merge", async () => {
   const { origin, desk, env } = await world("refused")
   const onto = git(desk, ["rev-parse", "HEAD"])
