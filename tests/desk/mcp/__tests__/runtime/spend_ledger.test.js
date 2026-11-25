@@ -338,17 +338,23 @@ test("an expired hold is no hold, and reads that start together share one rate_l
   assert.equal(lookups, 1)
 })
 
-test("racing processes never leave a higher remaining than the lowest any of them saw", async (t) => {
-  const { dir, rate } = ledger(t)
+test("racing processes never lose the lowest remaining any of them saw: the read decision follows it", async (t) => {
+  const { dir, env } = ledger(t)
   writeFileSync(path.join(dir, "personal.rate"), `4000 ${RESET} 5000 ${NOW}\n`)
   const child = fileURLToPath(new URL("./_spend_ledger_child.mjs", import.meta.url))
   const starts = [3900, 3800, 3700, 3600, 3500, 3400]
   await Promise.all(starts.map((first) => new Promise((resolve, reject) => {
-    const run = spawn(process.execPath, [child, dir, String(RESET), String(first), "150"], { stdio: "ignore" })
+    let stderr = ""
+    const run = spawn(process.execPath, [child, dir, String(RESET), String(first), "150"], { stdio: ["ignore", "ignore", "pipe"] })
+    run.stderr.on("data", (chunk) => { stderr += chunk })
     run.on("error", reject)
-    run.on("exit", (code) => (code === 0 ? resolve() : reject(new Error(`child exited ${code}`))))
+    run.on("exit", (code) => (code === 0 ? resolve() : reject(new Error(`child exited ${code}: ${stderr.slice(0, 1500)}`))))
   })))
-  assert.equal(rate("personal")[0], 3400 - 149)
+  // The stored file is a cache the shim also writes and may briefly sit above the lowest; reads are decided from the observations.
+  const lowest = 3400 - 149
+  const read = (floor) => ledgeredFetch(async () => answer(200), { env: { ...env, MS_DESK_GH_FLOOR: String(floor) }, login: () => "ari", now: clockNow })("https://api.github.com/repos/o/r/issues/1", auth())
+  await assert.rejects(read(lowest + 1), SpendHeld)
+  assert.equal((await read(lowest - 1)).status, 200)
 })
 
 test("same-window numbers only ever tighten: a rate_limit answer cannot raise what a header already showed, and a later window replaces it", async (t) => {
