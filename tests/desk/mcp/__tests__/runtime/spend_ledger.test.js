@@ -2,7 +2,7 @@ import test from "node:test"
 import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
 import { fileURLToPath } from "node:url"
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, existsSync, unlinkSync, chmodSync, utimesSync } from "node:fs"
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, existsSync, unlinkSync, chmodSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 import { removeTreeSync } from "../_remove_tree.js"
@@ -361,10 +361,12 @@ test("same-window numbers only ever tighten: a rate_limit answer cannot raise wh
   writeFileSync(path.join(dir, "personal.rate"), `3000 ${RESET} 5000 ${NOW - 120}\n`)
   await fetchFn("https://api.github.com/repos/o/r/pulls/2", auth()).catch(() => {})
   assert.equal(rate("personal")[0], 3000, "the refresh's 3900 is higher in the same window")
-  writeFileSync(path.join(dir, "personal.rate"), `3000 ${RESET - 4000} 5000 ${NOW}\n`)
-  sends.push(answer(200, {}, quota(4900)))
+  sends.push(answer(200, {}, quota(4900, { "x-ratelimit-reset": String(RESET + 3600) })))
   await fetchFn("https://api.github.com/repos/o/r/pulls/3", auth())
-  assert.deepEqual(rate("personal").slice(0, 2), [4900, RESET], "an older window is replaced")
+  assert.deepEqual(rate("personal").slice(0, 2), [4900, RESET + 3600], "an older window is replaced")
+  sends.push(answer(200, {}, quota(100)))
+  await fetchFn("https://api.github.com/repos/o/r/pulls/4", auth())
+  assert.deepEqual(rate("personal").slice(0, 2), [4900, RESET + 3600], "an answer from the earlier window is ignored")
 })
 
 test("two ceilings for one window keep the lower remaining and the ceiling of the answer that gave it, without treating the pools as one", async (t) => {
@@ -415,17 +417,25 @@ test("parallel first use of one token sends one /user lookup", async (t) => {
   assert.equal(users, 1)
 })
 
-test("a lock left behind by a dead process is broken, and a live one is waited out, not trampled", async (t) => {
+test("a higher number written over the file by a slower writer is corrected from the observation log, and a leftover lock file is ignored", async (t) => {
   const { dir, env, rate } = ledger(t)
   writeFileSync(path.join(dir, "personal.rate"), `4000 ${RESET} 5000 ${NOW}\n`)
-  const lock = path.join(dir, "personal.rate.lock")
-  writeFileSync(lock, "")
-  const old = new Date(Date.now() - 60_000)
-  utimesSync(lock, old, old)
-  const fetchFn = ledgeredFetch(async () => answer(200, {}, quota(3000)), { env, login: () => "ari", now: clockNow })
+  writeFileSync(path.join(dir, "personal.rate.lock"), "")
+  const answers = [answer(200, {}, quota(3000)), answer(200, {}, quota(3500))]
+  const fetchFn = ledgeredFetch(async () => answers.shift(), { env, login: () => "ari", now: clockNow })
   await fetchFn("https://api.github.com/repos/o/r/pulls/1", auth())
+  writeFileSync(path.join(dir, "personal.rate"), `4000 ${RESET} 5000 ${NOW}\n`)
+  await fetchFn("https://api.github.com/repos/o/r/pulls/2", auth())
   assert.equal(rate("personal")[0], 3000)
-  assert.equal(existsSync(lock), false)
+})
+
+test("an observation log that cannot be written leaves the stored numbers alone and the send unharmed", async (t) => {
+  const { dir, env, rate } = ledger(t)
+  writeFileSync(path.join(dir, "personal.rate"), `4000 ${RESET} 5000 ${NOW}\n`)
+  mkdirSync(path.join(dir, "personal.rate.obs"))
+  const fetchFn = ledgeredFetch(async () => answer(200, {}, quota(3000)), { env, login: () => "ari", now: clockNow })
+  assert.equal((await fetchFn("https://api.github.com/repos/o/r/pulls/1", auth())).status, 200)
+  assert.equal(rate("personal")[0], 4000)
 })
 
 test("a rate-limited or synchronously failing /user lookup is held and asked again, never kept as no account", async (t) => {

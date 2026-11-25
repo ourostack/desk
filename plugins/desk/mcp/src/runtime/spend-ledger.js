@@ -11,14 +11,15 @@
 // (any other method, GraphQL included), `refused` (held back here) or `unknown` (sent, but no answer came back: a timeout or a dropped
 // connection, which may or may not have been charged; the shim's report counts it as sent, the upper bound). `<kind>.rate` is
 // "remaining reset limit fetched" for the REST `core` pool, refreshed from `GET /rate_limit` (free) at most once a minute; here it is also
-// refreshed from the `x-ratelimit-*` headers of every answer, so the floor sees a burst before the minute is up. Writes take a lock file and
-// only ever tighten (a later window replaces, within one window the lower remaining wins), so concurrent processes cannot raise it. `<kind>.hold` is
+// refreshed from the `x-ratelimit-*` headers of every answer, so the floor sees a burst before the minute is up. Writes go through an append-only
+// observation log and are re-checked against it, so they only ever tighten (a later window replaces, within one window the lower remaining
+// wins) and concurrent processes cannot raise it, with no lock. `<kind>.hold` is
 // "until \t why". Reads below MS_DESK_GH_FLOOR (500) are refused for the session spending most, and for any read that is not on the merge
 // path; merge-path reads run on to MS_DESK_GH_MERGE_FLOOR (half the floor). Writes and GraphQL (its own pool) always run, and GraphQL is
 // not counted in the REST tally.
 
 import { createHash } from "node:crypto"
-import { appendFileSync, closeSync, fstatSync, openSync, readFileSync, readSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs"
+import { appendFileSync, closeSync, fstatSync, openSync, readFileSync, readSync, renameSync, statSync, writeFileSync } from "node:fs"
 import * as path from "node:path"
 import { looksLikeNodeTestRunner } from "./test-state-guard.js"
 
@@ -114,54 +115,54 @@ function readRate(dir, kind) {
   }
 }
 
-const LOCK_STALE_MS = 10_000
-const LOCK_TRIES = 200
-const pause = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
+const OBS_TAIL_BYTES = 64 * 1024
+const SETTLE_PASSES = 8
+let tempCount = 0
 
-// One writer at a time per rate file, across processes: an exclusive lock file, broken when its owner is long gone. False when the lock
-// could not be had, in which case the write is skipped (the next answer or refresh carries the numbers).
-function locked(file, write) {
-  const lock = `${file}.lock`
-  for (let attempt = 0; attempt < LOCK_TRIES; attempt += 1) {
-    try {
-      closeSync(openSync(lock, "wx"))
-    } catch {
-      try {
-        if (Date.now() - statSync(lock).mtimeMs > LOCK_STALE_MS) {
-          const gone = `${lock}.${process.pid}.stale`
-          renameSync(lock, gone)
-          unlinkSync(gone)
-        }
-      } catch {
-        // Released between the two calls.
-      }
-      pause(5)
-      continue
-    }
-    try {
-      write()
-    } finally {
-      rmSync(lock, { force: true })
-    }
-    return true
-  }
-  return false
+// The tightest numbers among observations: only the latest window counts, and within it the lowest remaining, with the ceiling of the
+// observation that gave it.
+const tightest = (observations) => {
+  const latest = Math.max(...observations.map((o) => o.reset))
+  return observations.filter((o) => o.reset === latest).reduce((low, o) => (o.remaining < low.remaining ? o : low))
 }
 
-// Fold one observation of the REST pool into the stored numbers. A later window replaces the stored one, an earlier one is ignored, and
-// within one window the lower remaining wins together with the ceiling of the answer that gave it, so answers arriving out of order, from
-// a free refresh or from a concurrent process only ever tighten the picture.
+// Every observation is first appended to `<kind>.rate.obs` (one small O_APPEND write is atomic across processes, so none is ever lost),
+// then `<kind>.rate` is written from the tightest of the log's tail and the stored numbers, and checked again until it matches: a writer
+// that had read the log before another's append is corrected by its own check, so the last writer to finish leaves the lowest remaining,
+// with no lock to hold, expire or reclaim. A later window replaces, an earlier one is ignored. False when the log cannot be written.
 function mergeRate(dir, kind, { remaining, reset, limit }, now) {
   const file = path.join(dir, `${kind}.rate`)
-  return locked(file, () => {
-    const had = readRate(dir, kind)
-    if (had.reset !== null && had.reset > reset) return
-    const keep = had.reset === reset && had.remaining !== null && had.remaining < remaining
-    const next = keep ? { remaining: had.remaining, limit: had.limit ?? limit } : { remaining, limit }
-    const temp = `${file}.${process.pid}`
-    writeFileSync(temp, `${next.remaining} ${reset} ${next.limit} ${now}\n`)
-    renameSync(temp, file)
-  })
+  const log = `${file}.obs`
+  try {
+    appendFileSync(log, `${remaining} ${reset} ${limit}\n`)
+    for (let pass = 0; pass < SETTLE_PASSES; pass += 1) {
+      const seen = []
+      const fd = openSync(log, "r")
+      try {
+        const size = fstatSync(fd).size
+        const length = Math.min(size, OBS_TAIL_BYTES)
+        const buffer = Buffer.alloc(length)
+        readSync(fd, buffer, 0, length, size - length)
+        for (const line of buffer.toString("utf8").split("\n")) {
+          const [r, t, l] = line.split(" ").map((value) => (/^\d+$/u.test(value) ? Number(value) : null))
+          if (r !== null && t !== null && l !== null) seen.push({ remaining: r, reset: t, limit: l })
+        }
+      } finally {
+        closeSync(fd)
+      }
+      const had = readRate(dir, kind)
+      if (had.remaining !== null && had.reset !== null && had.limit !== null) seen.push({ remaining: had.remaining, reset: had.reset, limit: had.limit })
+      const want = tightest(seen)
+      if (pass > 0 && had.remaining === want.remaining && had.reset === want.reset && had.limit === want.limit) return true
+      tempCount += 1
+      const temp = `${file}.${process.pid}.${tempCount}`
+      writeFileSync(temp, `${want.remaining} ${want.reset} ${want.limit} ${now}\n`)
+      renameSync(temp, file)
+    }
+    return true
+  } catch {
+    return false
+  }
 }
 
 // The REST pool's numbers from an answer's headers.
