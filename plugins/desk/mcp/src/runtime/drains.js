@@ -698,7 +698,8 @@ async function changedByOthers(api, repo, issue, before, digest, ignored, rules,
     if (ownStatus(entry, api.login) || ignoredComment(entry, rules.comments) || (isBot(entry) && (await repeatsPrevious(api, repo, issue, entry)))) continue
     return `comment ${entry.id} by ${entry.user?.login ?? "nobody"}`
   }
-  const feed = await api.issueEvents(repo, issue.number, since)
+  // A reopen is the drain's own when its claim (a `drain:` label event) came up to CLAIM_SLACK_MS before it, so the read reaches back that far past the revision.
+  const feed = await api.issueEvents(repo, issue.number, isoSeconds(Date.parse(since) - CLAIM_SLACK_MS))
   const claims = feed.filter(isDrainLabel)
   const news = feed.filter((event) => event.created_at > since).map((event) => newsEvent(event, rules, claims, api.login, Date.parse(issue.created_at))).find(Boolean)
   return news ?? (await crossReference(api, repo, issue, since))

@@ -2710,7 +2710,7 @@ test("history reads follow what is new, not how long the issue's history is, and
   const noise = (count) => Array.from({ length: count }, (_, index) => ({ id: index, event: "milestoned", created_at: at(index) }))
   const long = { comments: [], events: noise(450), timeline: noise(450) }
   const state = { open: [{ number: 7, title: "Long", body: "b", state: "open", updated_at: at(500) }], closed: { number: 9, title: "Done", body: "b", state: "closed", updated_at: at(500) } }
-  const world = historyGithub({ histories: { 7: long, 9: { comments: [], events: noise(450), timeline: noise(450) } }, issues: () => [...state.open, ...(state.closed ? [state.closed] : [])] })
+  const world = historyGithub({ histories: { 3: { comments: [] }, 7: long, 9: { comments: [], events: noise(450), timeline: noise(450) } }, issues: () => [...state.open, ...(state.closed ? [state.closed] : [])] })
   const connect = (account, { login }) => connectGithub(account, { spawn: () => ({ status: 0, stdout: "tok" }), fetchImpl: world.fetchImpl, env: { PATH: "/bin" }, login })
   const states = {}
   const drain = { repo: "o/r", account: "maintainer", session: "s" }
@@ -2742,6 +2742,7 @@ test("history reads follow what is new, not how long the issue's history is, and
 
   world.failures.clear()
   const recovered = await poll(3)
+  assert.equal(world.log.some((line) => line.includes("/repos/other/repo/issues/3/comments") && !line.endsWith("page=1")), false)
   const reads = world.history()
   assert.deepEqual(reads, ["comments?page=1", "events?page=1", "events?page=5", "timeline?page=1", "timeline?page=5"].map((tail) => `/repos/o/r/issues/7/${tail}`).concat(["/repos/o/r/issues/7/comments?page=1", "/repos/other/repo/issues/3/comments?page=1"]), "the first and last page of each list, never the pages between, then one page of comments to tell whose cross-reference it is")
   assert.equal(recovered.pending.length, 1)
@@ -2771,4 +2772,19 @@ test("recent reads stop at the first page that reaches back far enough, and read
   urls.length = 0
   assert.equal((await named.comments("o/r", 5, "1970-01-01T00:00:00Z", (page) => page.some((item) => item.id === 150))).length, 150)
   assert.deepEqual(urls.map((url) => new URL(url).searchParams.get("page")), ["1", "3", "2"], "a bot comment's previous one is found without reading the oldest pages")
+})
+
+test("a reopen by the drain's own claim is still recognised when the claim sits on the page before the last one read", async () => {
+  const at = (index) => new Date(Date.parse("2026-11-01T00:00:00Z") + index * 1000).toISOString().replace(".000", "")
+  const events = Array.from({ length: 201 }, (_, index) => ({ id: index, event: "milestoned", created_at: at(index) }))
+  // Page 2 ends with the drain's claim; page 3 starts with an old event (the revision's second), so the last page alone reaches back to the revision.
+  events[199] = { id: 199, event: "labeled", label: { name: "drain:claimed" }, actor: { login: "maintainer" }, created_at: at(199) }
+  events.push({ id: 500, event: "reopened", actor: { login: "maintainer" }, created_at: at(230) })
+  const world = historyGithub({ histories: { 7: { comments: [], events, timeline: [] } }, issues: () => [{ number: 7, title: "T", body: "b", state: "open", updated_at: at(231) }] })
+  const connect = (account, { login }) => connectGithub(account, { spawn: () => ({ status: 0, stdout: "tok" }), fetchImpl: world.fetchImpl, env: { PATH: "/bin" }, login })
+  const states = { "o/r": { seeded: true, seen: { 7: { updatedAt: at(200), digest: createHash("sha1").update("T\nb").digest("hex").slice(0, 16), title: "T" } }, pending: [], turns: [] } }
+  await pollDrain({ repo: "o/r", account: "maintainer", session: "s" }, states, { connect, now: Date.parse(at(240)) })
+  assert.equal(states["o/r"].lastError, undefined)
+  assert.deepEqual(states["o/r"].pending, [], "the claim one minute before the reopen is found on page 2, so the reopen is the drain's own")
+  assert.ok(world.history().some((line) => line.endsWith("events?page=2")))
 })
