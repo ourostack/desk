@@ -54,18 +54,33 @@ add_session "$@"
 ${chainTail("prepare-commit-msg", false)}`
 }
 
-/** The `commit-msg` hook text: in a repository that forbids AI attribution, drops `Co-authored-by` lines that name an AI tool or a bot. */
+// Runs the repository's own attribution checker (`findings`), so the hook removes exactly the Co-authored-by lines that checker rejects
+// and keeps a person's. Written without single quotes: it sits inside a single-quoted shell word.
+const STRIP_SCRIPT = [
+  'import{readFileSync,writeFileSync}from"node:fs";import{resolve}from"node:path";import{pathToFileURL}from"node:url";',
+  'const f=process.argv[1];',
+  'const{findings}=await import(pathToFileURL(resolve(".github/scripts/attribution.mjs")).href);',
+  'const text=readFileSync(f,"utf8");',
+  'const drop=new Set(findings(text).filter(x=>x.reason.startsWith("Co-authored-by")).map(x=>x.line));',
+  'if(drop.size)writeFileSync(f,text.split(/\\r?\\n/).filter((_,i)=>!drop.has(i+1)).join("\\n"));',
+].join("")
+
+/**
+ * The `commit-msg` hook text. A foreign `commit-msg` hook runs first, and keeps its failure; then, in a repository with
+ * `.github/scripts/attribution.mjs`, the final message loses the Co-authored-by lines that checker rejects. A failed check refuses the commit.
+ */
 function commitMsgScript() {
-  return `${header("commit-msg")}strip_ai_coauthors() {
-  [ -f .github/scripts/attribution.mjs ] || return 0
-  tmp="$1.desk-strip"
-  grep -v -i -E '^[[:space:]>*+-]*co-authored-by[[:space:]]*:.*(copilot|anthropic|openai|chatgpt|codex|gemini|claude code|\\[bot\\])' "$1" > "$tmp" 2>/dev/null
-  [ $? -le 1 ] && cat "$tmp" > "$1"
-  rm -f "$tmp"
-  return 0
-}
-strip_ai_coauthors "$@"
-${chainTail("commit-msg", false)}`
+  return `${header("commit-msg")}chained="\${0%/*}/commit-msg${CHAINED_SUFFIX}"
+if [ -x "$chained" ] && ! grep -q '${SESSION_MARKER}' "$chained" 2>/dev/null; then
+  "$chained" "$@" || exit $?
+fi
+[ -f .github/scripts/attribution.mjs ] || exit 0
+if ! node --input-type=module -e '${STRIP_SCRIPT}' "$1"; then
+  echo "Desk commit-msg: could not check this commit message against .github/scripts/attribution.mjs (is node installed?), so the commit is refused. Remove any AI Co-authored-by line by hand." >&2
+  exit 1
+fi
+exit 0
+`
 }
 
 /** The `pre-push` hook text. */

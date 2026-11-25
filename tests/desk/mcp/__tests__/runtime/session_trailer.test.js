@@ -212,13 +212,41 @@ test("a Session trailer matches none of the attribution checks", async () => {
   for (const check of [aiCredit, ruleset, deskScan]) assert.doesNotMatch(`subject\n\n${trailer}\n`, check)
 })
 
-test("in a repository that rejects AI attribution, a commit loses AI Co-authored-by lines and keeps a person's", async () => {
+const CHECKER = `export const findings = (text) => text.split(/\\r?\\n/).flatMap((line, i) => (/^co-authored-by:.*(copilot|claude\\s+(code\\b|3)|gpt)/i.test(line) ? [{ line: i + 1, reason: "Co-authored-by trailer naming an agent" }] : []))\n`
+
+function withChecker(dir, source = CHECKER) {
+  mkdirSync(path.join(dir, ".github", "scripts"), { recursive: true })
+  writeFileSync(path.join(dir, ".github", "scripts", "attribution.mjs"), source)
+}
+
+test("where a repository's attribution checker exists, a commit loses the lines it rejects and keeps a person's", async () => {
   const dir = await repo()
-  const body = ["Subject", "", "Co-authored-by: Copilot App <223556219+Copilot@users.noreply.github.com>", "Co-authored-by: Claude <noreply@anthropic.com>", "Co-authored-by: Dana Lee <dana@example.com>"].join("\n")
+  const body = ["Subject", "", "Co-authored-by: Copilot App <223556219+Copilot@users.noreply.github.com>", "Co-authored-by: Claude 3 Sonnet <noreply@anthropic.com>", "Co-authored-by: Claude Codey <claude@example.org>", "Co-authored-by: Dana Lee <dana@example.com>"].join("\n")
   ok(commit(dir, body))
   assert.match(message(dir), /Copilot App/u)
-  mkdirSync(path.join(dir, ".github", "scripts"), { recursive: true })
-  writeFileSync(path.join(dir, ".github", "scripts", "attribution.mjs"), "")
+  withChecker(dir)
   ok(commit(dir, body, {}, [], "g.txt"))
-  assert.equal(message(dir), "Subject\n\nCo-authored-by: Dana Lee <dana@example.com>")
+  assert.equal(message(dir), "Subject\n\nCo-authored-by: Claude Codey <claude@example.org>\nCo-authored-by: Dana Lee <dana@example.com>")
+})
+
+test("a commit is refused, with a reason, when the checker cannot run", async () => {
+  const dir = await repo()
+  withChecker(dir, "throw new Error('broken')\n")
+  const result = commit(dir, "Subject")
+  assert.notEqual(result.status, 0)
+  assert.match(result.stderr, /could not check this commit message/u)
+})
+
+test("a chained commit-msg hook runs first, keeps its failure, and its additions are checked too", async () => {
+  const dir = await repo()
+  withChecker(dir)
+  const hooks = path.join(dir, ".git", "hooks")
+  writeFileSync(path.join(hooks, "commit-msg.desk-chained"), "#!/bin/sh\nprintf 'Co-authored-by: GPT Bot <b@example.com>\\n' >> \"$1\"\n")
+  chmodSync(path.join(hooks, "commit-msg.desk-chained"), 0o755)
+  ok(commit(dir, "Subject"))
+  assert.equal(message(dir), "Subject")
+  writeFileSync(path.join(hooks, "commit-msg.desk-chained"), "#!/bin/sh\necho nope >&2\nexit 3\n")
+  const refused = commit(dir, "Again", {}, [], "h.txt")
+  assert.notEqual(refused.status, 0)
+  assert.match(refused.stderr, /nope/u)
 })
