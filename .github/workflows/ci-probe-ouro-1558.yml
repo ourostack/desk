@@ -18,7 +18,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           PKG: "@ouro.bot/cli@0.1.0-alpha.1558"
         run: |
-          set -u; set +e          W="$RUNNER_TEMP/probe"; mkdir -p "$W/cache" "$W/prefix" "$W/pack" "$W/asset"
+          set -u; set +e
+          W="$RUNNER_TEMP/probe"; mkdir -p "$W/cache" "$W/prefix" "$W/pack" "$W/asset"
           : > "$W/npmrc"
           export NPM_CONFIG_USERCONFIG="$W/npmrc" NPM_CONFIG_GLOBALCONFIG="$W/npmrc" NPM_CONFIG_CACHE="$W/cache" NPM_CONFIG_REGISTRY=https://registry.npmjs.org/
           node -v; npm -v; npm config get registry
