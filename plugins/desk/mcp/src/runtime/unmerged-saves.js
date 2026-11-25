@@ -56,8 +56,8 @@ export function hasSettledSave({ root, env, spawnGit = spawnSync }) {
   return entries(readSyncStatus({ root, env })).some((save) => onFetchedMain({ root, save, spawnGit }))
 }
 
-// Whether the fetched main already holds the save: it is an ancestor, or every file it changed is identical on main (or absent
-// on both) because the same content landed as another commit. Looser evidence is left to settlement, which closes with it. Local
+// Whether the fetched main already holds the save: it is an ancestor, or every path it changed has the same mode and object on main (or
+// a deletion is proven absent) because the same content landed as another commit. Looser evidence is left to settlement, which closes with it. Local
 // reads only; anything unreadable is "not proven", so the save stays named.
 function onFetchedMain({ root, save, spawnGit }) {
   try {
@@ -67,7 +67,7 @@ function onFetchedMain({ root, save, spawnGit }) {
     const main = git(["rev-parse", "--verify", "--quiet", `${upstream.tracking}^{commit}`]).stdout.trim()
     if (!OBJECT_ID.test(main) || git(["cat-file", "-e", `${save.head}^{commit}`]).status !== 0) return false
     if (git(["merge-base", "--is-ancestor", save.head, main]).status === 0) return true
-    return (supersession(git, save.head, main, () => "", { exact: true })?.length ?? 0) > 0
+    return exactlyOnMain(git, save.head, main)
   } catch {
     return false
   }
@@ -134,7 +134,7 @@ const FRONTMATTER_KEY = /^([A-Za-z][\w-]*):(?:\s|$)/u
  * main, when every line the commit adds is on main, or when the commit only sets frontmatter fields that a newer commit on
  * main has since set differently.
  */
-function supersession(git, head, main, link, { exact = false } = {}) {
+function supersession(git, head, main, link) {
   const parent = `${head}^`
   const files = git(["diff-tree", "--root", "-r", "--name-only", "--no-renames", "--no-commit-id", "-z", head]).stdout.split("\0").filter(Boolean)
   const headTime = Number(git(["log", "-1", "--format=%ct", head]).stdout.trim())
@@ -148,7 +148,6 @@ function supersession(git, head, main, link, { exact = false } = {}) {
       return null
     }
     if (onMain.stdout === onHead.stdout) { evidence.push(`${file} is identical on main (${link(file)})`); continue }
-    if (exact) return null
     const had = new Set(git(["cat-file", "blob", `${parent}:${file}`]).stdout.split("\n"))
     const added = onHead.stdout.split("\n").filter((line) => line.trim() !== "" && !had.has(line))
     const mainLines = onMain.stdout.split("\n")
@@ -163,6 +162,26 @@ function supersession(git, head, main, link, { exact = false } = {}) {
     return null
   }
   return evidence
+}
+
+// Whether every path the save's commit (a single commit on the commit it was published onto) changes has on `main` the same mode,
+// type and object, or is proven absent there when the commit deletes it. A failed read proves nothing.
+function exactlyOnMain(git, head, main) {
+  const raw = git(["diff-tree", "--root", "-r", "--raw", "--no-renames", "--no-commit-id", "-z", head])
+  if (raw.status !== 0) return false
+  const fields = raw.stdout.split("\0")
+  let changes = 0
+  for (let at = 0; fields[at]; at += 2) {
+    const [, mode, , oid, status] = fields[at].split(/[ ]/u)
+    const file = fields[at + 1]
+    const onMain = git(["ls-tree", "-z", main, "--", file])
+    if (onMain.status !== 0) return false
+    const entry = onMain.stdout.split("\0").find((line) => line.endsWith(`\t${file}`))
+    const same = status === "D" ? entry === undefined : entry !== undefined && (entry.startsWith(`${mode} blob ${oid}\t`) || entry.startsWith(`${mode} commit ${oid}\t`))
+    if (!same) return false
+    changes += 1
+  }
+  return changes > 0
 }
 
 const short = (sha) => sha.slice(0, 12)
