@@ -516,6 +516,12 @@ function baselineOf(scan) {
 
 const NEWS = { kind: "news" }
 
+/** A person's edit is news, and still leaves the record of how many edits the history holds, so the next change is not read from the start of it again. The count can only be too high (an edit newer than this one that was not read): a later scan then finds more new edits than it expects and is news, never quiet. */
+function newsAt(scan, edit) {
+  if (typeof edit.id !== "string" || !Number.isFinite(Date.parse(edit.editedAt))) return NEWS
+  return { kind: "news", baseline: baselineOf({ ...scan, found: { ...scan.found, [edit.id]: edit.editedAt } }) }
+}
+
 const validPage = (page) => Array.isArray(page.edits) && Number.isInteger(page.total) && typeof page.updatedAt === "string" && typeof page.hasMore === "boolean"
 
 /** What the pages read so far settle: the issue's new edits are all found (a bot-only proof, once a page is as fresh as the issue), not all found yet (null), or cannot be explained (news). */
@@ -573,7 +579,7 @@ async function advance(api, repo, issue, scan) {
       if (scan.base === null) scan.old += 1
       continue
     }
-    if (!botEdit(edit)) return NEWS
+    if (!botEdit(edit)) return newsAt(scan, edit)
     scan.found[edit.id] = edit.editedAt
   }
   if (page.hasMore) {
@@ -850,7 +856,7 @@ async function recordChanges(api, drain, state, { full, issues }, { now, desk })
       if (verdict?.kind === "deferred") throw Object.assign(new Error(verdict.message), { code: verdict.code })
       if (verdict?.kind === "news") item.edited = "title or body edited"
       const why = await changedByOthers(api, drain.repo, issue, before, digest, ignored, rules, item.edited)
-      if (verdict?.kind === "bot") seen[key].edits = verdict.baseline
+      if (verdict?.baseline) seen[key].edits = verdict.baseline
       if (why) recorded.push({ number: issue.number, title: issue.title, updatedAt: issue.updated_at, seenAt: new Date(now).toISOString(), why })
     } catch (error) {
       // This issue's marker stays where it was, so the next poll judges the same change again; the others go on.

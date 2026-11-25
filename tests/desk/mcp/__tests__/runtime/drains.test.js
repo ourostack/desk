@@ -2859,3 +2859,25 @@ test("repeated bot comments from two authors each find their own previous commen
   const wakes = await run("build passed")
   assert.match(wakes.pending[0]?.why ?? "", /comment 149 by ci-two\[bot\]/u, "it matches the other author's previous text, not its own")
 })
+
+test("a person's body edit leaves a baseline, so the next body change on a long history reads a page or two, not the whole history again (#1798)", async () => {
+  for (const order of ["asc", "desc"]) {
+    const w = await editsWorld([ISSUE()])
+    w.hist[1] = history(30_000, { order })
+    await w.poll()
+    const reads = []
+    const step = async (k, edit) => {
+      const at = NOW + k * 360_000
+      const before = w.reads.length
+      w.change(1, at, edit)
+      const { wakes } = await w.poll(at)
+      reads.push(w.reads.length - before)
+      return wakes
+    }
+    assert.equal((await step(1, personEdit("h1", iso(NOW + 360_000)))).length, 1, `${order}: a person's edit wakes`)
+    assert.equal((await step(2, botEdit("b2", iso(NOW + 720_000)))).length, 0, `${order}: a bot's edit after it is quiet`)
+    assert.equal((await step(3, personEdit("h3", iso(NOW + 1_080_000)))).length, 1, `${order}: a second person's edit wakes`)
+    assert.equal((await step(4, botEdit("b4", iso(NOW + 1_440_000)))).length, 0, order)
+    assert.ok(reads.slice(1).every((count) => count <= 4), `${order}: later changes read a few pages, got ${reads}`)
+  }
+})
