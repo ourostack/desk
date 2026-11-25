@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.589 — 2026-11-25
+
+An issue drain now reads an issue's events, timeline and comments from their newest end and only as far back as what changed since it last looked (a reopen's drain claim one minute earlier included), instead of paging the whole history every time an open issue's `updated_at` moves or a failed read is retried. Closed issues were already skipped. A read that fails still leaves the issue's marker and its wake where they were. Which host produced the reported traffic is not established here, and a body edit's GraphQL history read is unchanged.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.588 — 2026-11-25
 
 Desk's Git hooks now include a `commit-msg` step. In a repository that has `.github/scripts/attribution.mjs`, it runs that file's own checker over the final message and removes the `Co-authored-by` lines the checker rejects, so a person's co-author stays and the hook never disagrees with the repository's check. A `commit-msg` hook that was already there still runs first and can still refuse the commit. If the checker can't run (for example, node is missing), the commit is refused with a message saying why. Commits no longer reach a pull request that the attribution check then fails, so nobody has to reword and force-push.
