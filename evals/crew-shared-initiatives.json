@@ -67,7 +67,7 @@
     "evals/worlds/crew-shared-initiatives/roster-fact-not-note/person",
     "evals/worlds/crew-shared-initiatives/note-rules/person"
   ],
-  "reviewedSourceFingerprint": "e767421d53cb7d94ae407943706065f675da23644ddfb3efd28ec8c6879aaaac",
+  "reviewedSourceFingerprint": "dfe74af88836651310b08504e07019c757317d5d285c5bf81fc10a32536df9f5",
   "requirements": [
     {
       "id": "single-home",
