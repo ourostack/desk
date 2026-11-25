@@ -1,8 +1,9 @@
 import test from "node:test"
 import assert from "node:assert/strict"
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, existsSync, rmSync, chmodSync } from "node:fs"
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, existsSync, chmodSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
+import { removeTreeSync } from "../_remove_tree.js"
 import { ledgeredFetch, SpendHeld, unrecordedSends } from "../../../../../plugins/desk/mcp/src/runtime/spend-ledger.js"
 import { connectGithub } from "../../../../../plugins/desk/mcp/src/runtime/drains.js"
 import { prDelivery } from "../../../../../plugins/desk/mcp/src/tools/delivery-gate.js"
@@ -16,7 +17,7 @@ const auth = (token = "tok-A") => ({ headers: { Authorization: `Bearer ${token}`
 
 function ledger(t) {
   const root = mkdtempSync(path.join(tmpdir(), "spend-ledger-"))
-  t.after(() => { try { chmodSync(path.join(root, "gh-quota"), 0o700) } catch {} rmSync(root, { recursive: true, force: true }) })
+  t.after(() => { try { chmodSync(path.join(root, "gh-quota"), 0o700) } catch {} removeTreeSync(root) })
   const dir = path.join(root, "gh-quota")
   mkdirSync(dir)
   const env = { MS_DESK_QUOTA_DIR: dir, COPILOT_AGENT_SESSION_ID: SESSION }
