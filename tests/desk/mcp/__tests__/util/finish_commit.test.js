@@ -4,9 +4,10 @@ import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import { spawnSync } from "node:child_process"
 import { randomUUID } from "node:crypto"
-import { existsSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, utimesSync, writeFileSync, mkdirSync } from "node:fs"
+import { chmodSync, existsSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, utimesSync, writeFileSync, mkdirSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
+import { fileURLToPath } from "node:url"
 
 import { finishCommit, runFinishCommitCli } from "../../../../../plugins/desk/mcp/src/util/finish-commit.js"
 import { commitIndexPaths, commitPaths, indexEntries } from "../../../../../plugins/desk/mcp/src/util/git-stage.js"
@@ -1033,13 +1034,31 @@ async function sealed(run) {
   for (const key of Object.keys(process.env)) delete process.env[key]
   Object.assign(process.env, clean)
   sealedEnv = clean
+  owned.push(home)
+  let failed = null
   try {
     return await run(clean)
+  } catch (error) {
+    failed = error
+    throw error
   } finally {
     sealedEnv = null
-    for (const dir of [home, ...owned.splice(0)]) rmSync(dir, { recursive: true, force: true })
-    for (const key of Object.keys(process.env)) delete process.env[key]
-    Object.assign(process.env, saved)
+    try {
+      // A root that cannot be removed stays registered and is reported, never dropped from the list.
+      const left = []
+      for (const dir of owned.splice(0)) {
+        try { rmSync(dir, { recursive: true, force: true }) } catch { left.push(dir) }
+      }
+      owned.push(...left)
+      if (left.length > 0) {
+        const note = `sealed fixture roots could not be removed and remain: ${left.join(", ")}`
+        if (failed === null) throw new Error(note)
+        process.stderr.write(`${note}\n`)
+      }
+    } finally {
+      for (const key of Object.keys(process.env)) delete process.env[key]
+      Object.assign(process.env, saved)
+    }
   }
 }
 
@@ -1197,20 +1216,79 @@ test("a finish replays any card change Desk itself recorded, even one in a teamm
 }))
 
 // A hostile but synthetic parent environment (Git repository and config injection, a hooks path, a foreign home) never reaches the fixtures' Git calls or the recorded finish.
-test("sealed fixtures drop an inherited Git repository and config injection instead of merging it back", () => {
-  const planted = { GIT_DIR: "/nonexistent-synthetic", GIT_WORK_TREE: "/nonexistent-synthetic", GIT_INDEX_FILE: "/nonexistent-synthetic/index", GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "core.hooksPath", GIT_CONFIG_VALUE_0: "/nonexistent-synthetic/hooks", GIT_CONFIG_PARAMETERS: "'core.hooksPath=/nonexistent-synthetic/hooks'", DESK_SYNTHETIC_PROBE: "leak" }
+test("sealed() swaps in the clean environment and removes the home it made, even when the body fails", async () => {
+  const planted = { GIT_DIR: "/nonexistent-synthetic", GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "core.hooksPath", GIT_CONFIG_VALUE_0: "/nonexistent-synthetic/hooks", DESK_SYNTHETIC_PROBE: "leak" }
   const saved = Object.fromEntries(Object.keys(planted).map((key) => [key, process.env[key]]))
   Object.assign(process.env, planted)
-  let seen = null
-  return sealed(async (clean) => {
-    const { root, recorded } = strandedCreate(clean)
-    seen = { clean, recorded, hooks: spawnSync("git", ["-C", root, "config", "--get", "core.hooksPath"], { encoding: "utf8", env: sealedEnv }).stdout }
-    assert.equal(git(root, ["rev-parse", "--show-toplevel"]).trim(), root)
-  }).finally(() => {
-    for (const [key, value] of Object.entries(saved)) value === undefined ? delete process.env[key] : (process.env[key] = value)
-    for (const key of Object.keys(planted)) assert.equal(seen.recorded[key], undefined, `${key} must not reach the recorded finish`)
-    assert.equal(seen.hooks, "")
-    assert.equal(existsSync(seen.clean.HOME), false, "the sealed home is removed")
+  let home = null
+  try {
+    await assert.rejects(sealed(async (clean) => {
+      home = clean.HOME
+      assert.equal(process.env.GIT_CONFIG_COUNT, undefined)
+      assert.equal(sealedEnv.DESK_SYNTHETIC_PROBE, undefined)
+      throw new Error("body failed")
+    }), /body failed/u)
+    assert.equal(existsSync(home), false, "the sealed home is removed")
     assert.equal(sealedEnv, null)
-  })
+    assert.equal(process.env.GIT_CONFIG_COUNT, "1", "the caller's environment is restored")
+  } finally {
+    for (const [key, value] of Object.entries(saved)) value === undefined ? delete process.env[key] : (process.env[key] = value)
+  }
+})
+
+test("a sealed root that cannot be removed stays registered and reported, and the environment is still restored", async () => {
+  const outer = mkdtempSync(path.join(tmpdir(), "desk-unremovable-"))
+  const stuck = path.join(outer, "stuck")
+  mkdirSync(stuck)
+  writeFileSync(path.join(stuck, "keep"), "x")
+  const before = process.env.PATH
+  try {
+    chmodSync(outer, 0o500)
+    await assert.rejects(sealed(async () => { owned.push(stuck) }), (error) => error.message.includes(stuck))
+    assert.deepEqual(owned.filter((dir) => dir === stuck), [stuck], "the unremovable root is still registered")
+    assert.equal(sealedEnv, null)
+    assert.equal(process.env.PATH, before, "the environment is restored although removal failed")
+  } finally {
+    chmodSync(outer, 0o700)
+    owned.splice(0, owned.length)
+    rmSync(outer, { recursive: true, force: true })
+  }
+})
+
+// The probe below runs only in a child launched by the next test, with hostile synthetic state already in the environment at import.
+test("pre-import probe: hostile launch state reaches neither helper Git nor the recorded finish", { skip: process.env.DESK_SEAL_PROBE !== "1" }, () => sealed(async (clean) => {
+  assert.equal(env.GIT_CONFIG_COUNT, "2", "the hostile state was present when this module was imported")
+  assert.match(env.GIT_DIR, /blocker/u)
+  const { root, finish, recorded } = strandedCreate(clean)
+  assert.equal(git(root, ["rev-parse", "--show-toplevel"]).trim(), root, "helper Git ignores the hostile GIT_DIR")
+  assert.equal(git(root, ["config", "user.name"]).trim(), "t", "helper Git ignores the hostile config injection")
+  assert.deepEqual(Object.keys(recorded).filter((key) => key.startsWith("GIT_")).sort(), ["GIT_CONFIG_GLOBAL", "GIT_CONFIG_NOSYSTEM", "GIT_TERMINAL_PROMPT"])
+  advance(root, 2)
+  const done = await runRecorded(finish, { recorded })
+  assert.deepEqual([done.code, done.answer.state], [0, "finished"], JSON.stringify(done.answer))
+  assert.equal(git(root, ["log", "-1", "--format=%an <%ae>"]).trim(), "t <t@example.com>", "the recorded finish committed as the repository's own identity")
+  assert.equal(git(root, ["show", "--name-only", "--format=", "HEAD"]).trim(), `${ARI_CARD}/task.md`)
+}))
+
+test("a hostile launch environment present before import is neutralized for helper Git and the recorded finish", () => {
+  const base = realpathSync(mkdtempSync(path.join(tmpdir(), "desk-probe-launch-")))
+  try {
+    const blocker = path.join(base, "blocker")
+    writeFileSync(blocker, "not a directory")
+    const hostile = {
+      PATH: process.env.PATH, TMPDIR: base, HOME: path.join(base, "hostile-home"), XDG_STATE_HOME: path.join(base, "hostile-state"),
+      GIT_DIR: path.join(blocker, "gitdir"), GIT_WORK_TREE: path.join(blocker, "tree"), GIT_INDEX_FILE: path.join(blocker, "index"),
+      GIT_CONFIG_COUNT: "2", GIT_CONFIG_KEY_0: "user.name", GIT_CONFIG_VALUE_0: "hostile-name", GIT_CONFIG_KEY_1: "user.email", GIT_CONFIG_VALUE_1: "hostile@example.invalid",
+      GIT_CONFIG_PARAMETERS: `'core.hooksPath=${path.join(base, "hostile-hooks")}'`, GIT_AUTHOR_NAME: "hostile-author", GIT_AUTHOR_EMAIL: "hostile-author@example.invalid",
+      GIT_COMMITTER_NAME: "hostile-committer", GIT_COMMITTER_EMAIL: "hostile-committer@example.invalid", DESK_SEAL_PROBE: "1",
+    }
+    const child = spawnSync(process.execPath, ["--test", "--test-reporter=tap", "--test-concurrency=1", "--test-name-pattern=pre-import probe", fileURLToPath(import.meta.url)], { encoding: "utf8", env: hostile, timeout: 120000 })
+    assert.equal(child.status, 0, `${child.stdout}\n${child.stderr}`)
+    assert.match(child.stdout, /^# pass 1$/mu)
+    assert.match(child.stdout, /^# fail 0$/mu)
+    assert.equal(existsSync(hostile.XDG_STATE_HOME), false, "the hostile state folder was never written")
+    assert.equal(existsSync(hostile.HOME), false, "the hostile home was never written")
+  } finally {
+    rmSync(base, { recursive: true, force: true })
+  }
 })
