@@ -116,7 +116,7 @@ test("a worktree move whose publication fails says so and leaves the move on dis
 // detached worker is, yielding the lock) takes the worktree's index lock for as long as a real `git add` runs, and a following
 // task_update in the same worktree commits meanwhile. A clean filter on log.md, named only in the common git dir's info/attributes,
 // is what makes the worker's own `git add` hold the lock for about a second.
-test("task_update right after a queued log entry, while the worker's commit holds the index lock, loses nothing and publishes both", async () => {
+test("task_update right after a queued log entry, while the worker's commit holds the index lock, loses nothing and publishes both", { skip: process.platform === "win32" && "the lock-holding clean filter is a POSIX sh script" }, async () => {
   const { root, origin, worktree } = await deskWithWorktree()
   const marker = `${root}-filter-ran`
   const filter = `${root}-filter.sh`
