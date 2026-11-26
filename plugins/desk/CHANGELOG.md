@@ -1,5 +1,13 @@
 # desk plugin — changelog
 
+## 3.2.599 — 2026-11-26
+
+An issue drain can set `everySeconds` (60 or more) in its config to be polled less often than the drains run, so a busy repository that changes every minute costs fewer GitHub reads.
+
+The relays drain reads a pull request that waits only on a merge conflict or a draft at most every 5 minutes, not every 30 to 60 seconds. Nothing about it changes until the author pushes, so the reads were wasted GitHub requests on the shared work account.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.598 — 2026-11-26
 
 Desk's MCP server now vendors Ouro UI v1.3.576, moved by Ouro Current.
