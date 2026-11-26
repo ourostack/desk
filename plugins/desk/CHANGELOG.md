@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.614 — 2026-11-26
+
+A quota observation Desk's spend ledger records after a process was killed mid-write is now its own line. The next observation was glued onto the unfinished one (`35` then `3900 …` read as `353900 …`), which lost the real number and could leave a read allowed under the floor; each observation now starts on a new line, and the floor itself is unchanged.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.613 — 2026-11-26
 
 Desk's MCP server now vendors Ouro UI v1.3.584, moved by Ouro Current.

@@ -1,1 +1,0 @@
-A quota observation Desk's spend ledger records after a process was killed mid-write is now its own line. The next observation was glued onto the unfinished one (`35` then `3900 …` read as `353900 …`), which lost the real number and could leave a read allowed under the floor; each observation now starts on a new line, and the floor itself is unchanged.
