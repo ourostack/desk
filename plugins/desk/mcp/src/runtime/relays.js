@@ -868,7 +868,7 @@ export async function pollRelays({ paths, drainFiles, connect, now, signedIn = (
       }
       const epoch = typeof api.credentialEpoch === "string" ? api.credentialEpoch : null
       const slot = (repo) => `${login} ${repo}`
-      const waiting = epoch ? repos.map((repo) => ({ repo, entry: state.probes?.[slot(repo)] })).find(({ repo, entry }) => entry?.key === accountProbeKey(relay, login, repo, epoch) && now < Date.parse(entry.retryAt) - DUE_SLACK_MS) : null
+      const waiting = epoch ? repos.map((repo) => ({ repo, entry: state.probes?.[slot(repo)] })).find(({ repo, entry }) => entry?.key === accountProbeKey(relay, login, repo, epoch) && now < Date.parse(entry.retryAt) - (entry.outcome === "denied" ? DUE_SLACK_MS : 0)) : null
       if (waiting) {
         kept[slot(waiting.repo)] = waiting.entry
         if (waiting.entry.outcome === "transient") transient ??= Object.assign(new Error(waiting.entry.message), { code: waiting.entry.code })
@@ -979,20 +979,20 @@ function denialDelayMs(relay, state) {
 }
 
 /**
- * What a failed probe means. "denied": GitHub refused this account the repository (a 4xx other than a rate limit) or it has no token.
- * "transient": a keyring that gave no answer, a server error, a rate limit or hold, or anything unrecognised; it is never remembered as a refusal.
+ * What a failed probe means. "denied": GitHub refused this account the repository (401, 403 that is not a rate limit, or 404) or it has no token.
+ * "transient": a keyring that gave no answer, a server error, a timeout (408), any other status, a rate limit or hold, or anything unrecognised; it is never remembered as a refusal.
  */
 function probeOutcome(error) {
   if (error?.code === "drains_sign_in_the_github_cli") return "denied"
   if (error?.code === "spend_held" || error?.rateLimited || error?.transient) return "transient"
-  if (Number.isInteger(error?.status) && error.status >= 400 && error.status < 500 && error.status !== 429) return "denied"
+  if ([401, 403, 404].includes(error?.status)) return "denied"
   return "transient"
 }
 
-/** When a transient failure said to come back, from the provider's own Retry-After or reset time; null when it said nothing. */
+/** When a transient failure said to come back: its Retry-After counted from when the answer arrived, else its window reset; null when it said nothing. */
 function signalledRetryAt(error, now) {
-  const times = [Number.isFinite(error?.retryAfterMs) ? now + error.retryAfterMs : null, Number.isFinite(error?.resetAt) ? error.resetAt : null].filter((at) => at !== null)
-  return times.length > 0 ? Math.max(...times) : null
+  if (Number.isFinite(error?.retryAfterMs)) return (Number.isFinite(error.receivedAt) ? error.receivedAt : now) + error.retryAfterMs
+  return Number.isFinite(error?.resetAt) ? error.resetAt : null
 }
 
 /** Identifies one account's access to one repository for one relay configuration and credential, without holding the token. */
