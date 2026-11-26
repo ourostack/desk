@@ -1,0 +1,1 @@
+`drains progress --card <card>` counts what shipped for a card: pull requests GitHub says are merged (each once) and acceptance checks that passed on a named version. Messages, commits, turns and "busy" never count, and a `done` ending the turn-end gate recorded is checked against GitHub rather than taken at its word. See [keep-the-work-moving.md](docs/keep-the-work-moving.md).
