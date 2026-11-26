@@ -59,13 +59,12 @@ function gitRead(repo, name) {
   if (!repo || !/^[\w.-]+$/u.test(name)) return null
   const ref = `refs/heartbeats/${name}`
   if (git(repo, ["fetch", "-q", "origin", `+${ref}:${ref}`]).status !== 0) return null
-  const out = git(repo, ["cat-file", "-p", ref])
-  return out.status === 0 ? out.stdout : null
+  return git(repo, ["cat-file", "-p", ref]).stdout
 }
 
 /** Reads a peer's heartbeat over ssh with no prompt; null when it cannot be read. */
 function sshRead(peer, name) {
-  if (!/^[\w.@-]+$/u.test(peer.ssh ?? "") || !/^[\w.-]+$/u.test(name)) return null
+  if (!/^[\w.@-]+$/u.test(String(peer.ssh)) || !/^[\w.-]+$/u.test(name)) return null
   const run = spawnSync("ssh", ["-o", "BatchMode=yes", "-o", "ConnectTimeout=10", peer.ssh, `cat "\${XDG_STATE_HOME:-$HOME/.local/state}/ouroboros-skills/desk/heartbeats/${name}.json"`], { encoding: "utf8", timeout: 20_000, windowsHide: true })
   return run.status === 0 ? run.stdout : null
 }
