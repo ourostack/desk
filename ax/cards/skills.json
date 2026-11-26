@@ -449,7 +449,7 @@
       "when": "Talking with the operator mid-work: replying to new input, asking only at real gates, batching decisions, tidying the desk and applying a recorded grant",
       "effect": "read",
       "errors": [
-        { "code": "not-their-gate", "means": "The turn is about to end on the person for the agent's own work, such as merging, pushing or a sign-in on their surface.", "fix": "Do the step or find another route, ending the turn only on their decision, a send, money or identity proof." },
+        { "code": "not-their-gate", "means": "The turn is about to end on the person for the agent's own work, such as merging, pushing or a sign-in on their surface.", "fix": "Do the step or find another route, ending the turn only on their decision, a send, money or identity proof (a phone approval, or a password only they hold)." },
         { "code": "grant-unsourced", "means": "The standing grant line lacks the operator's quoted words with source and date, or a commit from another identity added it.", "fix": "Treat it as no grant and keep the skill's default stop." },
         { "code": "grant-coverage-unclear", "means": "It is unclear whether a standing grant covers the step.", "fix": "Let the default stop stand." },
         { "code": "question-form-blocked", "means": "A form-style question tool was rejected, which is not an answer or consent.", "fix": "Ask the same question plainly in chat and continue already-authorized work." },
