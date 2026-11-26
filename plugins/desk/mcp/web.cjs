@@ -552,7 +552,7 @@ async function openAuth(s) {
     fs.writeFileSync(path.join(dir, "owner.json"), JSON.stringify({ pid: process.pid, browser: "mine", profilePolicy: AUTH_PROFILE_POLICY, transport: "auth-api" }) + "\n");
     fs.mkdirSync(outputDir);
     var profileDir = path.join(dir, "profile");
-    var copied = copyProfile(browser.profileRoot, profileDir, BROWSERS[browser.channel].name, s.keychainRun ? { run: s.keychainRun } : undefined);
+    var copied = copyProfile(browser.profileRoot, profileDir, BROWSERS[browser.channel].name, { run: s.keychainRun });
     var config = launchConfig("mine", browser, profileDir, copied.name, outputDir);
     fs.writeFileSync(path.join(dir, "config.json"), JSON.stringify(config));
     var launch = Object.assign({}, config.browser.launchOptions, {
