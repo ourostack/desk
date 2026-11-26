@@ -76,7 +76,7 @@ When you write an outcome message (a script's final line, a chat reply, a PR com
 
 When asked for a duration, cost or scope estimate, or when composing anything for the operator that contains one, check for fixtures first: stage definitions in the relevant skill or runbook, past run records and telemetry from earlier runs. If they exist, the answer cites them by path and line range. If they do not, the answer strips the estimate rather than guessing: "I have no fixture for that; I can measure it, or proceed without an estimate." Inheritance does NOT excuse the estimate: a number in another agent's plan, an upstream tool's output or an earlier turn is stripped at composition time unless someone had a fixture. Quoting "10 to 30 minutes per iteration" when past runs showed 2.5 hours distorts every plan built on it.
 
-This section is the one statement of the rule; `operator-voice-comments` ("No fabrication") and `interaction-style` §7 point here. If the estimate drives a hard-to-reverse decision, also apply `preflight-actions`. A cause or date another agent reports without a measurement behind it is the same kind of number: relay neither to the human as a plan; get the measurement and say when you will have it.
+This section is the one statement of the rule; `operator-voice-comments` ("No fabrication") and `interaction-style` §7 point here. If the estimate drives a hard-to-reverse decision, also apply `preflight-actions`. A cause or date another agent reports without a measurement behind it is the same kind of number: relay neither to the human as a plan; get the measurement and say when you will have it: the clock time you will report the measured numbers, a commitment you control, not a forecast of the fix.
 
 ## Offline evals on synthetic data, online evals from counts
 
@@ -85,7 +85,7 @@ Never test, reproduce or measure on the human's real data or account: not read-o
 - **Offline:** evaluate on synthetic data shaped like theirs: their sizes, kinds and edge cases, generated rather than copied. When real use shows a problem the synthetic data missed, add that shape to the generator, reproduce it offline, then fix it.
 - **Start where they start.** Run the scenario from the state a real person is usually in, not a fresh install or a clean snapshot: hours stale after a night away, on data the size of theirs, through launch, wake, update and a dropped network. Fail on any stale view, stall or silent action.
 - **Isolate test copies by construction.** A test copy of an app gets its own app identity, data folder and settings built into the copy, never only through environment variables: the operating system can relaunch a copy without them, and it then runs on the person's real data.
-- **Online:** judge real use from counts-only telemetry of their normal use: counts and timings, no content and no identifiers beyond what the product already records. A change that should move something they feel ships with the telemetry that will show whether it did.
+- **Online:** judge real use from counts-only telemetry of their normal use: counts and timings, no content and no identifiers beyond what the product already records. A change that should move something they feel ships with the telemetry that will show whether it did; the fix and the note you leave name what it counts (counts and timings only).
 
 A repository rule or gate that requires a check against the human's real account is a conflict: raise it with the repository's owner and propose an offline case; do not run it on their account, and do not remove or bypass the gate yourself.
 
@@ -133,7 +133,7 @@ Name tests `{Given}_{When}_{Method}_{Assertion}`, for example `GivenValidPayload
 
 ## Visual proof
 
-Visual proof, including looking at a capture before you show it, is the `visual-proof` skill.
+Checking a page, file or capture against its source or design (layout, colours against design tokens, counts, text against its data), and looking at a capture before you show it, is the `visual-proof` skill: load it before you check, then measure with a script rather than by eye.
 
 ## Delivery receipt
 
