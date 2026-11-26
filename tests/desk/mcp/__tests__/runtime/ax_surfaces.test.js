@@ -49,6 +49,7 @@ const NOT_ERRORS = {
   "plugins/desk/hooks/lib/boot-checks.cjs#usage-boot-checks-cjs-compatible": "a command-line usage line: the exit status is its code",
   "plugins/desk/hooks/lib/factory-end.cjs#desk-delivery-unverified": "a log line the delivery hook writes",
   "plugins/desk/hooks/lib/factory-end.cjs#desk-delivery-unverified~2": "a log line the delivery hook writes",
+  "plugins/desk/hooks/lib/factory-end.cjs#desk-turn-end-unverified": "a log line the turn-end gate writes",
   "plugins/desk/mcp/src/search/engine.js#meaning-based-search-is-off": "a status note, not a failure",
   "plugins/desk/mcp/web.cjs#method-not-found": "the JSON-RPC protocol's own method-not-found reply",
   "plugins/desk/mcp/src/runtime/agency-desk-channel.js#usage-run-it-with-detect": "a command-line usage line: the exit status is its code",

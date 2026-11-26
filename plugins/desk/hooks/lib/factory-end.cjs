@@ -291,7 +291,7 @@ async function runBoundedHook(host, input, entry, { deadlineMs = DEADLINE_MS, st
         if (diagnostic) stderr.write(diagnostic.slice(0, 2048));
         try {
           const value = JSON.parse(output);
-          if (value?.decision === "block" && typeof value.reason === "string" && value.reason.includes("[DESK_DELIVERY_CORRECTION]")) stdout.write(JSON.stringify(value));
+          if (value?.decision === "block" && typeof value.reason === "string" && (value.reason.includes("[DESK_DELIVERY_CORRECTION]") || value.reason.includes("[DESK_TURN_END_GATE]"))) stdout.write(JSON.stringify(value));
         } catch { /* Accounting produces no stdout when no correction is due. */ }
       } else {
         const why = timedOut ? "deadline" : spawnError ? `spawn ${spawnError.code ?? "error"}` : signal ? `signal ${signal}` : `exit ${code}`;
@@ -320,11 +320,17 @@ function main(entry, argv = process.argv, stdin = process.stdin) {
       }
       const delivery = await checkDelivery({ host: argv[2], payload }).catch(() => ({ diagnostic: "guard_unavailable" }));
       if (delivery.diagnostic) process.stderr.write(`[desk-delivery] unverified: ${delivery.diagnostic}\n`);
-      if (delivery.output) process.stdout.write(JSON.stringify(delivery.output));
+      if (delivery.output) { process.stdout.write(JSON.stringify(delivery.output)); return; }
+      if (delivery.diagnostic) return;
+      // The delivery reply check owns a turn's correction budget; the turn-end gate speaks only when it has none to spend.
+      const gate = await checkTurnEnd({ host: argv[2], payload }).catch(() => ({ diagnostic: "guard_unavailable" }));
+      if (gate.diagnostic) process.stderr.write(`[desk-turn-end] unverified: ${gate.diagnostic}\n`);
+      if (gate.output) process.stdout.write(JSON.stringify(gate.output));
     })
     : runBoundedHook(argv[2], stdin, entry);
   work.then(() => process.exit(0), () => process.exit(0));
 }
 
 const checkDelivery = options => require("./delivery-stop.cjs").checkDelivery(options);
+const checkTurnEnd = options => require("./turn-end-gate.cjs").checkTurnEnd(options);
 module.exports = { readInput, runHook, runBoundedHook, launch, main };
