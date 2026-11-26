@@ -1512,9 +1512,9 @@ async function probeWorld(relays = [IMMEDIATE]) {
   const fetchImpl = async (url, init) => {
     const who = Object.keys(tokens).find((name) => init.headers.Authorization === `Bearer ${tokens[name]}`)
     http.push({ who, url: new URL(url).pathname })
-    const { status, headers = {}, takes = 0 } = answers[who]
+    const { status, headers = {}, takes = 0, body = "" } = answers[who]
     clock.at += takes
-    return { status, ok: status < 400, headers: { get: (name) => headers[name.toLowerCase()] ?? null, has: (name) => name.toLowerCase() in headers }, json: async () => ({ workflow_runs: [] }), text: async () => "" }
+    return { status, ok: status < 400, headers: { get: (name) => headers[name.toLowerCase()] ?? null, has: (name) => name.toLowerCase() in headers }, json: async () => ({ workflow_runs: [] }), text: async () => body }
   }
   const connect = (account, options) => connectGithub(account, { ...options, spawn, fetchImpl, pauseMs: 0, clock: () => clock.at, env: { PATH: "/bin", MS_DESK_QUOTA: "off" } })
   const poll = (at) => pollRelays({ paths: w.paths, drainFiles: w.drainFiles, connect, now: at, signedIn: () => ["a", "b"] })
@@ -1623,8 +1623,8 @@ test("probes: a slow answer counts its Retry-After from when it arrived, not fro
 
 test("probes: a primary quota reset with no Retry-After holds until the reset, without the cadence slack", async () => {
   const p = await probeWorld()
-  p.answers.a = { status: 429, headers: { "x-ratelimit-reset": String((NOW + 600 * SECOND) / 1000) } }
-  p.answers.b = { status: 429, headers: { "x-ratelimit-reset": String((NOW + 3600 * SECOND) / 1000) } }
+  p.answers.a = { status: 429, headers: { "x-ratelimit-remaining": "0", "x-ratelimit-reset": String((NOW + 600 * SECOND) / 1000) } }
+  p.answers.b = { status: 429, headers: { "x-ratelimit-remaining": "0", "x-ratelimit-reset": String((NOW + 3600 * SECOND) / 1000) } }
   await p.poll(NOW)
   p.answers.a = { status: 200 }
   await p.poll(NOW + 599_999)
@@ -1672,4 +1672,27 @@ test("probes: an exhausted primary quota with a Retry-After as well holds until 
   assert.equal(asked(), 1)
   await p.poll(NOW + 3600 * SECOND)
   assert.equal(asked(), 2)
+})
+
+for (const [status, body] of [[429, ""], [403, "You have exceeded a secondary rate limit"]]) {
+  test(`probes: a healthy-pool ${status} with no Retry-After is not a used-up hourly pool and is not held until the unrelated reset`, async () => {
+    const p = await probeWorld()
+    const healthy = { status, body, headers: { "x-ratelimit-remaining": "4000", "x-ratelimit-reset": String((NOW + 3600 * SECOND) / 1000) } }
+    p.answers.a = healthy
+    p.answers.b = healthy
+    const first = await p.poll(NOW)
+    assert.ok(!/hourly API limit is used up|13:00:00/u.test(first.errors[0].error), first.errors[0].error)
+    assert.equal(p.state("data to pages").probes?.["a o/data"], undefined, "no memo-hold for an unknown deadline")
+    await p.poll(NOW + 30 * SECOND)
+    assert.equal(p.probes(), 4, "asked again at the configured interval")
+  })
+}
+
+test("probes: a probe that rejects with nothing is a visible failure, never an accessible account", async () => {
+  const w = await setup([IMMEDIATE])
+  const connect = async () => ({ get: async () => Promise.reject(undefined), calls: () => ({ total: 0 }), credentialEpoch: "e" })
+  const polled = await pollRelays({ paths: w.paths, drainFiles: w.drainFiles, connect, now: NOW, signedIn: () => ["a", "b"] })
+  assert.equal(polled.errors.length, 1)
+  assert.ok(polled.errors[0].error.length > 0)
+  assert.equal(w.state("data to pages").resolvedAccount, undefined)
 })

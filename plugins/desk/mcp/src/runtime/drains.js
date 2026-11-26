@@ -1152,8 +1152,7 @@ export async function connectGithub(account, { spawn = spawnSync, fetchImpl: raw
         const reset = Number(response.headers.get("x-ratelimit-reset"))
         const until = Number.isFinite(reset) && reset > 0 ? new Date(reset * 1000).toISOString() : "the next window"
         const signals = retrySignals(response.headers, clock())
-        const held = Number.isFinite(signals.retryAfterMs) && !signals.exhausted
-        const wording = held ? `GitHub asked to wait ${Math.ceil(signals.retryAfterMs / 1000)}s before this read is retried` : `GitHub's hourly API limit is used up, rate limited until ${until}`
+        const wording = signals.exhausted ? `GitHub's hourly API limit is used up, rate limited until ${until}` : Number.isFinite(signals.retryAfterMs) ? `GitHub asked to wait ${Math.ceil(signals.retryAfterMs / 1000)}s before this read is retried` : remaining === null ? `GitHub rate limited this read, rate limited until ${until}` : "GitHub rate limited this read (not the hourly pool)"
         throw Object.assign(new Error(`Wait for the quota to reset: ${wording} (HTTP ${response.status} for ${route.split("?")[0]})`), { code: "drains_rate_limited", status: response.status, rateLimited: true, ...signals })
       }
       throw failedAnswer(response.status, route.split("?")[0])

@@ -880,12 +880,12 @@ export async function pollRelays({ paths, drainFiles, connect, now, signedIn = (
         const shareKey = epoch ? `${login}\0${repo}\0${epoch}` : null
         let asked = shareKey ? sharedProbes.get(shareKey) : null
         if (!asked) {
-          asked = Promise.resolve().then(() => api.get(`/repos/${repo}`)).then(() => null, (error) => error)
+          asked = Promise.resolve().then(() => api.get(`/repos/${repo}`)).then(() => ({ ok: true }), (error) => ({ ok: false, error: asError(error) }))
           if (shareKey) sharedProbes.set(shareKey, asked)
         }
-        const error = await asked
-        if (error) {
-          failure = { repo, error }
+        const result = await asked
+        if (!result.ok) {
+          failure = { repo, error: result.error }
           break
         }
       }
@@ -989,12 +989,16 @@ function probeOutcome(error) {
   return "transient"
 }
 
-/** When a transient failure said to come back: an exhausted primary quota (x-ratelimit-remaining 0) waits for its reset, or its Retry-After if later; otherwise the Retry-After counted from when the answer arrived, else the window reset; null when it said nothing. */
+/** When a transient failure said to come back: its Retry-After counted from when the answer arrived; the window reset only when the primary quota is known exhausted (x-ratelimit-remaining 0), then the later of the two; null when no applicable deadline is known. */
 function signalledRetryAt(error, now) {
   const after = Number.isFinite(error?.retryAfterMs) ? (Number.isFinite(error.receivedAt) ? error.receivedAt : now) + error.retryAfterMs : null
-  const reset = Number.isFinite(error?.resetAt) ? error.resetAt : null
-  if (error?.exhausted && reset !== null) return after === null ? reset : Math.max(after, reset)
-  return after ?? reset
+  const reset = error?.exhausted && Number.isFinite(error?.resetAt) ? error.resetAt : null
+  return after === null ? reset : reset === null ? after : Math.max(after, reset)
+}
+
+/** Whatever a probe rejected with, as an Error. */
+function asError(value) {
+  return value instanceof Error || (value && typeof value === "object") ? value : new Error(String(value ?? "the account probe failed without saying why"))
 }
 
 /** Identifies one account's access to one repository for one relay configuration and credential, without holding the token. */
