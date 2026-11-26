@@ -1,5 +1,17 @@
 # desk plugin — changelog
 
+## 3.2.626 — 2026-11-26
+
+Card claims now expire. `drains leases take` records a claim, and `drains leases status` shows it as held, lapsed (nothing pushed to its branch for two hours, read from GitHub's push events) or ownerless (its session ended). Messages, reruns and claiming again never renew a lease. See [keep-the-work-moving.md](docs/keep-the-work-moving.md).
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.625 — 2026-11-26
+
+Desk's MCP server now vendors Ouro UI v1.3.590, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.624 — 2026-11-26
 
 The `evidence-discipline` pointer to `visual-proof` now covers checking a page, file or capture against its source or design (layout, colours against design tokens, counts, text against its data), and says to load `visual-proof` before checking and measure with a script rather than by eye. Before, it named only looking at a capture before showing it, so a measurement request that loaded `evidence-discipline` (every recorded miss did) never reached the rule that lives in `visual-proof`. `live-ui-iteration` now says to tell the person, in the handover message, how to reach each state, that each note becomes one small edit on the page, and that every decision becomes a deterministic check run on every edit. The `principle-moments` suite now declares `evidence-discipline` as a source, so its receipt binds the guidance the subject actually loads.
