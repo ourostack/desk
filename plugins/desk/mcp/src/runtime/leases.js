@@ -37,7 +37,8 @@ export function takeClaim({ claims, card, owner, now, assess }) {
 /** The server's time of the last push to a branch, from GitHub's events: an agent cannot backdate it as it can a commit's date. */
 function ghLastPush(repo, branch) {
   if (!/^[\w.-]+\/[\w.-]+$/u.test(repo ?? "") || typeof branch !== "string" || branch === "") return null
-  const run = spawnSync("gh", ["api", `repos/${repo}/events?per_page=100`, "-q", `[.[]|select(.type=="PushEvent" and .payload.ref=="refs/heads/${branch.replaceAll('"', "")}")][0].created_at // empty`], { encoding: "utf8", timeout: 20_000, windowsHide: true })
+  const query = `[.[]|select(.type=="PushEvent" and .payload.ref=="refs/heads/${branch.replaceAll('"', "")}")][0].created_at // empty`
+  const run = spawnSync("gh", ["api", `repos/${repo}/events?per_page=100`, "-q", query], { encoding: "utf8", timeout: 20_000, windowsHide: true })
   const at = Date.parse(run.stdout?.trim() ?? "")
   return run.status === 0 && Number.isFinite(at) ? at : null
 }
