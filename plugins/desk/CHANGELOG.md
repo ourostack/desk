@@ -1,5 +1,25 @@
 # desk plugin — changelog
 
+## 3.2.623 — 2026-11-26
+
+The four human-experience defaults behave reliably again (#1858). Agent storage retention is set and run, never asked about or proposed: `interaction-style` no longer lists agent storage as a permanent-deletion decision, `task-lifecycle` tells the human in one line what was removed and the space before and after, and `session-resumption` says a session's own folder ages out under that retention once cited evidence is kept by pointer. A date is never relayed without a measurement: the reply says a trustworthy date needs measuring and gives the clock time the numbers will be reported. A change to a human's chat or account setup ships counts-only telemetry with the fix and says so. A status answer opens with how the work feels, never the release's state or date.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.622 — 2026-11-26
+
+`drains progress --card <card>` counts what shipped for a card: pull requests GitHub says are merged (each once) and acceptance checks that passed on a named version. Messages, commits, turns and "busy" never count, and a `done` ending the turn-end gate recorded is checked against GitHub rather than taken at its word. See [keep-the-work-moving.md](docs/keep-the-work-moving.md).
+
+A session with an open focused card can now end its turn only as done (with a pull request, run or commit this session produced), waiting (on a named event, with a wake it registered, an expiry within 7 days and what it blocks), blocked on a named person (with the step that resumes the work), or "no ready work" (with where it looked). The Stop hook corrects any other ending once per turn, so it cannot loop, and records every ending for the runner that checks unfinished jobs outside agent sessions. See [keep-the-work-moving.md](docs/keep-the-work-moving.md).
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.621 — 2026-11-26
+
+Desk's MCP server now vendors Ouro UI v1.3.589, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.620 — 2026-11-26
 
 A lane never asks a person for a keyboard or machine action: a command to run, a key at a prompt, a code from their mail, a sign-in on a particular machine, terms to accept or a setting to change by hand. Signing in is the agent's job, with the password from its vault filled by a tool; the person gets only the number or prompt to approve on their own phone, or a password for their own account that the agent doesn't hold. A "you need to sign in" ask is checked first (`gh auth status` for gh) and dropped when it is false. The `interaction-style` and `using-desk` skills no longer tell agents to hand a password, code or identity-proof screen to the person.

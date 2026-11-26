@@ -8,8 +8,7 @@
     "plugins/desk/skills/preflight-actions/SKILL.md",
     "plugins/desk/skills/interaction-style/SKILL.md"
   ],
-  "reviewedSourceFingerprint": "43ef911c8772406fcc70cafead9638267d4dc7539a343118fd0a4ac1360d42d3",
-  "knownFailure": {"issue":"https://github.com/ourostack/desk/issues/1866","case":"normal-owner-rollout-before-manual-enablement","observed":"2026-11-27"},
+  "reviewedSourceFingerprint": "2e0539261a926dd61981b95a456bdb2a8f74b93f4617fefa58e73f9aaadbc960",
   "requirements": [
     {
       "id": "governing-question-fidelity",

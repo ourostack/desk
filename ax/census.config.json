@@ -27,6 +27,7 @@
     {"id": "desk-runtime-upkeep", "when": "Maintenance of the desk plugin's own machinery: startup migrations and the packed production dependencies its server loads"},
     {"id": "drains-issues", "when": "Watching configured GitHub repositories for issue changes made by others, and waking each repository's assigned session"},
     {"id": "drains-schedule", "when": "Timed prompts from schedules.json that a runner hands to a session every so many minutes, optionally gated"},
+    {"id": "drains-keep-moving", "when": "Counting what shipped, leasing cards to sessions and checking for stuck work from outside any agent session"},
     {"id": "turn-end-gate", "when": "Judging whether a headless lane's final output ended its job as shipped, blocked on a person or with no ready work"},
     {"id": "drains-stalled", "when": "Nudging sessions that sat idle with a focused task card still unfinished and nothing running"},
     {"id": "drains-relays", "when": "GitHub relays that fire a dispatch after a green workflow run or merge labelled pull requests once checks pass"},

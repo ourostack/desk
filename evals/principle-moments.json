@@ -17,8 +17,8 @@
     "evals/worlds/principle-moments/ui-feedback-live/desk/site/index.html",
     "evals/worlds/principle-moments/ui-feedback-live/desk/site/settings.css"
   ],
-  "reviewedSourceFingerprint": "656b0a7696742b1a54eddc2daac2e80af4b505419c0c8800a7a25526b230c02d",
-  "knownFailure": [{"issue":"https://github.com/ourostack/desk/issues/1866","case":"measure-not-eyeball","observed":"2026-11-27"},{"issue":"https://github.com/ourostack/desk/issues/1866","case":"ui-feedback-live","observed":"2026-11-27"}],
+  "reviewedSourceFingerprint": "ef0e3db4ac999338bc96dcec63b3379280571bbc7fd1a2507eb99c79b8846453",
+  "knownFailure": {"issue":"https://github.com/ourostack/desk/issues/1866","case":"ui-feedback-live","observed":"2026-11-27"},
   "requirements": [
     {
       "id": "skill-found-at-the-moment",
