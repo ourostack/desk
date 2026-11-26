@@ -268,7 +268,10 @@ test("copyProfile says so when encrypted cookies cannot be made readable, instea
   db.exec("CREATE TABLE cookies (host_key TEXT, name TEXT, value TEXT, encrypted_value BLOB)")
   db.prepare("INSERT INTO cookies VALUES (?, ?, ?, ?)").run("github.com", "user_session", "", Buffer.from("v10sealed-by-the-running-browser"))
   db.close()
-  const copied = web.copyProfile(source, path.join(root, "dest"), "Microsoft Edge", { cookieKey: null })
+  const platform = Object.getOwnPropertyDescriptor(process, "platform")
+  Object.defineProperty(process, "platform", { value: "darwin" })
+  let copied
+  try { copied = web.copyProfile(source, path.join(root, "dest"), "Microsoft Edge", { cookieKey: null }) } finally { Object.defineProperty(process, "platform", platform) }
   assert.deepEqual(copied.unreadableCookies, { encrypted: 1, unreadable: 1, keychain: "no key" })
   assert.match(web.sessionWarning(copied.unreadableCookies), /^SESSION_MAY_BE_MISSING: 1 of 1 cookies .*Safe Storage key: no key/)
   assert.equal(web.copyProfile(source, path.join(root, "dest2"), "Microsoft Edge", { cookieKey: crypto.randomBytes(16) }).unreadableCookies.keychain, "key read")
