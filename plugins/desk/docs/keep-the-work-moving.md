@@ -67,6 +67,8 @@ Code: [keepers.js](../mcp/src/runtime/keepers.js), tests in [keepers.test.js](..
 | Stop the keeper or fake a peer's heartbeat | Each keeper publishes its heartbeat as a blob on `refs/heartbeats/<host>` of the shared remote and reads the other's from there, so no host needs inbound ssh and a Dev Box can join as a third (a peer with an `ssh` alias is still read over ssh); a missing, old or future heartbeat is `peer_silent` |
 | Delete its own ledger file | Not caught by one host; the ledger is outside the agent's tools, and a missing ledger leaves leases (GitHub pushes) and the peer's view to catch the card |
 
+The keeper only lists findings and wakes no session. A runner that delivers findings by waking sessions must wake them one at a time and bound the sessions a machine runs at once, as the `work-orchestration` skill requires.
+
 ## 5. Waits on systems we own
 
 A wait whose `on` names CI, checks, a workflow, the merge queue, auto-merge, a release, publishing, a pipeline, a runner or the keeper, and whose expiry passed or that was renewed three times in a row, shows as `fix_system` instead of `wait_expired` or `wait_renewed`. Its job is to fix that system, then clear the wait with a `done` ending that names the fix. Waits on people or outside systems keep their own kinds.
