@@ -5,17 +5,17 @@
 const OPS = new Set(["snapshot", "restore", "abort"])
 
 /**
- * @param {{ channel: { on, off?, removeListener?, send, channel?: { unref?: () => void } }, token: string, session: { focusSnapshot, restoreFocus }, kick: () => void, log?: (text: string) => void }} options
+ * @param {{ channel: { on, off?, removeListener?, send, channel?: { unref?: () => void } }, token: string, session: { focusSnapshot, restoreFocus }, kick: () => void }} options
  * @returns {() => void} removes this handoff's own listeners and aborts work in flight
  */
-export function serveFocusHandoff({ channel, token, session, kick, log = () => {} }) {
+export function serveFocusHandoff({ channel, token, session, kick }) {
   if (typeof token !== "string" || token === "" || typeof channel?.on !== "function" || typeof channel?.send !== "function") return () => {}
   const active = new Map()
   const reply = (message) => {
     try {
       channel.send({ desk: "focus-handoff", v: 1, token, ...message }, () => {})
-    } catch (error) {
-      log(`focus handoff reply failed: ${error?.code ?? "error"}`)
+    } catch {
+      // A closed channel has no one left to tell; the proxy settles on its own deadline.
     }
   }
   const onMessage = (message) => {

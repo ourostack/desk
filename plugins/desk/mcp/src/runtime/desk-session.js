@@ -829,9 +829,9 @@ export function createDeskSession(deps) {
       root: context.root.root,
       argsPerson: args.person ?? null,
       person: context.person ?? null,
-      authorityMode: context.authority?.mode ?? null,
+      authorityMode: context.authority?.mode,
       authorityPerson: context.authority?.person ?? null,
-      writeAuthority: policy.write_authority ?? null,
+      writeAuthority: policy.write_authority,
       authorityProvider: policy.authority_provider ?? null,
       member: context.member?.person ?? null,
     })).digest("hex")
@@ -875,7 +875,10 @@ export function createDeskSession(deps) {
       if (scope === null) return result("unknown", { kind: "unknown" })
       if (scope !== snapshot.scope) return result("scope_changed", { kind: "scope_changed" })
       if (focus.declared()) return { outcome: "already_declared" }
-      if (snapshot.task === null) return focus.restore(null) ? { outcome: "restored" } : { outcome: "already_declared" }
+      if (snapshot.task === null) {
+        focus.restore(null)
+        return { outcome: "restored" }
+      }
       if (typeof context.runtimeServer.checkFocusCard !== "function") return result("unknown", { kind: "unknown" })
       const deskRoot = context.root.root
       const task = { track: snapshot.task.track, slug: snapshot.task.slug }
@@ -887,8 +890,11 @@ export function createDeskSession(deps) {
       }
       // Whatever happened while the lookup ran (an abort, a new root, a changed authority, a declaration) wins over this answer.
       if (aborted || disposed || context.root?.root !== deskRoot || focusScope() !== scope) return { outcome: "unknown" }
-      if (focus.declared()) return { outcome: "already_declared" }
-      if (found === true) return focus.restore(task) ? { outcome: "restored" } : { outcome: "already_declared" }
+      // Declarations run through the same operation queue as this restore, so none can have happened during the lookup.
+      if (found === true) {
+        focus.restore(task)
+        return { outcome: "restored" }
+      }
       return result("card_missing", { kind: "card_missing", task })
     }
     try {

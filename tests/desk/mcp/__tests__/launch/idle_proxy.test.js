@@ -31,6 +31,7 @@ function harness({ idleMs: idle = IDLE, failSpawnAt = [], watchesParent = true, 
   const compacted = []
   const signals = new EventEmitter()
   const children = []
+  const cleared = []
   const stdout = Object.assign(new EventEmitter(), { write: (text) => sent.push(text) })
   let parentGone = null
   let spawns = 0
@@ -54,7 +55,15 @@ function harness({ idleMs: idle = IDLE, failSpawnAt = [], watchesParent = true, 
       child.token = token
       child.ipcSent = []
       child.sendFails = false
+      child.sendThrows = false
+      child.deferred = null
       child.send = (message, callback) => {
+        if (child.sendThrows) throw new Error("channel closed")
+        if (child.deferred) {
+          child.ipcSent.push(message)
+          child.deferred.push(callback)
+          return true
+        }
         if (child.sendFails) {
           if (callback) callback(new Error("ipc closed"))
           return false
@@ -81,7 +90,7 @@ function harness({ idleMs: idle = IDLE, failSpawnAt = [], watchesParent = true, 
     idleMs: idle,
     now: () => clock.now,
     setTimer: (fn, ms) => { timers.set(nextTimer, { fn, at: clock.now + ms }); return nextTimer++ },
-    clearTimer: (id) => timers.delete(id),
+    clearTimer: (id) => { if (timers.has(id)) cleared.push(timers.get(id).fn); timers.delete(id) },
     exit: (code) => exits.push(code),
     signals,
     kill: (pid, signal) => kills.push(signal),
@@ -91,7 +100,7 @@ function harness({ idleMs: idle = IDLE, failSpawnAt = [], watchesParent = true, 
 
   const tick = () => new Promise((resolve) => setImmediate(resolve))
   return {
-    proxy, stdin, stdout, launchTokens, parentGone: () => parentGone(), sent, stderr, exits, kills, compacted, signals, children, timers,
+    proxy, stdin, stdout, launchTokens, parentGone: () => parentGone(), sent, stderr, exits, kills, compacted, signals, children, timers, cleared,
     last: () => children.at(-1),
     host: async (message) => { stdin.write(`${typeof message === "string" ? message : JSON.stringify(message)}\n`); await tick() },
     sees: () => sent.filter(Boolean).map((line) => JSON.parse(line.trim())),
@@ -1169,4 +1178,120 @@ test("a server that never said hello leaves the focus unknown, not forgotten, fo
   const restore = ipcOps(third, "restore")
   assert.equal(restore[0].unknown, "support_unconfirmed")
   assert.equal(restore[0].snapshot, undefined)
+})
+
+test("a snapshot that cannot be asked for or read leaves the focus unknown after served calls, and nothing for a server that served none", async () => {
+  for (const fail of ["sendFails", "sendThrows", "disconnect", "malformed"]) {
+    const h = harness({ ipc: true })
+    await handshaken(h)
+    const first = h.last()
+    first.hello()
+    await h.host(CALL(2))
+    answer(first, 2)
+    await h.flush()
+    if (fail === "sendFails" || fail === "sendThrows") first[fail] = true
+    await h.advance(IDLE)
+    if (fail === "disconnect") first.emit("disconnect")
+    if (fail === "malformed") first.ipc("snapshot-result", { id: ipcOps(first, "snapshot")[0].id, snapshot: {} })
+    await h.flush()
+    const next = await resumedAfter(h, first)
+    next.hello()
+    await h.flush()
+    assert.equal(ipcOps(next, "restore")[0].unknown, "snapshot_unavailable", fail)
+  }
+  const h = harness({ ipc: true })
+  await handshaken(h)
+  const idle = h.last()
+  idle.hello()
+  await h.advance(IDLE)
+  idle.ipc("snapshot-result", { id: ipcOps(idle, "snapshot")[0].id, snapshot: null })
+  const next = await resumedAfter(h, idle)
+  next.hello()
+  await h.flush()
+  assert.equal(ipcOps(next, "restore").length, 0)
+})
+
+test("a restore request that fails after the hold ended, a timer that fires late, and a disconnect from a replaced server change nothing", async () => {
+  const h = harness({ ipc: true })
+  const old = await idleWithFocus(h)
+  const next = await resumedAfter(h, old)
+  next.deferred = []
+  next.hello()
+  await h.flush()
+  const before = h.cleared.length
+  next.ipc("restore-result", { id: ipcOps(next, "restore")[0].id, outcome: "weather" })
+  assert.equal(delivered(next, PING), 1)
+  h.cleared.slice(before).forEach((fn) => fn())
+  next.deferred[0](new Error("late"))
+  old.emit("disconnect")
+  await h.flush()
+  assert.equal(next.ended, false)
+  assert.equal(delivered(next, PING), 1)
+})
+
+test("a late window timer or an answer for an id nobody asked about is dealt with without error", async () => {
+  const h = harness({ ipc: true })
+  await handshaken(h)
+  h.last().hello()
+  await h.host({ jsonrpc: "2.0", id: "nobody-asked", result: {} })
+  assert.equal(delivered(h.last(), { jsonrpc: "2.0", id: "nobody-asked", result: {} }), 1)
+})
+
+test("the record of retired server requests is cleared once it grows past a thousand", async () => {
+  const h = harness({ ipc: true })
+  const old = await idleWithFocus(h)
+  const held = await resumedAfter(h, old)
+  for (let i = 0; i < 1001; i += 1) held.say({ jsonrpc: "2.0", id: `r${i}`, method: "roots/list" })
+  await h.flush()
+  held.hello()
+  await h.flush()
+  await h.advance(WINDOW)
+  held.leave(0)
+  await h.flush()
+  const second = h.last()
+  second.say({ jsonrpc: "2.0", id: RESUME, result: {} })
+  second.hello()
+  second.say({ jsonrpc: "2.0", id: "x1", method: "roots/list" })
+  await h.flush()
+  await h.advance(WINDOW)
+  second.leave(0)
+  await h.flush()
+  await h.host({ jsonrpc: "2.0", id: "r5", result: {} })
+  const third = h.last()
+  third.say({ jsonrpc: "2.0", id: RESUME, result: {} })
+  await h.flush()
+  await h.advance(WINDOW)
+  assert.equal(delivered(third, { jsonrpc: "2.0", id: "r5", result: {} }), 1)
+})
+
+test("a snapshot that never arrives times out, a late send failure after the answer changes nothing, and a declared-nothing focus is handed over", async () => {
+  const silent = harness({ ipc: true })
+  await handshaken(silent)
+  const quiet = silent.last()
+  quiet.hello()
+  await silent.host(CALL(2))
+  answer(quiet, 2)
+  await silent.flush()
+  await silent.advance(IDLE)
+  await silent.advance(WINDOW)
+  const afterTimeout = await resumedAfter(silent, quiet)
+  afterTimeout.hello()
+  await silent.flush()
+  assert.equal(ipcOps(afterTimeout, "restore")[0].unknown, "snapshot_unavailable")
+
+  const h = harness({ ipc: true })
+  await handshaken(h)
+  const first = h.last()
+  first.hello()
+  first.deferred = []
+  await h.host(CALL(2))
+  answer(first, 2)
+  await h.flush()
+  await h.advance(IDLE)
+  first.ipc("snapshot-result", { id: ipcOps(first, "snapshot")[0].id, snapshot: { declared: true, task: null, scope: "scope-a" } })
+  first.deferred.forEach((callback) => callback(new Error("late")))
+  const next = await resumedAfter(h, first)
+  next.hello()
+  await h.flush()
+  assert.deepEqual(ipcOps(next, "restore")[0].snapshot, { declared: true, task: null, scope: "scope-a" })
 })

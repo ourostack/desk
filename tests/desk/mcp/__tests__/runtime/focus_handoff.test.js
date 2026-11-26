@@ -80,3 +80,34 @@ test("a failing restore replies unknown, teardown removes only its own listeners
   noop()
   assert.equal(serveFocusHandoff({ channel: harness().channel, token: "", session: {}, kick: () => {} }).constructor, Function)
 })
+
+test("a disconnect aborts in-flight work, a send on a closed channel is tolerated, a missing outcome is unknown, and a channel with only removeListener tears down", async () => {
+  const signals = []
+  const h = harness({ restoreFocus: (_request, { signal }) => new Promise(() => { signals.push(signal) }) })
+  h.post({ op: "restore", id: 1, budgetMs: 10, snapshot: { declared: false } })
+  await flush()
+  h.channel.emit("disconnect")
+  assert.equal(signals[0].aborted, true)
+
+  const sent = []
+  const closed = new EventEmitter()
+  closed.send = (message) => { sent.push(message); throw new Error("closed") }
+  closed.off = undefined
+  const stop = serveFocusHandoff({ channel: closed, token: "tok", session: { restoreFocus: async () => null }, kick: () => {} })
+  closed.emit("message", { desk: "focus-handoff", v: 1, token: "tok", op: "restore", id: 9, budgetMs: 10, snapshot: { declared: false } })
+  await flush()
+  assert.deepEqual(sent.map((m) => m.op), ["hello", "restore-result"])
+  assert.equal(sent[1].outcome, "unknown")
+  stop()
+  assert.equal(closed.listenerCount("message"), 0)
+})
+
+test("stopping the endpoint aborts restores still running and answers nothing for them", async () => {
+  let signal
+  const h = harness({ restoreFocus: (request, options) => { signal = options.signal; return new Promise(() => {}) } })
+  h.post({ op: "restore", id: 7, budgetMs: 2000, snapshot: { declared: false } })
+  await flush()
+  h.stop()
+  assert.equal(signal.aborted, true)
+  assert.equal(h.channel.sent.filter((message) => message.op === "restore-result").length, 0)
+})

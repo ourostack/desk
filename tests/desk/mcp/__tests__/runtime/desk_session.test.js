@@ -2789,3 +2789,62 @@ test("restore requests with an undeclared snapshot, a note-only request or a mal
   assert.equal(noted.session.focusSnapshot().unknownPrior, true)
   assert.deepEqual(noted.runtime.calls, [])
 })
+
+test("restore edge cases: an explicit clear is carried, a bad budget never waits, and a lookup that throws after an abort changes nothing more", async (t) => {
+  const declaring = (value) => fakeRuntime({ callTool: async ({ statusContext }) => { statusContext.focus.set(value); return { content: [{ type: "text", text: "{}" }] } } })
+  const cleared = await makeSession(t, { runtime: declaring(null) })
+  await cleared.session.admission.refresh()
+  await cleared.session.callTool({ name: "task_focus", input: { clear: true } })
+  const clearedSnapshot = cleared.session.focusSnapshot()
+  assert.equal(clearedSnapshot.task, null)
+  const intoClear = await secondSession(t, cleared)
+  assert.equal((await intoClear.session.restoreFocus({ snapshot: clearedSnapshot })).outcome, "restored")
+  assert.equal(intoClear.session.focusSnapshot().task, null)
+
+  const first = await makeSession(t, { runtime: declaring(harbor) })
+  await first.session.admission.refresh()
+  await first.session.callTool({ name: "task_focus", input: harbor })
+  const snapshot = first.session.focusSnapshot()
+  const noBudget = await secondSession(t, first, { checkFocusCard: async () => ({ found: true }) })
+  assert.equal((await noBudget.session.restoreFocus({ snapshot }, { budgetMs: null })).outcome, "unknown")
+
+  const controller = new AbortController()
+  const throwing = await secondSession(t, first, { checkFocusCard: () => { controller.abort(); throw new Error("x") } })
+  assert.equal((await throwing.session.restoreFocus({ snapshot }, { signal: controller.signal })).outcome, "unknown")
+  assert.equal(throwing.session.focusSnapshot().unknownPrior, undefined, "an aborted restore leaves no note")
+
+})
+
+test("a declared focus whose authority is no longer settled snapshots as unknown, and a restore that cannot be admitted at all leaves a note", async (t) => {
+  const first = await makeSession(t, { runtime: fakeRuntime({ callTool: async ({ statusContext }) => { statusContext.focus.set(harbor); return { content: [{ type: "text", text: "{}" }] } } }) })
+  await first.session.admission.refresh()
+  await first.session.callTool({ name: "task_focus", input: harbor })
+  first.session.context.authorityAdmitted = false
+  assert.deepEqual(first.session.focusSnapshot(), { declared: false, unknownPrior: true })
+
+  const snapshot = { declared: true, task: harbor, scope: "s" }
+  const refused = await makeSession(t, { runtime: fakeRuntime({ checkFocusCard: async () => ({ found: true }) }), resolveInputs: async () => { throw new Error("no desk") } })
+  await refused.session.admission.refresh()
+  assert.equal((await refused.session.restoreFocus({ snapshot }, { budgetMs: 500 })).outcome, "unknown")
+  assert.equal(refused.session.focusSnapshot().unknownPrior, true)
+  assert.equal((await refused.session.restoreFocus({ unknown: "x" })).outcome, "unknown")
+})
+
+test("a restore aborted while it waits its turn behind another restore never starts", async (t) => {
+  const first = await makeSession(t, { runtime: fakeRuntime({ callTool: async ({ statusContext }) => { statusContext.focus.set(harbor); return { content: [{ type: "text", text: "{}" }] } } }) })
+  await first.session.admission.refresh()
+  await first.session.callTool({ name: "task_focus", input: harbor })
+  const snapshot = first.session.focusSnapshot()
+  let answer
+  let lookups = 0
+  const second = await secondSession(t, first, { checkFocusCard: () => { lookups += 1; return new Promise((resolve) => { answer = resolve }) } })
+  const slow = second.session.restoreFocus({ snapshot })
+  await waitUntil(() => answer !== undefined)
+  const controller = new AbortController()
+  const queued = second.session.restoreFocus({ snapshot }, { signal: controller.signal })
+  controller.abort()
+  answer({ found: true })
+  assert.equal((await slow).outcome, "restored")
+  assert.equal((await queued).outcome, "unknown")
+  assert.equal(lookups, 1)
+})

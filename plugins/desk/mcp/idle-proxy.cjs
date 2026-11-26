@@ -638,7 +638,7 @@ function runIdleProxy(o) {
   var env = pick("env");
   var spawn = pick("spawn");
   var proxy = createIdleProxy({
-    makeToken: o.makeToken !== undefined ? o.makeToken : function () {
+    makeToken: function () {
       return crypto.randomBytes(16).toString("hex");
     },
     launchChild: function (token) {
