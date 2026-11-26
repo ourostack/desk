@@ -1722,3 +1722,36 @@ for (const [label, rejection] of [["nothing", undefined], ["null", null], ["an e
     assert.equal(w.state("data to pages").resolvedAccount, undefined)
   })
 }
+
+for (const [label, rejection, expected] of [["a string", "plain failure", /plain failure/u], ["an object with a message", { message: "object failure" }, /object failure/u]]) {
+  test(`probes: a probe that rejects with ${label} keeps that message as the visible failure`, async () => {
+    const w = await setup([IMMEDIATE])
+    const connect = async () => ({ get: async () => Promise.reject(rejection), calls: () => ({ total: 0 }), credentialEpoch: "e" })
+    const polled = await pollRelays({ paths: w.paths, drainFiles: w.drainFiles, connect, now: NOW, signedIn: () => ["a"] })
+    assert.match(polled.errors[0].error, expected)
+  })
+}
+
+test("probes: a structured rate limit without a receipt time counts its Retry-After from the poll", async () => {
+  const w = await setup([IMMEDIATE])
+  const connect = async () => ({ get: async () => { throw { status: 429, rateLimited: true, message: "slow", retryAfterMs: 60_000 } }, calls: () => ({ total: 0 }), credentialEpoch: "e" })
+  await pollRelays({ paths: w.paths, drainFiles: w.drainFiles, connect, now: NOW, signedIn: () => ["a"] })
+  assert.equal(Date.parse(Object.values(w.state("data to pages").probes)[0].retryAt), NOW + 60_000)
+})
+
+test("probes: an account with no token, whether it fails at connection or at the probe, is a denial", async () => {
+  const noToken = () => Object.assign(new Error("sign in"), { code: "drains_sign_in_the_github_cli" })
+  for (const connect of [async () => { throw noToken() }, async () => ({ get: async () => { throw noToken() }, calls: () => ({ total: 0 }), credentialEpoch: "e" })]) {
+    const w = await setup([IMMEDIATE])
+    const polled = await pollRelays({ paths: w.paths, drainFiles: w.drainFiles, connect, now: NOW, signedIn: () => ["a"] })
+    assert.equal(polled.errors[0].code, "relays_set_account_on_relay")
+  }
+})
+
+test("probes: two relays reading the same repository share one probe per account", async () => {
+  const w = await setup([IMMEDIATE, { ...IMMEDIATE, name: "second" }])
+  const asked = []
+  const connect = async () => ({ get: async (url) => { asked.push(url); throw { status: 404, message: "gone" } }, calls: () => ({ total: 0 }), credentialEpoch: "e" })
+  await pollRelays({ paths: w.paths, drainFiles: w.drainFiles, connect, now: NOW, signedIn: () => ["a"] })
+  assert.equal(asked.filter((url) => url === "/repos/o/data").length, 1)
+})
