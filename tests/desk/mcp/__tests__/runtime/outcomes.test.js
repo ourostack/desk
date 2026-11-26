@@ -36,7 +36,7 @@ test("an acceptance check counts only as passed on a named version", () => {
 
 test("readEndings skips damaged lines and orders by time", () => {
   const dir = mkdtempSync(path.join(tmpdir(), "endings-"))
-  writeFileSync(path.join(dir, "a.jsonl"), `${JSON.stringify({ at: "2", card: "b" })}\nnot json\n${JSON.stringify({ at: "1", card: "a" })}\n`)
+  writeFileSync(path.join(dir, "a.jsonl"), `${JSON.stringify({ at: "2", card: "b" })}\nnot json\nnull\n5\n${JSON.stringify({ at: "1", card: "a" })}\n`)
   assert.deepEqual(readEndings(dir).map((e) => e.card), ["a", "b"])
 })
 
@@ -82,6 +82,7 @@ test("odd endings and acceptance records are judged, never trusted", () => {
   const e = (ending, card = "c") => ({ at: "2026-11-26T11:00:00Z", card, ending })
   assert.equal(endingsDir({ HOME: "/h", XDG_STATE_HOME: "rel" }), path.join("/h", ".local", "state", "ouroboros-skills", "desk", "turn-ends"))
   assert.deepEqual(readEndings(path.join(tmpdir(), "no-such-endings-dir")), [])
+  assert.ok(endingsDir().endsWith(path.join("desk", "turn-ends")))
   assert.ok(endingsDir({}).endsWith(path.join("desk", "turn-ends")))
   const r = progressOf({ card: "c", lookup: () => null, endings: [{ card: "c" }, e({ kind: "waiting" }), e({ kind: "done" })], acceptance: [{ card: "z" }, { card: "c", passed: true, check: "x", version: "v1" }, { card: "c", passed: true, check: "x", version: "v2", at: "t" }, { card: "c", passed: true, check: "", version: "v" }, { card: "c", passed: true, check: "x", version: "" }, { card: "c", passed: false }, { card: "c", passed: true, check: 5, version: "v" }, { card: "c", passed: true, check: "x", version: 5 }] })
   assert.equal(r.count, 2)
