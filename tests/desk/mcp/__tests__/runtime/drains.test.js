@@ -2921,3 +2921,12 @@ test("a person's edit with no id or time is news and leaves no baseline (#1798)"
   assert.equal((await w.poll(NOW + 360_000)).wakes.length, 1)
   assert.equal(w.state().seen[1].edits, undefined)
 })
+
+test("connectGithub names the login and token together without holding the token, and a rate limit keeps what GitHub said about coming back", async () => {
+  const spawn = () => ({ status: 0, stdout: "fake-token-x\n" })
+  const limited = response({}, { status: 429, headers: { "retry-after": "90", "x-ratelimit-reset": "2000" } })
+  const api = await connectGithub("a", { spawn, fetchImpl: async () => limited, login: "a", env: { PATH: "/bin", MS_DESK_QUOTA: "off" } })
+  assert.equal(api.credentialEpoch, createHash("sha256").update("a\0fake-token-x").digest("hex"))
+  assert.ok(!api.credentialEpoch.includes("fake-token-x"))
+  await assert.rejects(api.get("/repos/o/r"), (error) => error.code === "drains_rate_limited" && error.retryAfterMs === 90_000 && error.resetAt === 2_000_000)
+})

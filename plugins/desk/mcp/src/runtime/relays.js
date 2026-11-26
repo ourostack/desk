@@ -5,6 +5,7 @@
 // branch's latest completed run of a workflow is green; with `strict` it also judges named workflows' jobs (minus advisory ones) and updates a
 // head that is behind its base. Like `drains.js poll`, no model turn is spent: each poll reads GitHub
 // with conditional requests (an unchanged answer is a free 304) and acts. See docs/relays.md.
+import { createHash } from "node:crypto"
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs"
 import * as path from "node:path"
 import { deskFailure } from "./desk-failure.js"
@@ -845,38 +846,82 @@ export async function pollRelays({ paths, drainFiles, connect, now, signedIn = (
     if (!connections.has(account ?? "")) connections.set(account ?? "", connect(account, account ? { login: account } : {}))
     return connections.get(account ?? "")
   }
+  const sharedProbes = new Map()
   let candidates = null
   const accountsToTry = async () => (candidates ??= Promise.resolve().then(signedIn).catch(() => []))
-  // The first signed-in account that can read every repository the relay uses; undefined when there is no choice to make.
-  const resolveAccount = async (relay) => {
+  // The first signed-in account that can read every repository the relay uses; login undefined when there is no choice to make.
+  // A refused account is not asked again until its relay's idle pace has passed; `probed` says whether any HTTP probe ran.
+  const resolveAccount = async (relay, state) => {
     const accounts = await accountsToTry()
-    if (accounts.length === 0) return undefined
+    if (accounts.length === 0) return { login: undefined, probed: false }
+    const repos = reposOf(relay)
+    const kept = {}
+    let probed = false
+    let transient = null
     for (const login of accounts) {
+      let api
       try {
-        const api = await connectOnce(login)
-        for (const repo of reposOf(relay)) await api.get(`/repos/${repo}`)
-        return login
-      } catch {
-        // This account cannot reach the repository; try the next one.
+        api = await connectOnce(login)
+      } catch (error) {
+        if (probeOutcome(error) === "transient") transient ??= error
+        continue
+      }
+      const epoch = typeof api.credentialEpoch === "string" ? api.credentialEpoch : null
+      const slot = (repo) => `${login} ${repo}`
+      const waiting = epoch ? repos.map((repo) => ({ repo, entry: state.probes?.[slot(repo)] })).find(({ repo, entry }) => entry?.key === accountProbeKey(relay, login, repo, epoch) && now < Date.parse(entry.retryAt) - DUE_SLACK_MS) : null
+      if (waiting) {
+        kept[slot(waiting.repo)] = waiting.entry
+        if (waiting.entry.outcome === "transient") transient ??= Object.assign(new Error(waiting.entry.message), { code: waiting.entry.code })
+        continue
+      }
+      let failure = null
+      for (const repo of repos) {
+        probed = true
+        const shareKey = epoch ? `${login}\0${repo}\0${epoch}` : null
+        let asked = shareKey ? sharedProbes.get(shareKey) : null
+        if (!asked) {
+          asked = Promise.resolve().then(() => api.get(`/repos/${repo}`)).then(() => null, (error) => error)
+          if (shareKey) sharedProbes.set(shareKey, asked)
+        }
+        const error = await asked
+        if (error) {
+          failure = { repo, error }
+          break
+        }
+      }
+      if (!failure) {
+        delete state.probes
+        delete state.probeRetryAt
+        return { login, probed }
+      }
+      const outcome = probeOutcome(failure.error)
+      const retryAt = outcome === "denied" ? now + denialDelayMs(relay, state) : signalledRetryAt(failure.error, now)
+      if (outcome === "transient") transient ??= failure.error
+      if (epoch && retryAt !== null) {
+        kept[slot(failure.repo)] = { outcome, checkedAt: new Date(now).toISOString(), retryAt: new Date(retryAt).toISOString(), key: accountProbeKey(relay, login, failure.repo, epoch), ...(outcome === "transient" ? { code: failure.error.code, message: String(failure.error.message) } : {}) }
       }
     }
-    throw Object.assign(new Error(`Set "account" on relay ${relay.name} in relays.json: none of the signed-in GitHub accounts (${accounts.join(", ")}) can reach ${reposOf(relay).join(" and ")}`), { code: "relays_set_account_on_relay" })
+    const waits = Object.values(kept).filter((entry) => entry.outcome === "denied").map((entry) => entry.retryAt).sort()
+    if (Object.keys(kept).length > 0) state.probes = kept
+    else delete state.probes
+    if (waits.length > 0 && !transient) state.probeRetryAt = waits[0]
+    else delete state.probeRetryAt
+    return { login: undefined, probed, error: transient ?? Object.assign(new Error(`Set "account" on relay ${relay.name} in relays.json: none of the signed-in GitHub accounts (${accounts.join(", ")}) can reach ${repos.join(" and ")}`), { code: "relays_set_account_on_relay" }) }
   }
   await Promise.all(relays.map(async (relay) => {
     const state = states[relay.name]
-    const stretch = relay.backOffWhenIdle !== false ? Math.min(MAX_IDLE_STRETCH, 1 + Math.floor((state.idlePolls ?? 0) / IDLE_POLLS_PER_STEP)) : 1
-    const intervalMs = stretch > 1 ? Math.max(relay.everySeconds * stretch, IDLE_FLOOR_SECONDS) * 1000 : relay.everySeconds * 1000
+    const intervalMs = pollIntervalMs(relay, state)
     if (state.lastPollAt && now - Date.parse(state.lastPollAt) < intervalMs - DUE_SLACK_MS) return
     if (!accountOf(relay, drains, states)) {
-      try {
-        const login = await resolveAccount(relay)
-        if (login) state.resolvedAccount = login
-      } catch (error) {
-        state.lastError = error.message
-        keepCode(state, error)
-        state.lastPollAt = new Date(now).toISOString()
+      const resolved = await resolveAccount(relay, state)
+      if (resolved.error) {
+        state.lastError = resolved.error.message
+        keepCode(state, resolved.error)
+        // A probe skipped for its pace sent nothing, so it does not count as a poll.
+        if (resolved.probed || !state.lastPollAt) state.lastPollAt = new Date(now).toISOString()
         return
       }
+      if (resolved.login) state.resolvedAccount = resolved.login
     }
     const account = accountOf(relay, drains, states)
     const readAccount = relay.readAccount && relay.readAccount !== account ? relay.readAccount : undefined
@@ -922,6 +967,39 @@ export async function pollRelays({ paths, drainFiles, connect, now, signedIn = (
   return { at: new Date(now).toISOString(), wakes: [], errors, calls, spent, status: relayStatusLines(relays, states, now) }
 }
 
+/** How long a relay waits between polls: its own interval, stretched while idle but never below the idle floor. */
+function pollIntervalMs(relay, state) {
+  const stretch = relay.backOffWhenIdle !== false ? Math.min(MAX_IDLE_STRETCH, 1 + Math.floor((state.idlePolls ?? 0) / IDLE_POLLS_PER_STEP)) : 1
+  return stretch > 1 ? Math.max(relay.everySeconds * stretch, IDLE_FLOOR_SECONDS) * 1000 : relay.everySeconds * 1000
+}
+
+/** A refused account is asked again on the relay's idle pace: the floor applies from the first refusal, an opted-out relay keeps its own interval. */
+function denialDelayMs(relay, state) {
+  return relay.backOffWhenIdle !== false ? Math.max(pollIntervalMs(relay, state), IDLE_FLOOR_SECONDS * 1000) : relay.everySeconds * 1000
+}
+
+/**
+ * What a failed probe means. "denied": GitHub refused this account the repository (a 4xx other than a rate limit) or it has no token.
+ * "transient": a keyring that gave no answer, a server error, a rate limit or hold, or anything unrecognised; it is never remembered as a refusal.
+ */
+function probeOutcome(error) {
+  if (error?.code === "drains_sign_in_the_github_cli") return "denied"
+  if (error?.code === "spend_held" || error?.rateLimited || error?.transient) return "transient"
+  if (Number.isInteger(error?.status) && error.status >= 400 && error.status < 500 && error.status !== 429) return "denied"
+  return "transient"
+}
+
+/** When a transient failure said to come back, from the provider's own Retry-After or reset time; null when it said nothing. */
+function signalledRetryAt(error, now) {
+  const times = [Number.isFinite(error?.retryAfterMs) ? now + error.retryAfterMs : null, Number.isFinite(error?.resetAt) ? error.resetAt : null].filter((at) => at !== null)
+  return times.length > 0 ? Math.max(...times) : null
+}
+
+/** Identifies one account's access to one repository for one relay configuration and credential, without holding the token. */
+function accountProbeKey(relay, login, repo, credentialEpoch) {
+  return createHash("sha256").update(JSON.stringify([relay, login, repo, credentialEpoch])).digest("hex")
+}
+
 /** Keep the failure's stable code beside its text, so a runner can branch on it. */
 function keepCode(state, error) {
   if (typeof error.code === "string") state.lastErrorCode = error.code
@@ -945,7 +1023,8 @@ export function relayStatusLines(relays, states, now) {
     const head = `relay ${relay.name} (${relay.type})`
     const tail = `${state.spend && state.spend.counted + state.spend.free > 0 ? `, spent ${state.spend.counted} counted calls (${state.spend.free} free) since ${state.spend.at}` : ""}${state.spendLastHour ? `, last full hour ${state.spendLastHour.counted} counted calls (${state.spendLastHour.free} free)` : ""}${state.hold ? `, held: ${state.hold}` : ""}${state.lastError ? `, last error: ${state.lastError}` : ""}`
     if (!state.lastPollAt) return `${head}: not polled yet${tail}`
-    const polled = `polled ${ago(state.lastPollAt, now)}`
+    const probe = state.probeRetryAt && Date.parse(state.probeRetryAt) > now ? `, no signed-in account could read it, next account check in ${span(Date.parse(state.probeRetryAt) - now)}` : ""
+    const polled = `polled ${ago(state.lastPollAt, now)}${probe}`
     if (relay.type === "dispatch") {
       const last = state.lastFire ? `last fired ${ago(state.lastFire.at, now)} for run ${state.lastFire.runId}${state.lastFire.headSha ? ` on head ${short(state.lastFire.headSha)}` : ""} -> ${state.lastFire.target}` : "never fired"
       const pending = state.pending ? `, head ${short(state.pending.run.head_sha)} (run ${state.pending.run.id}) pending` : ""

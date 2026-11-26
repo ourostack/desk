@@ -1494,3 +1494,96 @@ test("updateBehind: a red head that is behind main is updated once; a pending, g
     assert.ok(!prWrites(w.world).some((write) => write.route.endsWith("/update-branch")), `a ${why} head is not updated`)
   }
 })
+
+// ── Account probes: a relay with no account asks each signed-in account for its repository, and a refusal is not asked again at every poll ──
+
+/** The real client over a fake `gh` token read and a fake GitHub, so the traffic counted is the HTTP the default client really sends. */
+async function probeWorld(relays = [IMMEDIATE]) {
+  const w = await setup(relays)
+  const tokens = { a: "fake-token-a-1", b: "fake-token-b-1" }
+  const answers = { a: { status: 403 }, b: { status: 403 } }
+  const http = []
+  const spawn = (_command, args) => ({ status: 0, stdout: `${tokens[args[args.indexOf("--user") + 1]]}\n` })
+  const fetchImpl = async (url, init) => {
+    const who = Object.keys(tokens).find((name) => init.headers.Authorization === `Bearer ${tokens[name]}`)
+    http.push({ who, url: new URL(url).pathname })
+    const { status, headers = {} } = answers[who]
+    return { status, ok: status < 400, headers: { get: (name) => headers[name.toLowerCase()] ?? null, has: (name) => name.toLowerCase() in headers }, json: async () => ({ workflow_runs: [] }), text: async () => "" }
+  }
+  const connect = (account, options) => connectGithub(account, { ...options, spawn, fetchImpl, env: { PATH: "/bin", MS_DESK_QUOTA: "off" } })
+  const poll = (at) => pollRelays({ paths: w.paths, drainFiles: w.drainFiles, connect, now: at, signedIn: () => ["a", "b"] })
+  return { ...w, tokens, answers, http, poll, probes: () => http.filter((call) => call.url === "/repos/o/data").length }
+}
+
+test("probes: two refused accounts are asked once, then again only when the relay's idle pace has passed", async () => {
+  const p = await probeWorld()
+  const lastPolls = []
+  for (const at of [0, 30, 60, 90]) {
+    const polled = await p.poll(NOW + at * SECOND)
+    lastPolls.push(p.state("data to pages").lastPollAt)
+    assert.match(polled.errors[0].error, /none of the signed-in GitHub accounts \(a, b\) can reach o\/data and o\/pages/u)
+    assert.equal(polled.errors[0].code, "relays_set_account_on_relay")
+    assert.equal(p.probes(), 2, `after +${at}s`)
+  }
+  assert.deepEqual(lastPolls, Array(4).fill(new Date(NOW).toISOString()), "a skipped probe is not a poll")
+  assert.match(relayStatusLines(readRelayConfig(p.paths.config), { "data to pages": p.state("data to pages") }, NOW + 90 * SECOND)[0], /next account check in 30s/u)
+  await p.poll(NOW + 120 * SECOND)
+  assert.equal(p.probes(), 4)
+  assert.ok(!readFileSync(p.paths.state, "utf8").includes("fake-token"), "no token is kept in the state")
+})
+
+test("probes: a relay that opts out of backing off asks its refused accounts at its own interval", async () => {
+  const p = await probeWorld([{ ...IMMEDIATE, backOffWhenIdle: false }])
+  for (const at of [0, 30, 60, 90]) await p.poll(NOW + at * SECOND)
+  assert.equal(p.probes(), 8)
+})
+
+test("probes: a refreshed token for one login, or a changed relay, is asked again at once, and an unchanged account is not", async () => {
+  const p = await probeWorld()
+  await p.poll(NOW)
+  p.tokens.a = "fake-token-a-2"
+  await p.poll(NOW + 30 * SECOND)
+  assert.deepEqual(p.http.map((call) => call.who), ["a", "b", "a"])
+  writeFileSync(p.paths.config, JSON.stringify({ relays: [{ ...IMMEDIATE, settleSeconds: 1 }] }))
+  await p.poll(NOW + 60 * SECOND)
+  assert.equal(p.probes(), 5)
+})
+
+test("probes: access granted remotely is found when the pace has passed, and the relay then polls normally", async () => {
+  const p = await probeWorld()
+  await p.poll(NOW)
+  p.answers.b = { status: 200 }
+  assert.equal((await p.poll(NOW + 60 * SECOND)).errors.length, 1)
+  assert.equal(p.probes(), 2)
+  const polled = await p.poll(NOW + 120 * SECOND)
+  assert.deepEqual(polled.errors, [])
+  assert.equal(p.state("data to pages").resolvedAccount, "b")
+  assert.equal(p.state("data to pages").probes, undefined)
+})
+
+test("probes: a server error or a rate limit is never remembered as a refusal, and a reachable account after it is still chosen", async () => {
+  const p = await probeWorld()
+  p.answers.a = { status: 500 }
+  p.answers.b = { status: 200 }
+  assert.deepEqual((await p.poll(NOW)).errors, [])
+  assert.equal(p.state("data to pages").resolvedAccount, "b")
+  const q = await probeWorld()
+  q.answers.a = { status: 500 }
+  const first = await q.poll(NOW)
+  assert.equal(first.errors[0].code, "drains_github_server_error")
+  await q.poll(NOW + 30 * SECOND)
+  assert.equal(q.http.filter((call) => call.who === "a").length, 4, "a server error is asked again at the configured interval")
+})
+
+test("probes: a provider's Retry-After holds only that account's probe", async () => {
+  const p = await probeWorld()
+  p.answers.a = { status: 429, headers: { "retry-after": "90" } }
+  p.answers.b = { status: 404 }
+  await p.poll(NOW)
+  await p.poll(NOW + 30 * SECOND)
+  await p.poll(NOW + 60 * SECOND)
+  assert.equal(p.http.filter((call) => call.who === "a").length, 1)
+  p.answers.a = { status: 200 }
+  assert.deepEqual((await p.poll(NOW + 90 * SECOND)).errors, [])
+  assert.equal(p.state("data to pages").resolvedAccount, "a")
+})
