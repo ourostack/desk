@@ -989,10 +989,12 @@ function probeOutcome(error) {
   return "transient"
 }
 
-/** When a transient failure said to come back: its Retry-After counted from when the answer arrived, else its window reset; null when it said nothing. */
+/** When a transient failure said to come back: an exhausted primary quota (x-ratelimit-remaining 0) waits for its reset, or its Retry-After if later; otherwise the Retry-After counted from when the answer arrived, else the window reset; null when it said nothing. */
 function signalledRetryAt(error, now) {
-  if (Number.isFinite(error?.retryAfterMs)) return (Number.isFinite(error.receivedAt) ? error.receivedAt : now) + error.retryAfterMs
-  return Number.isFinite(error?.resetAt) ? error.resetAt : null
+  const after = Number.isFinite(error?.retryAfterMs) ? (Number.isFinite(error.receivedAt) ? error.receivedAt : now) + error.retryAfterMs : null
+  const reset = Number.isFinite(error?.resetAt) ? error.resetAt : null
+  if (error?.exhausted && reset !== null) return after === null ? reset : Math.max(after, reset)
+  return after ?? reset
 }
 
 /** Identifies one account's access to one repository for one relay configuration and credential, without holding the token. */

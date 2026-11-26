@@ -1596,9 +1596,11 @@ test("probes: a provider's Retry-After holds only that account's probe", async (
 
 test("probes: a Retry-After holds exactly that long, however long the rest of the pool's window is, and counts from the answer's arrival", async () => {
   const p = await probeWorld()
-  p.answers.a = { status: 429, headers: { "retry-after": "90", "x-ratelimit-reset": String((NOW + 3600 * SECOND) / 1000) } }
+  p.answers.a = { status: 429, headers: { "retry-after": "90", "x-ratelimit-remaining": "4000", "x-ratelimit-reset": String((NOW + 3600 * SECOND) / 1000) } }
   p.answers.b = { status: 404 }
-  await p.poll(NOW)
+  const first = await p.poll(NOW)
+  assert.ok(!/hourly API limit is used up/u.test(first.errors[0].error), "a healthy pool is not told its hourly limit is used up")
+  assert.match(first.errors[0].error, /asked to wait 90s/u)
   const asked = () => p.http.filter((call) => call.who === "a" && call.url === "/repos/o/data").length
   await p.poll(NOW + 89_999)
   assert.equal(asked(), 1, "no send before GitHub's not-before time")
@@ -1656,4 +1658,18 @@ test("probes: a first account whose token read gave no answer does not hide a re
   const polled = await q.poll(NOW)
   assert.equal(polled.errors[0].code, "drains_github_cli_token_unavailable")
   assert.equal(q.state("data to pages").probes?.["a o/data"], undefined)
+})
+
+test("probes: an exhausted primary quota with a Retry-After as well holds until its reset, not the shorter Retry-After", async () => {
+  const p = await probeWorld()
+  p.answers.a = { status: 429, headers: { "retry-after": "90", "x-ratelimit-remaining": "0", "x-ratelimit-reset": String((NOW + 3600 * SECOND) / 1000) } }
+  p.answers.b = { status: 404 }
+  const first = await p.poll(NOW)
+  assert.match(first.errors[0].error, /hourly API limit is used up/u)
+  p.answers.a = { status: 200 }
+  const asked = () => p.http.filter((call) => call.who === "a" && call.url === "/repos/o/data").length
+  await p.poll(NOW + 90 * SECOND)
+  assert.equal(asked(), 1)
+  await p.poll(NOW + 3600 * SECOND)
+  assert.equal(asked(), 2)
 })

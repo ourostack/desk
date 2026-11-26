@@ -1089,7 +1089,7 @@ function failedAnswer(status, route) {
 function retrySignals(headers, receivedAt) {
   const after = headers.get("retry-after")
   const reset = Number(headers.get("x-ratelimit-reset"))
-  return { receivedAt, ...(after !== null && after.trim() !== "" && Number.isFinite(Number(after)) ? { retryAfterMs: Number(after) * 1000 } : {}), ...(Number.isFinite(reset) && reset > 0 ? { resetAt: reset * 1000 } : {}) }
+  return { receivedAt, exhausted: headers.get("x-ratelimit-remaining") === "0", ...(after !== null && after.trim() !== "" && Number.isFinite(Number(after)) ? { retryAfterMs: Number(after) * 1000 } : {}), ...(Number.isFinite(reset) && reset > 0 ? { resetAt: reset * 1000 } : {}) }
 }
 
 // A read held under the quota floor stops the poll the way the quota running out does, and the next poll tries again.
@@ -1151,7 +1151,10 @@ export async function connectGithub(account, { spawn = spawnSync, fetchImpl: raw
       if (response.status === 429 || (response.status === 403 && (remaining === "0" || response.headers.has("retry-after") || /rate limit/iu.test(said)))) {
         const reset = Number(response.headers.get("x-ratelimit-reset"))
         const until = Number.isFinite(reset) && reset > 0 ? new Date(reset * 1000).toISOString() : "the next window"
-        throw Object.assign(new Error(`Wait for the quota to reset: GitHub's hourly API limit is used up, rate limited until ${until} (HTTP ${response.status} for ${route.split("?")[0]})`), { code: "drains_rate_limited", status: response.status, rateLimited: true, ...retrySignals(response.headers, clock()) })
+        const signals = retrySignals(response.headers, clock())
+        const held = Number.isFinite(signals.retryAfterMs) && !signals.exhausted
+        const wording = held ? `GitHub asked to wait ${Math.ceil(signals.retryAfterMs / 1000)}s before this read is retried` : `GitHub's hourly API limit is used up, rate limited until ${until}`
+        throw Object.assign(new Error(`Wait for the quota to reset: ${wording} (HTTP ${response.status} for ${route.split("?")[0]})`), { code: "drains_rate_limited", status: response.status, rateLimited: true, ...signals })
       }
       throw failedAnswer(response.status, route.split("?")[0])
     }
