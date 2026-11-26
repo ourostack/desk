@@ -2648,3 +2648,267 @@ test("desk_doctor's factory answer reaches Desk's own recorder by default, and a
   assert.equal(refused.isError, true)
   assert.equal(payload(refused).code, "factory_no_store")
 })
+
+// Focus continuity across an idle restart (src/runtime/focus-handoff.js): what the session keeps, and how it restores.
+async function declaredSnapshot(t, task, options = {}) {
+  const first = await makeSession(t, { runtime: fakeRuntime({ checkFocusCard: async () => ({ found: true }) }), ...options })
+  await first.session.admission.refresh()
+  await first.session.callTool({ name: "task_focus", input: task === null ? { clear: true } : task })
+  return { first, snapshot: first.session.focusSnapshot() }
+}
+const harbor = { track: "ops", slug: "harbor-lights" }
+async function secondSession(t, first, { checkFocusCard, inputs: more, root, args } = {}) {
+  const second = await makeSession(t, {
+    ...(args ? { args } : {}),
+    inputs: { root: undefined, ...more },
+    runtime: fakeRuntime(checkFocusCard === undefined ? {} : { checkFocusCard }),
+    resolveInputs: async () => inputs({ root: root ?? first.root, ...(more ?? {}) }),
+  })
+  await second.session.admission.refresh()
+  return second
+}
+
+test("a declared focus is snapshotted with its scope and restored into a session with the same scope, without any tool call", async (t) => {
+  const { first, snapshot } = await declaredSnapshot(t, harbor, { runtime: fakeRuntime({
+    callTool: async ({ name, input, statusContext }) => { if (name === "task_focus") statusContext.focus.set({ track: input.track, slug: input.slug }); return { content: [{ type: "text", text: "{}" }] } },
+    checkFocusCard: async () => ({ found: true }),
+  }) })
+  assert.equal(snapshot.declared, true)
+  assert.deepEqual(snapshot.task, harbor)
+  const asked = []
+  const second = await secondSession(t, first, { checkFocusCard: async (request) => { asked.push(request); return { found: true } } })
+  assert.deepEqual(await second.session.restoreFocus({ snapshot }, { budgetMs: 2000 }), { outcome: "restored" })
+  assert.deepEqual(second.runtime.calls, [], "no tool was called to restore")
+  assert.equal(asked.length, 1)
+  assert.deepEqual(await second.session.restoreFocus({ snapshot }), { outcome: "already_declared" })
+})
+
+test("a focus is not restored into another scope, and a note says so", async (t) => {
+  const { first, snapshot } = await declaredSnapshot(t, harbor, { runtime: fakeRuntime({
+    callTool: async ({ statusContext }) => { statusContext.focus.set(harbor); return { content: [{ type: "text", text: "{}" }] } },
+  }) })
+  const second = await secondSession(t, first, { checkFocusCard: async () => ({ found: true }), root: (await makeSession(t)).root })
+  assert.deepEqual(await second.session.restoreFocus({ snapshot }), { outcome: "scope_changed" })
+  assert.equal(second.session.focusSnapshot().unknownPrior, true)
+})
+
+test("a different person is never restored silently, while an activation change alone keeps the focus", async (t) => {
+  const first = await makeSession(t, { runtime: fakeRuntime({ callTool: async ({ statusContext }) => { statusContext.focus.set(harbor); return { content: [{ type: "text", text: "{}" }] } } }) })
+  await first.session.admission.refresh()
+  await first.session.callTool({ name: "task_focus", input: harbor })
+  const snapshot = first.session.focusSnapshot()
+  const found = async () => ({ found: true })
+  const personChanged = await secondSession(t, first, { checkFocusCard: found, args: { person: "someone-else" } })
+  assert.notEqual((await personChanged.session.restoreFocus({ snapshot })).outcome, "restored")
+  assert.equal(personChanged.session.focusSnapshot().unknownPrior, true)
+  const runtimeOnly = await secondSession(t, first, { checkFocusCard: found, inputs: { activationStatus: { build: "a-newer-build" } } })
+  assert.equal((await runtimeOnly.session.restoreFocus({ snapshot })).outcome, "restored")
+})
+
+test("a focus declared by task_create is snapshotted like a task_focus one, and a failed declaration keeps the prior focus", async (t) => {
+  const other = { track: "ops", slug: "other-task" }
+  const first = await makeSession(t, { runtime: fakeRuntime({ callTool: async ({ name, input, statusContext }) => {
+    if (name === "task_create" && input.focus === true) statusContext.focus.set({ track: input.track, slug: input.slug })
+    if (name === "task_focus" && input.fail === true) throw new Error("declaration failed")
+    return { content: [{ type: "text", text: "{}" }] }
+  } }) })
+  await first.session.admission.refresh()
+  await first.session.callTool({ name: "task_create", input: { ...harbor, title: "Harbor", focus: true } })
+  assert.deepEqual(first.session.focusSnapshot().task, harbor)
+  await first.session.callTool({ name: "task_focus", input: { ...other, fail: true } }).catch(() => {})
+  assert.deepEqual(first.session.focusSnapshot().task, harbor, "the failed declaration changed nothing")
+  const second = await secondSession(t, first, { checkFocusCard: async () => ({ found: true }) })
+  assert.equal((await second.session.restoreFocus({ snapshot: first.session.focusSnapshot() })).outcome, "restored")
+})
+
+test("a restore into a session whose authority is not settled is unknown, never a declaration", async (t) => {
+  const first = await makeSession(t, { runtime: fakeRuntime({ callTool: async ({ statusContext }) => { statusContext.focus.set(harbor); return { content: [{ type: "text", text: "{}" }] } } }) })
+  await first.session.admission.refresh()
+  await first.session.callTool({ name: "task_focus", input: harbor })
+  const snapshot = first.session.focusSnapshot()
+  const unsettled = await makeSession(t, { runtime: fakeRuntime({ checkFocusCard: async () => ({ found: true }) }), resolveInputs: () => new Promise(() => {}) })
+  assert.equal((await unsettled.session.restoreFocus({ snapshot }, { budgetMs: 50 })).outcome, "unknown")
+  assert.equal(unsettled.session.focusSnapshot().declared, false)
+})
+
+test("a missing card, an unreadable lookup, an old runtime and a hung lookup leave a visible note, not a declaration", async (t) => {
+  const first = await makeSession(t, { runtime: fakeRuntime({ callTool: async ({ statusContext }) => { statusContext.focus.set(harbor); return { content: [{ type: "text", text: "{}" }] } } }) })
+  await first.session.admission.refresh()
+  await first.session.callTool({ name: "task_focus", input: harbor })
+  const snapshot = first.session.focusSnapshot()
+  for (const [checkFocusCard, outcome] of [[async () => ({ found: false }), "card_missing"], [async () => { throw new Error("boom") }, "unknown"], [undefined, "unknown"]]) {
+    const second = await secondSession(t, first, { checkFocusCard })
+    assert.equal((await second.session.restoreFocus({ snapshot })).outcome, outcome)
+    assert.equal(second.session.focusSnapshot().unknownPrior, true)
+  }
+  let late
+  const second = await secondSession(t, first, { checkFocusCard: () => new Promise((resolve) => { late = resolve }) })
+  const started = Date.now()
+  assert.equal((await second.session.restoreFocus({ snapshot }, { budgetMs: 50 })).outcome, "unknown")
+  assert.ok(Date.now() - started < 1500)
+  late({ found: true })
+  await flush()
+  assert.equal(second.session.focusSnapshot().declared, false, "a lookup answering after the deadline commits nothing")
+})
+
+test("an abort during the lookup, or a declaration made meanwhile, wins over the lookup's answer", async (t) => {
+  const first = await makeSession(t, { runtime: fakeRuntime({ callTool: async ({ statusContext }) => { statusContext.focus.set(harbor); return { content: [{ type: "text", text: "{}" }] } } }) })
+  await first.session.admission.refresh()
+  await first.session.callTool({ name: "task_focus", input: harbor })
+  const snapshot = first.session.focusSnapshot()
+  let answer
+  const second = await secondSession(t, first, { checkFocusCard: () => new Promise((resolve) => { answer = resolve }) })
+  const controller = new AbortController()
+  const pending = second.session.restoreFocus({ snapshot }, { signal: controller.signal })
+  await waitUntil(() => answer !== undefined)
+  controller.abort()
+  assert.equal((await pending).outcome, "unknown")
+  answer({ found: true })
+  await flush()
+  assert.equal(second.session.focusSnapshot().declared, false)
+  const third = await secondSession(t, first, { checkFocusCard: () => new Promise((resolve) => { answer = resolve }) })
+  answer = undefined
+  const racing = third.session.restoreFocus({ snapshot })
+  await waitUntil(() => answer !== undefined)
+  await third.session.callTool({ name: "task_focus", input: { clear: true } })
+  answer({ found: true })
+  assert.ok(["already_declared", "unknown"].includes((await racing).outcome))
+})
+
+test("restore requests with an undeclared snapshot, a note-only request or a malformed one change nothing they should not", async (t) => {
+  const { session } = await makeSession(t)
+  await session.admission.refresh()
+  assert.equal((await session.restoreFocus({ snapshot: undefined })).outcome, "undeclared")
+  assert.equal(session.focusSnapshot().declared, false)
+  assert.equal(session.focusSnapshot().unknownPrior, undefined)
+  assert.equal((await session.restoreFocus({ snapshot: { declared: true, task: 7, scope: "x" } })).outcome, "unknown")
+  assert.equal(session.focusSnapshot().unknownPrior, true)
+  const noted = await makeSession(t)
+  await noted.session.admission.refresh()
+  assert.equal((await noted.session.restoreFocus({ unknown: "server_crashed" })).outcome, "unknown")
+  assert.equal(noted.session.focusSnapshot().unknownPrior, true)
+  assert.deepEqual(noted.runtime.calls, [])
+})
+
+test("restore edge cases: an explicit clear is carried, a bad budget never waits, and a lookup that throws after an abort changes nothing more", async (t) => {
+  const declaring = (value) => fakeRuntime({ callTool: async ({ statusContext }) => { statusContext.focus.set(value); return { content: [{ type: "text", text: "{}" }] } } })
+  const cleared = await makeSession(t, { runtime: declaring(null) })
+  await cleared.session.admission.refresh()
+  await cleared.session.callTool({ name: "task_focus", input: { clear: true } })
+  const clearedSnapshot = cleared.session.focusSnapshot()
+  assert.equal(clearedSnapshot.task, null)
+  const intoClear = await secondSession(t, cleared)
+  assert.equal((await intoClear.session.restoreFocus({ snapshot: clearedSnapshot })).outcome, "restored")
+  assert.equal(intoClear.session.focusSnapshot().task, null)
+
+  const first = await makeSession(t, { runtime: declaring(harbor) })
+  await first.session.admission.refresh()
+  await first.session.callTool({ name: "task_focus", input: harbor })
+  const snapshot = first.session.focusSnapshot()
+  const noBudget = await secondSession(t, first, { checkFocusCard: async () => ({ found: true }) })
+  assert.equal((await noBudget.session.restoreFocus({ snapshot }, { budgetMs: null })).outcome, "unknown")
+
+  const controller = new AbortController()
+  const throwing = await secondSession(t, first, { checkFocusCard: () => { controller.abort(); throw new Error("x") } })
+  assert.equal((await throwing.session.restoreFocus({ snapshot }, { signal: controller.signal })).outcome, "unknown")
+  assert.equal(throwing.session.focusSnapshot().unknownPrior, undefined, "an aborted restore leaves no note")
+
+})
+
+test("a declared focus whose authority is no longer settled snapshots as unknown, and a restore that cannot be admitted at all leaves a note", async (t) => {
+  const first = await makeSession(t, { runtime: fakeRuntime({ callTool: async ({ statusContext }) => { statusContext.focus.set(harbor); return { content: [{ type: "text", text: "{}" }] } } }) })
+  await first.session.admission.refresh()
+  await first.session.callTool({ name: "task_focus", input: harbor })
+  first.session.context.authorityAdmitted = false
+  assert.deepEqual(first.session.focusSnapshot(), { declared: false, unknownPrior: true })
+
+  const snapshot = { declared: true, task: harbor, scope: "s" }
+  const refused = await makeSession(t, { runtime: fakeRuntime({ checkFocusCard: async () => ({ found: true }) }), resolveInputs: async () => { throw new Error("no desk") } })
+  await refused.session.admission.refresh()
+  assert.equal((await refused.session.restoreFocus({ snapshot }, { budgetMs: 500 })).outcome, "unknown")
+  assert.equal(refused.session.focusSnapshot().unknownPrior, true)
+  assert.equal((await refused.session.restoreFocus({ unknown: "x" })).outcome, "unknown")
+})
+
+test("a restore aborted while it waits its turn behind another restore never starts", async (t) => {
+  const first = await makeSession(t, { runtime: fakeRuntime({ callTool: async ({ statusContext }) => { statusContext.focus.set(harbor); return { content: [{ type: "text", text: "{}" }] } } }) })
+  await first.session.admission.refresh()
+  await first.session.callTool({ name: "task_focus", input: harbor })
+  const snapshot = first.session.focusSnapshot()
+  let answer
+  let lookups = 0
+  const second = await secondSession(t, first, { checkFocusCard: () => { lookups += 1; return new Promise((resolve) => { answer = resolve }) } })
+  const slow = second.session.restoreFocus({ snapshot })
+  await waitUntil(() => answer !== undefined)
+  const controller = new AbortController()
+  const queued = second.session.restoreFocus({ snapshot }, { signal: controller.signal })
+  controller.abort()
+  answer({ found: true })
+  assert.equal((await slow).outcome, "restored")
+  assert.equal((await queued).outcome, "unknown")
+  assert.equal(lookups, 1)
+})
+
+test("disposing the session aborts a restore that is still looking up its card", async (t) => {
+  const first = await makeSession(t, { runtime: fakeRuntime({ callTool: async ({ statusContext }) => { statusContext.focus.set(harbor); return { content: [{ type: "text", text: "{}" }] } } }) })
+  await first.session.admission.refresh()
+  await first.session.callTool({ name: "task_focus", input: harbor })
+  const snapshot = first.session.focusSnapshot()
+  let answer
+  const second = await secondSession(t, first, { checkFocusCard: () => new Promise((resolve) => { answer = resolve }) })
+  const pending = second.session.restoreFocus({ snapshot })
+  await waitUntil(() => answer !== undefined)
+  await second.session.dispose()
+  assert.equal((await pending).outcome, "unknown")
+  answer({ found: true })
+  await flush()
+  assert.equal(second.session.focusSnapshot().declared, false)
+})
+
+test("a focus keeps the owner who declared it: a person admitted later at the same desk makes it unknown, never theirs", async (t) => {
+  const found = async () => ({ found: true })
+  const declare = async ({ statusContext }) => { statusContext.focus.set(harbor); return { content: [{ type: "text", text: "{}" }] } }
+  const base = await mkTempRoot("desk-session-owner-")
+  const root = path.join(base, "desk")
+  mkdirSync(root, { recursive: true })
+  const args = { person: "ari" }
+  const current = { build: "one" }
+  const runtime = fakeRuntime({ callTool: declare, checkFocusCard: found, verifyAuthority: async () => ({ mode: "person", person: args.person }) })
+  const first = await makeSession(t, { args, runtime, resolveInputs: async () => inputs({ root, policy: { ...unsupported, write_authority: "person" }, activationStatus: { build: current.build } }) })
+  await first.session.admission.refresh()
+  await first.session.callTool({ name: "task_focus", input: harbor })
+  assert.equal(first.session.focusSnapshot().declared, true)
+  // A change of runtime or build alone is not a change of owner.
+  current.build = "two"
+  await first.session.admission.refresh()
+  await waitUntil(() => first.session.focusSnapshot().declared === true)
+  args.person = "bob"
+  await first.session.admission.refresh()
+  await waitUntil(() => first.session.focusSnapshot().unknownPrior === true)
+  assert.deepEqual(first.session.focusSnapshot(), { declared: false, unknownPrior: true }, "ari's declaration is not relabelled with bob's scope")
+  // What the same session declares under the new owner is the new owner's.
+  await first.session.callTool({ name: "task_focus", input: harbor })
+  assert.equal(first.session.focusSnapshot().declared, true)
+})
+
+test("a restore that was aborted or whose session was disposed before it started commits and notes nothing, on every path", async (t) => {
+  const first = await makeSession(t, { runtime: fakeRuntime({ callTool: async ({ statusContext }) => { statusContext.focus.set(harbor); return { content: [{ type: "text", text: "{}" }] } } }) })
+  await first.session.admission.refresh()
+  await first.session.callTool({ name: "task_focus", input: harbor })
+  const snapshot = first.session.focusSnapshot()
+  const asked = []
+  const second = await secondSession(t, first, { checkFocusCard: async (request) => { asked.push(request); return { found: true } } })
+  const aborted = new AbortController()
+  aborted.abort()
+  for (const request of [{ snapshot }, { snapshot: { declared: true, task: 7, scope: "x" } }, { unknown: "server_crashed" }, { snapshot: undefined }]) {
+    assert.deepEqual(await second.session.restoreFocus(request, { signal: aborted.signal }), { outcome: "unknown" })
+    assert.deepEqual(second.session.focusSnapshot(), { declared: false }, "no declaration and no note")
+  }
+  assert.deepEqual(asked, [], "the card was never looked up")
+  const third = await secondSession(t, first, { checkFocusCard: async () => ({ found: true }) })
+  third.session.dispose()
+  for (const request of [{ snapshot }, { unknown: "server_crashed" }]) {
+    assert.deepEqual(await third.session.restoreFocus(request), { outcome: "unknown" })
+  }
+  assert.equal(third.session.focusSnapshot().unknownPrior, undefined)
+})

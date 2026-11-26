@@ -114,7 +114,7 @@ function collect(output) {
 // ---- it must run on very old Node ----
 
 test("the bootstrap and its idle proxy use only syntax and built-ins that Node 8 has", () => {
-  for (const [file, builtins] of [[bootstrapPath, ["./idle-proxy.cjs", "child_process", "fs", "os", "path", "url"]], [path.join(path.dirname(bootstrapPath), "idle-proxy.cjs"), ["child_process", "path", "v8", "vm"]]]) {
+  for (const [file, builtins] of [[bootstrapPath, ["./idle-proxy.cjs", "child_process", "fs", "os", "path", "url"]], [path.join(path.dirname(bootstrapPath), "idle-proxy.cjs"), ["child_process", "crypto", "path", "v8", "vm"]]]) {
     const source = readFileSync(file, "utf8")
     // Strings first (one holds a URL), then comments.
     const code = source.replace(/"(?:[^"\\]|\\.)*"/gu, "\"\"").replace(/\/\/.*$/gmu, "").replace(/\/\*[\s\S]*?\*\//gu, "")

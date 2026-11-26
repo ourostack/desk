@@ -6,7 +6,7 @@
 // the task stands.
 //
 // The held focus lives in the session layer (runtime/desk-session.js), handed in as `statusContext.focus`:
-// `{ get(): { track, slug } | null, set(value), declared(): boolean }`. The hints built here are only hints:
+// `{ get(): { track, slug } | null, set(value), declared(): boolean, note?(): { kind, task? } | null }`. The hints built here are only hints:
 // no tool call fails, waits or changes because focus is unset or different, and every hint is worded for the
 // session's main agent because a subagent shares the session's server.
 
@@ -33,6 +33,14 @@ const ACCEPTED = "pass `track` and `slug` to focus a task, or `clear: true` alon
 
 export const NO_FOCUS_HINT = "If you are the session's main agent: no task in focus; call task_focus with the task you are working on, or with clear: true for none."
 export const focusedHint = ({ track, slug }) => `If you are the session's main agent: focused on ${track}/${slug}; call task_focus if you have switched tasks, or with clear: true for none.`
+
+const AFTER_RESTART = "call task_focus with the task you are working on, or with clear: true for none."
+/** The hint when the focus held before an idle restart could not be carried over: Desk says what it does not know, never "no task in focus". */
+function carriedNoteHint(note) {
+  if (note.kind === "card_missing") return `If you are the session's main agent: ${note.task.track}/${note.task.slug} was in focus before the idle restart, but its card was not found; ${AFTER_RESTART}`
+  if (note.kind === "scope_changed") return `If you are the session's main agent: the focus was not carried over the idle restart because the desk, person or authority changed; ${AFTER_RESTART}`
+  return `If you are the session's main agent: Desk cannot tell whether a task was in focus before the idle restart; ${AFTER_RESTART}`
+}
 
 const sameTask = (a, b) => a.track === b.track && a.slug === b.slug
 
@@ -159,6 +167,10 @@ export function focusNote(statusContext, target) {
   const focus = statusContext?.focus
   if (!focus) return undefined
   const current = focus.get()
-  if (current === null) return focus.declared() ? undefined : NO_FOCUS_HINT
+  if (current === null) {
+    if (focus.declared()) return undefined
+    const note = focus.note?.() ?? null
+    return note === null ? NO_FOCUS_HINT : carriedNoteHint(note)
+  }
   return target !== undefined && !sameTask(current, target) ? focusedHint(current) : undefined
 }

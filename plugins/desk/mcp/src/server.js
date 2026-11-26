@@ -37,7 +37,8 @@ import {
   task_update,
   task_archive,
 } from "./tools/task.js"
-import { taskFocus } from "./tools/task-focus.js"
+import { taskFocus, findCard } from "./tools/task-focus.js"
+import { validateWriteSegment } from "./util/paths.js"
 import { taskSignoff } from "./tools/task-signoff.js"
 import { track_create, track_update } from "./tools/track.js"
 import { taskMoveRequested, moveTaskAlone, trackRenameRequested, renameTrackAlone } from "./tools/move.js"
@@ -56,6 +57,20 @@ export { waitForStatusInspection } from "./tools/status.js"
 import { doctorRuntime } from "./tools/doctor.js"
 import { SIBLING_DESK_TOOLS, resolveSiblingDesk } from "./tools/sibling-desk.js"
 export { createSearchEngine } from "./search/engine.js"
+
+/**
+ * Whether the task's card exists for this person in this desk, read only: what a restored focus is checked against.
+ * Returns `{ found: boolean }`; a track or slug that is not a task folder name is `{ found: false }`.
+ */
+export async function checkFocusCard({ deskRoot, person = null, track, slug }) {
+  try {
+    validateWriteSegment(track)
+    validateWriteSegment(slug)
+  } catch {
+    return { found: false }
+  }
+  return { found: (await findCard({ deskRoot, person, track, slug })) !== null }
+}
 import { searchRouter } from "./search/files-router.js"
 import { headlessRefusal } from "./factory/headless-flag.js"
 import { NATIVE_STAGES, NATIVE_STAGE_MAX_US, nativeStageTraceEnabled, runWithNativeStageScope } from "./tools/native-stage-context.js"

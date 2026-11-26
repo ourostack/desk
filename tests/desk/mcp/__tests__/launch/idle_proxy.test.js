@@ -19,7 +19,7 @@ const IDLE = 1000
 const GRACE = 5000
 const HOUR = 3600000
 
-function harness({ idleMs: idle = IDLE, failSpawnAt = [], watchesParent = true } = {}) {
+function harness({ idleMs: idle = IDLE, failSpawnAt = [], watchesParent = true, ipc = false } = {}) {
   const clock = { now: 0 }
   const timers = new Map()
   let nextTimer = 1
@@ -31,11 +31,14 @@ function harness({ idleMs: idle = IDLE, failSpawnAt = [], watchesParent = true }
   const compacted = []
   const signals = new EventEmitter()
   const children = []
+  const cleared = []
   const stdout = Object.assign(new EventEmitter(), { write: (text) => sent.push(text) })
   let parentGone = null
   let spawns = 0
 
-  function launchChild() {
+  const launchTokens = []
+  function launchChild(token) {
+    launchTokens.push(token)
     spawns += 1
     if (failSpawnAt.includes(spawns)) throw new Error(`spawn ${spawns} failed`)
     const child = new EventEmitter()
@@ -48,6 +51,30 @@ function harness({ idleMs: idle = IDLE, failSpawnAt = [], watchesParent = true }
     })
     child.stdout = new PassThrough()
     child.kill = (signal) => child.killed.push(signal)
+    if (typeof ipc === "function" ? ipc(spawns) : ipc) {
+      child.token = token
+      child.ipcSent = []
+      child.sendFails = false
+      child.sendThrows = false
+      child.deferred = null
+      child.send = (message, callback) => {
+        if (child.sendThrows) throw new Error("channel closed")
+        if (child.deferred) {
+          child.ipcSent.push(message)
+          child.deferred.push(callback)
+          return true
+        }
+        if (child.sendFails) {
+          if (callback) callback(new Error("ipc closed"))
+          return false
+        }
+        child.ipcSent.push(message)
+        if (callback) callback(null)
+        return true
+      }
+      child.ipc = (op, fields = {}, as = token) => child.emit("message", { desk: "focus-handoff", v: 1, token: as, op, ...fields })
+      child.hello = () => child.ipc("hello")
+    }
     child.say = (message) => child.stdout.write(`${typeof message === "string" ? message : JSON.stringify(message)}\n`)
     child.leave = (code = 0, signal = null) => child.emit("exit", code, signal)
     children.push(child)
@@ -63,16 +90,17 @@ function harness({ idleMs: idle = IDLE, failSpawnAt = [], watchesParent = true }
     idleMs: idle,
     now: () => clock.now,
     setTimer: (fn, ms) => { timers.set(nextTimer, { fn, at: clock.now + ms }); return nextTimer++ },
-    clearTimer: (id) => timers.delete(id),
+    clearTimer: (id) => { if (timers.has(id)) cleared.push(timers.get(id).fn); timers.delete(id) },
     exit: (code) => exits.push(code),
     signals,
     kill: (pid, signal) => kills.push(signal),
     compact: () => compacted.push(clock.now),
+    makeToken: () => `token-${launchTokens.length + 1}`,
   })
 
   const tick = () => new Promise((resolve) => setImmediate(resolve))
   return {
-    proxy, stdin, stdout, parentGone: () => parentGone(), sent, stderr, exits, kills, compacted, signals, children, timers,
+    proxy, stdin, stdout, launchTokens, parentGone: () => parentGone(), sent, stderr, exits, kills, compacted, signals, children, timers, cleared,
     last: () => children.at(-1),
     host: async (message) => { stdin.write(`${typeof message === "string" ? message : JSON.stringify(message)}\n`); await tick() },
     sees: () => sent.filter(Boolean).map((line) => JSON.parse(line.trim())),
@@ -497,7 +525,12 @@ test("runIdleProxy starts index.js under the chosen Node with the host's own pid
   assert.equal(started.error, null)
   assert.equal(started.proxy.running(), true)
   assert.deepEqual(calls[0].slice(0, 2), ["/node", ["/mcp/index.js", "--root", "/d"]])
-  assert.deepEqual(calls[0][2].stdio, ["pipe", "pipe", "inherit"])
+  assert.deepEqual(calls[0][2].stdio, ["pipe", "pipe", "inherit", "ipc"])
+  assert.match(calls[0][2].env.DESK_FOCUS_HANDOFF_TOKEN, /^[0-9a-f]{32}$/u)
+  runIdleProxy({ ...common(), env: { DESK_FOCUS_HANDOFF_TOKEN: "inherited" } })
+  assert.notEqual(calls[1][2].env.DESK_FOCUS_HANDOFF_TOKEN, "inherited")
+  assert.notEqual(calls[1][2].env.DESK_FOCUS_HANDOFF_TOKEN, calls[0][2].env.DESK_FOCUS_HANDOFF_TOKEN)
+  calls.pop()
   assert.equal(calls[0][2].env.A, "1")
   assert.equal(calls[0][2].env.DESK_SESSION_HOST_PID, String(process.ppid))
   runIdleProxy({ ...common(), env: { DESK_SESSION_HOST_PID: "42" }, now: undefined })
@@ -688,4 +721,671 @@ test("tool protocol 1 promises every tool the host may have cached: removing or 
   const protocol1 = ["task_create", "task_update", "task_archive", "task_focus", "task_signoff", "track_create", "track_update", "friction_add", "lesson_add", "desk_save", "note", "desk_search", "desk_recall", "desk_status", "desk_doctor", "desk_skill", "improvement_open", "improvement_next", "improvement_update"]
   if (pkg.toolProtocol === 1) for (const name of protocol1) assert.ok(TOOL_NAMES.includes(name), `${name} is gone but toolProtocol is still 1`)
   assert.equal(typeof pkg.toolProtocol, "number")
+})
+
+// Focus handoff: the proxy keeps the server's focus in its own memory across an idle stop and gives it back to the next server over a private IPC channel, never over the host's stdio.
+const RESUME = "desk-idle-proxy-resume"
+const WINDOW = 2000
+const TOTAL = 5000
+const SNAPSHOT = { declared: true, task: { track: "t", slug: "s" }, scope: "scope-a" }
+const PING = { jsonrpc: "2.0", method: "notifications/ping" }
+const ipcOps = (child, op) => child.ipcSent.filter((message) => message.op === op)
+const answer = (child, id) => child.say({ jsonrpc: "2.0", id, result: { ok: true } })
+
+// A handshaken server that has served a call, is idle, snapshots `snapshot` and leaves. Returns the stopped server.
+async function idleWithFocus(h, snapshot = SNAPSHOT) {
+  await handshaken(h)
+  const first = h.last()
+  first.hello()
+  await h.host(CALL(2))
+  answer(first, 2)
+  await h.flush()
+  await h.advance(IDLE)
+  const asked = ipcOps(first, "snapshot")
+  assert.equal(asked.length, 1, "an idle stop asks a supporting server for its focus")
+  if (snapshot !== null) first.ipc("snapshot-result", { id: asked[0].id, snapshot })
+  await h.flush()
+  return first
+}
+
+// The next server after an idle stop, once the host speaks and the server has answered the replayed initialize.
+async function resumedAfter(h, first, message = PING) {
+  first.leave(0)
+  await h.flush()
+  await h.host(message)
+  const next = h.last()
+  assert.notEqual(next, first)
+  assert.equal(next.written[0].id, RESUME)
+  next.say({ jsonrpc: "2.0", id: RESUME, result: {} })
+  await h.flush()
+  return next
+}
+
+const delivered = (child, message) => child.written.filter((line) => JSON.stringify(line) === JSON.stringify(message)).length
+
+test("each server gets its own private token, and nothing of the handoff reaches the host's stream", async () => {
+  const h = harness({ ipc: true })
+  const first = await idleWithFocus(h)
+  const next = await resumedAfter(h, first)
+  next.hello()
+  await h.flush()
+  assert.equal(new Set(h.launchTokens).size, 2)
+  assert.ok(h.launchTokens.every((token) => typeof token === "string" && token.length > 0))
+  assert.equal(h.sent.filter((line) => /focus-handoff|snapshot/u.test(line)).length, 0)
+  assert.ok(![...first.written, ...next.written].some((line) => /focus-handoff/u.test(JSON.stringify(line))), "stdio to the server carries no handoff")
+})
+
+test("an idle stop keeps the server's stdin open until its focus arrives, then ends it; a server that never answers is ended at 2000 ms and killed at the one 5000 ms deadline", async () => {
+  const answered = harness({ ipc: true })
+  await handshaken(answered)
+  answered.last().hello()
+  await answered.host(CALL(2))
+  answer(answered.last(), 2)
+  await answered.flush()
+  await answered.advance(IDLE)
+  assert.equal(answered.last().ended, false, "waits for the snapshot")
+  const asked = ipcOps(answered.last(), "snapshot")[0]
+  answered.last().ipc("snapshot-result", { id: asked.id + 99, snapshot: SNAPSHOT })
+  answered.last().ipc("snapshot-result", { id: asked.id, snapshot: SNAPSHOT }, "wrong-token")
+  assert.equal(answered.last().ended, false, "another id or token is ignored")
+  answered.last().ipc("snapshot-result", { id: asked.id, snapshot: SNAPSHOT })
+  assert.equal(answered.last().ended, true)
+
+  const silent = harness({ ipc: true })
+  await handshaken(silent)
+  silent.last().hello()
+  await silent.host(CALL(2))
+  answer(silent.last(), 2)
+  await silent.flush()
+  await silent.advance(IDLE)
+  await silent.advance(WINDOW - 1)
+  assert.equal(silent.last().ended, false)
+  await silent.advance(1)
+  assert.equal(silent.last().ended, true, "ended at 2000 ms")
+  await silent.advance(TOTAL - WINDOW - 1)
+  assert.deepEqual(silent.last().killed, [])
+  await silent.advance(1)
+  assert.deepEqual(silent.last().killed, ["SIGKILL"], "killed 5000 ms after the stop began, not 5000 ms after the stdin closed")
+})
+
+test("a supporting server's idle stop taken after the host's stream ended, or from a server with no private channel, keeps nothing and waits for nothing", async () => {
+  const ended = harness({ ipc: true })
+  await handshaken(ended)
+  ended.last().hello()
+  await ended.host(CALL(2))
+  answer(ended.last(), 2)
+  ended.stdin.emit("end")
+  await ended.flush()
+  assert.equal(ipcOps(ended.last(), "snapshot").length, 0)
+  assert.equal(ended.last().ended, true)
+
+  const plain = harness()
+  await handshaken(plain)
+  await plain.host(CALL(2))
+  answer(plain.last(), 2)
+  await plain.advance(IDLE)
+  plain.last().leave(0)
+  await plain.host(PING)
+  plain.last().say({ jsonrpc: "2.0", id: RESUME, result: {} })
+  assert.equal(delivered(plain.last(), PING), 1, "no retained focus: delivered at once")
+})
+
+test("no retained focus means no wait: a server that never had a task declared, or never used, resumes at once", async () => {
+  const h = harness({ ipc: true })
+  const first = await idleWithFocus(h, { declared: false })
+  const next = await resumedAfter(h, first)
+  assert.equal(delivered(next, PING), 1)
+  assert.equal(ipcOps(next, "restore").length, 0)
+})
+
+test("a hello that arrives after the stdout reply still restores the focus; it is never taken as an unsupported server", async () => {
+  const h = harness({ ipc: true })
+  const first = await idleWithFocus(h)
+  const next = await resumedAfter(h, first)
+  assert.equal(delivered(next, PING), 0, "held while support is awaited")
+  await h.advance(900)
+  next.hello()
+  await h.flush()
+  const restore = ipcOps(next, "restore")
+  assert.equal(restore.length, 1)
+  assert.deepEqual(restore[0].snapshot, SNAPSHOT)
+  assert.equal(restore[0].budgetMs, WINDOW - 900, "the restore gets only what is left of the one window")
+  assert.equal(delivered(next, PING), 0, "held until the restore is answered")
+  next.ipc("restore-result", { id: restore[0].id + 1, outcome: "restored" })
+  assert.equal(delivered(next, PING), 0, "another id is ignored")
+  next.ipc("restore-result", { id: restore[0].id, outcome: "restored" })
+  assert.equal(delivered(next, PING), 1)
+  assert.match(h.stderr.join(""), /focus handoff restored/u)
+})
+
+test("a server that never says hello is released at 2000 ms from the replay reply, not before; a late hello then only notes that the focus is unknown", async () => {
+  const h = harness({ ipc: true })
+  const first = await idleWithFocus(h)
+  const next = await resumedAfter(h, first)
+  await h.advance(WINDOW - 1)
+  assert.equal(delivered(next, PING), 0)
+  await h.advance(1)
+  assert.equal(delivered(next, PING), 1)
+  assert.equal(next.ended, false, "nothing commit-capable was sent, so nothing is retired")
+  assert.equal(ipcOps(next, "restore").length, 0)
+  next.hello()
+  await h.flush()
+  const late = ipcOps(next, "restore")
+  assert.equal(late.length, 1)
+  assert.equal(late[0].unknown, "hello_late")
+  assert.equal(late[0].snapshot, undefined, "a late hello never carries a focus value")
+  assert.match(h.stderr.join(""), /focus handoff support_unconfirmed/u)
+})
+
+test("a restore answered at 1999 ms releases the host's messages; one not answered at 2000 ms retires the server and holds them until it is gone", async () => {
+  const quick = harness({ ipc: true })
+  const first = await idleWithFocus(quick)
+  const next = await resumedAfter(quick, first)
+  next.hello()
+  await quick.advance(WINDOW - 1)
+  next.ipc("restore-result", { id: ipcOps(next, "restore")[0].id, outcome: "restored" })
+  assert.equal(delivered(next, PING), 1)
+
+  const h = harness({ ipc: true })
+  const old = await idleWithFocus(h)
+  const retiring = await resumedAfter(h, old)
+  retiring.hello()
+  await h.advance(WINDOW - 1)
+  assert.equal(retiring.ended, false)
+  await h.advance(1)
+  assert.equal(retiring.ended, true, "retired at 2000 ms")
+  assert.equal(ipcOps(retiring, "abort").length, 1, "and told to stop")
+  assert.equal(delivered(retiring, PING), 0)
+  await h.advance(TOTAL - WINDOW - 1)
+  assert.deepEqual(retiring.killed, [])
+  await h.advance(1)
+  assert.deepEqual(retiring.killed, ["SIGKILL"], "killed at 5000 ms from the replay reply: one deadline, no second 5 s")
+  assert.equal(h.children.length, 2, "no replacement while the retired server is still there")
+  retiring.ipc("restore-result", { id: ipcOps(retiring, "restore")[0].id, outcome: "restored" })
+  assert.equal(h.children.length, 2, "a late answer from the retired server is dropped")
+  retiring.leave(null, "SIGKILL")
+  await h.flush()
+  const replacement = h.last()
+  assert.equal(h.children.length, 3)
+  assert.equal(delivered(retiring, PING), 0, "never delivered to the retired server")
+  replacement.say({ jsonrpc: "2.0", id: RESUME, result: {} })
+  replacement.hello()
+  await h.flush()
+  const note = ipcOps(replacement, "restore")[0]
+  assert.equal(note.unknown, "restore_timeout")
+  assert.equal(note.snapshot, undefined)
+  assert.equal(delivered(replacement, PING), 0)
+  replacement.ipc("restore-result", { id: note.id, outcome: "unknown" })
+  assert.equal(delivered(replacement, PING), 1, "delivered once, to the replacement")
+  assert.equal(delivered(retiring, PING), 0)
+})
+
+test("a retired server that leaves on its own after its stdin closes releases the held messages to a replacement before the kill", async () => {
+  const h = harness({ ipc: true })
+  const old = await idleWithFocus(h)
+  const retiring = await resumedAfter(h, old, CALL(9))
+  retiring.hello()
+  await h.advance(WINDOW)
+  assert.equal(retiring.ended, true)
+  retiring.leave(0)
+  await h.flush()
+  const replacement = h.last()
+  assert.notEqual(replacement, retiring)
+  assert.equal(delivered(retiring, CALL(9)), 0)
+  assert.equal(h.sent.filter(Boolean).some((line) => /"id":9/u.test(line)), false, "a queued call gets no ended error")
+  replacement.say({ jsonrpc: "2.0", id: RESUME, result: {} })
+  replacement.hello()
+  await h.flush()
+  replacement.ipc("restore-result", { id: ipcOps(replacement, "restore")[0].id, outcome: "unknown" })
+  assert.equal(delivered(replacement, CALL(9)), 1)
+  assert.deepEqual(h.killed ?? [], [])
+})
+
+test("a failed or closed private channel after a restore was sent retires the server at once; before one was sent it only ends the wait", async () => {
+  const sendFails = harness({ ipc: true })
+  const first = await idleWithFocus(sendFails)
+  const next = await resumedAfter(sendFails, first)
+  next.sendFails = true
+  next.hello()
+  await sendFails.flush()
+  assert.equal(next.ended, true, "a restore that could not be sent leaves the server unproven")
+  assert.equal(delivered(next, PING), 0)
+
+  const closed = harness({ ipc: true })
+  const old = await idleWithFocus(closed)
+  const second = await resumedAfter(closed, old)
+  second.hello()
+  second.emit("disconnect")
+  await closed.flush()
+  assert.equal(second.ended, true)
+
+  const early = harness({ ipc: true })
+  const before = await idleWithFocus(early)
+  const third = await resumedAfter(early, before)
+  third.emit("disconnect")
+  await early.flush()
+  assert.equal(third.ended, false)
+  assert.equal(delivered(third, PING), 1, "no hello can come any more: released, not retired")
+})
+
+test("a queued call is delivered once, in order, after a crash during the hold; a forwarded call is answered with one error and never sent again", async () => {
+  const h = harness({ ipc: true })
+  const old = await idleWithFocus(h)
+  const held = await resumedAfter(h, old, CALL(5))
+  held.hello()
+  await h.host(CALL(6))
+  await h.host({ jsonrpc: "2.0", method: "notifications/cancelled", params: { requestId: 6 } })
+  held.leave(1)
+  await h.flush()
+  assert.equal(h.sent.filter(Boolean).some((line) => /"id":(5|6)\b/u.test(line)), false, "queued calls get no error")
+  const crashed = h.last()
+  assert.notEqual(crashed, held)
+  crashed.say({ jsonrpc: "2.0", id: RESUME, result: {} })
+  crashed.hello()
+  await h.flush()
+  const request = ipcOps(crashed, "restore")[0]
+  assert.equal(request.snapshot, undefined, "the snapshot was consumed by the restore that was sent")
+  assert.equal(request.unknown, "server_crashed")
+  crashed.ipc("restore-result", { id: request.id, outcome: "unknown" })
+  assert.deepEqual(crashed.written.slice(2).map((line) => line.id ?? line.method), [5, 6, "notifications/cancelled"], "original order, once each")
+  assert.equal(delivered(held, CALL(5)), 0)
+  answer(crashed, 5)
+  await h.flush()
+  // 7 is forwarded; the server then crashes: it is answered once and never resent.
+  await h.host(CALL(7))
+  crashed.leave(1)
+  await h.flush()
+  const errors = h.sees().filter((message) => message.id === 7 && message.error)
+  assert.equal(errors.length, 1)
+  await h.host(PING)
+  const third = h.last()
+  assert.notEqual(third, crashed)
+  assert.equal(delivered(third, CALL(7)), 0, "a forwarded call is never sent again")
+})
+
+test("a restore that was never sent keeps the focus for the server that follows a crash", async () => {
+  const h = harness({ ipc: true })
+  const old = await idleWithFocus(h)
+  const crashing = await resumedAfter(h, old)
+  crashing.leave(1)
+  await h.flush()
+  const next = h.last()
+  next.say({ jsonrpc: "2.0", id: RESUME, result: {} })
+  next.hello()
+  await h.flush()
+  const request = ipcOps(next, "restore")[0]
+  assert.deepEqual(request.snapshot, SNAPSHOT)
+})
+
+test("a crash after a call keeps nothing but the fact that the focus is unknown, and a server that crashes before any call keeps nothing", async () => {
+  const h = harness({ ipc: true })
+  await handshaken(h)
+  h.last().hello()
+  await h.host(CALL(2))
+  const crashing = h.last()
+  crashing.leave(1)
+  await h.flush()
+  await h.host(PING)
+  h.last().say({ jsonrpc: "2.0", id: RESUME, result: {} })
+  h.last().hello()
+  await h.flush()
+  assert.equal(ipcOps(h.last(), "restore")[0].unknown, "server_crashed")
+
+  const none = harness({ ipc: true })
+  await handshaken(none)
+  none.last().leave(1)
+  await none.flush()
+  await none.host(PING)
+  none.last().say({ jsonrpc: "2.0", id: RESUME, result: {} })
+  assert.equal(delivered(none.last(), PING), 1, "nothing to hand over: no wait")
+})
+
+test("the host's reply to a request the server made is delivered during the hold, and never to a replacement or a retired server", async () => {
+  const h = harness({ ipc: true })
+  const old = await idleWithFocus(h)
+  const held = await resumedAfter(h, old)
+  held.say({ jsonrpc: "2.0", id: "s1", method: "roots/list" })
+  held.say({ jsonrpc: "2.0", id: "s2", method: "roots/list" })
+  await h.flush()
+  held.hello()
+  await h.flush()
+  await h.host({ jsonrpc: "2.0", id: "s1", result: { roots: [] } })
+  assert.equal(delivered(held, { jsonrpc: "2.0", id: "s1", result: { roots: [] } }), 1, "not stranded behind the hold")
+  await h.advance(WINDOW)
+  assert.equal(held.ended, true)
+  held.leave(0)
+  await h.flush()
+  await h.host({ jsonrpc: "2.0", id: "s2", result: { roots: [] } })
+  const replacement = h.last()
+  assert.equal(delivered(replacement, { jsonrpc: "2.0", id: "s2", result: { roots: [] } }), 0, "a reply for a retired server is not sent to its replacement")
+  replacement.say({ jsonrpc: "2.0", id: RESUME, result: {} })
+  replacement.hello()
+  await h.flush()
+  replacement.ipc("restore-result", { id: ipcOps(replacement, "restore")[0].id, outcome: "unknown" })
+  assert.equal(delivered(replacement, { jsonrpc: "2.0", id: "s2", result: { roots: [] } }), 0)
+})
+
+test("the idle check that ran out during the hold is armed again when the hold ends, so the server is not kept for ever", async () => {
+  const h = harness({ ipc: true })
+  const old = await idleWithFocus(h)
+  const next = await resumedAfter(h, old)
+  next.hello()
+  await h.advance(IDLE + 500)
+  assert.equal(delivered(next, PING), 0, "still held when the idle time ran out")
+  next.ipc("restore-result", { id: ipcOps(next, "restore")[0].id, outcome: "restored" })
+  assert.equal(delivered(next, PING), 1)
+  assert.equal(next.ended, false, "the idle time ran out during the hold, which does not end a server")
+  assert.equal(ipcOps(next, "snapshot").length, 0)
+  await h.advance(IDLE)
+  assert.equal(ipcOps(next, "snapshot").length, 1, "idle checking resumed after the hold")
+})
+
+test("a restore that cannot commit anything, or an answer with an outcome it does not know, never retires the server", async () => {
+  const h = harness({ ipc: true })
+  await handshaken(h)
+  h.last().hello()
+  await h.host(CALL(2))
+  h.last().leave(1)
+  await h.flush()
+  await h.host(PING)
+  const next = h.last()
+  next.say({ jsonrpc: "2.0", id: RESUME, result: {} })
+  next.hello()
+  await h.advance(WINDOW)
+  assert.equal(next.ended, false)
+  assert.equal(delivered(next, PING), 1, "a note-only restore is released at its window")
+  next.ipc("restore-result", { id: ipcOps(next, "restore")[0].id, outcome: "elsewhere" })
+  assert.doesNotMatch(h.stderr.join(""), /elsewhere/u)
+})
+
+test("an idle stop where the focus is unknown to the server itself keeps that fact for the next server", async () => {
+  const h = harness({ ipc: true })
+  const first = await idleWithFocus(h, { declared: false, unknownPrior: true })
+  const next = await resumedAfter(h, first)
+  next.hello()
+  await h.flush()
+  assert.equal(ipcOps(next, "restore")[0].unknown, "prior_unknown")
+})
+
+test("the host's stream ending during the hold, or a signal, ends the server without waiting for the handoff", async () => {
+  const h = harness({ ipc: true })
+  const old = await idleWithFocus(h)
+  const held = await resumedAfter(h, old)
+  h.stdin.emit("end")
+  await h.flush()
+  assert.equal(held.ended, true)
+  held.leave(0)
+  await h.flush()
+  assert.deepEqual(h.exits, [0])
+  assert.equal(h.timers.size, 0)
+})
+
+// A generation that cannot hand its focus over still served calls: a capable successor learns the prior focus is unknown, never that there was none.
+async function serveAndIdle(h, child) {
+  await h.host(CALL(7))
+  answer(child, 7)
+  await h.flush()
+  await h.advance(IDLE)
+}
+
+test("a server without the private channel that served a call leaves an unknown focus for a capable replacement", async () => {
+  const h = harness({ ipc: (spawn) => spawn > 1 })
+  await handshaken(h)
+  const old = h.last()
+  await serveAndIdle(h, old)
+  assert.equal(old.ended, true)
+  const next = await resumedAfter(h, old)
+  next.hello()
+  await h.flush()
+  const restore = ipcOps(next, "restore")
+  assert.equal(restore.length, 1)
+  assert.equal(restore[0].unknown, "child_unsupported")
+  assert.equal(restore[0].snapshot, undefined)
+})
+
+test("a focus carried across a generation that could not take it is unknown after that generation served calls, and unchanged when it served none", async () => {
+  const served = harness({ ipc: (spawn) => spawn !== 2 })
+  const first = await idleWithFocus(served)
+  const second = await resumedAfter(served, first)
+  assert.equal(delivered(second, PING), 1, "an unsupporting server is not waited for")
+  await serveAndIdle(served, second)
+  const third = await resumedAfter(served, second)
+  third.hello()
+  await served.flush()
+  assert.equal(ipcOps(third, "restore")[0].unknown, "child_unsupported")
+  assert.equal(ipcOps(third, "restore")[0].snapshot, undefined)
+
+  const idle = harness({ ipc: (spawn) => spawn !== 2 })
+  const one = await idleWithFocus(idle)
+  const two = await resumedAfter(idle, one)
+  await idle.advance(IDLE)
+  const three = await resumedAfter(idle, two)
+  three.hello()
+  await idle.flush()
+  assert.deepEqual(ipcOps(three, "restore")[0].snapshot, SNAPSHOT)
+})
+
+test("a server that never said hello leaves the focus unknown, not forgotten, for the next one", async () => {
+  const h = harness({ ipc: true })
+  const first = await idleWithFocus(h)
+  const second = await resumedAfter(h, first)
+  await h.advance(WINDOW)
+  assert.equal(delivered(second, PING), 1)
+  await h.advance(IDLE)
+  const third = await resumedAfter(h, second)
+  third.hello()
+  await h.flush()
+  const restore = ipcOps(third, "restore")
+  assert.equal(restore[0].unknown, "support_unconfirmed")
+  assert.equal(restore[0].snapshot, undefined)
+})
+
+test("a snapshot that cannot be asked for or read leaves the focus unknown after served calls, and nothing for a server that served none", async () => {
+  for (const fail of ["sendFails", "sendThrows", "disconnect", "malformed"]) {
+    const h = harness({ ipc: true })
+    await handshaken(h)
+    const first = h.last()
+    first.hello()
+    await h.host(CALL(2))
+    answer(first, 2)
+    await h.flush()
+    if (fail === "sendFails" || fail === "sendThrows") first[fail] = true
+    await h.advance(IDLE)
+    if (fail === "disconnect") first.emit("disconnect")
+    if (fail === "malformed") first.ipc("snapshot-result", { id: ipcOps(first, "snapshot")[0].id, snapshot: {} })
+    await h.flush()
+    const next = await resumedAfter(h, first)
+    next.hello()
+    await h.flush()
+    assert.equal(ipcOps(next, "restore")[0].unknown, "snapshot_unavailable", fail)
+  }
+  const h = harness({ ipc: true })
+  await handshaken(h)
+  const idle = h.last()
+  idle.hello()
+  await h.advance(IDLE)
+  idle.ipc("snapshot-result", { id: ipcOps(idle, "snapshot")[0].id, snapshot: null })
+  const next = await resumedAfter(h, idle)
+  next.hello()
+  await h.flush()
+  assert.equal(ipcOps(next, "restore").length, 0)
+})
+
+test("a restore request that fails after the hold ended, a timer that fires late, and a disconnect from a replaced server change nothing", async () => {
+  const h = harness({ ipc: true })
+  const old = await idleWithFocus(h)
+  const next = await resumedAfter(h, old)
+  next.deferred = []
+  next.hello()
+  await h.flush()
+  const before = h.cleared.length
+  next.ipc("restore-result", { id: ipcOps(next, "restore")[0].id, outcome: "weather" })
+  assert.equal(delivered(next, PING), 1)
+  h.cleared.slice(before).forEach((fn) => fn())
+  next.deferred[0](new Error("late"))
+  old.emit("disconnect")
+  await h.flush()
+  assert.equal(next.ended, false)
+  assert.equal(delivered(next, PING), 1)
+})
+
+test("a late window timer or an answer for an id nobody asked about is dealt with without error", async () => {
+  const h = harness({ ipc: true })
+  await handshaken(h)
+  h.last().hello()
+  await h.host({ jsonrpc: "2.0", id: "nobody-asked", result: {} })
+  assert.equal(delivered(h.last(), { jsonrpc: "2.0", id: "nobody-asked", result: {} }), 1)
+})
+
+test("the record of retired server requests is cleared once it grows past a thousand", async () => {
+  const h = harness({ ipc: true })
+  const old = await idleWithFocus(h)
+  const held = await resumedAfter(h, old)
+  for (let i = 0; i < 1001; i += 1) held.say({ jsonrpc: "2.0", id: `r${i}`, method: "roots/list" })
+  await h.flush()
+  held.hello()
+  await h.flush()
+  await h.advance(WINDOW)
+  held.leave(0)
+  await h.flush()
+  const second = h.last()
+  second.say({ jsonrpc: "2.0", id: RESUME, result: {} })
+  second.hello()
+  second.say({ jsonrpc: "2.0", id: "x1", method: "roots/list" })
+  await h.flush()
+  await h.advance(WINDOW)
+  second.leave(0)
+  await h.flush()
+  await h.host({ jsonrpc: "2.0", id: "r5", result: {} })
+  const third = h.last()
+  third.say({ jsonrpc: "2.0", id: RESUME, result: {} })
+  await h.flush()
+  await h.advance(WINDOW)
+  assert.equal(delivered(third, { jsonrpc: "2.0", id: "r5", result: {} }), 1)
+})
+
+test("a snapshot that never arrives times out, a late send failure after the answer changes nothing, and a declared-nothing focus is handed over", async () => {
+  const silent = harness({ ipc: true })
+  await handshaken(silent)
+  const quiet = silent.last()
+  quiet.hello()
+  await silent.host(CALL(2))
+  answer(quiet, 2)
+  await silent.flush()
+  await silent.advance(IDLE)
+  await silent.advance(WINDOW)
+  const afterTimeout = await resumedAfter(silent, quiet)
+  afterTimeout.hello()
+  await silent.flush()
+  assert.equal(ipcOps(afterTimeout, "restore")[0].unknown, "snapshot_unavailable")
+
+  const h = harness({ ipc: true })
+  await handshaken(h)
+  const first = h.last()
+  first.hello()
+  first.deferred = []
+  await h.host(CALL(2))
+  answer(first, 2)
+  await h.flush()
+  await h.advance(IDLE)
+  first.ipc("snapshot-result", { id: ipcOps(first, "snapshot")[0].id, snapshot: { declared: true, task: null, scope: "scope-a" } })
+  first.deferred.forEach((callback) => callback(new Error("late")))
+  const next = await resumedAfter(h, first)
+  next.hello()
+  await h.flush()
+  assert.deepEqual(ipcOps(next, "restore")[0].snapshot, { declared: true, task: null, scope: "scope-a" })
+})
+
+test("a server that only carried a focus and cannot give it back again leaves it unknown", async () => {
+  const h = harness({ ipc: true })
+  const first = await idleWithFocus(h)
+  const second = await resumedAfter(h, first)
+  second.hello()
+  await h.flush()
+  second.ipc("restore-result", { id: ipcOps(second, "restore")[0].id, outcome: "restored" })
+  await h.flush()
+  second.sendFails = true
+  await h.advance(IDLE)
+  const third = await resumedAfter(h, second)
+  third.hello()
+  await h.flush()
+  assert.equal(ipcOps(third, "restore")[0].unknown, "snapshot_unavailable")
+})
+
+test("a server that served nothing and cannot be asked for its focus leaves nothing to carry", async () => {
+  const h = harness({ ipc: true })
+  await handshaken(h)
+  const idle = h.last()
+  idle.hello()
+  idle.sendFails = true
+  await h.advance(IDLE)
+  const next = await resumedAfter(h, idle)
+  next.hello()
+  await h.flush()
+  assert.equal(ipcOps(next, "restore").length, 0)
+})
+
+test("output that reaches the host from a server that already ended is dropped: after a crash and after an idle exit, and it cannot clear a replacement's call", async () => {
+  const stale = (id) => ({ jsonrpc: "2.0", id, result: { stale: true } })
+  const crash = harness()
+  await handshaken(crash)
+  await crash.host(CALL(7))
+  const crashed = crash.last()
+  crashed.leave(3)
+  await crash.flush()
+  crashed.say(stale(7))
+  await crash.flush()
+  assert.equal(crash.sees().filter((message) => message.id === 7).length, 1, "the failed call's terminal answer is not repeated by buffered output")
+  await crash.host(CALL(8))
+  const replacement = crash.last()
+  replacement.say({ jsonrpc: "2.0", id: RESUME, result: {} })
+  await crash.flush()
+  crashed.say(stale(8))
+  await crash.flush()
+  assert.equal(crash.sees().some((message) => message.id === 8), false, "the replacement's call is not answered by the old server")
+  await crash.advance(IDLE - 1)
+  assert.equal(replacement.ended, false, "and the call stays pending, so the replacement is kept")
+  replacement.leave(4)
+  await crash.flush()
+  assert.match(JSON.stringify(crash.sees().find((message) => message.id === 8)), /exited with code 4/u, "the replacement's call is still failed by its own crash")
+
+  const idle = harness()
+  await handshaken(idle)
+  const first = idle.last()
+  await idle.advance(IDLE)
+  first.leave(0)
+  await idle.flush()
+  first.say(stale(5))
+  first.say({ jsonrpc: "2.0", method: "notifications/message", params: {} })
+  await idle.flush()
+  assert.deepEqual(idle.sees().filter((message) => message.id === 5 || message.method === "notifications/message"), [], "nothing from an idle-stopped server arrives after it left")
+})
+
+test("a host that ends its stream while a server is being ended does not cancel the kill deadline, for an idle stop or a retired restore", async () => {
+  const idle = harness()
+  await handshaken(idle)
+  const server = idle.last()
+  await idle.advance(IDLE)
+  idle.stdin.end()
+  await idle.flush()
+  idle.stdin.emit("error", new Error("again"))
+  await idle.flush()
+  await idle.advance(GRACE)
+  assert.deepEqual(server.killed, ["SIGKILL"], "a server that ignores its closed stdin is still killed 5000 ms after the stop began")
+  server.leave(null, "SIGKILL")
+  await idle.flush()
+  assert.deepEqual(idle.exits, [0], "the proxy then ends with the host")
+
+  const h = harness({ ipc: true })
+  const old = await idleWithFocus(h)
+  const retiring = await resumedAfter(h, old)
+  retiring.hello()
+  await h.advance(WINDOW)
+  assert.equal(retiring.ended, true)
+  h.stdin.end()
+  await h.flush()
+  await h.advance(TOTAL - WINDOW - 1)
+  assert.deepEqual(retiring.killed, [])
+  await h.advance(1)
+  assert.deepEqual(retiring.killed, ["SIGKILL"], "the total 5000 ms retirement deadline survives the host's end")
 })
