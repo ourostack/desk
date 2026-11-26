@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.594 — 2026-11-26
+
+A relay with no `account` that no signed-in GitHub account can read no longer asks GitHub again at every poll. Each refused account and repository is remembered in the relay's state, keyed by an opaque hash of the relay's configuration, the login and its current token (never the token itself), and asked again on the relay's existing idle pace: its `everySeconds` stretched while idle, never below 120 seconds, or its own interval when it has `backOffWhenIdle: false`. A refreshed token, a changed relay, a new account, or the end of the pace tries again at once, so access granted on GitHub is found without editing the config. Only a 401, a 403 that is not a rate limit, a 404 or a missing token counts as a refusal; a server error, a timeout, any other status or a failed token read keeps its own error and is asked again at the next poll, and a later reachable account is still chosen. A provider's `Retry-After` (counted from when the answer arrived), holds only that account for exactly that long; only a primary quota known to be exhausted (`x-ratelimit-remaining: 0`) waits for its reset; a rate limit with quota left and no `Retry-After` is asked again at the next poll. While a probe waits, the relay's error and its next account check stay visible in `relays status`. This covers only the account probe; other relay reads and the schedule `when` gate are unchanged. See [relays](docs/relays.md).
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.593 — 2026-11-26
 
 Desk's MCP server now vendors Ouro UI v1.3.572, moved by Ouro Current.
