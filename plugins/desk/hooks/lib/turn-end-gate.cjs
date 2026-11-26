@@ -238,4 +238,4 @@ async function checkTurnEnd({ host, payload, env = process.env, now = Date.now }
   return { status: "correction", output: { decision: "block", reason:
     `Keep working the card, or end the reply with one Ending line. ${TAG} Your focused card ${s.target} is ${s.status}, and ${verdict.why}. If ready work remains, do it. If not, end with exactly one of these lines, filled in with facts you can show:\n${FORM}\n"No ready work" is a valid ending: say it, never invent work to avoid it. This is the only correction; do not repeat finished steps.` } };
 }
-module.exports = { checkTurnEnd, endingOf, judge, TAG };
+module.exports = { checkTurnEnd, endingOf, judge };

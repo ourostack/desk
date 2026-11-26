@@ -321,6 +321,7 @@ function main(entry, argv = process.argv, stdin = process.stdin) {
       const delivery = await checkDelivery({ host: argv[2], payload }).catch(() => ({ diagnostic: "guard_unavailable" }));
       if (delivery.diagnostic) process.stderr.write(`[desk-delivery] unverified: ${delivery.diagnostic}\n`);
       if (delivery.output) { process.stdout.write(JSON.stringify(delivery.output)); return; }
+      if (delivery.diagnostic) return;
       // The delivery reply check owns a turn's correction budget; the turn-end gate speaks only when it has none to spend.
       const gate = await checkTurnEnd({ host: argv[2], payload }).catch(() => ({ diagnostic: "guard_unavailable" }));
       if (gate.diagnostic) process.stderr.write(`[desk-turn-end] unverified: ${gate.diagnostic}\n`);
