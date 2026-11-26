@@ -234,6 +234,19 @@
       ]
     },
     {
+      "id": "cli:drains progress",
+      "group": "drains-keep-moving",
+      "when": "Counting what a card has shipped: merged pull requests GitHub confirms and named acceptance passes from outcomes rather than messages, commits or busy",
+      "effect": "read",
+      "errors": [
+        {
+          "code": "progress-card-missing",
+          "means": "No card was given, so nothing was counted",
+          "fix": "Pass --card with a card id from the turn-end ledger"
+        }
+      ]
+    },
+    {
       "id": "cli:drains relays poll",
       "group": "drains-relays",
       "when": "A runner cycle letting each due relay dispatch workflows, comment on and merge green labelled pull requests",
@@ -246,6 +259,37 @@
       ]
     },
     {
+      "id": "cli:drains leases status",
+      "group": "drains-keep-moving",
+      "when": "Listing each card claim as held, lapsed after two hours with nothing pushed, or ownerless because its session ended",
+      "effect": "read",
+      "errors": [
+        {
+          "code": "leases-file-invalid",
+          "means": "claims.json cannot be read, so no claim was judged",
+          "fix": "Repair or remove claims.json in the drains folder and rerun leases status"
+        }
+      ]
+    },
+    {
+      "id": "cli:drains leases take",
+      "group": "drains-keep-moving",
+      "when": "A session claiming a card to work on, starting its two-hour lease",
+      "effect": "write",
+      "errors": [
+        {
+          "code": "lease-owner-missing",
+          "means": "The card or the owning session was not given, so nothing was claimed",
+          "fix": "Pass --card and --owner with the session id"
+        },
+        {
+          "code": "leases-file-invalid",
+          "means": "claims.json cannot be read, so the claim was not changed",
+          "fix": "Repair or remove claims.json in the drains folder and rerun leases take"
+        }
+      ]
+    },
+    {
       "id": "cli:drains relays status",
       "group": "drains-relays",
       "when": "Reading each relay's last poll, last fire or merge, spend, and what it waits on, without acting on GitHub",
@@ -253,6 +297,15 @@
       "errors": [
         { "code": "desk-relays-config-invalid", "means": "relays.json has a malformed relay, so no lines were listed", "fix": "Repair that relay entry, then list the relays again" },
         { "code": "desk-relays-config-unreadable", "means": "relays.json cannot be read because of its owner or permissions", "fix": "Make relays.json readable by your user and rerun relays status" }
+      ]
+    },
+    {
+      "id": "cli:drains keepers check",
+      "group": "drains-keep-moving",
+      "when": "A scheduled run outside agent sessions that shows this host's heartbeat and lists waits, endings, claims and a peer keeper that need a job",
+      "effect": "write",
+      "errors": [
+        { "code": "keepers-config-invalid", "means": "keepers.json exists but is not valid JSON or cannot be read, so no peer was checked", "fix": "Repair keepers.json with this host's name and its peers and rerun keepers check" }
       ]
     },
     {

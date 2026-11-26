@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
-import { mkdtempSync, readFileSync } from "node:fs"
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 import { beat, findings, keepersCheck, peerFindings, readKeeperConfig } from "../../../../../plugins/desk/mcp/src/runtime/keepers.js"
@@ -67,4 +67,12 @@ test("a run shows this host's heartbeat, which its peer can then read", async ()
 
 test("a missing or malformed config names no host and no peers", () => {
   assert.deepEqual(readKeeperConfig(path.join(tmpdir(), "no-such-keepers.json")), { host: null, peers: [] })
+})
+
+test("gaming: a corrupted keepers.json stops the check; it does not read as no peers and switch the peer check off", () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "keepers-bad-"))
+  const file = path.join(dir, "keepers.json")
+  writeFileSync(file, "{nope")
+  assert.throws(() => readKeeperConfig(file), (error) => typeof error.keepersConfigInvalid === "string")
+  assert.deepEqual(readKeeperConfig(path.join(dir, "missing.json")), { host: null, peers: [] })
 })
