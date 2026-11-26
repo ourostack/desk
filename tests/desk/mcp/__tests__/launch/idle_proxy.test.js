@@ -50,7 +50,7 @@ function harness({ idleMs: idle = IDLE, failSpawnAt = [], watchesParent = true, 
     })
     child.stdout = new PassThrough()
     child.kill = (signal) => child.killed.push(signal)
-    if (ipc) {
+    if (typeof ipc === "function" ? ipc(spawns) : ipc) {
       child.token = token
       child.ipcSent = []
       child.sendFails = false
@@ -1109,4 +1109,64 @@ test("the host's stream ending during the hold, or a signal, ends the server wit
   await h.flush()
   assert.deepEqual(h.exits, [0])
   assert.equal(h.timers.size, 0)
+})
+
+// A generation that cannot hand its focus over still served calls: a capable successor learns the prior focus is unknown, never that there was none.
+async function serveAndIdle(h, child) {
+  await h.host(CALL(7))
+  answer(child, 7)
+  await h.flush()
+  await h.advance(IDLE)
+}
+
+test("a server without the private channel that served a call leaves an unknown focus for a capable replacement", async () => {
+  const h = harness({ ipc: (spawn) => spawn > 1 })
+  await handshaken(h)
+  const old = h.last()
+  await serveAndIdle(h, old)
+  assert.equal(old.ended, true)
+  const next = await resumedAfter(h, old)
+  next.hello()
+  await h.flush()
+  const restore = ipcOps(next, "restore")
+  assert.equal(restore.length, 1)
+  assert.equal(restore[0].unknown, "child_unsupported")
+  assert.equal(restore[0].snapshot, undefined)
+})
+
+test("a focus carried across a generation that could not take it is unknown after that generation served calls, and unchanged when it served none", async () => {
+  const served = harness({ ipc: (spawn) => spawn !== 2 })
+  const first = await idleWithFocus(served)
+  const second = await resumedAfter(served, first)
+  assert.equal(delivered(second, PING), 1, "an unsupporting server is not waited for")
+  await serveAndIdle(served, second)
+  const third = await resumedAfter(served, second)
+  third.hello()
+  await served.flush()
+  assert.equal(ipcOps(third, "restore")[0].unknown, "child_unsupported")
+  assert.equal(ipcOps(third, "restore")[0].snapshot, undefined)
+
+  const idle = harness({ ipc: (spawn) => spawn !== 2 })
+  const one = await idleWithFocus(idle)
+  const two = await resumedAfter(idle, one)
+  await idle.advance(IDLE)
+  const three = await resumedAfter(idle, two)
+  three.hello()
+  await idle.flush()
+  assert.deepEqual(ipcOps(three, "restore")[0].snapshot, SNAPSHOT)
+})
+
+test("a server that never said hello leaves the focus unknown, not forgotten, for the next one", async () => {
+  const h = harness({ ipc: true })
+  const first = await idleWithFocus(h)
+  const second = await resumedAfter(h, first)
+  await h.advance(WINDOW)
+  assert.equal(delivered(second, PING), 1)
+  await h.advance(IDLE)
+  const third = await resumedAfter(h, second)
+  third.hello()
+  await h.flush()
+  const restore = ipcOps(third, "restore")
+  assert.equal(restore[0].unknown, "support_unconfirmed")
+  assert.equal(restore[0].snapshot, undefined)
 })

@@ -3,6 +3,7 @@
 // This drives the real bootstrap.cjs (its idle proxy and its index.js child) over stdio against a synthetic git desk. It proves the mechanism with a short idle time, not the original #1811 incident or any live host.
 
 import assert from "node:assert/strict"
+import { createHash } from "node:crypto"
 import { readFileSync, readdirSync, renameSync, writeFileSync } from "node:fs"
 import * as path from "node:path"
 import test from "node:test"
@@ -66,7 +67,10 @@ async function idleRestart(h) {
 }
 
 const harbor = { track: "ops", slug: "harbor-lights" }
-const update = (session, task = harbor) => session.call("task_update", { ...task, status: "active" })
+const update = (session, task = harbor) => session.call("task_update", { ...task, status: "paused" })
+
+// The product files and card bytes, by hash, so a failure names the file and not 30 MB of model weights. The search index's SQLite files and the downloaded embedding model are runtime cache that a server may touch at any time, so they alone are left out.
+const RUNTIME_CACHE = [/^\.state\/desk-vectors\.sqlite(?:-shm|-wal|-journal)?$/u, /^\.state\/embedding-model(?:\/|$)/u]
 
 function snapshotDesk(fixture) {
   const files = []
@@ -74,11 +78,14 @@ function snapshotDesk(fixture) {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
       if (entry.name === ".git") continue
       const full = path.join(dir, entry.name)
+      const relative = path.relative(fixture.desk, full).split(path.sep).join("/")
+      if (RUNTIME_CACHE.some((pattern) => pattern.test(relative))) continue
       if (entry.isDirectory()) walk(full)
-      else files.push([path.relative(fixture.desk, full), readFileSync(full, "utf8")])
+      else files.push([relative, createHash("sha256").update(readFileSync(full)).digest("hex")])
     }
   }
   walk(fixture.desk)
+  files.sort((a, b) => (a[0] < b[0] ? -1 : 1))
   return { files, head: git(fixture.desk, "rev-parse", "HEAD"), porcelain: git(fixture.desk, "status", "--porcelain") }
 }
 
@@ -96,6 +103,7 @@ test("a task_focus survives an idle restart: the resume writes nothing and task_
   assert.deepEqual(snapshotDesk(h.fixture), before)
   assert.equal(JSON.stringify((await h.session.request("tools/list")).result), toolsBefore)
   const result = await update(h.session)
+  assert.equal(result.isError, false, JSON.stringify(result.payload))
   assert.equal(h.note(result), "silent", JSON.stringify(result.payload))
   assert.match(h.session.stderr(), /focus handoff restored/u)
   assert.notEqual(first.pid, second.pid)

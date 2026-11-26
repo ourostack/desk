@@ -185,7 +185,11 @@ function createIdleProxy(options) {
       killTimer = null;
       stopped.kill("SIGKILL");
     }, STOP_GRACE_MS);
-    if (clientEnded || !g.ipcCapable || !g.helloSeen || g.ipcClosed) return endStdin(g);
+    if (clientEnded || !g.ipcCapable || !g.helloSeen || g.ipcClosed) {
+      // This server cannot hand its focus over, but it served calls: what it held is unknown, never known to be nothing.
+      if (!clientEnded && (g.sawToolCall || g.carried)) handoff = { unknown: "child_unsupported" };
+      return endStdin(g);
+    }
     g.snapId = nextIpcId++;
     snapTimer = options.setTimer(function () {
       snapTimer = null;
@@ -336,10 +340,7 @@ function createIdleProxy(options) {
   function beginHold() {
     var g = gen;
     if (handoff === null) return release();
-    if (!g.ipcCapable) {
-      handoff = null;
-      return release();
-    }
+    if (!g.ipcCapable) return release();
     hold = { origin: options.now(), phase: "support", restoreId: null, commit: false };
     windowTimer = options.setTimer(onWindow, FOCUS_WAIT_MS);
     if (g.helloSeen) sendRestore();
@@ -374,7 +375,7 @@ function createIdleProxy(options) {
     if (hold === null) return;
     if (hold.phase === "support") {
       gen.supportTimedOut = true;
-      handoff = null;
+      handoff = { unknown: "support_unconfirmed" };
       logHandoff("support_unconfirmed");
       return release();
     }
@@ -387,7 +388,7 @@ function createIdleProxy(options) {
     if (g.snapId !== null) snapshotFailed(g);
     if (hold === null) return;
     if (hold.phase === "support") {
-      handoff = null;
+      handoff = { unknown: "channel_closed" };
       logHandoff("channel_closed");
       return release();
     }
@@ -447,7 +448,7 @@ function createIdleProxy(options) {
       return finish(code === null || code === undefined ? 1 : code);
     }
     options.stderr.write("[desk-mcp] idle proxy: the server " + reason + "; it restarts on the next message\n");
-    if ((g.sawToolCall || g.carried) && handoff === null) handoff = { unknown: "server_crashed" };
+    if (g.sawToolCall || g.carried) handoff = { unknown: "server_crashed" };
     var lost = Object.keys(clientCalls);
     clientCalls = {};
     lost.forEach(function (key) {
