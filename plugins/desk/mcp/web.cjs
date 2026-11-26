@@ -172,6 +172,7 @@ function settings(o) {
     exitWaitMs: o.exitWaitMs || 5000,
     closeMs: o.closeMs || 40000,
     recordMs: o.recordMs || 15000,
+    keychainRun: o.keychainRun,
     processTable: o.processTable || function () {
       return readProcessTable(platform, env);
     }
@@ -320,7 +321,7 @@ function transcodeCookies(file, key) {
 // a later pathname copy would undo identity/link qualification.
 function copyProfile(source, dest, app, options) {
   var keyReport = {};
-  var cookieKey = options && "cookieKey" in options ? options.cookieKey : keychainCookieKey(app, process.platform, childProcess.execFileSync, keyReport);
+  var cookieKey = options && "cookieKey" in options ? options.cookieKey : keychainCookieKey(app, process.platform, options && options.run || childProcess.execFileSync, keyReport);
   var cookies = { encrypted: 0, readable: 0 };
   var state;
   try { state = readProfileFile(path.join(source, "Local State")); } catch (error) {
@@ -548,7 +549,7 @@ async function openAuth(s) {
     fs.writeFileSync(path.join(dir, "owner.json"), JSON.stringify({ pid: process.pid, browser: "mine", profilePolicy: AUTH_PROFILE_POLICY, transport: "auth-api" }) + "\n");
     fs.mkdirSync(outputDir);
     var profileDir = path.join(dir, "profile");
-    var copied = copyProfile(browser.profileRoot, profileDir, BROWSERS[browser.channel].name);
+    var copied = copyProfile(browser.profileRoot, profileDir, BROWSERS[browser.channel].name, s.keychainRun ? { run: s.keychainRun } : undefined);
     var config = launchConfig("mine", browser, profileDir, copied.name, outputDir);
     fs.writeFileSync(path.join(dir, "config.json"), JSON.stringify(config));
     var launch = Object.assign({}, config.browser.launchOptions, {

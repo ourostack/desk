@@ -539,6 +539,32 @@ test("mine uses the owned native API and never opens or closes the CLI", async (
   assert.equal(calls().length, 0)
 })
 
+test("mine open on macOS warns, through the supported entry, when the keychain refuses and the copy holds encrypted cookies", async () => {
+  const { DatabaseSync } = await import("node:sqlite")
+  const { options, profiles } = await setup()
+  const edge = path.join(profiles, "edge")
+  makeProfile(edge)
+  const cookies = path.join(edge, "Profile 1", "Network", "Cookies")
+  fs.rmSync(cookies)
+  const db = new DatabaseSync(cookies)
+  db.exec("CREATE TABLE cookies (host_key TEXT, name TEXT, value TEXT, encrypted_value BLOB)")
+  db.prepare("INSERT INTO cookies VALUES (?, ?, ?, ?)").run("github.com", "user_session", "", Buffer.from("v10sealed-by-the-running-browser"))
+  db.close()
+  const platform = Object.getOwnPropertyDescriptor(process, "platform")
+  Object.defineProperty(process, "platform", { value: "darwin" })
+  const keychainRun = () => { throw Object.assign(new Error("denied"), { status: 51 }) }
+  try {
+    const controller = web.createController({ ...options, keychainRun })
+    const opened = await controller.call("browser_context", { action: "open", browser: "mine" })
+    assert.equal(opened.isError, false, text(opened))
+    const reply = JSON.parse(text(opened))
+    assert.match(reply.sessionWarning, /^SESSION_MAY_BE_MISSING: 1 of 1 cookies .*Safe Storage key: exit 51/)
+    const again = JSON.parse(text(await controller.call("browser_context", { action: "open", browser: "mine" })))
+    assert.match(again.sessionWarning, /exit 51/)
+    await controller.closeAll()
+  } finally { Object.defineProperty(process, "platform", platform) }
+})
+
 test("mine runs eval as given, and emits owned redacted text JSON and artifacts", async () => {
   const { options, profiles, calls } = await setup()
   makeProfile(path.join(profiles, "edge"))
