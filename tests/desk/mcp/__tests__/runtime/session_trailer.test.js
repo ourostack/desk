@@ -251,7 +251,7 @@ test("a chained commit-msg hook runs first, keeps its failure, and its additions
   assert.match(refused.stderr, /nope/u)
 })
 
-test("a commit is refused, with a reason, when the chained hook cannot be read by grep", async () => {
+test("a commit is refused, with a reason, when the chained hook cannot be read by grep", { skip: process.platform === "win32" }, async () => {
   const dir = await repo()
   const hooks = path.join(dir, ".git", "hooks")
   writeFileSync(path.join(hooks, "commit-msg.desk-chained"), "#!/bin/sh\nexit 0\n")
