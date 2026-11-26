@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
-import { mkdtempSync } from "node:fs"
+import { mkdtempSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 import { LEASE_MS, assessLease, claimCard, leaseStatus, takeClaim } from "../../../../../plugins/desk/mcp/src/runtime/leases.js"
@@ -50,4 +50,11 @@ test("claims are kept on disk, a repeated claim is refused, and a missing owner 
   assert.equal((await claimCard({ paths, card: "t/c", owner: "s2", now: NOW + MIN, env, push })).owner, "s2")
   const status = await leaseStatus({ paths, now: NOW + 2 * MIN, env, push })
   assert.equal(status.leases[0].state, "ownerless")
+})
+
+test("gaming: corrupting claims.json stops the call; it does not read as no claims and free every card", async () => {
+  const home = mkdtempSync(path.join(tmpdir(), "leases-bad-"))
+  const paths = { claims: path.join(home, "claims.json") }
+  writeFileSync(paths.claims, "{not json")
+  await assert.rejects(() => leaseStatus({ paths, now: NOW, env: { ...process.env, COPILOT_HOME: path.join(home, "copilot") } }), (error) => typeof error.leasesFileInvalid === "string")
 })

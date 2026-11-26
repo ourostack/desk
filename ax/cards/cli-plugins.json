@@ -234,6 +234,19 @@
       ]
     },
     {
+      "id": "cli:drains progress",
+      "group": "drains-keep-moving",
+      "when": "Counting what a card has shipped: merged pull requests GitHub confirms and named acceptance passes from outcomes rather than messages, commits or busy",
+      "effect": "read",
+      "errors": [
+        {
+          "code": "progress-card-missing",
+          "means": "No card was given, so nothing was counted",
+          "fix": "Pass --card with a card id from the turn-end ledger"
+        }
+      ]
+    },
+    {
       "id": "cli:drains relays poll",
       "group": "drains-relays",
       "when": "A runner cycle letting each due relay dispatch workflows, comment on and merge green labelled pull requests",
@@ -243,6 +256,37 @@
         { "code": "desk-relays-config-invalid", "means": "relays.json is not valid JSON or a relay entry is malformed, so no relay ran", "fix": "Correct the relay the message names against docs/relays.md and poll again" },
         { "code": "desk-relays-config-unreadable", "means": "relays.json exists but its permissions block reading it", "fix": "Restore read access to relays.json and poll again" },
         { "code": "desk-drains-busy", "means": "Another relays poll holds the relays lock file", "fix": "Wait for that poll to end, then run relays poll again" }
+      ]
+    },
+    {
+      "id": "cli:drains leases status",
+      "group": "drains-keep-moving",
+      "when": "Listing each card claim as held, lapsed after two hours with nothing pushed, or ownerless because its session ended",
+      "effect": "read",
+      "errors": [
+        {
+          "code": "leases-file-invalid",
+          "means": "claims.json cannot be read, so no claim was judged",
+          "fix": "Repair or remove claims.json in the drains folder and rerun leases status"
+        }
+      ]
+    },
+    {
+      "id": "cli:drains leases take",
+      "group": "drains-keep-moving",
+      "when": "A session claiming a card to work on, starting its two-hour lease",
+      "effect": "write",
+      "errors": [
+        {
+          "code": "lease-owner-missing",
+          "means": "The card or the owning session was not given, so nothing was claimed",
+          "fix": "Pass --card and --owner with the session id"
+        },
+        {
+          "code": "leases-file-invalid",
+          "means": "claims.json cannot be read, so the claim was not changed",
+          "fix": "Repair or remove claims.json in the drains folder and rerun leases take"
+        }
       ]
     },
     {

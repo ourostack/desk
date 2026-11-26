@@ -46,8 +46,9 @@ function readClaims(paths) {
   try {
     const claims = JSON.parse(readFileSync(paths.claims, "utf8")).claims
     return Array.isArray(claims) ? claims : []
-  } catch {
-    return [] // no claims file means no claims
+  } catch (error) {
+    if (error?.code === "ENOENT") return [] // no claims file means no claims
+    throw { leasesFileInvalid: error.message } // the CLI turns this into its coded error
   }
 }
 
