@@ -96,12 +96,13 @@ test("a task_focus survives an idle restart: the resume writes nothing and task_
   assert.equal(focused.isError, false, JSON.stringify(focused.payload))
   const first = h.servers()[0]
   const toolsBefore = JSON.stringify((await h.session.request("tools/list")).result)
+  // Captured before the lifecycle transition, so the whole resume and restore is bracketed.
+  const before = snapshotDesk(h.fixture)
   const second = await idleRestart(h)
   assert.ok(String(second.argv1).endsWith("index.js"))
-  const before = snapshotDesk(h.fixture)
-  // tools/list is answered only after the restore ended, and it writes nothing.
-  assert.deepEqual(snapshotDesk(h.fixture), before)
+  // tools/list is answered only after the restore ended; nothing may have been written by then.
   assert.equal(JSON.stringify((await h.session.request("tools/list")).result), toolsBefore)
+  assert.deepEqual(snapshotDesk(h.fixture), before)
   const result = await update(h.session)
   assert.equal(result.isError, false, JSON.stringify(result.payload))
   assert.equal(h.note(result), "silent", JSON.stringify(result.payload))

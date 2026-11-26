@@ -88,7 +88,7 @@ export const LAUNCHER_READ_ONLY_CODES = Object.freeze([
  * the no-focus hint is repeated on task tool results until the session sets a focus or clears it on purpose. Never
  * written to disk: the transcript is the record.
  */
-export function createFocusHolder() {
+export function createFocusHolder({ onDeclare } = {}) {
   let current = null
   let declared = false
   let note = null
@@ -98,6 +98,7 @@ export function createFocusHolder() {
       current = value
       declared = true
       note = null
+      onDeclare?.()
     },
     declared: () => declared,
     /** After an idle restart that could not carry the focus over: `{ kind: "unknown" | "scope_changed" | "card_missing", task? }`, or null. Any declaration clears it. */
@@ -110,6 +111,7 @@ export function createFocusHolder() {
       current = value
       declared = true
       note = null
+      onDeclare?.()
     },
   }
 }
@@ -199,7 +201,9 @@ export function createDeskSession(deps) {
     answerFactoryConsent = async (request) => (await import("../factory/consent-answer.js")).answerFactoryConsent(request),
   } = deps
   const context = { pendingRepairs: [], exceptions: [], launcher, phase: null, search: null }
-  const focus = createFocusHolder()
+  // The scope a focus was declared in, so a later change of person or authority cannot relabel it as the new owner's.
+  let declaredScope = null
+  const focus = createFocusHolder({ onDeclare: () => { declaredScope = focusScope() } })
   const staleCard = createStaleCardLead({ env, focus, context })
   let headWatch = null
   let headTimer = null
@@ -839,7 +843,9 @@ export function createDeskSession(deps) {
   function focusSnapshot() {
     if (focus.declared()) {
       const scope = focusScope()
-      return scope === null ? { declared: false, unknownPrior: true } : { declared: true, task: focus.get(), scope }
+      // A declared task keeps the scope it was declared in; a clear holds nothing to misattribute and follows the current one.
+      const owner = focus.get() === null ? scope : declaredScope
+      return scope === null || owner === null || owner !== scope ? { declared: false, unknownPrior: true } : { declared: true, task: focus.get(), scope }
     }
     return focus.note() === null ? { declared: false } : { declared: false, unknownPrior: true }
   }
@@ -849,6 +855,7 @@ export function createDeskSession(deps) {
 
   // Puts back the focus a previous server held, or notes honestly that it cannot. It only reads (the card's existence); it never declares, creates, writes or reports status. Every path is bounded by `budgetMs` (at most FOCUS_WAIT_MS), and an abort or that deadline releases the operation queue and keeps late work from committing.
   async function restoreFocus(request, { budgetMs = FOCUS_WAIT_MS, signal } = {}) {
+    if (signal?.aborted || disposed) return { outcome: "unknown" }
     const result = (outcome, note) => {
       if (note !== undefined) focus.setNote(note)
       return { outcome }

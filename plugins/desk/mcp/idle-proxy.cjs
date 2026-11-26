@@ -126,12 +126,13 @@ function createIdleProxy(options) {
     options.exit(code);
   }
 
-  function clearTimer() {
-    [idleTimer, killTimer, windowTimer, snapTimer].forEach(function (timer) {
+  // The kill deadline of a server being ended is absolute: only finishing the proxy cancels it.
+  function clearTimer(keepKill) {
+    [idleTimer, keepKill ? null : killTimer, windowTimer, snapTimer].forEach(function (timer) {
       if (timer !== null) options.clearTimer(timer);
     });
     idleTimer = null;
-    killTimer = null;
+    if (!keepKill) killTimer = null;
     windowTimer = null;
     snapTimer = null;
   }
@@ -470,7 +471,8 @@ function createIdleProxy(options) {
   }
 
   function fromChild(g, line) {
-    if (line === "" || g.retired) return;
+    // Only the server now running may speak to the host: a generation that ended, crashed or was retired has had its calls answered or failed already.
+    if (line === "" || g.retired || g !== gen) return;
     touch();
     var message = parse(line);
     if (message !== null && hasId(message)) {
@@ -531,7 +533,7 @@ function createIdleProxy(options) {
 
   function onClientEnd() {
     clientEnded = true;
-    clearTimer();
+    clearTimer(stopping);
     if (child === null) return finish(0);
     if (!stopping) return stop();
     endStdin(gen);

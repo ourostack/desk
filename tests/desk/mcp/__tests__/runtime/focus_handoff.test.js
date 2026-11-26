@@ -127,3 +127,15 @@ test("an abort for a restore that is running stops it", async () => {
   h.post({ op: "abort", id: 5 })
   assert.equal(signal.aborted, true)
 })
+
+test("an abort or teardown that arrives before the deferred restore starts reaches the session as an already-aborted signal and is never answered", async () => {
+  for (const cancel of [(h) => h.post({ op: "abort", id: 4 }), (h) => h.stop()]) {
+    const seen = []
+    const h = harness({ restoreFocus: async (_request, { signal }) => { seen.push(signal.aborted); return { outcome: "restored" } } })
+    h.post({ op: "restore", id: 4, budgetMs: 2000, snapshot: { declared: false } })
+    cancel(h)
+    await flush()
+    assert.deepEqual(seen, [true], "the session sees the cancellation when it starts")
+    assert.equal(h.channel.sent.some((message) => message.op === "restore-result"), false)
+  }
+})
