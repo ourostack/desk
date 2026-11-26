@@ -57,7 +57,7 @@ function withFakeGh(fn) {
   return Promise.resolve(fn()).finally(() => { process.env.PATH = before })
 }
 
-test("drains progress counts only what GitHub confirms merged, through the real lookup", async () => {
+test("drains progress counts only what GitHub confirms merged, through the real lookup", { skip: process.platform === "win32" }, async () => {
   const state = mkdtempSync(path.join(tmpdir(), "state-"))
   const dir = path.join(state, "ouroboros-skills", "desk", "turn-ends")
   mkdirSync(dir, { recursive: true })
