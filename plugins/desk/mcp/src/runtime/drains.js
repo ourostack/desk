@@ -1103,7 +1103,7 @@ function retrySignals(headers, receivedAt) {
 // A read held under the quota floor stops the poll the way the quota running out does, and the next poll tries again.
 function heldAsRateLimit(error) {
   if (!(error instanceof SpendHeld)) throw error
-  throw Object.assign(new Error(error.message), { code: "drains_rate_limited", status: 429, rateLimited: true })
+  throw Object.assign(new Error(error.message), { code: "drains_rate_limited", status: 429, rateLimited: true, held: true })
 }
 
 /** The drain's GitHub access: its account's token from the `gh` CLI, then the REST API. `login` skips asking GitHub who the token is. */
