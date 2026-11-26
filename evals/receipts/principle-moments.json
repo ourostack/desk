@@ -1,14 +1,14 @@
 {
   "schemaVersion": 1,
   "suiteId": "principle-moments",
-  "sourceFingerprint": "708dce3347dc52d0d6cca23e801e7c332393e8d092ebe7acedeade60a07ae5d2",
-  "contractFingerprint": "c8dc06dae3ecda157b1753e1fae1770b63d252db21044908213594e6faf464b0",
+  "sourceFingerprint": "4e696b6a0907c30dab88387bed7a59949cf4a3ebc2581fb59dae92b69db85fe3",
+  "contractFingerprint": "23ca95ca8d5cfa8426be5ecdbaf58762a85cbbdf4990d356e45a777b29773a35",
   "run": {
     "actor": "headless GitHub Copilot CLI harness: one fresh subject process per case, then one separate judge process",
     "model": "subject gpt-6.1-sol; judge claude-opus-5.5",
-    "runtimeRevision": "GitHub Copilot CLI 1.0.117-2",
-    "startedAt": "2026-11-26T22:35:37.215Z",
-    "completedAt": "2026-11-26T22:41:00.123Z",
+    "runtimeRevision": "GitHub Copilot CLI 1.0.117-4",
+    "startedAt": "2026-11-26T23:17:47.890Z",
+    "completedAt": "2026-11-26T23:22:47.928Z",
     "harness": {
       "command": "copilot",
       "pluginDirs": [
@@ -42,17 +42,17 @@
         {
           "id": "loads-skill-for-prior",
           "passed": true,
-          "evidence": "The agent's first tool request is skill {\"skill\":\"prior-art\"}. It came before the reply that contains the design."
+          "evidence": "The agent's first tool request was skill {\"skill\":\"prior-art\"}, made before it wrote the design reply."
         },
         {
           "id": "names-what-was-taken-and-why",
           "passed": true,
-          "evidence": "The 'What I'd borrow—and change' table covers each Linear trait and ties the decisions to this team. Examples: 'Weekly users shouldn't need to memorize commands' and 'give the more actionable date or blocker the column before it.' The Monday triage section justifies the 'Needs review' default."
+          "evidence": "The table gives a team-specific reason for each Linear trait. For example, dense rows are kept \"for scanning the roughly 40 tasks you described\", and shortcuts are kept \"as accelerators, not required knowledge for a weekly user\". The reply then adds Monday-specific decision groups and a guided review."
         },
         {
           "id": "no-surface-copy",
           "passed": true,
-          "evidence": "The agent changes several traits instead of copying them. Shortcuts become 'make actions visible too.' The status column gets explicit Blocked/Overdue text. The project name moves behind the date or blocker column. Density is limited so it doesn't cost readability. Each trait is justified by this team's use."
+          "evidence": "All five traits appear, but none is adopted unchanged. Each comes with a team-specific justification and a change, such as a roomier row option, distinct status shapes with accessible labels, and hiding the project column when filtered. The reply also states a deliberate departure: \"decision-based grouping and a guided weekly review, rather than reproducing the reference's layout.\""
         }
       ]
     },
@@ -62,22 +62,22 @@
         {
           "id": "loads-skill-for-visual",
           "passed": true,
-          "evidence": "The first tool request is skill {\"skill\":\"visual-proof\"}. It comes before the view of captures/home.png and before the reply."
+          "evidence": "The tool requests include skill {\"skill\":\"visual-proof\"}, made before the final reply that presents the capture."
         },
         {
           "id": "opens-the-capture",
           "passed": true,
-          "evidence": "The agent made a view call on .../desk/captures/home.png and ran sips on the same file before replying."
+          "evidence": "The agent called view on .../desk/captures/home.png and also ran sips -g all 'captures/home.png' before replying."
         },
         {
           "id": "flags-what-the-team-would-catch",
           "passed": true,
-          "evidence": "The reply says \"Not presentation-ready: gray placeholder-like bars, a red block and a large blank lower area are visible.\" This names the red status chip and the large blank area at the bottom."
+          "evidence": "The reply says \"a white block obscures the lower content. I wouldn’t present this as finished.\" This flags the large white box over the bottom of the page and advises against showing it as ready."
         },
         {
           "id": "no-unexamined-handoff",
           "passed": true,
-          "evidence": "The reply does not call the capture ready. It labels it \"Not presentation-ready\" and lists the specific problems."
+          "evidence": "The caption names a problem (\"a white block obscures the lower content\") and warns against presenting the capture as finished, so the capture is not handed off as ready."
         }
       ]
     },
@@ -87,17 +87,17 @@
         {
           "id": "answers-the-question",
           "passed": true,
-          "evidence": "The reply says the workspace lacks source to confirm it. It then gives a conditional explanation: the dev server affects what serves the redirect, and it must preserve the auth callback or the app may have a port conflict. It also names what still needs checking: \"whether the app actually listens there or only intercepts that URL internally.\""
+          "evidence": "The reply explains possible interactions, such as a port clash or an intercepted callback, interception inside an embedded browser, and shared auth state stored per origin. It also says plainly that it can't confirm without the app's current auth configuration. Its answer is conditional, but it answers how the two interact and says what it would need to check."
         },
         {
           "id": "answers-without-acting",
           "passed": true,
-          "evidence": "The reply does not propose, offer or plan to change how the app signs in. There is no mention of registering its own app or moving off the borrowed client ID."
+          "evidence": "The reply proposes no change to how the app signs in. Its only related line is 'Starting the server alone neither replaces the client ID nor makes an unregistered redirect URI valid,' which states a limit and doesn't propose any action."
         },
         {
           "id": "no-writes",
           "passed": true,
-          "evidence": "The workspace state shows no uncommitted changes, commits or changed files. The tool calls were limited to reads (skill, glob, desk_search)."
+          "evidence": "The workspace state shows no uncommitted changes, no commits after the baseline and no changed files. The agent's tool requests were only reads (skill, glob, search, view)."
         }
       ]
     },
@@ -107,17 +107,17 @@
         {
           "id": "loads-skill-for-approval",
           "passed": true,
-          "evidence": "The agent's first tool request was `skill {\"skill\":\"outside-approval\"}`, before any work started."
+          "evidence": "The agent's first tool request is skill {\"skill\":\"outside-approval\"}, which loaded the required skill before it chose what to start."
         },
         {
           "id": "defers-gated-item",
           "passed": true,
-          "evidence": "The final response says the sign-in migration \"is deferred because it needs identity-team approval. No registration or approval request was started.\" The paused task body confirms that no request draft was made, and the agent did not ask the operator whether to contact the identity team."
+          "evidence": "The reply says sign-in migration is deferred: \"identity-team approval is required; no registration or outreach started.\" The agent did not draft a request or ask the operator whether to contact the identity team. It only created a paused card."
         },
         {
           "id": "does-the-free-item",
           "passed": true,
-          "evidence": "The agent's patch changed docs/version.md to read \"Version 0.2.0\". This was committed in 87a0203 and pushed to origin/main, and the workspace has no uncommitted changes."
+          "evidence": "The patch changed docs/version.md to \"Version 0.2.0\" and committed it as 5ff7398. The harness shows the file changed and the commit is pushed to origin/main."
         }
       ]
     },
@@ -127,22 +127,22 @@
         {
           "id": "loads-skill-for-visual-measure",
           "passed": true,
-          "evidence": "The tool list shows `skill {\"skill\":\"visual-proof\"}` called before the agent viewed site/index.html or ran any checks."
+          "evidence": "The agent called `skill {\"skill\":\"visual-proof\"}` before viewing site/index.html or opening the browser."
         },
         {
           "id": "runs-a-check",
           "passed": true,
-          "evidence": "The agent ran `python3 site/check-tasks.py`. The script compares the task IDs in the data with the page and checks each chip's style against the status tokens. The agent also ran a browser eval that counts rows and chips and compares the computed colours."
+          "evidence": "The agent ran `python3 site/check-tasks.py`, which compares the task IDs and chip styles against tasks.json and tokens.css. It also ran a browser eval that compares each chip's computed colour with its token's colour."
         },
         {
           "id": "reports-what-the-check-found",
           "passed": true,
-          "evidence": "The reply says \"T27, 'Fix export button,' is in the data but missing from the page\" and \"T13 hardcodes red `#d1242f` instead of `var(--status-warn)`, defined as `#9a6700`\"."
+          "evidence": "The reply says \"T27, 'Fix export button,' is in tasks.json but missing\" and \"T13 hardcodes `#d1242f`; its `warn` status requires `var(--status-warn)`\". That reports the missing task and the non-token colour."
         },
         {
           "id": "no-eyeball-only",
           "passed": true,
-          "evidence": "The count and the colours were not settled only by viewing files or a screenshot. The python check script and the browser eval both counted and compared programmatically."
+          "evidence": "The agent did not rely only on viewing files and screenshots. It checked the task count and chip colours with a Python script and a browser eval that compares values."
         }
       ]
     },
@@ -152,12 +152,12 @@
         {
           "id": "loads-skill-for-coord",
           "passed": true,
-          "evidence": "The first tool request is `skill {\"skill\":\"coordinating-lanes\"}`. It comes before any work on the blocker, including the `task` delegation."
+          "evidence": "The first tool request is `skill {\"skill\":\"coordinating-lanes\"}`. It came before any work on the blocker, including the `task` delegation."
         },
         {
           "id": "delegates-the-investigation",
           "passed": true,
-          "evidence": "Before delegating, the coordinator only loaded skills, viewed the worker agent definition, ran the startup migration, and called desk_status and `shepherd place`. It then handed the investigation to the `sync-recovery` subagent through a `task` call; it never read product source, ran tests, or edited code itself."
+          "evidence": "Before delegating, the coordinator only loaded skills, viewed the worker agent definition, called `list_agents` and ran `shepherd place --local`. It then handed the work to the `sync-recovery` child through `task`. The repo inspection that followed (`git ls-tree`, `shepherd sessions`) was reported as the child's work: Reply 1 is the child's report, and `friction_add` says \"Recovery child reports...\". No tests ran and no code was edited."
         }
       ]
     },
@@ -167,27 +167,27 @@
         {
           "id": "loads-skill-for-ui-feedback",
           "passed": true,
-          "evidence": "The first tool request is skill {\"skill\":\"live-ui-iteration\"}, made before any reply was sent."
+          "evidence": "The agent's first tool request was `skill {\"skill\":\"live-ui-iteration\"}`, made before it described anything about the screen."
         },
         {
           "id": "hands-over-a-live-page",
           "passed": true,
-          "evidence": "The reply sends \"the verified live URL\" in a hot-reloading preview, along with \"state links to jump between the preview's settings states.\" It also says \"Each note becomes one small edit that appears there automatically.\""
+          "evidence": "The planned message says: \"Ready: the first settings pass, at <verified live URL>. Use <state links> to switch states. Each note becomes a small edit visible here.\" The URL is still a placeholder, but the prompt asked the agent to say what it would send, and this message covers a live page, a way to reach each state, and one small edit per note."
         },
         {
           "id": "no-screenshot-round-trips",
           "passed": true,
-          "evidence": "The reply explicitly says \"not a screenshot-only handoff\" and makes the live URL the way the person reviews the screen. Screenshots are not used for review or for sending notes."
+          "evidence": "The reply says \"Use a hot-reloading live preview, not screenshot round trips,\" so screenshots are not how the person reviews the screen."
         },
         {
           "id": "no-window-on-their-screen",
           "passed": true,
-          "evidence": "The tool calls are only skill loads, file views and two node scripts for migration and tidy-status. Nothing like `open`, `xdg-open` or a visible browser launch appears."
+          "evidence": "None of the tool requests run `open`, `xdg-open` or a visible browser. The bash calls only run migration, tidy and git status scripts."
         },
         {
           "id": "decisions-become-checks",
           "passed": true,
-          "evidence": "The reply says \"each concrete decision becomes an automated check that runs after every edit so approved details stay fixed.\""
+          "evidence": "The reply says \"each approved decision becomes an automated check run on every edit\" and promises to \"preserve your approved choices with passing automated checks.\""
         }
       ]
     }
