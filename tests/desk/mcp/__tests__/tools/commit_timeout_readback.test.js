@@ -387,7 +387,7 @@ test("desk_save: written bytes whose commit landed but timed out are committed a
 test("desk_save: written bytes whose commit timed out before landing are asked once more, and when that times out too are not committed and leave another staged entry alone", async () => {
   const { root, base, result, commits, pushes } = await savedNotes(timedOutBeforeCommit)
   assert.equal(result.commit?.status, "failed")
-  assert.equal(result.commit.reason, "timeout")
+  assert.match(result.commit.reason, /^timeout: git commit was cut off by the clock \(ETIMEDOUT: .*; signal SIGTERM; exit status none\) after its 10000 ms attempt and its 60000 ms retry, so whether it landed rests on the read-back$/u)
   assertRoute(result.commit.route_around)
   assert.deepEqual(pushes, [], "nothing landed, so nothing is pushed")
   assert.equal(commits(), 2, "the commit is run once more with room, never a third time")
@@ -402,8 +402,9 @@ test("desk_save: a commit that timed out before landing is commit_failed, never 
   assert.deepEqual(Object.keys(result)[0], "next", "the answer opens with the next step")
   const { next, ...answer } = result
   assert.match(next, /^The change is on disk but not committed or on the remote yet: run commit\.route_around\.steps now, in order, then read back the remote\.$/u)
-  const { route_around: route, ...commit } = answer.commit
-  assert.deepEqual({ ...answer, commit }, { status: "commit_failed", commit: { status: "failed", reason: "timeout" } })
+  const { route_around: route, reason, ...commit } = answer.commit
+  assert.match(reason, /^timeout: git commit was cut off by the clock \(ETIMEDOUT: .*; signal SIGTERM; exit status none\) after its 10000 ms attempt and its 60000 ms retry,/u)
+  assert.deepEqual({ ...answer, commit }, { status: "commit_failed", commit: { status: "failed" } })
   assertRoute(route)
 })
 

@@ -397,6 +397,7 @@ test("the route of an unknown commit that landed never commits the dirt that cam
   const result = await desk_save({ deskRoot: root, input: { files: [{ path: "notes.md", content: "Exact notes.\n" }], message: "save notes" }, spawnGit: landedUnreadable, schedulePush: () => assert.fail("no push for an unknown commit") })
   assert.equal(result.commit.status, "unknown")
   assert.equal(result.status, "commit_unknown", "a commit that may have landed is never nothing_to_commit")
+  assert.match(result.commit.reason, /^timeout: git commit was cut off by the clock \(ETIMEDOUT: .*; signal SIGTERM; exit status none\) after 10000 ms, so whether it landed rests on the read-back$/u, "the answer names the cut-off call, its error and signal, and its budget")
   await fs.writeFile(path.join(root, "notes.md"), "Exact notes.\nSomeone else's line.\n", "utf8")
   git(root, ["add", "notes.md"])
   await fs.writeFile(path.join(root, "notes.md"), "Exact notes.\nSomeone else's line.\nAnd more.\n", "utf8")
