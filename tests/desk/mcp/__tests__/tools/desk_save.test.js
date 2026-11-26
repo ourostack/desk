@@ -56,7 +56,7 @@ test("desk_save stages and commits exactly the given path", async () => {
     schedulePush: () => {},
   })
 
-  assert.equal(result.status, "committed")
+  assert.equal(result.status, "committed", JSON.stringify(result))
   assert.equal(result.commit, undefined, "no commit field on a normal, silent success")
   assert.equal(gitStatus(root), "")
   assert.equal(lastCommitMessage(root), "save planning notes")
@@ -76,7 +76,7 @@ test("desk_save commits several paths together as one commit", async () => {
     schedulePush: () => {},
   })
 
-  assert.equal(result.status, "committed")
+  assert.equal(result.status, "committed", JSON.stringify(result))
   assert.equal(commitCount(root), 1)
   assert.deepEqual(
     lastCommitFiles(root),
@@ -153,7 +153,7 @@ test("desk_save commits a path inside the resolved --person write prefix", async
     schedulePush: () => {},
   })
 
-  assert.equal(result.status, "committed")
+  assert.equal(result.status, "committed", JSON.stringify(result))
   assert.deepEqual(lastCommitFiles(root), ["desks/alex/notes.md"])
 })
 
@@ -173,7 +173,7 @@ test("desk_save commits only its own paths, leaving another process's staged, un
     schedulePush: () => {},
   })
 
-  assert.equal(result.status, "committed")
+  assert.equal(result.status, "committed", JSON.stringify(result))
   assert.deepEqual(lastCommitFiles(root), ["notes.md"])
   const status = gitStatus(root)
   assert.match(status, /^A  unrelated\.txt$/m, "the unrelated path is still staged, not swept into this commit")
@@ -362,7 +362,7 @@ test("desk_save schedules a push after a successful commit", async () => {
     schedulePush,
   })
 
-  assert.equal(result.status, "committed")
+  assert.equal(result.status, "committed", JSON.stringify(result))
   assert.equal(calls.length, 1, "schedulePush is called exactly once")
   assert.deepEqual(calls[0], { root })
 })
@@ -378,7 +378,7 @@ test("desk_save accepts `paths` sent as a JSON-encoded array string", async () =
     schedulePush: () => {},
   })
 
-  assert.equal(result.status, "committed")
+  assert.equal(result.status, "committed", JSON.stringify(result))
   assert.deepEqual(lastCommitFiles(root), ["notes.md"])
 })
 
@@ -408,7 +408,7 @@ test("desk_save commits the listed paths that changed and reports an ignored gen
   await fs.writeFile(path.join(root, "notes.md"), "Notes.\n", "utf8")
   await fs.writeFile(path.join(root, "report.log"), "generated\n", "utf8")
   const result = await desk_save({ deskRoot: root, input: { paths: ["notes.md", "report.log"], message: "save notes" }, schedulePush: () => {} })
-  assert.equal(result.status, "committed")
+  assert.equal(result.status, "committed", JSON.stringify(result))
   assert.deepEqual(lastCommitFiles(root), ["notes.md"])
   assert.equal(result.unchanged_paths, undefined)
   assert.equal(result.partial, true)
@@ -427,7 +427,7 @@ test("desk_save tells a genuinely unchanged tracked file from an ignored or miss
   await fs.writeFile(path.join(root, "notes.md"), "Notes.\n", "utf8")
   await fs.writeFile(path.join(root, "a.log"), "generated\n", "utf8")
   const mixed = await desk_save({ deskRoot: root, input: { paths: ["notes.md", "kept.md", "a.log", "typo.md"], message: "mixed" }, schedulePush: () => {} })
-  assert.equal(mixed.status, "committed")
+  assert.equal(mixed.status, "committed", JSON.stringify(mixed))
   assert.deepEqual(lastCommitFiles(root), ["notes.md"])
   assert.deepEqual(mixed.unchanged_paths, ["kept.md"])
   assert.deepEqual(mixed.unsaved_paths, [{ path: "a.log", reason: "ignored" }, { path: "typo.md", reason: "not_in_git" }])
