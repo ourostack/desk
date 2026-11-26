@@ -396,6 +396,17 @@ test("a half-written last line of an observation log is not an observation: a re
   await assert.rejects(ledgeredFetch(async () => answer(200), { env, login: () => "ari", now: clockNow })("https://api.github.com/repos/o/r/issues/1", auth()), SpendHeld)
 })
 
+test("an observation appended after a killed writer's unfinished line is its own line, so the lowest remaining still holds reads", async (t) => {
+  const { dir, env } = ledger(t)
+  writeFileSync(path.join(dir, "personal.rate"), `4000 ${RESET} 5000 ${NOW}\n`)
+  writeFileSync(path.join(dir, `personal.rate.obs.${RESET}`), `3900 ${RESET} 5000\n35`)
+  const fetchFn = ledgeredFetch(async () => answer(200, {}, quota(100)), { env, login: () => "ari", now: clockNow })
+  await fetchFn("https://api.github.com/repos/o/r/issues/1", auth())
+  // The cache file the shim also writes may sit above the lowest (see the racing test); the decision must come from the observations.
+  writeFileSync(path.join(dir, "personal.rate"), `4000 ${RESET} 5000 ${NOW}\n`)
+  await assert.rejects(fetchFn("https://api.github.com/repos/o/r/issues/2", auth()), SpendHeld)
+})
+
 test("same-window numbers only ever tighten: a rate_limit answer cannot raise what a header already showed, and a later window replaces it", async (t) => {
   const { dir, env, rate } = ledger(t)
   writeFileSync(path.join(dir, "personal.rate"), `4000 ${RESET} 5000 ${NOW - 120}\n`)
