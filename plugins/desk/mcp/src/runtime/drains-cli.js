@@ -157,7 +157,7 @@ function drainsCli({ script, env, now, connect, listProcesses, signedIn, fetchHo
         return withDesk(await stalledStatus({ paths, now: now(), env, homeDir: os.homedir() }), { script, env })
       }),
       command("progress", { ...READ, summary: "Count what shipped for a card: merged pull requests GitHub confirms, never messages, commits or busy.", flags: { card: { type: "string", required: true, placeholder: "<card>", description: "The card as the turn-end ledger names it." } } }, (input) => {
-        if (!String(input.card ?? "").trim()) throw usageError("progress-card-missing", "no card was given, so nothing was counted", "run drains progress --card <card> with a card id from the turn-end ledger")
+        if (!String(input.card).trim()) throw usageError("progress-card-missing", "no card was given, so nothing was counted", "run drains progress --card <card> with a card id from the turn-end ledger")
         const result = progressOf({ card: input.card, endings: readEndings(endingsDir(env)) })
         return withDesk({ ...result, status: [`${input.card}: ${result.count} shipped, ${result.unverified.length} claimed but not confirmed`] }, { script, env })
       }),

@@ -30,8 +30,7 @@ export function readEndings(dir) {
 
 /** Looks a pull request up on GitHub with the gh CLI. Returns { merged, repo, mergedAt } or null when GitHub cannot say. */
 function ghPull(url) {
-  const m = PR_URL.exec(url)
-  if (!m) return null
+  const m = PR_URL.exec(url) // progressOf only passes URLs that already matched
   const run = spawnSync("gh", ["pr", "view", url, "--json", "state,mergedAt", "-q", "[.state,.mergedAt]|@tsv"], { encoding: "utf8", timeout: 20_000, windowsHide: true })
   if (run.status !== 0) return null
   const [state, mergedAt] = run.stdout.trim().split("\t")
