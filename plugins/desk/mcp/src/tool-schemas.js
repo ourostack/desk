@@ -78,12 +78,12 @@ const RETURN_REASON = {
   description: "Required when the task goes backwards (out of `done`, or below its furthest stage), refused otherwise: agent_error is your mistake, changed_ask the operator's new ask, new_information something nobody knew, external an outside break.",
 }
 
-// Mirrors STEP_STATES in src/desk/steps.js, less the states Desk derives (DERIVED_STATES) (this file stays free of imports).
+// Mirrors STEP_STATES in src/desk/steps.js (this file stays free of imports).
 const STEP = {
   type: "object",
   properties: {
     id: text("The step's name: short kebab-case, unique on the card, never renamed. An unknown name adds a row."),
-    state: { type: "string", enum: ["pending", "in progress", "blocked", "dropped"], description: "A new step starts pending. `blocked` and `dropped` need `reason`. Desk sets `in review`, `merged` and `delivered` itself from the PR URL in `evidence`." },
+    state: { type: "string", enum: ["pending", "in progress", "blocked", "in review", "merged", "delivered", "dropped"], description: "A new step starts pending. `blocked` and `dropped` need `reason`. Desk sets `in review`, `merged` and `delivered` itself from a GitHub PR URL or `task:<track>/<slug>` in `evidence`; a step that shipped without one (a commit pushed to a default branch, a run receipt, an Azure DevOps PR) is yours to set to `merged` or `delivered`, with that proof in `evidence`." },
     depends_on: list("Steps that must be delivered or dropped first; empty for none. Needed for a new step; changes only while pending."),
     repo: text("One of the card's repos, or \"—\" for none. Needed for a new step; changes only while pending."),
     evidence: text("The PR URL that backs the step, `task:<track>/<slug>` for a step delegated to its own card, or a line on where it stands."),

@@ -5,6 +5,7 @@ import { strict as assert } from "node:assert"
 import * as path from "node:path"
 import { promises as fs } from "node:fs"
 import { task_create, task_update } from "../../../../../plugins/desk/mcp/src/tools/task.js"
+import { TOOL_INPUT_SCHEMAS } from "../../../../../plugins/desk/mcp/src/tool-schemas.js"
 import { readSteps } from "../../../../../plugins/desk/mcp/src/desk/steps.js"
 import { mkTempDeskRoot } from "./_helpers.js"
 
@@ -141,6 +142,11 @@ test("where Desk cannot read the state (an Azure DevOps PR, a commit) the agent 
   assert.equal(delivered.step.state, "delivered")
   assert.equal((await rows(file))[0].state, "delivered")
   assert.equal((await update(root, { id: "a", state: "delivered" })).step_declared, undefined)
+})
+
+test("the task_update schema offers every step state, so a step that shipped without a PR can be declared delivered", () => {
+  const states = TOOL_INPUT_SCHEMAS.task_update.properties.step.properties.state.enum
+  assert.deepEqual(states, ["pending", "in progress", "blocked", "in review", "merged", "delivered", "dropped"])
 })
 
 test("dropping a step blocks its live dependents unless the call names them as still valid", async () => {
