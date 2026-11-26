@@ -1,0 +1,1 @@
+The relays drain reads a pull request that waits only on a merge conflict or a draft at most every 5 minutes, not every 30 to 60 seconds. Nothing about it changes until the author pushes, so the reads were wasted GitHub requests on the shared work account.
