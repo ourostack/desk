@@ -1,6 +1,6 @@
 import test from "node:test"
 import assert from "node:assert/strict"
-import { spawn } from "node:child_process"
+import { spawn, spawnSync } from "node:child_process"
 import { fileURLToPath } from "node:url"
 import { appendFileSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync, existsSync, unlinkSync, chmodSync, symlinkSync } from "node:fs"
 import { tmpdir } from "node:os"
@@ -287,6 +287,32 @@ test("the ledger folder is found from the state folder or home, and is left alon
   assert.equal(ledgerDir({ MS_DESK_QUOTA_DIR: dir }, true), dir, "an explicit folder is used even in a test run")
   assert.equal(ledgerDir({ HOME: home }, true), null, "a test run never touches the real state folder")
   for (const env of [{}, { MS_DESK_QUOTA_DIR: path.join(root, "missing") }, { MS_DESK_QUOTA_DIR: path.join(root, "afile") }, { MS_DESK_QUOTA: "off", MS_DESK_QUOTA_DIR: dir }]) assert.equal(ledgerDir(env, false), null)
+})
+
+test("a Windows-shaped env with only USERPROFILE finds and meters the ledger, and HOME, the state folder and an explicit folder still win", async (t) => {
+  const { root, dir } = ledger(t)
+  const profile = path.join(root, "profile")
+  const profileLedger = path.join(profile, ".local", "state", "ms-desk", "gh-quota")
+  mkdirSync(profileLedger, { recursive: true })
+  const home = path.join(root, "home")
+  const homeLedger = path.join(home, ".local", "state", "ms-desk", "gh-quota")
+  mkdirSync(homeLedger, { recursive: true })
+  assert.equal(ledgerDir({ USERPROFILE: profile }, false), profileLedger)
+  assert.equal(ledgerDir({ HOME: home, USERPROFILE: profile }, false), homeLedger, "HOME wins over USERPROFILE")
+  assert.equal(ledgerDir({ XDG_STATE_HOME: path.join(root, "nostate"), HOME: "", USERPROFILE: profile }, false), null, "a named state folder is never swapped for the profile")
+  assert.equal(ledgerDir({ MS_DESK_QUOTA_DIR: dir, USERPROFILE: profile }, false), dir, "an explicit folder wins")
+  assert.equal(ledgerDir({ USERPROFILE: profile }, true), null, "a test run never touches the profile's state folder")
+  assert.equal(ledgerDir({ USERPROFILE: profile, MS_DESK_QUOTA: "off" }, false), null)
+  assert.equal(ledgerDir({ USERPROFILE: path.join(root, "empty") }, false), null, "no fallback to the real home")
+  // The in-process test guard refuses an unnamed ledger, so the send runs in a plain child that gets only USERPROFILE.
+  const script = `import { ledgeredFetch } from ${JSON.stringify(new URL("../../../../../plugins/desk/mcp/src/runtime/spend-ledger.js", import.meta.url).href)}
+const f = ledgeredFetch(async () => ({ ok: true, status: 200, headers: { get: (n) => ({ "x-ratelimit-remaining": "4000", "x-ratelimit-limit": "5000", "x-ratelimit-reset": "${RESET}", "x-ratelimit-resource": "core" })[n] ?? null }, text: async () => "{}" }), { env: { USERPROFILE: ${JSON.stringify(profile)}, COPILOT_AGENT_SESSION_ID: "${SESSION}" }, login: () => "ari", now: () => ${NOW * 1000} })
+await f("https://api.github.com/repos/o/r", { headers: { Authorization: "Bearer synthetic" } })`
+  const run = spawnSync(process.execPath, ["--input-type=module", "-e", script], { env: {}, encoding: "utf8" })
+  assert.equal(run.status, 0, run.stderr)
+  const rows = readFileSync(path.join(profileLedger, "calls.log"), "utf8").trim().split("\n").map((line) => line.split("\t"))
+  assert.deepEqual(rows.map((row) => [row[1], row[2], row[3], row[4]]), [["personal", "api repos/o/r", SESSION, "o/r"]], "the send was metered once in the profile's ledger")
+  assert.equal(existsSync(path.join(homeLedger, "calls.log")), false)
 })
 
 test("odd ledger files are read for what they hold: a hold with no reason, a short rate file, a garbled one, poller rows and a log longer than the tail", async (t) => {

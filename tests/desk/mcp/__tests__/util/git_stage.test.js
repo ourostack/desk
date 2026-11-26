@@ -246,7 +246,9 @@ test("stagePaths reports { ok: false, stderr: \"timeout\" } when the git call ti
 test("commitPaths reports { ok: false, stderr: \"timeout\" } when the git call times out, without throwing, and cannot tell whether it landed when every read-back times out too", async () => {
   const root = await mkTempRepo()
   const result = commitPaths(root, ["a.txt"], "message", etimedoutResult)
-  assert.deepEqual(result, { ok: false, stderr: "timeout", readback: "unknown" })
+  const { stderr, ...rest } = result
+  assert.deepEqual(rest, { ok: false, readback: "unknown" })
+  assert.match(stderr, /^timeout: git commit was cut off by the clock \(ETIMEDOUT: spawnSync git ETIMEDOUT; signal SIGTERM; exit status none\) after 10000 ms,/u)
 })
 
 // Desk stages and commits only where it is meant to. A detached HEAD is always refused. With a configured state branch the checkout must be on it; with none configured it must be on the branch origin/HEAD names when the remote has one, and any named branch will do otherwise. A caller that was not told (undefined) gets only the detached-HEAD rule.
@@ -446,6 +448,7 @@ for (const indexed of [false, true]) {
   const said = (result, words, pattern) => {
     const { stderr, ...rest } = result
     if (indexed) assert.match(stderr, pattern)
+    else if (words === "timeout") assert.match(stderr, /^timeout: git commit was cut off by the clock \(ETIMEDOUT: spawnSync git ETIMEDOUT; signal SIGTERM; exit status none\) after /u)
     else assert.equal(stderr, words)
     return rest
   }

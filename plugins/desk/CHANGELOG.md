@@ -1,5 +1,31 @@
 # desk plugin — changelog
 
+## 3.2.608 — 2026-11-26
+
+Desk's direct GitHub calls now find the shim's spend ledger on a host whose environment has `USERPROFILE` but no `HOME`, as Windows does, so those calls are counted too. An explicit ledger folder, `XDG_STATE_HOME` and `HOME` still win, and an empty environment still finds nothing.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.607 — 2026-11-26
+
+Desk's MCP server now vendors Ouro UI v1.3.581, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.606 — 2026-11-26
+
+When a `desk_save` commit is cut off by the clock, the answer's reason now names the Git call, its error and signal, and the time it was given (it used to say only `timeout`). The commit's read-back, recovery route and deadlines are unchanged.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.605 — 2026-11-26
+
+### Relays: a cached GitHub answer is never reused across accounts, and a stray 304 no longer crashes a poll
+
+With Desk's own GitHub client, a relay's stored `ETag` and answer now belong to the credential that read them (the `readAccount`'s, not the writing account's), and every page of a paged read uses that same client. After the reading account changes, or the same login signs in with a new token, the old tag is not sent and the old answer is not reused. A `304` with nothing usable stored used to fail with a `TypeError`; the read is now repeated once without a tag, and a second `304` fails that relay's poll with `relays_unexpected_304` without moving its work forward. Stored `false`, `0`, empty and `null` answers are still reused. See [relays](docs/relays.md).
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.604 — 2026-11-26
 
 Desk's MCP server now vendors Ouro UI v1.3.580, moved by Ouro Current.
