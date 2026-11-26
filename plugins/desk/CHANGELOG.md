@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.621 — 2026-11-26
+
+Desk's MCP server now vendors Ouro UI v1.3.589, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.620 — 2026-11-26
 
 A lane never asks a person for a keyboard or machine action: a command to run, a key at a prompt, a code from their mail, a sign-in on a particular machine, terms to accept or a setting to change by hand. Signing in is the agent's job, with the password from its vault filled by a tool; the person gets only the number or prompt to approve on their own phone, or a password for their own account that the agent doesn't hold. A "you need to sign in" ask is checked first (`gh auth status` for gh) and dropped when it is false. The `interaction-style` and `using-desk` skills no longer tell agents to hand a password, code or identity-proof screen to the person.
