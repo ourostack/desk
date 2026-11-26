@@ -108,8 +108,14 @@ setTimeout(() => process.exit(2), 30000);
       await new Promise((resolve) => setTimeout(resolve, 20))
     }
     blockedPid = Number(readFileSync(pidPath, "utf8"))
-    assert.ok(existsSync(timingsPath), `no snapshot while the real file is blocked: ${stderr}`)
-    const before = JSON.parse(readFileSync(timingsPath, "utf8"))
+    // The runner starts the file before the reporter sees its dequeue event, so the snapshot naming it may land a moment after the pid file.
+    let before
+    while (!before?.running_files?.length) {
+      assert.equal(child.exitCode, null, stderr)
+      assert.ok(Date.now() < deadline, `no snapshot naming the blocked file: ${stderr}`)
+      if (existsSync(timingsPath)) before = JSON.parse(readFileSync(timingsPath, "utf8"))
+      if (!before?.running_files?.length) await new Promise((resolve) => setTimeout(resolve, 20))
+    }
     assert.equal(Object.keys(before.file_seconds).length, 1)
     assert.equal(path.basename(before.running_files[0].file), "second.test.mjs")
     child.kill("SIGTERM")
