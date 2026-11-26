@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.611 — 2026-11-26
+
+Desk's MCP server now vendors Ouro UI v1.3.582, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.610 — 2026-11-26
 
 A relay poll no longer reports a read that Desk held locally under the GitHub quota floor as a spent call. The hold sends no request, so `relays poll` and `relays status` showed `spent 1` for zero requests on the wire; it now shows 0. A real HTTP 429, a network failure, a write and every answer other than a free `304` still count as before. Partial change for [#1803](https://github.com/ourostack/desk/issues/1803).
