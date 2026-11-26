@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.591 — 2026-11-26
+
+A commit is now refused, with a reason, when Desk's `commit-msg` hook cannot tell whether the foreign hook it chains is its own because `grep` failed, instead of treating the failure as no match and passing silently.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.590 — 2026-11-25
 
 An issue drain that wakes for a person's body edit now keeps the edit history's count and that edit's time as its baseline, as it already did after a bot's edit. The next body change reads the history from its end instead of paging it from the start again, which on a 30,000-edit synthetic history took 301 reads per poll before and 2 after. The baseline is left only when every edit is accounted for, so a person's edit that was not read is never hidden under the count; an early stop leaves none. Which host produced the originally reported traffic is still not established.

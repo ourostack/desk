@@ -1,1 +1,0 @@
-A commit is now refused, with a reason, when Desk's `commit-msg` hook cannot tell whether the foreign hook it chains is its own because `grep` failed, instead of treating the failure as no match and passing silently.
