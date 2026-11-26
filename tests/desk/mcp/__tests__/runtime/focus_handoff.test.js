@@ -118,3 +118,12 @@ test("an abort for a restore nobody is running is ignored", async () => {
   await flush()
   assert.equal(h.channel.sent.length, 1)
 })
+
+test("an abort for a restore that is running stops it", async () => {
+  let signal
+  const h = harness({ restoreFocus: (request, options) => { signal = options.signal; return new Promise(() => {}) } })
+  h.post({ op: "restore", id: 5, budgetMs: 2000, snapshot: { declared: false } })
+  await flush()
+  h.post({ op: "abort", id: 5 })
+  assert.equal(signal.aborted, true)
+})

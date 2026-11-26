@@ -1311,3 +1311,16 @@ test("a server that only carried a focus and cannot give it back again leaves it
   await h.flush()
   assert.equal(ipcOps(third, "restore")[0].unknown, "snapshot_unavailable")
 })
+
+test("a server that served nothing and cannot be asked for its focus leaves nothing to carry", async () => {
+  const h = harness({ ipc: true })
+  await handshaken(h)
+  const idle = h.last()
+  idle.hello()
+  idle.sendFails = true
+  await h.advance(IDLE)
+  const next = await resumedAfter(h, idle)
+  next.hello()
+  await h.flush()
+  assert.equal(ipcOps(next, "restore").length, 0)
+})
