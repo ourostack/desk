@@ -1897,3 +1897,71 @@ test("conditional cache: a client with no epoch of its own reuses only entries t
   await w.poll(NOW + 2 * MIN)
   assert.equal(w.world.reads.at(-1).etag, undefined, "an entry of an identified credential is not offered to an unidentified client")
 })
+
+/** The real client for a merge relay: the fake GitHub's handlers answer behind a fake fetch, which records who asked and with which validator. */
+async function mergeCacheWorld(options = {}) {
+  const w = await setup([{ ...MERGE, requireMainWorkflowGreen: undefined, account: "writer", readAccount: "reader", ...options }])
+  const tokens = { writer: "fake-token-w-1", reader: "fake-token-r-1" }
+  const http = []
+  const fake = await w.world.connect()
+  const spawn = (_command, args) => ({ status: 0, stdout: `${tokens[args[args.indexOf("--user") + 1]]}\n` })
+  const fetchImpl = async (url, init) => {
+    const { pathname, search } = new URL(url)
+    const route = pathname + search
+    const who = Object.keys(tokens).find((name) => init.headers.Authorization === `Bearer ${tokens[name]}`)
+    const method = init.method ?? "GET"
+    http.push({ who, method, route, ifNoneMatch: init.headers["If-None-Match"] })
+    const headers = (etag) => ({ get: (name) => (name.toLowerCase() === "etag" ? etag ?? null : null), has: () => false })
+    if (method !== "GET") {
+      const answer = await fake.send(method, route, init.body ? JSON.parse(init.body) : undefined)
+      return { status: answer.status, ok: answer.ok, headers: headers(), json: async () => answer.body, text: async () => "" }
+    }
+    try {
+      const answer = await fake.get(route, { etag: init.headers["If-None-Match"] })
+      if (answer.notModified) return { status: 304, ok: false, headers: headers(), json: async () => ({}), text: async () => "" }
+      return { status: 200, ok: true, headers: headers(answer.etag), json: async () => answer.body, text: async () => "" }
+    } catch (error) {
+      return { status: error.status ?? 500, ok: false, headers: headers(), json: async () => ({}), text: async () => "" }
+    }
+  }
+  const connect = (account, opts) => connectGithub(account, { ...opts, spawn, fetchImpl, pauseMs: 0, env: { PATH: "/bin", MS_DESK_QUOTA: "off" } })
+  const poll = (at) => pollRelays({ paths: w.paths, drainFiles: w.drainFiles, connect, now: at })
+  const checkReads = () => http.filter((call) => call.method === "GET" && call.route.includes("/check-runs"))
+  return { ...w, http, poll, checkReads }
+}
+
+test("conditional cache: a check-runs entry with no stored body is dropped and read in full on the real merge path", async () => {
+  for (const [why, damage] of [["no body", (entry) => delete entry.value], ["no runs list", (entry) => (entry.value = {})], ["another credential", (entry) => (entry.epoch = "f".repeat(64))]]) {
+    const c = await mergeCacheWorld()
+    mergeWorld(c.world, { checks: [{ ...check("typecheck", null, "queued"), id: 1, started_at: "2026-11-14T11:00:00Z" }] })
+    await c.poll(NOW)
+    const states = readRelayStates(c.paths.state)
+    Object.entries(states["pages merge"].cache).filter(([route]) => route.includes("/check-runs")).forEach(([, entry]) => damage(entry))
+    writeFileSync(c.paths.state, JSON.stringify(states))
+    const polled = await c.poll(NOW + 12 * MIN)
+    assert.deepEqual(polled.errors, [], why)
+    assert.equal(c.checkReads().length, 2, why)
+    assert.equal(c.checkReads()[1].ifNoneMatch, undefined, why)
+    assert.equal(c.checkReads()[1].who, "reader", why)
+  }
+})
+
+test("conditional cache: every page of check runs and statuses is read by the reader, never by the writing account", async () => {
+  const c = await mergeCacheWorld({ requiredChecks: ["shard-*"] })
+  const many = Array.from({ length: 120 }, (_, index) => check(`shard-${index}`))
+  const statuses = Array.from({ length: 120 }, (_, index) => ({ context: `legacy/${index}`, state: "success" }))
+  mergeWorld(c.world)
+  c.world.on("GET", /\/commits\/a+\/check-runs\?per_page=100$/u, () => ({ total_count: 120, check_runs: many.slice(0, 100) }))
+  c.world.on("GET", /\/commits\/a+\/check-runs\?per_page=100&page=2$/u, () => ({ total_count: 120, check_runs: many.slice(100) }))
+  c.world.on("GET", /\/commits\/a+\/status\?per_page=100$/u, () => ({ state: "success", total_count: 120, statuses: statuses.slice(0, 100) }))
+  c.world.on("GET", /\/commits\/a+\/status\?per_page=100&page=2$/u, () => ({ state: "success", total_count: 120, statuses: statuses.slice(100) }))
+  await c.poll(NOW)
+  const paged = c.http.filter((call) => call.route.includes("page=2"))
+  assert.equal(paged.length, 2)
+  const checkCalls = c.http.filter((call) => /\/(check-runs|status)\?/u.test(call.route))
+  assert.equal(checkCalls.length, 4, "both pages of both lists")
+  assert.deepEqual(checkCalls.map((call) => call.who), ["reader", "reader", "reader", "reader"])
+  const writes = c.http.filter((call) => call.method !== "GET")
+  assert.ok(writes.some((call) => call.method === "PUT" && call.route.endsWith("/merge")))
+  assert.deepEqual(writes.filter((call) => call.who !== "writer"), [])
+})

@@ -198,6 +198,10 @@ function note(state, now, event) {
 
 // ── GitHub reads ──
 
+const readerOf = (ctx) => ctx.readApi ?? ctx.api
+const epochOf = (reader) => (typeof reader.credentialEpoch === "string" && reader.credentialEpoch !== "" ? reader.credentialEpoch : undefined)
+const usableEntry = (stored, epoch) => (isObject(stored) && typeof stored.etag === "string" && stored.etag !== "" && "value" in stored && stored.epoch === epoch ? stored : undefined)
+
 /**
  * One conditional read. `reduce` turns the body into the small value kept in the state next to the ETag, so a 304 (which costs
  * nothing against the quota) still hands back what the last answer meant. A value marked `volatile` is never cached.
@@ -210,10 +214,9 @@ function note(state, now, event) {
  * validators; a second 304 is a failure, never an empty answer.
  */
 async function cached(ctx, state, route, reduce) {
-  const reader = ctx.readApi ?? ctx.api
-  const epoch = typeof reader.credentialEpoch === "string" && reader.credentialEpoch !== "" ? reader.credentialEpoch : undefined
-  const stored = state.cache[route]
-  const hit = isObject(stored) && typeof stored.etag === "string" && stored.etag !== "" && "value" in stored && stored.epoch === epoch ? stored : undefined
+  const reader = readerOf(ctx)
+  const epoch = epochOf(reader)
+  const hit = usableEntry(state.cache[route], epoch)
   ctx.touched.add(route)
   let answer = await reader.get(route, { etag: hit?.etag })
   if (answer.notModified && hit) return hit.value
@@ -372,10 +375,12 @@ const compareAttempts = (a, b) => (a.startedAt ?? "").localeCompare(b.startedAt 
 async function readChecks(ctx, state, repo, sha) {
   const route = `/repos/${repo}/commits/${sha}/check-runs?per_page=${CHECKS_PAGE}`
   // A cached read from before check runs kept their ids and start times cannot tell the newest attempt, so it is read again.
-  if (state.cache[route]?.value.runs.some((run) => run.id === undefined)) delete state.cache[route]
+  // An entry the reader may not use, or one without a runs list, is dropped as well.
+  const stored = usableEntry(state.cache[route], epochOf(readerOf(ctx)))
+  if (state.cache[route] && !(Array.isArray(stored?.value?.runs) && !stored.value.runs.some((run) => run.id === undefined))) delete state.cache[route]
   return cached(ctx, state, route, async (body) => {
     const runs = [...body.check_runs]
-    for (let page = 2; page <= Math.ceil(body.total_count / CHECKS_PAGE); page++) runs.push(...(await ctx.api.get(`/repos/${repo}/commits/${sha}/check-runs?per_page=${CHECKS_PAGE}&page=${page}`)).body.check_runs)
+    for (let page = 2; page <= Math.ceil(body.total_count / CHECKS_PAGE); page++) runs.push(...(await readerOf(ctx).get(`/repos/${repo}/commits/${sha}/check-runs?per_page=${CHECKS_PAGE}&page=${page}`)).body.check_runs)
     return { runs: runs.map(checkSummary), volatile: body.total_count > CHECKS_PAGE }
   })
 }
@@ -385,7 +390,7 @@ async function readStatuses(ctx, state, repo, sha) {
   const route = `/repos/${repo}/commits/${sha}/status?per_page=${CHECKS_PAGE}`
   return cached(ctx, state, route, async (body) => {
     const statuses = [...body.statuses]
-    for (let page = 2; page <= Math.ceil(body.total_count / CHECKS_PAGE); page++) statuses.push(...(await ctx.api.get(`${route}&page=${page}`)).body.statuses)
+    for (let page = 2; page <= Math.ceil(body.total_count / CHECKS_PAGE); page++) statuses.push(...(await readerOf(ctx).get(`${route}&page=${page}`)).body.statuses)
     return { statuses: statuses.map((status) => ({ context: status.context, state: status.state })), volatile: body.total_count > CHECKS_PAGE }
   })
 }
@@ -515,7 +520,7 @@ async function readJobs(ctx, state, repo, runId) {
   const route = `/repos/${repo}/actions/runs/${runId}/jobs?filter=latest&per_page=${CHECKS_PAGE}`
   return cached(ctx, state, route, async (body) => {
     const jobs = [...body.jobs]
-    for (let page = 2; page <= Math.ceil(body.total_count / CHECKS_PAGE); page++) jobs.push(...(await ctx.api.get(`${route}&page=${page}`)).body.jobs)
+    for (let page = 2; page <= Math.ceil(body.total_count / CHECKS_PAGE); page++) jobs.push(...(await readerOf(ctx).get(`${route}&page=${page}`)).body.jobs)
     return { jobs: jobs.map((job) => ({ name: job.name, status: job.status, conclusion: job.conclusion ?? null })), volatile: body.total_count > CHECKS_PAGE || body.jobs.some((job) => job.status !== "completed") }
   })
 }
