@@ -2930,3 +2930,18 @@ test("connectGithub names the login and token together without holding the token
   assert.ok(!api.credentialEpoch.includes("fake-token-x"))
   await assert.rejects(api.get("/repos/o/r"), (error) => error.code === "drains_rate_limited" && error.retryAfterMs === 90_000 && error.resetAt === 2_000_000)
 })
+
+test("a drain with everySeconds is polled no more often than that, and a bad value is refused", async () => {
+  const w = await world([issue(1, "2026-11-13T01:00:00Z")])
+  writeFileSync(w.paths.config, JSON.stringify({ drains: [{ repo: "o/r", account: "maintainer", session: "s", everySeconds: 180 }] }))
+  let opened = 0
+  w.api.openIssues = async () => { opened += 1; return w.issues }
+  await w.poll(NOW)
+  assert.equal(opened, 1)
+  assert.equal((await w.poll(NOW + 60_000)).calls, 0)
+  assert.equal((await w.poll(NOW + 125_000)).calls, 0)
+  assert.equal(opened, 1)
+  await w.poll(NOW + 175_000)
+  assert.equal(opened, 2)
+  assert.throws(() => parseDrainConfig(JSON.stringify({ drains: [{ repo: "o/r", session: "s", everySeconds: 5 }] })), /everySeconds/u)
+})

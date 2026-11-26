@@ -36,6 +36,8 @@ const EDITS_BACKWARD = `query($owner: String!, $name: String!, $number: Int!, $c
 const FULL_SYNC_MS = 3_600_000
 /** The list is read from a little before the newest change it knew, so an update GitHub lists late is still seen. */
 const DELTA_SLACK_MS = 120_000
+// A poll a little early still counts as due, so a launcher that fires every minute reaches an `everySeconds` of 180 on its third run.
+const POLL_SLACK_MS = 10_000
 const LOGIN_MS = 24 * 3_600_000
 /** At or below this many calls left in the window a drain stops polling until the window resets. */
 const QUOTA_RESERVE = 25
@@ -174,12 +176,13 @@ export function parseDrainConfig(raw, file) {
   const seen = new Set()
   return list.map((entry, index) => {
     if (entry === null || typeof entry !== "object" || Array.isArray(entry)) throw bad(`drains[${index}] is not an object`)
-    const { repo, session, account, ignoredBodyTrailers, ignoredLabels, ignoreLabels, ignoreComments } = entry
+    const { repo, session, account, ignoredBodyTrailers, ignoredLabels, ignoreLabels, ignoreComments, everySeconds } = entry
     if (typeof repo !== "string" || !/^[\w.-]+\/[\w.-]+$/u.test(repo)) throw bad(`drains[${index}].repo is not "owner/name"`)
     if (!isText(session)) throw bad(`drains[${index}].session is not a session id`)
     if (account !== undefined && !isText(account)) throw bad(`drains[${index}].account is not a GitHub login`)
     if (ignoredBodyTrailers !== undefined && (!textList(ignoredBodyTrailers) || ignoredBodyTrailers.some((key) => key.includes(":")))) throw bad(`drains[${index}].ignoredBodyTrailers is not a list of trailer keys such as "Active-at"`)
     if (ignoredLabels !== undefined && !textList(ignoredLabels)) throw bad(`drains[${index}].ignoredLabels is not a list of label names such as "agent:drain"`)
+    if (everySeconds !== undefined && (!Number.isInteger(everySeconds) || everySeconds < 60)) throw bad(`drains[${index}].everySeconds is not a whole number of seconds, 60 or more`)
     if (ignoreLabels !== undefined) checkIgnoreLabels(ignoreLabels, `drains[${index}].ignoreLabels`, bad)
     if (ignoreComments !== undefined) checkIgnoreComments(ignoreComments, `drains[${index}].ignoreComments`, bad)
     if (seen.has(repo)) throw bad(`drains[${index}].repo ${repo} is listed twice`)
@@ -190,6 +193,7 @@ export function parseDrainConfig(raw, file) {
       ...(account === undefined ? {} : { account: account.trim() }),
       ...(ignoredBodyTrailers === undefined ? {} : { ignoredBodyTrailers: ignoredBodyTrailers.map((key) => key.trim()) }),
       ...(ignoredLabels === undefined ? {} : { ignoredLabels: ignoredLabels.map((name) => name.trim()) }),
+      ...(everySeconds === undefined ? {} : { everySeconds }),
       ...(ignoreLabels === undefined ? {} : { ignoreLabels: ignoreLabels.map((pattern) => pattern.trim()) }),
       ...(ignoreComments === undefined ? {} : { ignoreComments: ignoreComments.map(({ author, match }) => ({ author: author.trim(), ...(match === undefined ? {} : { match }) })) }),
     }
@@ -951,9 +955,13 @@ export async function pollDrains({ paths, connect, now, ackCommand, ackFlags = [
   for (const drain of drains) if (readDrainStates(paths.state)[drain.repo]?.targetGone) recover({ paths, repo: drain.repo, now })
   const stored = readDrainStates(paths.state)
   const states = Object.fromEntries(drains.map((drain) => [drain.repo, stored[drain.repo] ?? blank()]))
+  const skipped = new Set()
   for (const drain of drains) {
     const hold = quotaHold(freshestQuota(drains, states, drain.account), states[drain.repo].lastPollAt, now)
-    if (hold) Object.assign(states[drain.repo], { hold, calls: { total: 0, notModified: 0 } })
+    const last = states[drain.repo].lastPollAt
+    // A drain with `everySeconds` is polled no more often than that; its last answers and state stay as they were.
+    if (drain.everySeconds && last && now - Date.parse(last) < drain.everySeconds * 1000 - POLL_SLACK_MS) skipped.add(drain.repo)
+    else if (hold) Object.assign(states[drain.repo], { hold, calls: { total: 0, notModified: 0 } })
     else await pollDrain(drain, states, { connect, now, desk })
   }
   writeDrainStates(paths.state, states)
@@ -963,7 +971,7 @@ export async function pollDrains({ paths, connect, now, ackCommand, ackFlags = [
     return { id, repo: drain.repo, session: sessionOf(drain, states[drain.repo]), message: wakeMessage(drain.repo, events), replaces: wakePrefix(drain.repo), events, done: [...ackCommand, "ack", "--repo", drain.repo, "--wake", id, ...ackFlags] }
   })
   const errors = drains.filter((drain) => states[drain.repo].lastError).map((drain) => ({ repo: drain.repo, error: states[drain.repo].lastError, ...(states[drain.repo].lastErrorCode ? { code: states[drain.repo].lastErrorCode } : {}) }))
-  const calls = drains.reduce((sum, drain) => sum + states[drain.repo].calls.total, 0)
+  const calls = drains.reduce((sum, drain) => sum + (skipped.has(drain.repo) ? 0 : states[drain.repo].calls.total), 0)
   return { at: new Date(now).toISOString(), wakes, errors, calls, status: drainStatusLines(drains, states, now) }
 }
 

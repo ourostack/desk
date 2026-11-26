@@ -29,7 +29,7 @@ Both live in Desk's state folder, `$XDG_STATE_HOME/ouroboros-skills/desk/drains/
 ] }
 ```
 
-Only `repo` and `session` are required. `session` is opaque to Desk: the runner decides what it means. `account` picks the `gh` login whose token the poll uses; without it the active account is used. An invalid entry fails the command with the reason; it is never dropped, because a dropped drain would stop watching its repository.
+Only `repo` and `session` are required. `session` is opaque to Desk: the runner decides what it means. `account` picks the `gh` login whose token the poll uses; without it the active account is used. `everySeconds` (a whole number, 60 or more) polls a busy repository no more often than that; the launcher's own cadence applies without it. An invalid entry fails the command with the reason; it is never dropped, because a dropped drain would stop watching its repository.
 
 `state.json` holds, per repository, the revision last recorded for each issue, the events not yet delivered, and the last poll, wake and error. A first poll on a repository only records what is open. A closed issue's record is kept for 30 days, so one that returns unchanged is not new. A repository dropped from the config loses its state.
 
