@@ -259,6 +259,37 @@
       ]
     },
     {
+      "id": "cli:drains leases status",
+      "group": "drains-keep-moving",
+      "when": "Listing each card claim as held, lapsed after two hours with nothing pushed, or ownerless because its session ended",
+      "effect": "read",
+      "errors": [
+        {
+          "code": "leases-file-invalid",
+          "means": "claims.json cannot be read, so no claim was judged",
+          "fix": "Repair or remove claims.json in the drains folder and rerun leases status"
+        }
+      ]
+    },
+    {
+      "id": "cli:drains leases take",
+      "group": "drains-keep-moving",
+      "when": "A session claiming a card to work on, starting its two-hour lease",
+      "effect": "write",
+      "errors": [
+        {
+          "code": "lease-owner-missing",
+          "means": "The card or the owning session was not given, so nothing was claimed",
+          "fix": "Pass --card and --owner with the session id"
+        },
+        {
+          "code": "leases-file-invalid",
+          "means": "claims.json cannot be read, so the claim was not changed",
+          "fix": "Repair or remove claims.json in the drains folder and rerun leases take"
+        }
+      ]
+    },
+    {
       "id": "cli:drains relays status",
       "group": "drains-relays",
       "when": "Reading each relay's last poll, last fire or merge, spend, and what it waits on, without acting on GitHub",
