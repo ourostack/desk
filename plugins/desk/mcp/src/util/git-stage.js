@@ -96,7 +96,7 @@ function timedOut(result) {
 
 /** What the clock cut off, in words: the Git call, the error and signal it ended with, and the budgets it was given. Starts with "timeout" for anyone who reads the reason by that word. */
 function cutOffWords(result, retried) {
-  const error = result.error ? `${result.error.code ? `${result.error.code}: ` : ""}${result.error.message || "Git process failed"}` : "no error"
+  const error = `${result.error.code}: ${result.error.message}`
   return `timeout: git commit was cut off by the clock (${error}; signal ${result.signal ?? "none"}; exit status ${result.status ?? "none"}) after ${retried ? `its ${GIT_TIMEOUT_MS} ms attempt and its ${COMMIT_RETRY_TIMEOUT_MS} ms retry` : `${GIT_TIMEOUT_MS} ms`}, so whether it landed rests on the read-back`
 }
 
