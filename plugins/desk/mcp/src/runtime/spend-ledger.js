@@ -59,7 +59,8 @@ const count = (value, fallback) => (/^\d+$/u.test(String(value ?? "")) ? Number(
 export function ledgerDir(env, underTest = looksLikeNodeTestRunner(env)) {
   if (env.MS_DESK_QUOTA === "off" || env.MS_DESK_ROUTE === "off") return null
   if (!env.MS_DESK_QUOTA_DIR && underTest) return null
-  const base = env.XDG_STATE_HOME || (env.HOME ? path.join(env.HOME, ".local", "state") : "")
+  const home = env.HOME || env.USERPROFILE
+  const base = env.XDG_STATE_HOME || (home ? path.join(home, ".local", "state") : "")
   const dir = env.MS_DESK_QUOTA_DIR || (base ? path.join(base, "ms-desk", "gh-quota") : "")
   try {
     return dir && statSync(dir).isDirectory() ? dir : null
