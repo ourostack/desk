@@ -174,7 +174,7 @@ function drainsCli({ script, env, now, connect, listProcesses, signedIn, fetchHo
         let config
         try { config = readKeeperConfig(file) } catch (error) {
           if (!error?.keepersConfigInvalid) throw error
-          throw new AxError({ code: "keepers-config-invalid", exit: 1, thing: "keepers", problem: `${file} cannot be read (${error.keepersConfigInvalid}), so no peer was checked`, fix: "Repair keepers.json as { \"host\": \"<name>\", \"peers\": [{ \"host\": \"<name>\", \"ssh\": \"<alias>\" }] } and run drains keepers check again." })
+          throw new AxError({ code: "keepers-config-invalid", exit: 1, thing: "keepers", problem: `${file} cannot be read (${error.keepersConfigInvalid}), so no peer was checked`, fix: "Repair keepers.json as { \"host\": \"<name>\", \"repo\": \"<clone path>\", \"peers\": [{ \"host\": \"<name>\" }] } and run drains keepers check again." })
         }
         const t = now()
         const { leases } = await leaseStatus({ paths: leasePaths({ env }), now: t, env })

@@ -1,1 +1,3 @@
 `drains keepers check` is a check that runs outside every agent session and spends no model turn. It lists waits that expired or keep being renewed, endings the turn-end gate could not verify, claims that lapsed or lost their owner, and a peer keeper whose heartbeat went quiet, whatever a session's "busy" status says. Two always-on hosts each run it and read the other's heartbeat. See [keep-the-work-moving.md](docs/keep-the-work-moving.md).
+
+Keepers publish their heartbeat as a blob on `refs/heartbeats/<host>` of a shared git remote and read the peer's from there, so no host needs inbound ssh and a Dev Box can join later as a third keeper. `keepers.json` takes a `repo` clone path; a peer with an `ssh` alias is still read over ssh.

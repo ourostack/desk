@@ -3,6 +3,7 @@ import { strict as assert } from "node:assert"
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
+import { execFileSync } from "node:child_process"
 import { beat, findings, keepersCheck, peerFindings, readKeeperConfig } from "../../../../../plugins/desk/mcp/src/runtime/keepers.js"
 
 const NOW = Date.parse("2026-11-26T12:00:00Z")
@@ -66,7 +67,7 @@ test("a run shows this host's heartbeat, which its peer can then read", async ()
 })
 
 test("a missing or malformed config names no host and no peers", () => {
-  assert.deepEqual(readKeeperConfig(path.join(tmpdir(), "no-such-keepers.json")), { host: null, peers: [] })
+  assert.deepEqual(readKeeperConfig(path.join(tmpdir(), "no-such-keepers.json")), { host: null, repo: null, peers: [] })
 })
 
 test("gaming: a corrupted keepers.json stops the check; it does not read as no peers and switch the peer check off", () => {
@@ -74,5 +75,19 @@ test("gaming: a corrupted keepers.json stops the check; it does not read as no p
   const file = path.join(dir, "keepers.json")
   writeFileSync(file, "{nope")
   assert.throws(() => readKeeperConfig(file), (error) => typeof error.keepersConfigInvalid === "string")
-  assert.deepEqual(readKeeperConfig(path.join(dir, "missing.json")), { host: null, peers: [] })
+  assert.deepEqual(readKeeperConfig(path.join(dir, "missing.json")), { host: null, repo: null, peers: [] })
+})
+
+test("two hosts check each other through a shared git remote, with no ssh", async () => {
+  const root = mkdtempSync(path.join(tmpdir(), "keepers-git-"))
+  const git = (cwd, ...a) => execFileSync("git", a, { cwd, stdio: "pipe" })
+  git(root, "init", "-q", "--bare", "origin.git")
+  for (const n of ["a", "b"]) git(root, "clone", "-q", "origin.git", n)
+  const cfg = (host, peer, n) => ({ host, repo: path.join(root, n), peers: [{ host: peer }] })
+  const run = (config, now) => keepersCheck({ config, heartbeatDir: mkdtempSync(path.join(tmpdir(), "hb-")), endings: [], leases: [], now })
+  assert.equal((await run(cfg("laptop", "mini", "a"), NOW)).findings.length, 1, "the peer has shown nothing yet")
+  assert.equal((await run(cfg("mini", "laptop", "b"), NOW)).findings.length, 0, "the mini reads the laptop's published heartbeat")
+  assert.equal((await run(cfg("laptop", "mini", "a"), NOW + 5 * 60_000)).findings.length, 0, "and the laptop reads the mini's")
+  const quiet = await run(cfg("laptop", "mini", "a"), NOW + 60 * 60_000)
+  assert.equal(quiet.findings[0].kind, "peer_silent", "a keeper that stops publishing goes quiet within half an hour")
 })
