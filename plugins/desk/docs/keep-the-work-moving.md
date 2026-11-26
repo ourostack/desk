@@ -46,3 +46,23 @@ Code: [leases.js](../mcp/src/runtime/leases.js), tests in [leases.test.js](../..
 | Claim the card again to restart the clock | A held card is not retaken and keeps its original start, for its owner and anyone else |
 | Write a later `claimedAt`, a future push time or a `renewedAt` into the file | Times in the future count for nothing, and unknown fields are ignored |
 | Keep a dead session's claim as a placeholder | An ended or missing owner history makes it `ownerless`, so it can be taken |
+
+## 4. The keeper outside agent sessions
+
+Code: [keepers.js](../mcp/src/runtime/keepers.js), tests in [keepers.test.js](../../../tests/desk/mcp/__tests__/runtime/keepers.test.js). `run.mjs keepers check` (the same launcher as `stalled`) spends no model turn. Each run shows this host's heartbeat under `<state>/ouroboros-skills/desk/heartbeats/<host>.json`, reads the turn-end ledger and the leases, reads each peer's heartbeat over `ssh` (no prompt), and lists what needs a job:
+
+- `wait_expired`: a wait's expiry passed and nothing ended it afterwards.
+- `wait_renewed`: three waits in a row on the same thing, even unexpired.
+- `unverified_end`: the gate could not verify the last ending.
+- `lease_lapsed`, `no_owner`: see part 3.
+- `peer_silent`: a peer's heartbeat is missing, unreadable, from the future or older than 30 minutes.
+
+`keepers.json` in the drains state folder names this host and its peers: `{ "host": "laptop", "peers": [{ "host": "mini", "ssh": "aris-mac-mini" }] }`. Run the command every 10 minutes with whatever the host has (launchd `StartInterval`, Task Scheduler, cron) on two hosts that are always on, each naming the other. The laptop sleeps, so it is not a keeper. A run is idempotent: it reports the same findings until someone acts, and delivering them to the lead or the owner is the wake runner's job, as for `stalled poll`.
+
+| How an agent could game it | What stops it |
+|---|---|
+| Look busy | Busy is not an input; findings come from the ledger and leases alone (test: a running session hides nothing) |
+| Renew a wait again and again | Three in a row on the same thing is a finding even while unexpired |
+| Replace an expired wait with a later ending | Only a later `done`, `blocked` or `no ready work` clears it, each with its own checks from parts 1 and 2 |
+| Stop the keeper or fake a peer's heartbeat | Each host reads the other's heartbeat from the other host over ssh; a missing, old or future heartbeat is `peer_silent` |
+| Delete its own ledger file | Not caught by one host; the ledger is outside the agent's tools, and a missing ledger leaves leases (GitHub pushes) and the peer's view to catch the card |
