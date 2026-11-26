@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.618 — 2026-11-26
+
+The work-orchestration skill now says never to wake many agent sessions at once on one machine: wake one at a time, wait for each to answer or time out, and bound the sessions a machine runs. A burst of about ten wakes on a loaded Mac made every session reload time out ("Agency startup timed out" at 60 s, git admission timeouts). Keepers and any restart watcher that wake sessions follow the same rule.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.617 — 2026-11-26
 
 ### Fixed
