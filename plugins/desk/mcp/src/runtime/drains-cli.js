@@ -163,7 +163,7 @@ function drainsCli({ script, env, now, connect, listProcesses, signedIn, fetchHo
         return withDesk(await leaseFile(() => leaseStatus({ paths: leasePaths({ env }), now: now(), env })), { script, env })
       }),
       command("leases take", { effect: "private", summary: "Claim a card for a session; a held card stays with its owner, and claiming again does not restart its lease.", flags: { card: { type: "string", required: true, placeholder: "<card>", description: "The card to claim." }, owner: { type: "string", required: true, placeholder: "<session id>", description: "The session that will own it." }, repo: { type: "string", placeholder: "<owner/name>", description: "The repository its work is pushed to." }, branch: { type: "string", placeholder: "<branch>", description: "The branch its work is pushed to." } } }, async (input) => {
-        if (!String(input.card ?? "").trim() || !String(input.owner ?? "").trim()) throw usageError("lease-owner-missing", "a claim needs both a card and the session that owns it", "run drains leases take --card <card> --owner <session id>")
+        if (!String(input.card).trim() || !String(input.owner).trim()) throw usageError("lease-owner-missing", "a claim needs both a card and the session that owns it", "run drains leases take --card <card> --owner <session id>")
         return withDesk(await leaseFile(() => claimCard({ paths: leasePaths({ env }), card: input.card, owner: input.owner, repo: input.repo, branch: input.branch, now: now(), env })), { script, env })
       }),
       command("relays poll", { effect: "private", summary: "Poll the relays in relays.json, act on what is found and print no wakes.", flags: { config: CONFIG, state: STATE } }, async (input) => {
