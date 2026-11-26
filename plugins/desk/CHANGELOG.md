@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.624 — 2026-11-26
+
+The `evidence-discipline` pointer to `visual-proof` now covers checking a page, file or capture against its source or design (layout, colours against design tokens, counts, text against its data), and says to load `visual-proof` before checking and measure with a script rather than by eye. Before, it named only looking at a capture before showing it, so a measurement request that loaded `evidence-discipline` (every recorded miss did) never reached the rule that lives in `visual-proof`. `live-ui-iteration` now says to tell the person, in the handover message, how to reach each state, that each note becomes one small edit on the page, and that every decision becomes a deterministic check run on every edit. The `principle-moments` suite now declares `evidence-discipline` as a source, so its receipt binds the guidance the subject actually loads.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.623 — 2026-11-26
 
 The four human-experience defaults behave reliably again (#1858). Agent storage retention is set and run, never asked about or proposed: `interaction-style` no longer lists agent storage as a permanent-deletion decision, `task-lifecycle` tells the human in one line what was removed and the space before and after, and `session-resumption` says a session's own folder ages out under that retention once cited evidence is kept by pointer. A date is never relayed without a measurement: the reply says a trustworthy date needs measuring and gives the clock time the numbers will be reported. A change to a human's chat or account setup ships counts-only telemetry with the fix and says so. A status answer opens with how the work feels, never the release's state or date.
