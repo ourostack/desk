@@ -35,3 +35,14 @@ Code: [outcomes.js](../mcp/src/runtime/outcomes.js), tests in [outcomes.test.js]
 | Claim an unmerged or unknown pull request, or a bare sha | Listed as `unverified` with why, count stays 0 |
 | Claim the same pull request again, or another card's | Counted once; other cards' endings are ignored |
 | Report an acceptance pass with no version | Needs a check name and a version, and `passed: true` |
+
+## 3. Ownership with expiring leases
+
+Code: [leases.js](../mcp/src/runtime/leases.js), tests in [leases.test.js](../../../tests/desk/mcp/__tests__/runtime/leases.test.js). `drains leases take --card <card> --owner <session> --repo <owner/name> --branch <branch>` records a claim in `claims.json`; `drains leases status` lists each as `held`, `lapsed` (nothing pushed for two hours since the claim or the last push) or `ownerless` (its session's history shows it ended or is gone). The last push is GitHub's own event time for the branch, which an agent cannot backdate the way it can a commit date.
+
+| How an agent could game it | What stops it |
+|---|---|
+| Send messages or rerun to keep a claim alive | Neither is an input; only a push GitHub recorded renews |
+| Claim the card again to restart the clock | A held card is not retaken and keeps its original start, for its owner and anyone else |
+| Write a later `claimedAt`, a future push time or a `renewedAt` into the file | Times in the future count for nothing, and unknown fields are ignored |
+| Keep a dead session's claim as a placeholder | An ended or missing owner history makes it `ownerless`, so it can be taken |

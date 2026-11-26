@@ -10,6 +10,7 @@ import { runCli } from "../lib/ouro-ui/registry/ouro/ax/cli.ts"
 import { allStuckSaves, stuckLine } from "./unmerged-saves.js"
 import { pollRelays, readRelayConfig, readRelayStates, relayPaths, relayStatusLines, relaysOfPull, whyRelay } from "./relays.js"
 import { findPluginlessRuntimes, listProcesses as psList, pluginlessRuntimeLines } from "./pluginless-runtimes.js"
+import { claimCard, leasePaths, leaseStatus } from "./leases.js"
 import { endingsDir, progressOf, readEndings } from "./outcomes.js"
 import { ackStalled, pollStalled, stalledPaths, stalledStatus } from "./stalled.js"
 import { ackHooks, createHook, deleteHook, ghToken, hookPaths, hookStatus, listHooks, pollHooks } from "./hooks.js"
@@ -90,6 +91,7 @@ function drainsCli({ script, env, now, connect, listProcesses, signedIn, fetchHo
     groups: {
       schedule: "The prompts due to a session (schedules.json), at most one per schedule however many intervals were missed; see docs/schedules.md.",
       stalled: "The nudges due to sessions that went idle with their focused task card unfinished and nothing running, once per idle stretch; see docs/stalled-nudges.md.",
+      leases: "Card claims that lapse after two hours with nothing pushed and have no owner once their session ends; see docs/keep-the-work-moving.md.",
       relays: "The dispatch and merge-when-green relays in relays.json: poll acts on what it finds and prints no wakes; see docs/relays.md.",
       hooks: "Webhooks: events any service posts to the hooks receiver become wakes for the session hooks.json names; see docs/webhooks.md.",
       runtimes: "Copilot server runtimes started without Desk's plugin, whose sessions have no desk-* tools, and how to recover; see docs/schedules.md.",
@@ -148,6 +150,12 @@ function drainsCli({ script, env, now, connect, listProcesses, signedIn, fetchHo
       command("progress", { ...READ, summary: "Count what shipped for a card: merged pull requests GitHub confirms, never messages, commits or busy.", flags: { card: { type: "string", required: true, placeholder: "<card>", description: "The card as the turn-end ledger names it." } } }, (input) => {
         const result = progressOf({ card: input.card, endings: readEndings(endingsDir(env)) })
         return withDesk({ ...result, status: [`${input.card}: ${result.count} shipped, ${result.unverified.length} claimed but not confirmed`] }, { script, env })
+      }),
+      command("leases status", { ...READ, summary: "List each card claim as held, lapsed (nothing pushed for two hours) or ownerless (its session ended).", flags: {} }, async () => {
+        return withDesk(await leaseStatus({ paths: leasePaths({ env }), now: now(), env }), { script, env })
+      }),
+      command("leases take", { effect: "private", summary: "Claim a card for a session; a held card stays with its owner, and claiming again does not restart its lease.", flags: { card: { type: "string", required: true, placeholder: "<card>", description: "The card to claim." }, owner: { type: "string", required: true, placeholder: "<session id>", description: "The session that will own it." }, repo: { type: "string", placeholder: "<owner/name>", description: "The repository its work is pushed to." }, branch: { type: "string", placeholder: "<branch>", description: "The branch its work is pushed to." } } }, async (input) => {
+        return withDesk(await claimCard({ paths: leasePaths({ env }), card: input.card, owner: input.owner, repo: input.repo, branch: input.branch, now: now(), env }), { script, env })
       }),
       command("relays poll", { effect: "private", summary: "Poll the relays in relays.json, act on what is found and print no wakes.", flags: { config: CONFIG, state: STATE } }, async (input) => {
         const paths = pathsOf(relayPaths({ env }), input)
