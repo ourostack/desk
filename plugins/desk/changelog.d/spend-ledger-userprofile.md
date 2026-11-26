@@ -1,1 +1,0 @@
-Desk's direct GitHub calls now find the shim's spend ledger on a host whose environment has `USERPROFILE` but no `HOME`, as Windows does, so those calls are counted too. An explicit ledger folder, `XDG_STATE_HOME` and `HOME` still win, and an empty environment still finds nothing.

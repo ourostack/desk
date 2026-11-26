@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.608 — 2026-11-26
+
+Desk's direct GitHub calls now find the shim's spend ledger on a host whose environment has `USERPROFILE` but no `HOME`, as Windows does, so those calls are counted too. An explicit ledger folder, `XDG_STATE_HOME` and `HOME` still win, and an empty environment still finds nothing.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.607 — 2026-11-26
 
 Desk's MCP server now vendors Ouro UI v1.3.581, moved by Ouro Current.
