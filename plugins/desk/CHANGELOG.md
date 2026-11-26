@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.597 — 2026-11-26
+
+Fixed: `task_update` now lists every step state (`in review`, `merged`, `delivered`, `dropped` as well as `pending`, `in progress`, `blocked`), so a step that shipped without a GitHub PR can be set to `merged` or `delivered` with its proof in `evidence`, not only closed as `dropped`.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.596 — 2026-11-26
 
 Desk's MCP server now vendors Ouro UI v1.3.575, moved by Ouro Current.

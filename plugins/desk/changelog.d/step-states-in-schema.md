@@ -1,1 +1,0 @@
-Fixed: `task_update` now lists every step state (`in review`, `merged`, `delivered`, `dropped` as well as `pending`, `in progress`, `blocked`), so a step that shipped without a GitHub PR can be set to `merged` or `delivered` with its proof in `evidence`, not only closed as `dropped`.
