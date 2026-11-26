@@ -13,6 +13,8 @@ Ending: blocked; on: <named person>; resume: <exact step that restarts the work>
 Ending: no ready work; checked: <where you looked for ready work>
 ```
 
+Headless lanes (no hooks, no transcript) call the same module as a command: `node plugins/desk/hooks/lib/turn-end-gate.cjs check --session <id> --evidence-file <output.txt> --pr-head <branch> --repo <owner/repo>`. It exits 0 for a verified ending, 10 with the resume text when the work did not ship, 2 on a bad call, and records the ending in the ledger. Because the output file is the agent's own words, `done` counts only when GitHub shows a pull request for the branch, and `waiting` is refused: a headless lane has no registered wake to check. The caller owns the resume cap.
+
 Any other ending is corrected once, with this text. The correction is spent once per turn (`stop_hook_active` or an earlier correction means the turn ends and the ledger records `unverified`), so it can't loop. "No ready work" is a valid ending, so no agent has to invent work. Every ending is appended to `<state>/ouroboros-skills/desk/turn-ends/<session>.jsonl`, which the runner outside agent sessions reads (waits' expiry, "no ready work" audits).
 
 | How an agent could game it | What stops it (test in [turn_end_gate.test.js](../../../tests/desk/mcp/__tests__/factory/turn_end_gate.test.js)) |
