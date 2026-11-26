@@ -55,7 +55,7 @@ export function publish({ repo, host, now }) {
 }
 
 /** Reads a peer's published heartbeat; null when it cannot be fetched. */
-export function gitRead(repo, name) {
+function gitRead(repo, name) {
   if (!repo || !/^[\w.-]+$/u.test(name)) return null
   const ref = `refs/heartbeats/${name}`
   if (git(repo, ["fetch", "-q", "origin", `+${ref}:${ref}`]).status !== 0) return null
