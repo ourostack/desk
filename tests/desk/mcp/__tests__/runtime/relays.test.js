@@ -1700,3 +1700,25 @@ for (const [label, rejection] of [["nothing", undefined], ["null", null], ["an e
     if (rejection?.code) assert.equal(polled.errors[0].code, "x", "a structured code is kept")
   })
 }
+
+test("probes: a structured 403 rate limit keeps its decision fields, so it is not cached as 'set account' and holds until its deadline", async () => {
+  const w = await setup([IMMEDIATE])
+  const calls = []
+  const connect = async () => ({ get: async (url) => { calls.push(url); throw { status: 403, rateLimited: true, message: "slow down", retryAfterMs: 90_000, receivedAt: NOW } }, calls: () => ({ total: 0 }), credentialEpoch: "e" })
+  const polled = await pollRelays({ paths: w.paths, drainFiles: w.drainFiles, connect, now: NOW, signedIn: () => ["a"] })
+  assert.notEqual(polled.errors[0].code, "relays_set_account_on_relay")
+  const held = Object.values(w.state("data to pages").probes)[0]
+  assert.equal(held.outcome, "transient")
+  assert.equal(Date.parse(held.retryAt), NOW + 90_000)
+})
+
+for (const [label, rejection] of [["nothing", undefined], ["null", null], ["an empty object", {}]]) {
+  test(`probes: a connection that rejects with ${label} is a visible failure, never an account selection`, async () => {
+    const w = await setup([IMMEDIATE])
+    const connect = async () => Promise.reject(rejection)
+    const polled = await pollRelays({ paths: w.paths, drainFiles: w.drainFiles, connect, now: NOW, signedIn: () => ["a"] })
+    assert.equal(polled.errors.length, 1)
+    assert.ok(polled.errors[0].error.length > 0)
+    assert.equal(w.state("data to pages").resolvedAccount, undefined)
+  })
+}

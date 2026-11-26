@@ -862,7 +862,8 @@ export async function pollRelays({ paths, drainFiles, connect, now, signedIn = (
       let api
       try {
         api = await connectOnce(login)
-      } catch (error) {
+      } catch (thrown) {
+        const error = asError(thrown)
         if (probeOutcome(error) === "transient") transient ??= error
         continue
       }
@@ -1001,7 +1002,7 @@ function asError(value) {
   const message = value instanceof Error ? value.message : typeof value === "string" ? value : typeof value?.message === "string" ? value.message : ""
   const failure = value instanceof Error ? value : new Error(message)
   if (!failure.message) failure.message = "the account probe failed without saying why"
-  if (!(value instanceof Error) && value && typeof value === "object") for (const field of ["code", "status", "transient"]) if (value[field] !== undefined) failure[field] = value[field]
+  if (!(value instanceof Error) && value && typeof value === "object") for (const field of ["code", "status", "transient", "rateLimited", "retryAfterMs", "resetAt", "receivedAt", "exhausted"]) if (value[field] !== undefined) failure[field] = value[field]
   return failure
 }
 
