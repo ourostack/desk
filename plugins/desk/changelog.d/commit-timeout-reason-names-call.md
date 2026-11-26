@@ -1,1 +1,0 @@
-When a `desk_save` commit is cut off by the clock, the answer's reason now names the Git call, its error and signal, and the time it was given (it used to say only `timeout`). The commit's read-back, recovery route and deadlines are unchanged.

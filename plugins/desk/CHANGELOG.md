@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.606 — 2026-11-26
+
+When a `desk_save` commit is cut off by the clock, the answer's reason now names the Git call, its error and signal, and the time it was given (it used to say only `timeout`). The commit's read-back, recovery route and deadlines are unchanged.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.605 — 2026-11-26
 
 ### Relays: a cached GitHub answer is never reused across accounts, and a stray 304 no longer crashes a poll
