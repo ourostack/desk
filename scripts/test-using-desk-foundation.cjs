@@ -366,8 +366,8 @@ function main() {
     "Status' first sentence says how it feels to use today, then the broken things in numbers against their bars",
     "\"on track\" means they'll enjoy it, not that it ships",
     "Test on synthetic data shaped like theirs, never their real data or account",
-    "counts-only telemetry",
-    "Relay no unmeasured plan, cause or date: say a trustworthy date needs measuring, and the time you will report the measured numbers.",
+    "the change ships counts-only telemetry",
+    "Relay no unmeasured plan, cause or date: say a trustworthy date needs measuring and give the clock time you will report them.",
   ]);
   assert.match(section(skill, "Authority"), /Deploy, sign in and merge yourself \(`interaction-style` "Fix the tooling"\)/u);
   assert.match(owned("interaction-style"), /Deploy and run sign-in flows yourself, with the password for your own account filled from your vault by a tool, unread; never put a secret in context[^\n]+only the number or prompt to approve on their own phone \(2FA, GitHub Mobile, a passkey\), or a password for their own account that you don't hold, is the human's\./u);
