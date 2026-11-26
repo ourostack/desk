@@ -15,11 +15,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        n: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+        n: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-      - name: The failing scenario, first process-table read on a fresh runner
-        run: node --import ./tests/desk/mcp/__tests__/_isolated_env.mjs --test --test-name-pattern="a fresh start that stalls is stopped, and tried once more" ./tests/desk/mcp/__tests__/launch/web.test.js
+      - name: The whole file, as the real job runs it without the real browser
+        run: node --import ./tests/desk/mcp/__tests__/_isolated_env.mjs --test ./tests/desk/mcp/__tests__/launch/web.test.js
