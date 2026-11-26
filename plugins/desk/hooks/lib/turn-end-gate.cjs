@@ -238,4 +238,40 @@ async function checkTurnEnd({ host, payload, env = process.env, now = Date.now }
   return { status: "correction", output: { decision: "block", reason:
     `Keep working the card, or end the reply with one Ending line. ${TAG} Your focused card ${s.target} is ${s.status}, and ${verdict.why}. If ready work remains, do it. If not, end with exactly one of these lines, filled in with facts you can show:\n${FORM}\n"No ready work" is a valid ending: say it, never invent work to avoid it. This is the only correction; do not repeat finished steps.` } };
 }
-module.exports = { checkTurnEnd, endingOf, judge };
+
+// Headless lanes (no transcript, no hooks): `check` reads the lane's output file and judges its last `Ending:` line.
+// A `done` counts only if GitHub shows a PR for the lane's branch, since the output file is the agent's own words.
+// `waiting` is refused: a headless lane has no registered wake to verify. Exit 0 = acceptable, 10 = not shipped, 2 = bad call.
+function headlessCheck({ session, output, repo, head, prExists, env = process.env, now = Date.now }) {
+  const at = now();
+  const ending = endingOf(output);
+  let verdict;
+  if (ending && ending.kind === "waiting") verdict = { ok: false, why: "a headless lane cannot register a wake; end `done`, `blocked` on a person, or `no ready work`" };
+  else if (ending && ending.kind === "done") {
+    const pr = prExists(repo, head);
+    verdict = pr ? { ok: true, record: { kind: "done", shipped: pr } } : { ok: false, why: `\`done\` but GitHub shows no pull request for ${head} in ${repo}; push the branch and open one` };
+  } else verdict = judge(ending, { tools: [], wakes: [] }, at);
+  record(env, { session, host: "headless", at: new Date(at).toISOString(), card: head, ending: verdict.ok ? verdict.record : { kind: "unverified", why: verdict.why } });
+  if (verdict.ok) return { code: 0, text: "" };
+  return { code: 10, text: `Keep working, or end with exactly one of these lines, filled in with facts you can show. ${TAG} ${verdict.why}.\n${FORM.split("\n").filter(l => !l.includes("waiting")).join("\n")}\n"No ready work" is a valid ending: say it, never invent work.` };
+}
+
+function cli(argv) {
+  const [cmd, ...rest] = argv;
+  const a = {};
+  for (let i = 0; i < rest.length; i += 2) a[rest[i]?.replace(/^--/u, "")] = rest[i + 1];
+  const BAD_CALL = "bad-call";
+  const usage = "usage: node turn-end-gate.cjs check --session <id> --evidence-file <output.txt> --pr-head <branch> --repo <owner/repo>";
+  if (cmd !== "check" || !a.session || !a["evidence-file"] || !a["pr-head"] || !/^[\w.-]+\/[\w.-]+$/u.test(a.repo ?? "")) { process.stderr.write(`${BAD_CALL}: ${usage}\n`); return 2; }
+  let output;
+  try { output = fs.readFileSync(a["evidence-file"], "utf8"); } catch (e) { process.stderr.write(`${BAD_CALL}: ${usage}\n`); return 2; }
+  const prExists = (repo, head) => {
+    const r = require("node:child_process").spawnSync("gh", ["pr", "list", "--repo", repo, "--head", head, "--state", "all", "--json", "url", "--limit", "1"], { encoding: "utf8", windowsHide: true });
+    try { return JSON.parse(r.stdout)[0]?.url ?? null; } catch { return null; }
+  };
+  const r = headlessCheck({ session: a.session.replace(/[^\w.-]/gu, "_"), output, repo: a.repo, head: a["pr-head"], prExists });
+  if (r.text) process.stdout.write(`${r.text}\n`);
+  return r.code;
+}
+if (require.main === module) process.exitCode = cli(process.argv.slice(2));
+module.exports = { checkTurnEnd, endingOf, judge, headlessCheck };
