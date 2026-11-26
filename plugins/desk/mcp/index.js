@@ -13,6 +13,7 @@
 // own root/activation context without needing a bespoke Desk CLI.
 
 // Every module imported below must stay loadable on Node releases older than the engines floor (the Node 16 matrix test in __tests__/runtime/never_exit_before_handshake.test.js proves it), because ES module imports load before any code here runs. The version check itself is the first thing main() does.
+import { serveFocusHandoff } from "./src/runtime/focus-handoff.js"
 import { spawn } from "node:child_process"
 import { readFileSync, realpathSync } from "node:fs"
 import { fileURLToPath, pathToFileURL } from "node:url"
@@ -170,8 +171,12 @@ export async function main({
   crashTarget = process,
   parentWatcher = watchParent,
   spawnDetached = spawn,
+  handoffChannel = process.channel && typeof process.send === "function" ? process : null,
   onClosed = () => {},
 }) {
+  // The idle proxy's handoff token is for this process only: take it out of the environment before anything it starts can inherit it.
+  const handoffToken = env.DESK_FOCUS_HANDOFF_TOKEN
+  delete env.DESK_FOCUS_HANDOFF_TOKEN
   // The tools find the installed plugin (its hooks and the plugins beside it) through DESK_PLUGIN_ROOT. Claude's launcher sets it; Copilot's config passes no environment, and the server's code runs from a source mirror with no `hooks/` beside it, so every host gets this entrypoint's own plugin folder here.
   if (!hasText(env.DESK_PLUGIN_ROOT)) env.DESK_PLUGIN_ROOT = path.resolve(mcpRoot, "..")
   runtimeInspector = resolveRuntimeInspector({ runtimeImporter, runtimeInspector })
@@ -319,6 +324,7 @@ export async function main({
       startHostedSync()
     },
   })
+  const stopHandoff = hasText(handoffToken) && handoffChannel !== null ? serveFocusHandoff({ channel: handoffChannel, token: handoffToken, session, kick, log: (text) => stderr.write(`[desk-mcp] ${text}\n`) }) : () => {}
   // A client that never sends tools/list still gets admission.
   const kickoff = setTimeout(kick, admissionKickoffMs)
   kickoff.unref?.()
@@ -336,6 +342,7 @@ export async function main({
   // The host's input failing ends the session the same way its ending does: nothing can arrive on it again.
   const closed = frontDoor.closed.catch((error) => stderr.write(`[desk-mcp] the host's input failed (${describeError(error)}); closing the session\n`)).then(async () => {
     clearTimeout(kickoff)
+    stopHandoff()
     stopRecordWatch()
     let deadline
     let timedOut = false

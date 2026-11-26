@@ -11,6 +11,7 @@
 "use strict";
 
 var childProcess = require("child_process");
+var crypto = require("crypto");
 var path = require("path");
 var v8 = require("v8");
 var vm = require("vm");
@@ -25,6 +26,10 @@ var QUICK_CRASH_MS = 10000;
 var MAX_QUICK_CRASHES = 3;
 var PARENT_CHECK_MS = 5000;
 var RESUME_ID = "desk-idle-proxy-resume";
+// Focus handoff. A Desk server remembers the task in focus only in its own memory, so an idle stop would lose it. A server started by this proxy has a private IPC channel to it (never the host's stdio): at an idle stop the proxy asks for the focus and keeps it in its own memory only, and the next server, once it has said hello, is asked to restore it after checking the desk and the card. Each step waits at most FOCUS_WAIT_MS, counted from the answer to the replayed initialize; a server that may have committed a restore it did not answer in time is ended, and the whole retirement is over by RETIRE_TOTAL_MS from the same start. What cannot be restored becomes a visible "unknown" note, never a silent "no task in focus".
+var FOCUS_WAIT_MS = 2000;
+var RETIRE_TOTAL_MS = 5000;
+var RESTORE_OUTCOMES = ["restored", "undeclared", "already_declared", "card_missing", "scope_changed", "unknown"];
 var FORWARDED_SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"];
 
 // The idle time from DESK_MCP_IDLE_MS: a whole number of milliseconds, 0 for never, the default when unset or unreadable.
@@ -48,10 +53,11 @@ function hasId(message) {
   return message.id !== undefined && message.id !== null;
 }
 
-// options: { launchChild() -> child, compact() (collects garbage once a server has ended), stdin, stdout, stderr, idleMs, now, setTimer, clearTimer, exit, signals, kill }
-// The child is { stdin, stdout, kill(signal), on(event, listener) } like a child_process child with piped stdin and stdout.
+// options: { launchChild(token) -> child, makeToken() -> string, compact() (collects garbage once a server has ended), stdin, stdout, stderr, idleMs, now, setTimer, clearTimer, exit, signals, kill }
+// The child is { stdin, stdout, kill(signal), on(event, listener) } like a child_process child with piped stdin and stdout. A child that also has send() (a private IPC channel) can hand its focus over, see the focus handoff comment above.
 function createIdleProxy(options) {
   var child = null;
+  var gen = null;
   var stopping = false;
   var resuming = false;
   var clientEnded = false;
@@ -61,9 +67,16 @@ function createIdleProxy(options) {
   var logLevel = null;
   var clientCalls = {};
   var serverCalls = {};
+  var serverGens = {};
+  var retiredServerIds = {};
+  var handoff = null;
+  var hold = null;
+  var nextIpcId = 1;
   var lastTraffic = options.now();
   var idleTimer = null;
   var killTimer = null;
+  var windowTimer = null;
+  var snapTimer = null;
   var finished = null;
   var startedAt = 0;
   var quickCrashes = 0;
@@ -88,8 +101,22 @@ function createIdleProxy(options) {
     child.stdin.write(line + "\n");
   }
 
+  // A line is written to the server at one place: from here on its call, if it is one, is the server's to answer or the crash's to fail.
+  function forward(entry) {
+    writeToChild(entry.line);
+    var message = entry.message;
+    if (message !== null && hasId(message) && message.method !== undefined) {
+      track(clientCalls, message.id);
+      if (message.method === "tools/call") gen.sawToolCall = true;
+    }
+  }
+
   function toClient(line) {
     options.stdout.write(line + "\n");
+  }
+
+  function logHandoff(kind) {
+    options.stderr.write("[desk-mcp] idle proxy: focus handoff " + kind + "\n");
   }
 
   function finish(code) {
@@ -100,10 +127,13 @@ function createIdleProxy(options) {
   }
 
   function clearTimer() {
-    if (idleTimer !== null) options.clearTimer(idleTimer);
-    if (killTimer !== null) options.clearTimer(killTimer);
+    [idleTimer, killTimer, windowTimer, snapTimer].forEach(function (timer) {
+      if (timer !== null) options.clearTimer(timer);
+    });
     idleTimer = null;
     killTimer = null;
+    windowTimer = null;
+    snapTimer = null;
   }
 
   function armIdle(delay) {
@@ -123,29 +153,107 @@ function createIdleProxy(options) {
     stop();
   }
 
-  // Ends the child by closing its stdin, which is how index.js shuts down cleanly; a child that does not leave is killed.
-  function stop() {
-    stopping = true;
+  function sendIpc(g, message, onError) {
+    message.desk = "focus-handoff";
+    message.v = 1;
+    message.token = g.token;
     try {
-      child.stdin.end();
+      g.child.send(message, function (error) {
+        if (error && onError) onError();
+      });
+    } catch (error) {
+      if (onError) onError();
+    }
+  }
+
+  function endStdin(g) {
+    if (g.stdinEnded) return;
+    g.stdinEnded = true;
+    try {
+      g.child.stdin.end();
     } catch (error) {
       // The exit event below still arrives.
     }
+  }
+
+  // Ends the child by closing its stdin, which is how index.js shuts down cleanly; a child that does not leave is killed. A child that supports the handoff is first asked for its focus, which the proxy keeps in its own memory only; the whole stop is still bounded by STOP_GRACE_MS from here.
+  function stop() {
+    stopping = true;
+    var g = gen;
     var stopped = child;
     killTimer = options.setTimer(function () {
       killTimer = null;
       stopped.kill("SIGKILL");
     }, STOP_GRACE_MS);
+    if (clientEnded || !g.ipcCapable || !g.helloSeen || g.ipcClosed) return endStdin(g);
+    g.snapId = nextIpcId++;
+    snapTimer = options.setTimer(function () {
+      snapTimer = null;
+      snapshotFailed(g);
+    }, FOCUS_WAIT_MS);
+    sendIpc(g, { op: "snapshot", id: g.snapId }, function () {
+      snapshotFailed(g);
+    });
+  }
+
+  function snapshotFailed(g) {
+    if (g !== gen || g.snapId === null) return;
+    g.snapId = null;
+    if (snapTimer !== null) options.clearTimer(snapTimer);
+    snapTimer = null;
+    if (g.sawToolCall || g.carried) {
+      handoff = { unknown: "snapshot_unavailable" };
+      logHandoff("snapshot_unavailable");
+    }
+    endStdin(g);
+  }
+
+  function validTask(task) {
+    return task === null || (task !== null && typeof task === "object" && typeof task.track === "string" && typeof task.slug === "string");
+  }
+
+  function takeSnapshot(g, message) {
+    if (g.snapId === null || message.id !== g.snapId) return;
+    g.snapId = null;
+    if (snapTimer !== null) options.clearTimer(snapTimer);
+    snapTimer = null;
+    var snapshot = message.snapshot;
+    if (snapshot !== null && typeof snapshot === "object" && snapshot.declared === true && validTask(snapshot.task) && typeof snapshot.scope === "string") {
+      handoff = { snapshot: { declared: true, task: snapshot.task === null ? null : { track: snapshot.task.track, slug: snapshot.task.slug }, scope: snapshot.scope } };
+    } else if (snapshot !== null && typeof snapshot === "object" && snapshot.declared === false && snapshot.unknownPrior === true) {
+      handoff = { unknown: "prior_unknown" };
+    } else if (snapshot !== null && typeof snapshot === "object" && snapshot.declared === false) {
+      handoff = null;
+    } else {
+      handoff = g.sawToolCall || g.carried ? { unknown: "snapshot_unavailable" } : null;
+    }
+    endStdin(g);
   }
 
   function start() {
     var started;
+    var token = options.makeToken();
     try {
-      started = options.launchChild();
+      started = options.launchChild(token);
     } catch (error) {
       return error;
     }
     child = started;
+    var g = {
+      child: started,
+      token: token,
+      ipcCapable: typeof started.send === "function",
+      helloSeen: false,
+      sawToolCall: false,
+      carried: false,
+      supportTimedOut: false,
+      lateNoted: false,
+      stdinEnded: false,
+      retired: false,
+      ipcClosed: false,
+      snapId: null
+    };
+    gen = g;
     stopping = false;
     startedAt = options.now();
     var buffered = "";
@@ -154,7 +262,7 @@ function createIdleProxy(options) {
       buffered += chunk;
       var newline = buffered.indexOf("\n");
       while (newline !== -1) {
-        fromChild(buffered.slice(0, newline));
+        fromChild(g, buffered.slice(0, newline));
         buffered = buffered.slice(newline + 1);
         newline = buffered.indexOf("\n");
       }
@@ -168,10 +276,19 @@ function createIdleProxy(options) {
     started.on("exit", function (code, signal) {
       onExit(started, code, signal);
     });
+    if (g.ipcCapable) {
+      started.on("message", function (message) {
+        onIpc(g, message);
+      });
+      started.on("disconnect", function () {
+        onDisconnect(g);
+      });
+    }
     touch();
     armIdle(options.idleMs);
     if (initRequest !== null) {
       resuming = true;
+      hold = null;
       var replay = parse(initRequest);
       replay.id = RESUME_ID;
       writeToChild(JSON.stringify(replay));
@@ -182,21 +299,141 @@ function createIdleProxy(options) {
   }
 
   function flush() {
-    var lines = queue;
+    var entries = queue;
     queue = [];
-    lines.forEach(writeToChild);
+    entries.forEach(forward);
+  }
+
+  // The hold on the host's messages ends: they go to the server, and idle checking, which skipped the hold, starts again.
+  function release() {
+    if (windowTimer !== null) options.clearTimer(windowTimer);
+    windowTimer = null;
+    hold = null;
+    resuming = false;
+    flush();
+    armIdle(options.idleMs);
+  }
+
+  // Something that could have changed the server's focus was sent and not answered in time: this server may or may not hold it. It is ended and its successor is told the focus is unknown.
+  function retire() {
+    var g = gen;
+    if (windowTimer !== null) options.clearTimer(windowTimer);
+    windowTimer = null;
+    var spent = options.now() - hold.origin;
+    hold = null;
+    g.retired = true;
+    stopping = true;
+    if (g.ipcCapable && !g.ipcClosed) sendIpc(g, { op: "abort", id: g.restoreId }, null);
+    endStdin(g);
+    var retired = child;
+    killTimer = options.setTimer(function () {
+      killTimer = null;
+      retired.kill("SIGKILL");
+    }, Math.max(0, RETIRE_TOTAL_MS - spent));
+    logHandoff("restore_timeout");
+  }
+
+  function beginHold() {
+    var g = gen;
+    if (handoff === null) return release();
+    if (!g.ipcCapable) {
+      handoff = null;
+      return release();
+    }
+    hold = { origin: options.now(), phase: "support", restoreId: null, commit: false };
+    windowTimer = options.setTimer(onWindow, FOCUS_WAIT_MS);
+    if (g.helloSeen) sendRestore();
+  }
+
+  function sendRestore() {
+    var g = gen;
+    var request = { op: "restore", id: nextIpcId++, budgetMs: Math.max(0, FOCUS_WAIT_MS - (options.now() - hold.origin)) };
+    if (handoff.snapshot) request.snapshot = handoff.snapshot;
+    else request.unknown = handoff.unknown;
+    hold.phase = "restoring";
+    hold.restoreId = request.id;
+    hold.commit = handoff.snapshot !== undefined;
+    g.restoreId = request.id;
+    g.carried = true;
+    handoff = null;
+    sendIpc(g, request, function () {
+      if (hold === null || g !== gen || hold.restoreId !== request.id) return;
+      restoreEnded("restore_failed");
+    });
+  }
+
+  // The restore did not finish (no answer in the window, a send that failed, a channel that closed): a note-only restore changes nothing, so the messages are released; one that may have committed retires the server.
+  function restoreEnded(kind) {
+    if (hold.commit) return retire();
+    logHandoff(kind);
+    release();
+  }
+
+  function onWindow() {
+    windowTimer = null;
+    if (hold === null) return;
+    if (hold.phase === "support") {
+      gen.supportTimedOut = true;
+      handoff = null;
+      logHandoff("support_unconfirmed");
+      return release();
+    }
+    restoreEnded("restore_timeout");
+  }
+
+  function onDisconnect(g) {
+    g.ipcClosed = true;
+    if (g !== gen) return;
+    if (g.snapId !== null) snapshotFailed(g);
+    if (hold === null) return;
+    if (hold.phase === "support") {
+      handoff = null;
+      logHandoff("channel_closed");
+      return release();
+    }
+    restoreEnded("channel_closed");
+  }
+
+  function onIpc(g, message) {
+    if (g !== gen || g.retired) return;
+    if (message === null || typeof message !== "object" || message.desk !== "focus-handoff" || message.v !== 1 || message.token !== g.token) return;
+    if (message.op === "hello") {
+      g.helloSeen = true;
+      if (hold !== null && hold.phase === "support") sendRestore();
+      else if (hold === null && g.supportTimedOut && !g.lateNoted) {
+        g.lateNoted = true;
+        sendIpc(g, { op: "restore", id: nextIpcId++, budgetMs: FOCUS_WAIT_MS, unknown: "hello_late" }, null);
+      }
+    } else if (message.op === "snapshot-result") {
+      takeSnapshot(g, message);
+    } else if (message.op === "restore-result" && hold !== null && hold.phase === "restoring" && message.id === hold.restoreId) {
+      logHandoff(RESTORE_OUTCOMES.indexOf(message.outcome) === -1 ? "unknown" : message.outcome);
+      release();
+    }
+  }
+
+  function moveServerCalls(g) {
+    if (Object.keys(retiredServerIds).length > 1000) retiredServerIds = {};
+    Object.keys(serverGens).forEach(function (key) {
+      if (serverGens[key] === g) retiredServerIds[key] = true;
+    });
+    serverCalls = {};
+    serverGens = {};
   }
 
   function onExit(exited, code, signal) {
     if (exited !== child) return;
+    var g = gen;
     child = null;
+    gen = null;
     resuming = false;
-    if (killTimer !== null) options.clearTimer(killTimer);
-    killTimer = null;
+    hold = null;
+    clearTimer();
+    moveServerCalls(g);
     if (stopping) {
       stopping = false;
       clientCalls = {};
-      serverCalls = {};
+      if (g.retired) handoff = { unknown: "restore_timeout" };
       options.compact();
       if (clientEnded) return finish(code || 0);
       if (queue.length > 0) ensureChild();
@@ -210,9 +447,9 @@ function createIdleProxy(options) {
       return finish(code === null || code === undefined ? 1 : code);
     }
     options.stderr.write("[desk-mcp] idle proxy: the server " + reason + "; it restarts on the next message\n");
+    if ((g.sawToolCall || g.carried) && handoff === null) handoff = { unknown: "server_crashed" };
     var lost = Object.keys(clientCalls);
     clientCalls = {};
-    serverCalls = {};
     lost.forEach(function (key) {
       toClient(JSON.stringify({
         jsonrpc: "2.0",
@@ -231,20 +468,21 @@ function createIdleProxy(options) {
     }
   }
 
-  function fromChild(line) {
-    if (line === "") return;
+  function fromChild(g, line) {
+    if (line === "" || g.retired) return;
     touch();
     var message = parse(line);
     if (message !== null && hasId(message)) {
-      if (message.id === RESUME_ID && resuming) {
-        resuming = false;
+      if (message.id === RESUME_ID && resuming && hold === null && g === gen) {
         if (initialized !== null) writeToChild(initialized);
         if (logLevel !== null) writeToChild(logLevel);
-        flush();
+        beginHold();
         return;
       }
-      if (message.method !== undefined) track(serverCalls, message.id);
-      else delete clientCalls[JSON.stringify(message.id)];
+      if (message.method !== undefined) {
+        track(serverCalls, message.id);
+        serverGens[JSON.stringify(message.id)] = g;
+      } else delete clientCalls[JSON.stringify(message.id)];
     }
     toClient(line);
   }
@@ -264,17 +502,29 @@ function createIdleProxy(options) {
       } else if (message.method === "notifications/cancelled" && message.params && message.params.requestId !== undefined) {
         delete clientCalls[JSON.stringify(message.params.requestId)];
       }
-      if (hasId(message)) {
-        if (message.method !== undefined) track(clientCalls, message.id);
-        else delete serverCalls[JSON.stringify(message.id)];
+      if (hasId(message) && message.method === undefined) {
+        // The host's answer to a request the server made belongs to that server alone: it is sent at once, even while the host's other messages are held, and never to another server.
+        var key = JSON.stringify(message.id);
+        if (serverGens[key] !== undefined && serverGens[key] === gen && !gen.stdinEnded && child !== null) {
+          delete serverCalls[key];
+          delete serverGens[key];
+          writeToChild(line);
+          return;
+        }
+        if (retiredServerIds[key]) {
+          delete retiredServerIds[key];
+          return;
+        }
+        delete serverCalls[key];
+        delete serverGens[key];
       }
     }
     if (child === null || stopping || resuming) {
-      queue.push(line);
+      queue.push({ line: line, message: message });
       if (child === null) ensureChild();
       return;
     }
-    writeToChild(line);
+    forward({ line: line, message: message });
     armIdle(options.idleMs);
   }
 
@@ -282,7 +532,8 @@ function createIdleProxy(options) {
     clientEnded = true;
     clearTimer();
     if (child === null) return finish(0);
-    if (!stopping) stop();
+    if (!stopping) return stop();
+    endStdin(gen);
   }
 
   function begin() {
@@ -386,8 +637,12 @@ function runIdleProxy(o) {
   var env = pick("env");
   var spawn = pick("spawn");
   var proxy = createIdleProxy({
-    launchChild: function () {
+    makeToken: o.makeToken !== undefined ? o.makeToken : function () {
+      return crypto.randomBytes(16).toString("hex");
+    },
+    launchChild: function (token) {
       var childEnv = Object.assign({}, env);
+      childEnv.DESK_FOCUS_HANDOFF_TOKEN = token;
       // The child's parent is this proxy, not the host: the host's own pid is what "other sessions" must leave out.
       if (!childEnv.DESK_SESSION_HOST_PID) childEnv.DESK_SESSION_HOST_PID = String(process.ppid);
       var indexFile = o.indexFile;
@@ -405,7 +660,7 @@ function runIdleProxy(o) {
         indexFile = newest.indexFile;
         pick("stderr").write("[desk-mcp] idle proxy: running Desk " + newest.version + " from " + newest.pluginRoot + "\n");
       }
-      return spawn(o.node, [indexFile].concat(o.args), { stdio: ["pipe", "pipe", "inherit"], env: childEnv, windowsHide: true });
+      return spawn(o.node, [indexFile].concat(o.args), { stdio: ["pipe", "pipe", "inherit", "ipc"], env: childEnv, windowsHide: true });
     },
     stdin: pick("stdin"),
     stdout: pick("stdout"),

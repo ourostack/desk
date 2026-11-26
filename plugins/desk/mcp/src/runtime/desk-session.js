@@ -91,13 +91,28 @@ export const LAUNCHER_READ_ONLY_CODES = Object.freeze([
 export function createFocusHolder() {
   let current = null
   let declared = false
+  let note = null
   return {
     get: () => current,
     set(value) {
       current = value
       declared = true
+      note = null
     },
     declared: () => declared,
+    /** After an idle restart that could not carry the focus over: `{ kind: "unknown" | "scope_changed" | "card_missing", task? }`, or null. Any declaration clears it. */
+    note: () => note,
+    setNote(value) {
+      if (!declared && note === null) note = value
+    },
+    /** Puts back a focus carried over an idle restart, only while nothing has been declared in this session. */
+    restore(value) {
+      if (declared) return false
+      current = value
+      declared = true
+      note = null
+      return true
+    },
   }
 }
 
@@ -805,6 +820,87 @@ export function createDeskSession(deps) {
     headWatch = null
   }
 
+  // Who owns a focus: the desk and the person, authority and policy that decide what this session may read and write. Nothing about the runtime that serves it (version, build, cache, status), so a new release keeps the same scope. Null while any of that is unsettled.
+  function focusScope() {
+    const policy = resolvedInputs?.activation?.readinessPolicy
+    if (disposed || context.resolutionFailed || !context.root || context.authorityAdmitted !== true || !policy) return null
+    return createHash("sha256").update(JSON.stringify({
+      v: 1,
+      root: context.root.root,
+      argsPerson: args.person ?? null,
+      person: context.person ?? null,
+      authorityMode: context.authority?.mode ?? null,
+      authorityPerson: context.authority?.person ?? null,
+      writeAuthority: policy.write_authority ?? null,
+      authorityProvider: policy.authority_provider ?? null,
+      member: context.member?.person ?? null,
+    })).digest("hex")
+  }
+
+  // What an idle stop keeps for the next server, in the proxy's memory only: the declared focus with the scope it was declared in, or that Desk no longer knows it.
+  function focusSnapshot() {
+    if (focus.declared()) {
+      const scope = focusScope()
+      return scope === null ? { declared: false, unknownPrior: true } : { declared: true, task: focus.get(), scope }
+    }
+    return focus.note() === null ? { declared: false } : { declared: false, unknownPrior: true }
+  }
+
+  const activeRestores = new Set()
+  const validTask = (task) => task === null || (task !== null && typeof task === "object" && typeof task.track === "string" && typeof task.slug === "string")
+
+  // Puts back the focus a previous server held, or notes honestly that it cannot. It only reads (the card's existence); it never declares, creates, writes or reports status. Every path is bounded by `budgetMs` (at most FOCUS_WAIT_MS), and an abort or that deadline releases the operation queue and keeps late work from committing.
+  async function restoreFocus(request, { budgetMs = FOCUS_WAIT_MS, signal } = {}) {
+    const result = (outcome, note) => {
+      if (note !== undefined) focus.setNote(note)
+      return { outcome }
+    }
+    const snapshot = request?.snapshot
+    if (snapshot === undefined) return request?.unknown === undefined ? result("undeclared") : result("unknown", { kind: "unknown" })
+    if (snapshot === null || typeof snapshot !== "object" || snapshot.declared !== true || !validTask(snapshot.task) || typeof snapshot.scope !== "string") return result("unknown", { kind: "unknown" })
+    const wait = Math.min(FOCUS_WAIT_MS, Math.max(0, Number.isFinite(budgetMs) ? budgetMs : 0))
+    let aborted = false
+    let timer
+    let abort
+    const abortPromise = new Promise((resolve) => {
+      abort = () => { aborted = true; resolve({ outcome: "unknown" }) }
+      timer = setTimeout(abort, wait)
+    })
+    signal?.addEventListener("abort", abort, { once: true })
+    activeRestores.add(abort)
+    const run = async () => {
+      if (aborted || disposed) return { outcome: "unknown" }
+      if (!requirementMet("focus", context)) return result("unknown", { kind: "unknown" })
+      const scope = focusScope()
+      if (scope === null) return result("unknown", { kind: "unknown" })
+      if (scope !== snapshot.scope) return result("scope_changed", { kind: "scope_changed" })
+      if (focus.declared()) return { outcome: "already_declared" }
+      if (snapshot.task === null) return focus.restore(null) ? { outcome: "restored" } : { outcome: "already_declared" }
+      if (typeof context.runtimeServer.checkFocusCard !== "function") return result("unknown", { kind: "unknown" })
+      const deskRoot = context.root.root
+      const task = { track: snapshot.task.track, slug: snapshot.task.slug }
+      let found
+      try {
+        found = (await Promise.race([context.runtimeServer.checkFocusCard({ deskRoot, person: context.person ?? null, ...task }), abortPromise.then(() => null)]))?.found
+      } catch {
+        return aborted ? { outcome: "unknown" } : result("unknown", { kind: "unknown" })
+      }
+      // Whatever happened while the lookup ran (an abort, a new root, a changed authority, a declaration) wins over this answer.
+      if (aborted || disposed || context.root?.root !== deskRoot || focusScope() !== scope) return { outcome: "unknown" }
+      if (focus.declared()) return { outcome: "already_declared" }
+      if (found === true) return focus.restore(task) ? { outcome: "restored" } : { outcome: "already_declared" }
+      return result("card_missing", { kind: "card_missing", task })
+    }
+    try {
+      const gated = admitted({ waitMs: wait, revalidateOnly: requirementMet("focus", context), pending: () => result("unknown", aborted ? undefined : { kind: "unknown" }), work: run })
+      return await Promise.race([gated, abortPromise])
+    } finally {
+      clearTimeout(timer)
+      signal?.removeEventListener("abort", abort)
+      activeRestores.delete(abort)
+    }
+  }
+
   // `search` null leaves the search engine out: a write then changes only its files, which the engine's watcher or next read picks up.
   function statusContext(search) {
     return {
@@ -829,6 +925,38 @@ export function createDeskSession(deps) {
     })
   }
 
+  // Runs `work` once admission is settled, inside the operation queue.
+  async function admitted({ waitMs, revalidateOnly, pending, work }) {
+    // A background attempt (a .git/HEAD change, a retry on the backoff) can start after this call's own
+    // attempt settled and before its turn to dispatch. Never dispatch across it: join it and gate again, a
+    // bounded number of times and only while the call's wait budget lasts, instead of refusing a call that
+    // arrived while the session was admitted. The budget bounds the waits on admission; waiting for earlier
+    // operations to finish (operation()) is not counted against it, as before.
+    const deadline = Date.now() + waitMs
+    let budget = waitMs
+    for (let gate = 0; ; gate += 1) {
+      await admission.refresh({
+        waitMs: budget,
+        // A running status/HEAD attempt may have sampled context before this
+        // operation arrived. Join its completion, then resolve inputs anew.
+        // A rejoin only joins: the first gate's request stays queued, so a check that started after this call arrived always completes before dispatch. Asking for another
+        // fresh sample there made calls that arrive together rejoin in turn, each reading the other's
+        // revalidation as a background attempt, until one ran out of rejoins and was refused.
+        fresh: gate === 0,
+        revalidateOnly,
+      })
+      const result = await operation((release) => {
+        if (!disposed && admission.running && gate < GATE_REJOINS) return GATE_RETRY
+        if (disposed || admission.running) return pending()
+        return work(release)
+      })
+      if (result !== GATE_RETRY) return result
+      budget = deadline - Date.now()
+      // No budget left: refuse now rather than queue another revalidation.
+      if (budget <= 0) return pending()
+    }
+  }
+
   async function callTool({ name, input = {}, signal, requestId }) {
     if (!TOOL_NAMES.includes(name)) {
       return { content: [{ type: "text", text: unknownToolMessage(name, TOOL_NAMES, "Desk's") }], structuredContent: { code: "unknown_door" }, isError: true }
@@ -844,34 +972,12 @@ export function createDeskSession(deps) {
       if (name === "desk_skill") return deskSkill(input, { env })
       if (name === "desk_doctor" && !context.root) return await deskDoctor(input, signal)
       const waitMs = name === "task_focus" ? deps.focusWaitMs ?? FOCUS_WAIT_MS : GATE_WAIT_MS
-      // A background attempt (a .git/HEAD change, a retry on the backoff) can start after this call's own
-      // attempt settled and before its turn to dispatch. Never dispatch across it: join it and gate again, a
-      // bounded number of times and only while the call's wait budget lasts, instead of refusing a call that
-      // arrived while the session was admitted. The budget bounds the waits on admission; waiting for earlier
-      // operations to finish (operation()) is not counted against it, as before.
-      const deadline = Date.now() + waitMs
-      let budget = waitMs
-      for (let gate = 0; ; gate += 1) {
-        await admission.refresh({
-          waitMs: budget,
-          // A running status/HEAD attempt may have sampled context before this
-          // operation arrived. Join its completion, then resolve inputs anew.
-          // A rejoin only joins: the first gate's request stays queued, so a check that started after this call arrived always completes before dispatch. Asking for another
-          // fresh sample there made calls that arrive together rejoin in turn, each reading the other's
-          // revalidation as a background attempt, until one ran out of rejoins and was refused.
-          fresh: gate === 0,
-          revalidateOnly: name === "desk_doctor" || requirementMet(toolRequirement(name), context),
-        })
-        const result = await operation((release) => {
-          if (!disposed && admission.running && gate < GATE_REJOINS) return GATE_RETRY
-          if (disposed || admission.running) return pendingRefusal(name)
-          return dispatch(name, input, signal, release, requestId)
-        })
-        if (result !== GATE_RETRY) return result
-        budget = deadline - Date.now()
-        // No budget left: refuse now rather than queue another revalidation.
-        if (budget <= 0) return pendingRefusal(name)
-      }
+      return await admitted({
+        waitMs,
+        revalidateOnly: name === "desk_doctor" || requirementMet(toolRequirement(name), context),
+        pending: () => pendingRefusal(name),
+        work: (release) => dispatch(name, input, signal, release, requestId),
+      })
     } catch (error) {
       return toolException(name, error)
     }
@@ -1218,6 +1324,8 @@ export function createDeskSession(deps) {
     admission,
     context,
     callTool,
+    focusSnapshot,
+    restoreFocus,
     recordException,
     /** The plugin folder the serving runtime loaded from (the newest release's copy after a swap), for what the runtime itself produces, such as the boot. */
     servingPluginRoot: () => runtimeIdentity({ env, runtime: context.runtime }).plugin_root,
@@ -1229,6 +1337,7 @@ export function createDeskSession(deps) {
     lastStartWritten: () => lastStart.written(),
     dispose() {
       disposed = true
+      for (const abort of [...activeRestores]) abort()
       invalidateStatus()
       const attempt = admission.dispose()
       clearTimeout(leftoversTimer)

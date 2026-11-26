@@ -389,3 +389,19 @@ test("the focus holder keeps the value and is undeclared until the first set", (
   fresh.set(null)
   assert.equal(fresh.declared(), true)
 })
+
+test("focusNote says what is unknown after an idle restart that could not carry the focus, and stays silent once declared", () => {
+  for (const kind of ["unknown", "scope_changed", "card_missing"]) {
+    const { statusContext } = ctx()
+    statusContext.focus.setNote({ kind, task: { track: "tr", slug: "alpha-work" } })
+    const note = focusNote(statusContext)
+    assert.ok(typeof note === "string" && note.length > 0)
+    assert.notEqual(note, NO_FOCUS_HINT, kind)
+  }
+  const { focus, statusContext } = ctx()
+  focus.setNote({ kind: "unknown" })
+  focus.set(null)
+  assert.equal(focusNote(statusContext), undefined)
+  const bare = { focus: { get: () => null, declared: () => false } }
+  assert.equal(focusNote(bare), NO_FOCUS_HINT)
+})
