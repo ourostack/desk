@@ -36,7 +36,7 @@ export const focusedHint = ({ track, slug }) => `If you are the session's main a
 
 const AFTER_RESTART = "call task_focus with the task you are working on, or with clear: true for none."
 /** The hint when the focus held before an idle restart could not be carried over: Desk says what it does not know, never "no task in focus". */
-export function carriedNoteHint(note) {
+function carriedNoteHint(note) {
   if (note.kind === "card_missing") return `If you are the session's main agent: ${note.task.track}/${note.task.slug} was in focus before the idle restart, but its card was not found; ${AFTER_RESTART}`
   if (note.kind === "scope_changed") return `If you are the session's main agent: the focus was not carried over the idle restart because the desk, person or authority changed; ${AFTER_RESTART}`
   return `If you are the session's main agent: Desk cannot tell whether a task was in focus before the idle restart; ${AFTER_RESTART}`

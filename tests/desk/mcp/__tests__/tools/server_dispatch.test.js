@@ -6,7 +6,7 @@ import { strict as assert } from "node:assert"
 import { createHash } from "node:crypto"
 import { promises as fs } from "node:fs"
 import * as path from "node:path"
-import { callTool, createMcpServer, createMcpTransport, startServer, TOOL_IMPLS } from "../../../../../plugins/desk/mcp/src/server.js"
+import { callTool, checkFocusCard, createMcpServer, createMcpTransport, startServer, TOOL_IMPLS } from "../../../../../plugins/desk/mcp/src/server.js"
 import { TOOL_INPUT_SCHEMAS } from "../../../../../plugins/desk/mcp/src/tool-schemas.js"
 import { TOOL_NAMES } from "../../../../../plugins/desk/mcp/src/tool-names.js"
 import { mkTempDeskRoot } from "./_helpers.js"
@@ -571,4 +571,13 @@ test("calling desk_work_ledger is refused without touching retained ledger parti
     restore()
     await cleanup(preserved.base)
   }
+})
+
+test("checkFocusCard reads whether a task card exists without writing, and refuses names that are not task folders", async () => {
+  const root = await mkTempDeskRoot()
+  await fs.mkdir(path.join(root, "ops", "harbor-lights"), { recursive: true })
+  await fs.writeFile(path.join(root, "ops", "harbor-lights", "task.md"), "---\nstatus: paused\n---\n")
+  assert.deepEqual(await checkFocusCard({ deskRoot: root, track: "ops", slug: "harbor-lights" }), { found: true })
+  assert.deepEqual(await checkFocusCard({ deskRoot: root, track: "ops", slug: "gone" }), { found: false })
+  assert.deepEqual(await checkFocusCard({ deskRoot: root, track: "../ops", slug: "harbor-lights" }), { found: false })
 })
