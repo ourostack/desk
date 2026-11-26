@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.610 — 2026-11-26
+
+A relay poll no longer reports a read that Desk held locally under the GitHub quota floor as a spent call. The hold sends no request, so `relays poll` and `relays status` showed `spent 1` for zero requests on the wire; it now shows 0. A real HTTP 429, a network failure, a write and every answer other than a free `304` still count as before. Partial change for [#1803](https://github.com/ourostack/desk/issues/1803).
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.609 — 2026-11-26
 
 `task_focus` now survives an idle release of the Desk server. When the idle proxy ends the server child, it keeps the declared focus (or the deliberate clear) in its own memory and, over a private parent-child channel that is not an MCP method, hands it to the next child. The new server restores it only after checking that the root and write scope are unchanged and that the card still exists, and it writes nothing to the desk to do so. When the focus cannot be restored (the card moved, the scope changed, the restore timed out, the old server crashed, or the old server could not hand the focus over), `task_update` and the other task tools now say the earlier focus is unknown and to declare it again, instead of the misleading "no task in focus" hint. The focus is still memory-only: it is lost when the proxy or host ends, and an older server that does not speak the channel behaves as before. See [mcp/README.md](mcp/README.md).
