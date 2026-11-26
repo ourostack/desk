@@ -327,6 +327,8 @@ async function saveDesk({ deskRoot, input, person = null, env = process.env, spa
   const unstaged = paths.filter((p) => hasUnstagedWork(deskRoot, [p], spawnGit))
   if (unstaged.length === 0 && (stagedChanges(deskRoot, paths, spawnGit)?.length ?? 0) === 0) {
     const unsaved = unsavedPaths(deskRoot, paths, spawnGit)
+    const unknown = unclassified(deskRoot, paths, message, unsaved)
+    if (unknown !== null) return unknown
     return unsaved.length === 0 ? { status: "nothing_to_commit" } : { status: "nothing_to_commit", unsaved_paths: unsaved, desk_note: UNSAVED_NOTE }
   }
 
@@ -356,6 +358,8 @@ async function saveDesk({ deskRoot, input, person = null, env = process.env, spa
   const changed = paths.filter((p, i) => unstaged.includes(p) || everything.some((change) => change.paths.some((q) => covered(q, listed[i]))))
   const rest = paths.filter((p) => !changed.includes(p))
   const unsaved = unsavedPaths(deskRoot, rest, spawnGit)
+  const unknown = unclassified(deskRoot, paths, message, unsaved)
+  if (unknown !== null) return unknown
   const unchanged = rest.filter((p) => !unsaved.some((u) => u.path === p))
   const committed = commitPaths(deskRoot, changed, message, spawnGit, undefined, { keepLocal: true })
   if (!committed.ok) {
@@ -385,7 +389,7 @@ async function saveDesk({ deskRoot, input, person = null, env = process.env, spa
   }
 }
 
-const UNSAVED_NOTE = "Each path in unsaved_paths was NOT saved and is not on the remote: Git never holds its bytes. Save a copy under a name no ignore rule covers (a .txt suffix, say), or ask the owner to change the ignore rule; do not call it saved."
+const UNSAVED_NOTE = "This save did not commit the paths in unsaved_paths: this checkout's Git does not track them (ignored, or not in Git), so Desk cannot show them on the remote either; verify any you need there. To protect one, save a copy under a name no ignore rule covers (a .txt suffix, say), or ask the owner to change the ignore rule."
 
 function unsavedPaths(deskRoot, paths, spawnGit) {
   return paths.flatMap((p) => {
@@ -393,6 +397,12 @@ function unsavedPaths(deskRoot, paths, spawnGit) {
     const reason = whyNotSaved(deskRoot, rel, spawnGit)
     return reason === null ? [] : [{ path: p, reason }]
   })
+}
+
+// Git could not say whether a path is tracked or ignored. Nothing was committed (this runs before any commit), and the path is neither called saved, unchanged nor unsaved.
+function unclassified(deskRoot, paths, message, unsaved) {
+  const unknown = unsaved.filter((u) => u.reason === "unknown").map((u) => u.path)
+  return unknown.length === 0 ? null : { status: "commit_failed", commit: notCommitted(deskRoot, paths, message, `git could not tell whether ${unknown.join(", ")} is tracked or ignored, so Desk committed nothing and cannot say what was saved; check the Git state and save again`) }
 }
 
 // A stage or read failure: nothing was committed, and the route finishes the commit by hand (#623).
