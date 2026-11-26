@@ -1595,21 +1595,65 @@ const running = (pid) => {
   }
 }
 
+// Windows reads the table in stages, each announced on stderr with its wall-clock time, so a read that does not finish
+// names the stage it reached (shell start, CIM query or JSON) and how long each took. An unreadable table fails the
+// test; it is never taken for an empty one.
+const WINDOWS_TABLE_SCRIPT = [
+  "$ErrorActionPreference='Stop'",
+  "function mark($n){[Console]::Error.WriteLine('stage '+$n+' '+[DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds())}",
+  "mark 'shell'",
+  "$rows=@(Get-CimInstance Win32_Process)",
+  "mark 'cim'",
+  "$json=$rows | Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress",
+  "mark 'json'",
+  "[Console]::Out.Write($json)",
+].join(";")
+const tableStages = (stderr, began) => (stderr.match(/^stage \w+ \d+$/gmu) ?? []).map((line) => {
+  const [, name, at] = line.split(" ")
+  return `${name}+${Number(at) - began}ms`
+}).join(" ")
+const fixtureTableCommand = () => isWindows
+  ? [web.processTableCommand("win32", process.env)[0], ["-NoProfile", "-NonInteractive", "-Command", WINDOWS_TABLE_SCRIPT]]
+  : ["ps", ["-A", "-o", "pid=", "-o", "command="]]
+
+function readFixtureTable([file, args], timeout = 20000) {
+  const began = Date.now()
+  const result = spawnSync(file, args, { encoding: "utf8", timeout, windowsHide: true, maxBuffer: 16 * 1024 * 1024 })
+  const stages = tableStages(result.stderr ?? "", began)
+  const took = Date.now() - began
+  assert.equal(result.status, 0, `fixture process table failed (${result.error?.code ?? result.signal ?? "no signal"}) after ${took}ms; stages reached: ${stages || "none"}: ${result.stderr}`)
+  return { stdout: result.stdout, took, stages }
+}
+
+// A first PowerShell start on a fresh Windows runner takes 1.5 to 6.3 s, 0.1 s once warm, and is the one stage that varies
+// (#1848: 27 fresh runners, whole read 2.8 to 7.9 s). Read once before any test so no assertion's read is the cold one; the read
+// that follows still has to succeed, and a failure here is reported by it, not hidden.
+if (isWindows && !sourceOnly) {
+  try {
+    const warm = readFixtureTable(fixtureTableCommand(), 60000)
+    console.log(`# fixture process table warm-up: ${warm.took}ms, stages ${warm.stages}`)
+  } catch (error) {
+    console.log(`# fixture process table warm-up did not finish: ${error.message.split("\n")[0]}`)
+  }
+}
+
 function fakeProcessTable() {
-  const command = isWindows
-    ? [web.processTableCommand("win32", process.env)[0], ["-NoProfile", "-NonInteractive", "-Command", "Get-CimInstance Win32_Process | Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress"]]
-    : ["ps", ["-A", "-o", "pid=", "-o", "command="]]
-  const result = spawnSync(command[0], command[1], { encoding: "utf8", timeout: 20000, windowsHide: true, maxBuffer: 16 * 1024 * 1024 })
-  assert.equal(result.status, 0, `fixture process table failed (${result.error?.code ?? result.signal ?? "no signal"}): ${result.stderr}`)
+  const { stdout } = readFixtureTable(fixtureTableCommand())
   if (isWindows) {
-    const rows = JSON.parse(result.stdout)
+    const rows = JSON.parse(stdout)
     return (Array.isArray(rows) ? rows : [rows]).map((row) => ({ pid: row.ProcessId, command: row.CommandLine ?? "" }))
   }
-  return result.stdout.split(/\r?\n/u).flatMap((line) => {
+  return stdout.split(/\r?\n/u).flatMap((line) => {
     const match = /^\s*(\d+)\s+(.*)$/u.exec(line)
     return match ? [{ pid: Number(match[1]), command: match[2] }] : []
   })
 }
+
+test("a fixture process table that does not finish fails and names the stage it reached", () => {
+  const stalls = [process.execPath, ["-e", "console.error('stage shell ' + Date.now()); setInterval(() => {}, 1000)"]]
+  assert.throws(() => readFixtureTable(stalls, 1000), /fixture process table failed \(ETIMEDOUT\) after \d+ms; stages reached: shell\+\d+ms:/u)
+  assert.throws(() => readFixtureTable([process.execPath, ["-e", "process.exit(3)"]]), /fixture process table failed \(no signal\) after \d+ms; stages reached: none:/u)
+})
 
 // The log's PIDs can be reused; only this fixture's unique script paths identify its fakes.
 const fakesRunning = (root, table = fakeProcessTable()) => {
