@@ -384,6 +384,18 @@ test("racing processes never lose the lowest remaining any of them saw: the read
   assert.equal((await read(lowest - 1)).status, 200)
 })
 
+test("a half-written last line of an observation log is not an observation: a read is not held by '35' cut from '3500'", async (t) => {
+  const { dir, env } = ledger(t)
+  writeFileSync(path.join(dir, "personal.rate"), `4000 ${RESET} 5000 ${NOW}\n`)
+  for (const torn of ["35", `35 ${RESET}`, `35 ${RESET} 50`]) {
+    writeFileSync(path.join(dir, `personal.rate.obs.${RESET}`), `3900 ${RESET} 5000\n${torn}`)
+    const read = ledgeredFetch(async () => answer(200), { env, login: () => "ari", now: clockNow })("https://api.github.com/repos/o/r/issues/1", auth())
+    assert.equal((await read).status, 200, `a torn tail ${JSON.stringify(torn)} must not hold the read`)
+  }
+  writeFileSync(path.join(dir, `personal.rate.obs.${RESET}`), `3900 ${RESET} 5000\n35 ${RESET} 5000\n`)
+  await assert.rejects(ledgeredFetch(async () => answer(200), { env, login: () => "ari", now: clockNow })("https://api.github.com/repos/o/r/issues/1", auth()), SpendHeld)
+})
+
 test("same-window numbers only ever tighten: a rate_limit answer cannot raise what a header already showed, and a later window replaces it", async (t) => {
   const { dir, env, rate } = ledger(t)
   writeFileSync(path.join(dir, "personal.rate"), `4000 ${RESET} 5000 ${NOW - 120}\n`)
