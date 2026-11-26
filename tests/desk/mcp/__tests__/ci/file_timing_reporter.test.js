@@ -76,59 +76,86 @@ test("an unwritable snapshot fails reporting instead of silently losing evidence
   })), { code: "ENOENT" })
 })
 
-test("an interrupted real test runner leaves valid timings naming the blocked file", async () => {
-  const root = await mkTempRoot("file-timing-interrupted-")
-  const first = path.join(root, "first.test.mjs")
-  const second = path.join(root, "second.test.mjs")
-  const pidPath = path.join(root, "blocked.pid")
-  const timingsPath = path.join(root, "timings.json")
-  writeFileSync(first, 'import { test } from "node:test"; test("completed", () => {});\n')
-  writeFileSync(second, `import { writeFileSync } from "node:fs";
+const lagReporterSource = (delayMs) => `import fileTimingReporter from ${JSON.stringify(reporter)}
+const delayed = async function* (source) {
+  for await (const event of source) {
+    if (event.type === "test:dequeue" && event.data?.name?.endsWith("second.test.mjs")) {
+      await new Promise((resolve) => setTimeout(resolve, ${delayMs}))
+    }
+    yield event
+  }
+}
+export default (source, options) => fileTimingReporter(delayed(source), options)
+`
+
+// The blocked fixture starts when the runner spawns it; the reporter learns of it from a separate event stream, so the snapshot is read only once it names the file.
+for (const [label, reporterLag] of [["a prompt reporter", 0], ["a reporter that lags behind the spawned file", 600]]) {
+  test(`an interrupted real test runner leaves valid timings naming the blocked file, with ${label}`, async () => {
+    const root = await mkTempRoot("file-timing-interrupted-")
+    const first = path.join(root, "first.test.mjs")
+    const second = path.join(root, "second.test.mjs")
+    const pidPath = path.join(root, "blocked.pid")
+    const timingsPath = path.join(root, "timings.json")
+    let reporterUrl = reporter
+    if (reporterLag) {
+      const lagPath = path.join(root, "lag-reporter.mjs")
+      writeFileSync(lagPath, lagReporterSource(reporterLag))
+      reporterUrl = pathToFileURL(lagPath).href
+    }
+    writeFileSync(first, 'import { test } from "node:test"; test("completed", () => {});\n')
+    writeFileSync(second, `import { writeFileSync } from "node:fs";
 writeFileSync(${JSON.stringify(pidPath)}, String(process.pid));
 setTimeout(() => process.exit(2), 30000);
 `)
-  // These synthetic files contain no measured code; do not multiply the coverage loader's startup in them.
-  const env = { ...process.env, NODE_OPTIONS: "", DESK_COVERAGE_TIMINGS_PATH: timingsPath }
-  delete env.NODE_TEST_CONTEXT
-  const child = spawn(process.execPath, [
-    "--test", "--test-concurrency=1",
-    `--test-reporter=${reporter}`, "--test-reporter-destination=stdout",
-    first, second,
-  ], { env, stdio: ["ignore", "pipe", "pipe"] })
-  let stderr = ""
-  child.stderr.on("data", (chunk) => { stderr += chunk })
-  child.stdout.resume()
-  const closed = once(child, "close")
-  let blockedPid
-  try {
-    const deadline = Date.now() + 15000
-    while (!existsSync(pidPath)) {
-      assert.equal(child.exitCode, null, stderr)
-      assert.ok(Date.now() < deadline, `blocked fixture did not start: ${stderr}`)
-      await new Promise((resolve) => setTimeout(resolve, 20))
-    }
-    blockedPid = Number(readFileSync(pidPath, "utf8"))
-    assert.ok(existsSync(timingsPath), `no snapshot while the real file is blocked: ${stderr}`)
-    const before = JSON.parse(readFileSync(timingsPath, "utf8"))
-    assert.equal(Object.keys(before.file_seconds).length, 1)
-    assert.equal(path.basename(before.running_files[0].file), "second.test.mjs")
-    child.kill("SIGTERM")
-    await closed
-    assert.deepEqual(JSON.parse(readFileSync(timingsPath, "utf8")), before)
-  } finally {
-    if (child.exitCode === null && child.signalCode === null) child.kill("SIGTERM")
-    await closed
-    if (blockedPid === undefined && existsSync(pidPath)) blockedPid = Number(readFileSync(pidPath, "utf8"))
-    if (blockedPid !== undefined) {
-      try {
-        process.kill(blockedPid, "SIGTERM")
-      } catch (error) {
-        if (error.code !== "ESRCH") throw error
+    // These synthetic files contain no measured code; do not multiply the coverage loader's startup in them.
+    const env = { ...process.env, NODE_OPTIONS: "", DESK_COVERAGE_TIMINGS_PATH: timingsPath }
+    delete env.NODE_TEST_CONTEXT
+    const child = spawn(process.execPath, [
+      "--test", "--test-concurrency=1",
+      `--test-reporter=${reporterUrl}`, "--test-reporter-destination=stdout",
+      first, second,
+    ], { env, stdio: ["ignore", "pipe", "pipe"] })
+    let stderr = ""
+    child.stderr.on("data", (chunk) => { stderr += chunk })
+    child.stdout.resume()
+    const closed = once(child, "close")
+    let blockedPid
+    try {
+      const deadline = Date.now() + 15000
+      while (!existsSync(pidPath)) {
+        assert.equal(child.exitCode, null, stderr)
+        assert.ok(Date.now() < deadline, `blocked fixture did not start: ${stderr}`)
+        await new Promise((resolve) => setTimeout(resolve, 20))
       }
-      await waitForProcessesGone([blockedPid])
+      blockedPid = Number(readFileSync(pidPath, "utf8"))
+      let before
+      while (true) {
+        assert.ok(existsSync(timingsPath), `no snapshot while the real file is blocked: ${stderr}`)
+        before = JSON.parse(readFileSync(timingsPath, "utf8"))
+        if (Object.keys(before.file_seconds).length === 1 && before.running_files.length === 1) break
+        assert.equal(child.exitCode, null, stderr)
+        assert.ok(Date.now() < deadline, `the snapshot never named the blocked file: ${JSON.stringify(before)} ${stderr}`)
+        await new Promise((resolve) => setTimeout(resolve, 20))
+      }
+      assert.equal(path.basename(before.running_files[0].file), "second.test.mjs")
+      child.kill("SIGTERM")
+      await closed
+      assert.deepEqual(JSON.parse(readFileSync(timingsPath, "utf8")), before)
+    } finally {
+      if (child.exitCode === null && child.signalCode === null) child.kill("SIGTERM")
+      await closed
+      if (blockedPid === undefined && existsSync(pidPath)) blockedPid = Number(readFileSync(pidPath, "utf8"))
+      if (blockedPid !== undefined) {
+        try {
+          process.kill(blockedPid, "SIGTERM")
+        } catch (error) {
+          if (error.code !== "ESRCH") throw error
+        }
+        await waitForProcessesGone([blockedPid])
+      }
     }
-  }
-})
+  })
+}
 
 test("the watchdog artifact retains the test argument after a long inline loader", {
   skip: process.platform === "win32",
