@@ -322,7 +322,7 @@ function transcodeCookies(file, key) {
 function copyProfile(source, dest, app, options) {
   var keyReport = {};
   var cookieKey = options && "cookieKey" in options ? options.cookieKey : keychainCookieKey(app, process.platform, options && options.run || childProcess.execFileSync, keyReport);
-  var cookies = { encrypted: 0, readable: 0 };
+  var cookies = { encrypted: 0, readable: 0, uninspected: 0 };
   var state;
   try { state = readProfileFile(path.join(source, "Local State")); } catch (error) {
     if (error && error.permissionDenied) throw copyPermissionError(app);
@@ -374,18 +374,19 @@ function copyProfile(source, dest, app, options) {
       try { fs.writeFileSync(path.join(to, entry.name), bytes, { mode: 384 }); }
       catch (error) { throw copyDestinationError(); }
       finally { bytes.fill(0); }
-      if ((cookieKey || process.platform === "darwin") && /^(?:Network\/)?Cookies$/.test(inner)) {
+      if ((cookieKey || process.platform === "darwin" && SAFE_STORAGE[app]) && /^(?:Network\/)?Cookies$/.test(inner)) {
         var counted = transcodeCookies(path.join(to, entry.name), cookieKey);
         if (counted) {
           cookies.encrypted += counted.encrypted;
           cookies.readable += counted.readable;
-        }
+        } else cookies.uninspected++;
       }
     });
   }
   copy(path.join(source, name), path.join(dest, name), "");
   var result = { name: name, skipped: skipped };
   if (cookies.encrypted > cookies.readable) result.unreadableCookies = { encrypted: cookies.encrypted, unreadable: cookies.encrypted - cookies.readable, keychain: cookieKey ? "key read" : keyReport.reason || "no key" };
+  if (cookies.uninspected) result.uninspectedCookies = cookies.uninspected;
   return result;
 }
 
@@ -530,9 +531,11 @@ function loadAuthDriver(s) {
   return driver;
 }
 
-function sessionWarning(c) {
-  return "SESSION_MAY_BE_MISSING: " + c.unreadable + " of " + c.encrypted + " cookies in the copy are still encrypted and a newer browser may drop them, so GitHub and other sign-ins can show signed out (Safe Storage key: " + c.keychain + "). " +
-    "Check the page before relying on this copy; Desk cannot grant keychain access, and no sign-in or approval was attempted.";
+function sessionWarning(unreadable, uninspected) {
+  var parts = [];
+  if (unreadable) parts.push("SESSION_MAY_BE_MISSING: " + unreadable.unreadable + " of " + unreadable.encrypted + " cookies in the copy are still encrypted and a newer browser may drop them, so GitHub and other sign-ins can show signed out (Safe Storage key: " + unreadable.keychain + ").");
+  if (uninspected) parts.push("COOKIES_NOT_INSPECTED: " + uninspected + " copied cookie file(s) could not be opened as a database here, so whether sign-ins carried is unknown.");
+  return parts.join(" ") + " Check the page before relying on this copy; Desk cannot grant keychain access, and no sign-in or approval was attempted.";
 }
 
 async function openAuth(s) {
@@ -565,7 +568,10 @@ async function openAuth(s) {
       contextId: id, browser: "mine", app: BROWSERS[browser.channel].name, files: outputDir, evidence: evidenceDir(s),
       note: "Owned native output: only real secrets are hidden (password and one-time-code fields, token-looking values) plus rich-text and shadow text that cannot be told from page text; typed values in ordinary fields show. Pages are read with their child frames, refs act in any frame, and screenshot blurs real secrets and paints nothing else, and it is the operator's own page, so do not crop or hide it from them; every command is yours to run. Screenshots are saved in the evidence folder, which stays after close. Close this context when done. GitHub shows the account that was active in the copied profile; this copy holds every GitHub account signed in there, so to use another one goto https://github.com/switch_account and click its \"Select <account>\" entry, with no sign-in."
     };
-    if (copied.unreadableCookies) opened.sessionWarning = sessionWarning(copied.unreadableCookies);
+    if (copied.unreadableCookies || copied.uninspectedCookies) {
+      opened.sessionWarning = sessionWarning(copied.unreadableCookies, copied.uninspectedCookies);
+      opened.note = opened.note.replace("this copy holds every GitHub account signed in there, so to use another one", "if its sign-ins carried (see sessionWarning, which says they may not have), this copy holds every GitHub account signed in there, so to use another one");
+    }
     if (copied.skipped.length) opened.copyLimitations = "Some nonessential profile files were omitted because their regular-file identity, single-link ownership or readable bytes could not be qualified.";
     return opened;
   } catch (error) {
