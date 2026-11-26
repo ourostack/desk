@@ -990,6 +990,15 @@
         { "code": "polluter-found", "means": "A test file created the watched path; the script names it and exits 1.", "fix": "Run that test alone with npm test and fix its cleanup." },
         { "code": "already-polluted", "means": "The watched path existed before a test ran, so that test was skipped; if it existed from the start every test is skipped and it still reports all tests clean and exits 0.", "fix": "Delete the watched path and run the search again." }
       ]
+    },
+    {
+      "id": "cli:node plugins/desk/hooks/lib/turn-end-gate.cjs",
+      "group": "turn-end-gate",
+      "when": "A headless lane's runner checks the lane's final output before accepting its ending, to learn whether the work shipped and to get the resume text when it did not",
+      "effect": "write",
+      "errors": [
+        { "code": "bad-call", "means": "The command was not check, a flag is missing, --repo is not owner/repo, or the evidence file cannot be read; exit 2.", "fix": "Run it as check --session <id> --evidence-file <output.txt> --pr-head <branch> --repo <owner/repo>." }
+      ]
     }
   ]
 }
