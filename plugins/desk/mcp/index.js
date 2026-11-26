@@ -324,7 +324,7 @@ export async function main({
       startHostedSync()
     },
   })
-  const stopHandoff = hasText(handoffToken) && handoffChannel !== null ? serveFocusHandoff({ channel: handoffChannel, token: handoffToken, session, kick }) : () => {}
+  const stopHandoff = serveFocusHandoff({ channel: handoffChannel, token: handoffToken, session, kick })
   // A client that never sends tools/list still gets admission.
   const kickoff = setTimeout(kick, admissionKickoffMs)
   kickoff.unref?.()

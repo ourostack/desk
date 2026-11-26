@@ -153,16 +153,16 @@ function createIdleProxy(options) {
     stop();
   }
 
-  function sendIpc(g, message, onError) {
+  function sendIpc(g, message, onError = function () {}) {
     message.desk = "focus-handoff";
     message.v = 1;
     message.token = g.token;
     try {
       g.child.send(message, function (error) {
-        if (error && onError) onError();
+        if (error) onError();
       });
     } catch (error) {
-      if (onError) onError();
+      onError();
     }
   }
 
@@ -203,7 +203,7 @@ function createIdleProxy(options) {
   function snapshotFailed(g) {
     if (g !== gen || g.snapId === null) return;
     g.snapId = null;
-    if (snapTimer !== null) options.clearTimer(snapTimer);
+    options.clearTimer(snapTimer);
     snapTimer = null;
     if (g.sawToolCall || g.carried) {
       handoff = { unknown: "snapshot_unavailable" };
@@ -219,7 +219,7 @@ function createIdleProxy(options) {
   function takeSnapshot(g, message) {
     if (g.snapId === null || message.id !== g.snapId) return;
     g.snapId = null;
-    if (snapTimer !== null) options.clearTimer(snapTimer);
+    options.clearTimer(snapTimer);
     snapTimer = null;
     var snapshot = message.snapshot;
     if (snapshot !== null && typeof snapshot === "object" && snapshot.declared === true && validTask(snapshot.task) && typeof snapshot.scope === "string") {
@@ -327,7 +327,7 @@ function createIdleProxy(options) {
     hold = null;
     g.retired = true;
     stopping = true;
-    if (g.ipcCapable && !g.ipcClosed) sendIpc(g, { op: "abort", id: g.restoreId }, null);
+    if (g.ipcCapable && !g.ipcClosed) sendIpc(g, { op: "abort", id: g.restoreId });
     endStdin(g);
     var retired = child;
     killTimer = options.setTimer(function () {
@@ -403,7 +403,7 @@ function createIdleProxy(options) {
       if (hold !== null && hold.phase === "support") sendRestore();
       else if (hold === null && g.supportTimedOut && !g.lateNoted) {
         g.lateNoted = true;
-        sendIpc(g, { op: "restore", id: nextIpcId++, budgetMs: FOCUS_WAIT_MS, unknown: "hello_late" }, null);
+        sendIpc(g, { op: "restore", id: nextIpcId++, budgetMs: FOCUS_WAIT_MS, unknown: "hello_late" });
       }
     } else if (message.op === "snapshot-result") {
       takeSnapshot(g, message);
@@ -416,7 +416,7 @@ function createIdleProxy(options) {
   function moveServerCalls(g) {
     if (Object.keys(retiredServerIds).length > 1000) retiredServerIds = {};
     Object.keys(serverGens).forEach(function (key) {
-      if (serverGens[key] === g) retiredServerIds[key] = true;
+      retiredServerIds[key] = true;
     });
     serverCalls = {};
     serverGens = {};

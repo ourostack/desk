@@ -107,11 +107,9 @@ export function createFocusHolder() {
     },
     /** Puts back a focus carried over an idle restart, only while nothing has been declared in this session. */
     restore(value) {
-      if (declared) return false
       current = value
       declared = true
       note = null
-      return true
     },
   }
 }

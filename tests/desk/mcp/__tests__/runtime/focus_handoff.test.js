@@ -111,3 +111,10 @@ test("stopping the endpoint aborts restores still running and answers nothing fo
   assert.equal(signal.aborted, true)
   assert.equal(h.channel.sent.filter((message) => message.op === "restore-result").length, 0)
 })
+
+test("an abort for a restore nobody is running is ignored", async () => {
+  const h = harness()
+  h.post({ op: "abort", id: 99 })
+  await flush()
+  assert.equal(h.channel.sent.length, 1)
+})

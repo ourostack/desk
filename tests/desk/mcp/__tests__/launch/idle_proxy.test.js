@@ -1295,3 +1295,19 @@ test("a snapshot that never arrives times out, a late send failure after the ans
   await h.flush()
   assert.deepEqual(ipcOps(next, "restore")[0].snapshot, { declared: true, task: null, scope: "scope-a" })
 })
+
+test("a server that only carried a focus and cannot give it back again leaves it unknown", async () => {
+  const h = harness({ ipc: true })
+  const first = await idleWithFocus(h)
+  const second = await resumedAfter(h, first)
+  second.hello()
+  await h.flush()
+  second.ipc("restore-result", { id: ipcOps(second, "restore")[0].id, outcome: "restored" })
+  await h.flush()
+  second.sendFails = true
+  await h.advance(IDLE)
+  const third = await resumedAfter(h, second)
+  third.hello()
+  await h.flush()
+  assert.equal(ipcOps(third, "restore")[0].unknown, "snapshot_unavailable")
+})
