@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.603 — 2026-11-26
+
+`desk_save` no longer calls a path Git never holds, such as a Git-ignored log, "unchanged". `unchanged_paths` now names only tracked files already holding the saved bytes. An ignored path, or one that is not in Git, comes back in `unsaved_paths` with its reason (`ignored` or `not_in_git`), the answer says `partial: true` with a note that this save did not commit them and that Desk cannot show them on the remote, and a save of only such paths still says `nothing_to_commit` but lists them. When Git cannot say whether a path is tracked or ignored, `desk_save` commits nothing and says so (`commit_failed`) instead of guessing. This corrects the earlier change that reported ignored paths as unchanged ([#1817](https://github.com/ourostack/desk/issues/1817)).
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.602 — 2026-11-26
 
 Publishing a workspace no longer cuts a slow pre-push hook off before its own limit: the first push still gets 60 seconds, and the repeat gets 330 seconds, enough for a bounded hook such as CIT's publication guard (up to about 280 seconds). When a push is cut off twice, the error names the 330 second limit and says a hook still running at the limit is the likely cause.
