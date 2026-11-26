@@ -94,6 +94,12 @@ function timedOut(result) {
   return Boolean(result.error) && result.error.code === "ETIMEDOUT"
 }
 
+/** What the clock cut off, in words: the Git call, the error and signal it ended with, and the budgets it was given. Starts with "timeout" for anyone who reads the reason by that word. */
+function cutOffWords(result, retried) {
+  const error = result.error ? `${result.error.code ? `${result.error.code}: ` : ""}${result.error.message || "Git process failed"}` : "no error"
+  return `timeout: git commit was cut off by the clock (${error}; signal ${result.signal ?? "none"}; exit status ${result.status ?? "none"}) after ${retried ? `its ${GIT_TIMEOUT_MS} ms attempt and its ${COMMIT_RETRY_TIMEOUT_MS} ms retry` : `${GIT_TIMEOUT_MS} ms`}, so whether it landed rests on the read-back`
+}
+
 /** True when `root` is inside a Git work tree. A failing or missing `git` means no. */
 export function isGitRepository(root, spawnGit) {
   let result
@@ -443,13 +449,15 @@ export function commitPaths(root, relPaths, message, spawnGit, stateBranch, { ke
   // this is Desk's commit path, so it says so for the git call (and only for that call).
   const env = { ...process.env, [TOOL_COMMIT_ENV]: "1" }
   let result = run(spawnGit, root, ["commit", "-m", message, "--", ...relPaths], { env })
+  let retried = false
   // A commit cut off by the clock on a slow machine is read back, and when it did not land it is run once more with room to finish, rather than handed back as a failure.
   if (timedOut(result) && readBackCommit(root, relPaths, message, before, expected, spawnGit).readback === "absent" && !indexLockHeld(root, spawnGit)) {
     result = run(spawnGit, root, ["commit", "-m", message, "--", ...relPaths], { env, timeout: COMMIT_RETRY_TIMEOUT_MS })
+    retried = true
   }
   if (!timedOut(result) && result.status === 0) {
     recordToolCommit(root)
     return { ok: true, stderr: result.stderr }
   }
-  return afterFailedCommit(timedOut(result) ? "timeout" : result.stderr, root, relPaths, message, before, expected, spawnGit, branch)
+  return afterFailedCommit(timedOut(result) ? cutOffWords(result, retried) : result.stderr, root, relPaths, message, before, expected, spawnGit, branch)
 }
