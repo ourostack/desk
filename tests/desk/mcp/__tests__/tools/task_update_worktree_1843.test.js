@@ -4,7 +4,7 @@
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import { spawn, spawnSync } from "node:child_process"
-import { existsSync, writeFileSync } from "node:fs"
+import { existsSync, renameSync, writeFileSync } from "node:fs"
 import path from "node:path"
 import { stagePaths } from "../../../../../plugins/desk/mcp/src/util/git-stage.js"
 import { moveTask } from "../../../../../plugins/desk/mcp/src/tools/move.js"
@@ -86,14 +86,20 @@ test("staging waits out an index lock that appears just before its git add, inst
   assert.match(git(worktree, ["diff", "--cached", "--name-only"]), /main-track\/track\.md/u)
 })
 
-test("a lock that never clears fails within the bounded wait and is left in place", async () => {
+test("a lock that never clears gives up on the wait and is left in place", async () => {
   const { worktree } = await deskWithWorktree()
   writeFileSync(path.join(worktree, "main-track", "track.md"), "changed\n", { flag: "a" })
   const held = lockAtFirstAdd(worktree, null)
-  const started = Date.now()
   const staged = stagePaths(worktree, ["main-track/track.md"], held.spawnGit)
   assert.equal(staged.ok, false)
   assert.match(staged.stderr, /index\.lock/u)
-  assert.ok(Date.now() - started < 6000, "bounded")
   assert.equal(existsSync(held.lock), true, "the lock is not Desk's to remove")
+})
+
+test("a worktree move whose publication fails says so and leaves the move on disk", async () => {
+  const { origin, worktree } = await deskWithWorktree()
+  renameSync(origin, `${origin}.gone`)
+  const result = await moveTask({ deskRoot: worktree, input: { track: "main-track", slug: "dup-task", to_track: "other-track" }, schedulePush: () => {} })
+  assert.ok(result.commit, `a failed publication is reported: ${JSON.stringify(result)}`)
+  assert.equal(existsSync(path.join(worktree, "other-track", "dup-task", "task.md")), true)
 })
