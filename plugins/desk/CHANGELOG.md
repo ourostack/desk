@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.604 — 2026-11-26
+
+Desk's MCP server now vendors Ouro UI v1.3.580, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.603 — 2026-11-26
 
 `desk_save` no longer calls a path Git never holds, such as a Git-ignored log, "unchanged". `unchanged_paths` now names only tracked files already holding the saved bytes. An ignored path, or one that is not in Git, comes back in `unsaved_paths` with its reason (`ignored` or `not_in_git`), the answer says `partial: true` with a note that this save did not commit them and that Desk cannot show them on the remote, and a save of only such paths still says `nothing_to_commit` but lists them. When Git cannot say whether a path is tracked or ignored, `desk_save` commits nothing and says so (`commit_failed`) instead of guessing. This corrects the earlier change that reported ignored paths as unchanged ([#1817](https://github.com/ourostack/desk/issues/1817)).
