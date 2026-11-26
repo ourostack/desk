@@ -361,7 +361,7 @@
     {
       "id": "ourostack-ouro-ui-ax",
       "repository": "ourostack/ouro-ui",
-      "commit": "6ef19f9e6d7a42eea6169d3cad83208911d4a831",
+      "commit": "77aff7febf9baff1fde3ab311b11730c7f8ea434",
       "license": "MIT",
       "files": [
         {
@@ -489,7 +489,7 @@
     {
       "id": "ourostack-ouro-ui-census",
       "repository": "ourostack/ouro-ui",
-      "commit": "6ef19f9e6d7a42eea6169d3cad83208911d4a831",
+      "commit": "77aff7febf9baff1fde3ab311b11730c7f8ea434",
       "license": "MIT",
       "files": [
         {

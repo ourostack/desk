@@ -37,7 +37,7 @@ function fixture(options = {}) {
   const spawnGit = (command, args) => {
     assert.equal(command, "gh")
     calls.push(["gh", ...args])
-    const operation = args[0] === "api" ? args.includes("PUT") ? "merge" : args.some((arg) => arg.includes("/status?")) ? "statuses"
+    const operation = args[0] === "api" ? args.includes("DELETE") ? "delete" : args.includes("PUT") ? "merge" : args.some((arg) => arg.includes("/status?")) ? "statuses"
       : args.some((arg) => /\/issues\/\d+\/labels$/u.test(arg)) ? "labels"
       : args.some((arg) => arg.includes("/rules/branches/")) ? "rules" : args.some((arg) => /\/branches\/[^/]+$/u.test(arg)) ? "branch" : "checks" : args[1]
     if (options.fail === operation) return { status: options.timeout ? null : 1, stderr: "made-up-private-credential" }
@@ -82,6 +82,7 @@ function fixture(options = {}) {
       pr.mergeCommit = { oid: merged }
       return ok([{ name: "merge-when-green" }])
     }
+    if (operation === "delete") return options.deleteFails ? { status: 1, stderr: "nope" } : { status: 0, stdout: "" }
     if (operation === "labels") return ok(options.labels ?? [{ name: "merge-when-green" }])
     if (operation === "merge") return ok(options.mergeResult ?? { merged: true, sha: merged })
     assert.fail(`unexpected gh call: ${args.join(" ")}`)
@@ -513,7 +514,7 @@ test("a branch push cut off twice says it was cut off and shows no remote line",
   const f = fixture({ create: true })
   const git = f.request.git
   assert.throws(() => publishPullRequest({ ...f.request, git: (args, timeout) => (args[0] === "push" ? { status: null } : git(args, timeout)) }), (error) => {
-    assert.match(error.message, /the contribution branch push was cut off twice, and the upstream branch was not pushed\.$/u)
+    assert.match(error.message, /the contribution branch push was cut off twice, the second time at its 330 s limit; a pre-push hook still running at the limit is the likely cause, and the upstream branch was not pushed\.$/u)
     return true
   })
 })
@@ -529,4 +530,27 @@ test("publishing a candidate does not enumerate or close other publication PRs b
   const closed = f.calls.filter((call) => call[2] === "close").map((call) => call[3])
   assert.deepEqual(closed, [])
   assert.ok(!f.calls.some((call) => call[1] === "pr" && call[2] === "list" && !call.includes("--head")))
+})
+
+test("a push that needs longer than the first limit but less than the repeat limit succeeds on the repeat", () => {
+  const f = fixture({ create: true })
+  const git = f.request.git
+  const limits = []
+  const slow = (args, timeout) => {
+    if (args[0] !== "push") return git(args, timeout)
+    limits.push(timeout)
+    return 150_000 > timeout ? { status: null } : { status: 0 }
+  }
+  assert.equal(publishPullRequest({ ...f.request, git: slow }).receipt.merge, merged)
+  assert.deepEqual(limits, [60_000, 330_000])
+})
+
+test("the publish branch is deleted once its PR is merged, and a failed delete does not fail the publication", () => {
+  for (const deleteFails of [false, true]) {
+    const f = fixture({ create: true, deleteFails })
+    assert.equal(publishPullRequest(f.request).receipt.merge, merged)
+    const deletes = f.calls.filter((call) => call.includes("DELETE"))
+    assert.equal(deletes.length, 1)
+    assert.ok(deletes[0].includes(`repos/example/workspace/git/refs/heads/desk/publish/${head}`))
+  }
 })

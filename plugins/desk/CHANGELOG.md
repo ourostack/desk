@@ -1,5 +1,57 @@
 # desk plugin — changelog
 
+## 3.2.604 — 2026-11-26
+
+Desk's MCP server now vendors Ouro UI v1.3.580, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.603 — 2026-11-26
+
+`desk_save` no longer calls a path Git never holds, such as a Git-ignored log, "unchanged". `unchanged_paths` now names only tracked files already holding the saved bytes. An ignored path, or one that is not in Git, comes back in `unsaved_paths` with its reason (`ignored` or `not_in_git`), the answer says `partial: true` with a note that this save did not commit them and that Desk cannot show them on the remote, and a save of only such paths still says `nothing_to_commit` but lists them. When Git cannot say whether a path is tracked or ignored, `desk_save` commits nothing and says so (`commit_failed`) instead of guessing. This corrects the earlier change that reported ignored paths as unchanged ([#1817](https://github.com/ourostack/desk/issues/1817)).
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.602 — 2026-11-26
+
+Publishing a workspace no longer cuts a slow pre-push hook off before its own limit: the first push still gets 60 seconds, and the repeat gets 330 seconds, enough for a bounded hook such as CIT's publication guard (up to about 280 seconds). When a push is cut off twice, the error names the 330 second limit and says a hook still running at the limit is the likely cause.
+
+Desk now deletes the `desk/publish/<commit>` branch once its pull request is merged, so publishing no longer leaves a branch behind on the remote for every save.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.601 — 2026-11-26
+
+Desk's MCP server now vendors Ouro UI v1.3.578, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.600 — 2026-11-26
+
+Desk's MCP server now vendors Ouro UI v1.3.577, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.599 — 2026-11-26
+
+An issue drain can set `everySeconds` (60 or more) in its config to be polled less often than the drains run, so a busy repository that changes every minute costs fewer GitHub reads.
+
+The relays drain reads a pull request that waits only on a merge conflict or a draft at most every 5 minutes, not every 30 to 60 seconds. Nothing about it changes until the author pushes, so the reads were wasted GitHub requests on the shared work account.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.598 — 2026-11-26
+
+Desk's MCP server now vendors Ouro UI v1.3.576, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.597 — 2026-11-26
+
+Fixed: `task_update` now lists every step state (`in review`, `merged`, `delivered`, `dropped` as well as `pending`, `in progress`, `blocked`), so a step that shipped without a GitHub PR can be set to `merged` or `delivered` with its proof in `evidence`, not only closed as `dropped`.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.596 — 2026-11-26
 
 Desk's MCP server now vendors Ouro UI v1.3.575, moved by Ouro Current.
