@@ -244,7 +244,8 @@ test("copyProfile stores copied cookie values as plain values so a newer browser
   db.close()
   const before = fs.readFileSync(cookies)
   const dest = path.join(root, "dest")
-  web.copyProfile(source, dest, "Microsoft Edge", { cookieKey: key })
+  const copied = web.copyProfile(source, dest, "Microsoft Edge", { cookieKey: key })
+  assert.deepEqual(copied.unreadableCookies, { encrypted: 5, unreadable: 3, keychain: "key read" })
   const copy = new DatabaseSync(path.join(dest, "Profile 1", "Network", "Cookies"))
   const rows = copy.prepare("SELECT name, value, length(encrypted_value) AS n FROM cookies ORDER BY name").all()
   copy.close()
@@ -254,6 +255,33 @@ test("copyProfile stores copied cookie values as plain values so a newer browser
   fs.writeFileSync(path.join(source, "Profile 1", "Network", "Cookies"), "not a database")
   web.copyProfile(source, path.join(root, "dest3"), "Microsoft Edge", { cookieKey: key })
   assert.equal(fs.readFileSync(path.join(root, "dest3", "Profile 1", "Network", "Cookies"), "utf8"), "not a database")
+})
+
+test("copyProfile says so when encrypted cookies cannot be made readable, instead of passing off a signed-out copy as a normal one", async () => {
+  const { DatabaseSync } = await import("node:sqlite")
+  const { root } = await setup()
+  const source = path.join(root, "src")
+  makeProfile(source)
+  const cookies = path.join(source, "Profile 1", "Network", "Cookies")
+  fs.rmSync(cookies)
+  const db = new DatabaseSync(cookies)
+  db.exec("CREATE TABLE cookies (host_key TEXT, name TEXT, value TEXT, encrypted_value BLOB)")
+  db.prepare("INSERT INTO cookies VALUES (?, ?, ?, ?)").run("github.com", "user_session", "", Buffer.from("v10sealed-by-the-running-browser"))
+  db.close()
+  const platform = Object.getOwnPropertyDescriptor(process, "platform")
+  Object.defineProperty(process, "platform", { value: "darwin" })
+  let copied
+  try { copied = web.copyProfile(source, path.join(root, "dest"), "Microsoft Edge", { cookieKey: null }) } finally { Object.defineProperty(process, "platform", platform) }
+  assert.deepEqual(copied.unreadableCookies, { encrypted: 1, unreadable: 1, keychain: "no key" })
+  assert.match(web.sessionWarning(copied.unreadableCookies), /^SESSION_MAY_BE_MISSING: 1 of 1 cookies .*Safe Storage key: no key/)
+  assert.equal(web.copyProfile(source, path.join(root, "dest2"), "Microsoft Edge", { cookieKey: crypto.randomBytes(16) }).unreadableCookies.keychain, "key read")
+})
+
+test("keychainCookieKey reports why the keychain gave no key, without any secret", () => {
+  const why = (error) => { const report = {}; web.keychainCookieKey("Microsoft Edge", "darwin", () => { throw error }, report); return report.reason }
+  assert.equal(why(Object.assign(new Error("x"), { status: 44 })), "exit 44")
+  assert.equal(why(Object.assign(new Error("x"), { code: "ETIMEDOUT" })), "timeout")
+  assert.equal(why(new Error("x")), "unavailable")
 })
 
 test("keychainCookieKey derives the browser's cookie key on macOS and gives none anywhere else or when the keychain refuses", () => {
@@ -509,6 +537,32 @@ test("mine uses the owned native API and never opens or closes the CLI", async (
   await controller.closeAll()
   assert.equal(native.calls.filter((call) => call[0] === "context.close").length, 1)
   assert.equal(calls().length, 0)
+})
+
+test("mine open on macOS warns, through the supported entry, when the keychain refuses and the copy holds encrypted cookies", async () => {
+  const { DatabaseSync } = await import("node:sqlite")
+  const { options, profiles } = await setup()
+  const edge = path.join(profiles, "edge")
+  makeProfile(edge)
+  const cookies = path.join(edge, "Profile 1", "Network", "Cookies")
+  fs.rmSync(cookies)
+  const db = new DatabaseSync(cookies)
+  db.exec("CREATE TABLE cookies (host_key TEXT, name TEXT, value TEXT, encrypted_value BLOB)")
+  db.prepare("INSERT INTO cookies VALUES (?, ?, ?, ?)").run("github.com", "user_session", "", Buffer.from("v10sealed-by-the-running-browser"))
+  db.close()
+  const platform = Object.getOwnPropertyDescriptor(process, "platform")
+  Object.defineProperty(process, "platform", { value: "darwin" })
+  const keychainRun = () => { throw Object.assign(new Error("denied"), { status: 51 }) }
+  try {
+    const controller = web.createController({ ...options, keychainRun })
+    const opened = await controller.call("browser_context", { action: "open", browser: "mine" })
+    assert.equal(opened.isError, false, text(opened))
+    const reply = JSON.parse(text(opened))
+    assert.match(reply.sessionWarning, /^SESSION_MAY_BE_MISSING: 1 of 1 cookies .*Safe Storage key: exit 51/)
+    const again = JSON.parse(text(await controller.call("browser_context", { action: "open", browser: "mine" })))
+    assert.match(again.sessionWarning, /exit 51/)
+    await controller.closeAll()
+  } finally { Object.defineProperty(process, "platform", platform) }
 })
 
 test("mine runs eval as given, and emits owned redacted text JSON and artifacts", async () => {

@@ -172,6 +172,7 @@ function settings(o) {
     exitWaitMs: o.exitWaitMs || 5000,
     closeMs: o.closeMs || 40000,
     recordMs: o.recordMs || 15000,
+    keychainRun: o.keychainRun,
     processTable: o.processTable || function () {
       return readProcessTable(platform, env);
     }
@@ -261,13 +262,15 @@ function readProfileFile(file) {
 // private copy, which any version reads and which is deleted with the context.
 var SAFE_STORAGE = { "Microsoft Edge": ["Microsoft Edge Safe Storage", "Microsoft Edge"], "Google Chrome": ["Chrome Safe Storage", "Chrome"] };
 
-function keychainCookieKey(app, platform, run) {
+// `report.reason` says, without any secret, why no key came back: a timeout, or the exit status `security` gave.
+function keychainCookieKey(app, platform, run, report) {
   var item = SAFE_STORAGE[app];
   if (platform !== "darwin" || !item) return null;
   try {
     var secret = run("security", ["find-generic-password", "-w", "-s", item[0], "-a", item[1]], { timeout: 10000, windowsHide: true, stdio: ["ignore", "pipe", "ignore"] });
     return crypto.pbkdf2Sync(secret.toString("utf8").trim(), "saltysalt", 1003, 16, "sha1");
   } catch (error) {
+    if (report) report.reason = error && error.code === "ETIMEDOUT" ? "timeout" : error && Number.isInteger(error.status) ? "exit " + error.status : "unavailable";
     return null;
   }
 }
@@ -286,30 +289,40 @@ function decryptCookie(key, host, value) {
   }
 }
 
+// Counts the encrypted cookie values and how many were made readable; null when the file is not a cookie database this Node can open.
+// Without a key nothing is changed, only counted, so a copy that signs the person out can be told apart from one that does not.
 function transcodeCookies(file, key) {
   try {
     var db = new (require("node:sqlite").DatabaseSync)(file);
     try {
       var rows = db.prepare("SELECT rowid AS id, host_key AS host, encrypted_value AS value FROM cookies WHERE length(encrypted_value) > 0").all();
       var update = db.prepare("UPDATE cookies SET value = ?, encrypted_value = x'' WHERE rowid = ?");
+      var summary = { encrypted: rows.length, readable: 0 };
       db.exec("BEGIN");
       rows.forEach(function (row) {
-        var plain = decryptCookie(key, row.host, row.value);
-        if (plain !== null) update.run(plain, row.id);
+        var plain = key ? decryptCookie(key, row.host, row.value) : null;
+        if (plain !== null) {
+          update.run(plain, row.id);
+          summary.readable++;
+        }
       });
       db.exec("COMMIT");
+      return summary;
     } finally {
       db.close();
     }
   } catch (error) {
     // not a cookie database this Node can open: leave the bytes as copied
+    return null;
   }
 }
 
 // Admission precedes both parsing and copying. The opened descriptor supplies the bytes;
 // a later pathname copy would undo identity/link qualification.
 function copyProfile(source, dest, app, options) {
-  var cookieKey = options && "cookieKey" in options ? options.cookieKey : keychainCookieKey(app, process.platform, childProcess.execFileSync);
+  var keyReport = {};
+  var cookieKey = options && "cookieKey" in options ? options.cookieKey : keychainCookieKey(app, process.platform, options && options.run || childProcess.execFileSync, keyReport);
+  var cookies = { encrypted: 0, readable: 0 };
   var state;
   try { state = readProfileFile(path.join(source, "Local State")); } catch (error) {
     if (error && error.permissionDenied) throw copyPermissionError(app);
@@ -361,11 +374,19 @@ function copyProfile(source, dest, app, options) {
       try { fs.writeFileSync(path.join(to, entry.name), bytes, { mode: 384 }); }
       catch (error) { throw copyDestinationError(); }
       finally { bytes.fill(0); }
-      if (cookieKey && /^(?:Network\/)?Cookies$/.test(inner)) transcodeCookies(path.join(to, entry.name), cookieKey);
+      if ((cookieKey || process.platform === "darwin") && /^(?:Network\/)?Cookies$/.test(inner)) {
+        var counted = transcodeCookies(path.join(to, entry.name), cookieKey);
+        if (counted) {
+          cookies.encrypted += counted.encrypted;
+          cookies.readable += counted.readable;
+        }
+      }
     });
   }
   copy(path.join(source, name), path.join(dest, name), "");
-  return { name: name, skipped: skipped };
+  var result = { name: name, skipped: skipped };
+  if (cookies.encrypted > cookies.readable) result.unreadableCookies = { encrypted: cookies.encrypted, unreadable: cookies.encrypted - cookies.readable, keychain: cookieKey ? "key read" : keyReport.reason || "no key" };
+  return result;
 }
 
 function launchConfig(kind, browser, profileDir, profileName, outputDir) {
@@ -509,6 +530,11 @@ function loadAuthDriver(s) {
   return driver;
 }
 
+function sessionWarning(c) {
+  return "SESSION_MAY_BE_MISSING: " + c.unreadable + " of " + c.encrypted + " cookies in the copy are still encrypted and a newer browser may drop them, so GitHub and other sign-ins can show signed out (Safe Storage key: " + c.keychain + "). " +
+    "Check the page before relying on this copy; Desk cannot grant keychain access, and no sign-in or approval was attempted.";
+}
+
 async function openAuth(s) {
   checkAuthLogging(s);
   var browser = chooseBrowser(s, true);
@@ -523,7 +549,7 @@ async function openAuth(s) {
     fs.writeFileSync(path.join(dir, "owner.json"), JSON.stringify({ pid: process.pid, browser: "mine", profilePolicy: AUTH_PROFILE_POLICY, transport: "auth-api" }) + "\n");
     fs.mkdirSync(outputDir);
     var profileDir = path.join(dir, "profile");
-    var copied = copyProfile(browser.profileRoot, profileDir, BROWSERS[browser.channel].name);
+    var copied = copyProfile(browser.profileRoot, profileDir, BROWSERS[browser.channel].name, s.keychainRun ? { run: s.keychainRun } : undefined);
     var config = launchConfig("mine", browser, profileDir, copied.name, outputDir);
     fs.writeFileSync(path.join(dir, "config.json"), JSON.stringify(config));
     var launch = Object.assign({}, config.browser.launchOptions, {
@@ -539,6 +565,7 @@ async function openAuth(s) {
       contextId: id, browser: "mine", app: BROWSERS[browser.channel].name, files: outputDir, evidence: evidenceDir(s),
       note: "Owned native output: only real secrets are hidden (password and one-time-code fields, token-looking values) plus rich-text and shadow text that cannot be told from page text; typed values in ordinary fields show. Pages are read with their child frames, refs act in any frame, and screenshot blurs real secrets and paints nothing else, and it is the operator's own page, so do not crop or hide it from them; every command is yours to run. Screenshots are saved in the evidence folder, which stays after close. Close this context when done. GitHub shows the account that was active in the copied profile; this copy holds every GitHub account signed in there, so to use another one goto https://github.com/switch_account and click its \"Select <account>\" entry, with no sign-in."
     };
+    if (copied.unreadableCookies) opened.sessionWarning = sessionWarning(copied.unreadableCookies);
     if (copied.skipped.length) opened.copyLimitations = "Some nonessential profile files were omitted because their regular-file identity, single-link ownership or readable bytes could not be qualified.";
     return opened;
   } catch (error) {
@@ -1217,6 +1244,7 @@ module.exports = {
   npmCli: npmCli,
   profileRoot: profileRoot,
   copyProfile: copyProfile,
+  sessionWarning: sessionWarning,
   keychainCookieKey: keychainCookieKey,
   processTableCommand: processTableCommand,
   parseProcessTable: parseProcessTable,
