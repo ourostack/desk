@@ -10,7 +10,8 @@
     "plugins/desk/skills/task-lifecycle/SKILL.md",
     "plugins/desk/skills/fast-honest-ci/SKILL.md"
   ],
-  "reviewedSourceFingerprint": "d3f86494da142f79e530eb6c6013edf6e235e2e0fbf0da6aee8e8a103976787b",
+  "reviewedSourceFingerprint": "1288deb853fda63cb70c39b8318a5d535a8b578e95135c220daead681e3e728e",
+  "knownFailure": [{"issue": "https://github.com/ourostack/desk/issues/1858", "case": "disk-short", "observed": "2026-11-26"}, {"issue": "https://github.com/ourostack/desk/issues/1858", "case": "relayed-dates", "observed": "2026-11-26"}, {"issue": "https://github.com/ourostack/desk/issues/1858", "case": "missing-chats-real-account", "observed": "2026-11-26"}, {"issue": "https://github.com/ourostack/desk/issues/1858", "case": "status-before-publish", "observed": "2026-11-26"}],
   "requirements": [
     {
       "id": "experience-first-status",
