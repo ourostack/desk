@@ -370,7 +370,7 @@ function main() {
     "Relay no unmeasured plan, cause or date: say a trustworthy date needs measuring, and the time you will report the measured numbers.",
   ]);
   assert.match(section(skill, "Authority"), /Deploy, sign in and merge yourself \(`interaction-style` "Fix the tooling"\)/u);
-  assert.match(owned("interaction-style"), /Deploy and run sign-in flows yourself; never type a password into a page or put a secret in context[^\n]+only a password, MFA or consent screen you hit is the human's\./u);
+  assert.match(owned("interaction-style"), /Deploy and run sign-in flows yourself, with the password for your own account filled from your vault by a tool, unread; never put a secret in context[^\n]+only the number or prompt to approve on their own phone \(2FA, GitHub Mobile, a passkey\), or a password for their own account that you don't hold, is the human's\./u);
   // The waste rules moved to work-orchestration (the surface that plans lanes); Authority keeps the one-sentence trigger.
   assert.match(section(skill, "Authority"), /ship each small change live as you go \(`work-orchestration`\)/u);
   assert.match(owned("work-orchestration"), /side quests in their own lanes;/u);

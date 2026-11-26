@@ -1,5 +1,25 @@
 # desk plugin — changelog
 
+## 3.2.620 — 2026-11-26
+
+A lane never asks a person for a keyboard or machine action: a command to run, a key at a prompt, a code from their mail, a sign-in on a particular machine, terms to accept or a setting to change by hand. Signing in is the agent's job, with the password from its vault filled by a tool; the person gets only the number or prompt to approve on their own phone, or a password for their own account that the agent doesn't hold. A "you need to sign in" ask is checked first (`gh auth status` for gh) and dropped when it is false. The `interaction-style` and `using-desk` skills no longer tell agents to hand a password, code or identity-proof screen to the person.
+
+The turn-end gate now has a command for headless lanes: `node hooks/lib/turn-end-gate.cjs check --session <id> --evidence-file <output.txt> --pr-head <branch> --repo <owner/repo>`. It exits 0 for a verified ending, prints resume text and exits 10 when the work did not ship, and records the ending in the ledger. A `done` counts only if GitHub shows a pull request for the branch, and a headless lane cannot end `waiting` because it has no wake to verify. See [keep-the-work-moving.md](docs/keep-the-work-moving.md).
+
+### The mine browser no longer reads an unopenable cookie file as a clean copy
+
+When the copied cookie file can't be opened as a database on macOS, `browser_context open` with browser `mine` now says `COOKIES_NOT_INSPECTED` in `sessionWarning` instead of staying silent, and its note no longer promises that every signed-in GitHub account carried over whenever a `sessionWarning` is present ([#1853](https://github.com/ourostack/desk/issues/1853)).
+
+### The mine browser says when its copied sign-ins may be missing
+
+When `browser_context open` with browser `mine` copies a profile whose encrypted cookies could not be made readable on macOS (the browser's Safe Storage key was refused or timed out, or a cookie would not decrypt), the reply now carries `sessionWarning` (`SESSION_MAY_BE_MISSING`) with the count and the keychain failure reason, instead of passing off a signed-out copy as a normal open. The copy itself, the source profile and the access Desk asks for are unchanged ([#1853](https://github.com/ourostack/desk/issues/1853)).
+
+Desk's MCP server now vendors Ouro UI v1.3.587, moved by Ouro Current.
+
+Desk's MCP server now vendors Ouro UI v1.3.588, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.619 — 2026-11-26
 
 Desk's MCP server now vendors Ouro UI v1.3.586, moved by Ouro Current.
