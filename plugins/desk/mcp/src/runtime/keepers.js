@@ -50,7 +50,7 @@ export function beat({ dir, host, now }) {
 /** Reads a peer's heartbeat over ssh with no prompt; null when it cannot be read. */
 function sshRead(peer, name) {
   if (!/^[\w.@-]+$/u.test(peer.ssh ?? "") || !/^[\w.-]+$/u.test(name)) return null
-  const run = spawnSync("ssh", ["-o", "BatchMode=yes", "-o", "ConnectTimeout=10", peer.ssh, `cat "\${XDG_STATE_HOME:-$HOME/.local/state}/ouroboros-skills/desk/heartbeats/${name}.json"`], { encoding: "utf8", timeout: 20_000 })
+  const run = spawnSync("ssh", ["-o", "BatchMode=yes", "-o", "ConnectTimeout=10", peer.ssh, `cat "\${XDG_STATE_HOME:-$HOME/.local/state}/ouroboros-skills/desk/heartbeats/${name}.json"`], { encoding: "utf8", timeout: 20_000, windowsHide: true })
   return run.status === 0 ? run.stdout : null
 }
 
