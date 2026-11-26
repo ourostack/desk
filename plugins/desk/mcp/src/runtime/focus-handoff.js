@@ -30,7 +30,7 @@ export function serveFocusHandoff({ channel, token, session, kick }) {
       reply({ op: "snapshot-result", id: message.id, snapshot })
     } else if (message.op === "abort") {
       active.get(message.id)?.abort()
-    } else if (message.op === "restore") {
+    } else {
       // The proxy only restores into a server that has started admission: the restore needs the same admission a tool call would start.
       kick()
       const controller = new AbortController()

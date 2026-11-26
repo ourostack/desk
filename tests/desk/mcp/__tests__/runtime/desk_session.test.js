@@ -2848,3 +2848,19 @@ test("a restore aborted while it waits its turn behind another restore never sta
   assert.equal((await queued).outcome, "unknown")
   assert.equal(lookups, 1)
 })
+
+test("disposing the session aborts a restore that is still looking up its card", async (t) => {
+  const first = await makeSession(t, { runtime: fakeRuntime({ callTool: async ({ statusContext }) => { statusContext.focus.set(harbor); return { content: [{ type: "text", text: "{}" }] } } }) })
+  await first.session.admission.refresh()
+  await first.session.callTool({ name: "task_focus", input: harbor })
+  const snapshot = first.session.focusSnapshot()
+  let answer
+  const second = await secondSession(t, first, { checkFocusCard: () => new Promise((resolve) => { answer = resolve }) })
+  const pending = second.session.restoreFocus({ snapshot })
+  await waitUntil(() => answer !== undefined)
+  await second.session.dispose()
+  assert.equal((await pending).outcome, "unknown")
+  answer({ found: true })
+  await flush()
+  assert.equal(second.session.focusSnapshot().declared, false)
+})
