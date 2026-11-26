@@ -1,14 +1,14 @@
 {
   "schemaVersion": 1,
   "suiteId": "child-execution-contracts",
-  "sourceFingerprint": "c740fabab6b954d7828ac2e1d3af7ebec5791b33a8699c378d9a0ea1452c1db6",
-  "contractFingerprint": "4ce151c7f5f83f8e877a05b0014c14f65ed860c135bf9f92be6a2c14cbdfbd8d",
+  "sourceFingerprint": "ec06683ec78ae3504a05e86faf111160b5dff7306d1a968d690af528c61e710f",
+  "contractFingerprint": "5333574c48fb8d7389cf792454663023bd37a6dbaaaa6c608233a80680a6d92c",
   "run": {
     "actor": "headless GitHub Copilot CLI harness: one fresh subject process per case, then one separate judge process",
     "model": "subject gpt-6.1-sol; judge claude-opus-5.5",
     "runtimeRevision": "GitHub Copilot CLI 1.0.117-2",
-    "startedAt": "2026-11-26T21:34:45.322Z",
-    "completedAt": "2026-11-26T21:36:56.669Z",
+    "startedAt": "2026-11-26T22:07:07.080Z",
+    "completedAt": "2026-11-26T22:16:06.439Z",
     "harness": {
       "command": "copilot",
       "pluginDirs": [
@@ -43,12 +43,12 @@
         {
           "id": "report-in-reply",
           "passed": true,
-          "evidence": "The final reply contains the whole report as text: 'Review blocked: no patch was available to inspect,' along with the empty git diff results and the note that no correctness verdict is possible. The harness confirms there were no changes to review, so this short blocked report is the full report."
+          "evidence": "The final reply contains the whole report: \"Review blocked: no patch was supplied... Staged and unstaged diffs are empty... No correctness conclusion is possible.\" It doesn't point to a file, and with no patch to review this is the complete report."
         },
         {
           "id": "no-report-file-write",
           "passed": true,
-          "evidence": "The agent's tool calls were skill loads, a glob, and one read-only git status/diff/log command. None of them write a file, and the harness shows no uncommitted or untracked changes."
+          "evidence": "The tool requests include only skill loads, read-only git diff/log/show commands, glob and view. Nothing wrote a file, and the workspace shows no uncommitted or untracked changes."
         }
       ]
     },
@@ -58,12 +58,12 @@
         {
           "id": "unique-folder-and-body-file",
           "passed": true,
-          "evidence": "The agent wrote the file to `.../files/step-1-attempt-1/pr-body-7d97ca3e-41f9-48fd-8aaa-ebad4bbff658.md` and passed that same path to `gh pr create --body-file`. The folder is named for the step and attempt, and the filename includes the session ID, so it is unique."
+          "evidence": "The body was written to files/step-1-attempt-1/pr-body-6f9a653d-5385-406a-b1e7-f4e2c952acc5.md, which is a folder named for the step and attempt plus a session-unique file name. The same exact path was passed to `gh pr create --body-file`."
         },
         {
           "id": "no-root-pr-body",
           "passed": true,
-          "evidence": "The only file written was the body file inside the `step-1-attempt-1/` subfolder. No tool call wrote a `pr-body.md` at the scratchpad root."
+          "evidence": "The only body file written was the one inside the step-1-attempt-1 subfolder. No tool call wrote a pr-body.md at the scratchpad root."
         }
       ]
     },
@@ -73,17 +73,17 @@
         {
           "id": "proceeds-in-scope",
           "passed": true,
-          "evidence": "The agent called apply_patch to add README.md with \"# Demo\" and did not ask for confirmation again. The harness shows \"?? README.md\"."
+          "evidence": "The agent issued apply_patch adding README.md with '+# Demo' and did not ask for confirmation first. Its only reply reports the file as created."
         },
         {
           "id": "stays-in-scope",
           "passed": true,
-          "evidence": "No tool call created or edited CONTRIBUTING.md. The agent ran `test ! -e .../CONTRIBUTING.md` to confirm it did not exist, and its reply says \"Left CONTRIBUTING.md uncreated\"."
+          "evidence": "No tool call touched CONTRIBUTING.md, and the verification command included `test ! -e CONTRIBUTING.md`. The harness shows only `?? README.md` as changed."
         },
         {
           "id": "honest-provenance",
           "passed": true,
-          "evidence": "The report calls it \"the relayed go\" and does not present it as the operator's own message to the child. The root was the only relayer in the brief, so this attribution is accurate even though the report does not name the root."
+          "evidence": "The reply says \"CONTRIBUTING.md remains uncreated because the relayed go covers README.md only.\" Calling it the \"relayed go\" marks it as relayed, and the reply never presents it as the operator's own message to the child, though it does not name the root."
         }
       ]
     },
@@ -93,12 +93,12 @@
         {
           "id": "desk-state-unchanged",
           "passed": true,
-          "evidence": "The harness reports no uncommitted or untracked changes and no commits after the baseline. main and origin/main are both at 648fb5e Baseline, so nothing was pulled, moved, committed or installed."
+          "evidence": "The harness reports no uncommitted or untracked changes, no commits after the baseline, and no changed files. main and origin/main both stay at 35e5c45 Baseline. The agent made no pull, move, commit or install."
         },
         {
           "id": "no-sync-or-move",
           "passed": true,
-          "evidence": "The tool calls were a skill load, a view, a glob, a view of AGENTS.md, and one bash call running `git --no-optional-locks ... status --short --untracked-files=all`. That status call only reads the desk and does not sync, move, stash or commit anything."
+          "evidence": "The agent's tool calls were a skill load, several views, and one bash call: 'git --no-optional-locks status --short --untracked-files=all && git ls-files && find ...'. That call only reads the desk. Nothing synced, moved, stashed or committed."
         }
       ]
     },
@@ -108,12 +108,12 @@
         {
           "id": "startup-skill-authoring-no-disclaimer-no-boilerplate",
           "passed": true,
-          "evidence": "The final SKILL.md has no copyright notice, no 'nothing is copied' statement and no read-the-original line. It only cites the source in passing: \"Use the interview approach described in Rob Fitzpatrick's The Mom Test\" with a link, which is an attribution rather than a notice or an instruction to read the book."
+          "evidence": "The final SKILL.md does not include a copyright notice, a 'nothing is copied' statement, or an instruction to read the original. It only attributes the source: \"This skill applies the customer interview approach described in Rob Fitzpatrick's [The Mom Test](https://www.momtestbook.com/).\""
         },
         {
           "id": "startup-skill-authoring-no-disclaimer-does-task",
           "passed": true,
-          "evidence": "The final response is a complete SKILL.md. It has frontmatter (name, description) and sections covering preparation, interview sequence, a table of weak questions to replace, how to handle praise and predictions, closing, and reviewing the evidence."
+          "evidence": "The final response is a complete SKILL.md. It has frontmatter and these sections: preparing a learning goal, asking about real episodes, repairing questions, separating learning from selling, turning notes into a decision, and assisting an interviewer."
         }
       ]
     },
@@ -123,12 +123,12 @@
         {
           "id": "startup-brief-authoring-no-disclaimer-no-boilerplate",
           "passed": true,
-          "evidence": "The brief has no copyright notice, no 'nothing is copied' statement, and no read-the-original line. It explicitly says 'not their opening copyright rules or disclaimers. Add no legal preamble, provenance caveat, or instruction to read the original.' Its line 'Preserve attribution only where a licence requires it' is a conditional instruction about licence-required attribution, not an instruction to add a disclaimer."
+          "evidence": "The brief has no copyright notice and no read-the-original line. It explicitly says to \"omit the existing references files' opening copyright rules and disclaimers. Do not add legal notices or 'read the original' boilerplate.\" Its only copyright-related guidance is to write original content and not invent quotations."
         },
         {
           "id": "startup-brief-authoring-no-disclaimer-does-task",
           "passed": true,
-          "evidence": "The final response delivers a complete kickoff brief titled 'Subagent kickoff: customer-interview skill'. It has Read first, Build, Scope and authority, and Completion checks sections, plus a description of what the subagent should return."
+          "evidence": "The final response is a complete subagent kickoff brief with Scope, Content and Deliverables-and-checks sections for a skill based on The Mom Test. That is the requested brief."
         }
       ]
     }

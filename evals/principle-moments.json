@@ -17,7 +17,7 @@
     "evals/worlds/principle-moments/ui-feedback-live/desk/site/index.html",
     "evals/worlds/principle-moments/ui-feedback-live/desk/site/settings.css"
   ],
-  "reviewedSourceFingerprint": "ef0e3db4ac999338bc96dcec63b3379280571bbc7fd1a2507eb99c79b8846453",
+  "reviewedSourceFingerprint": "dea0cc6c3753b062b69d613a0279d63609272b6bf33d385565a851fe3e5a1a42",
   "knownFailure": {"issue":"https://github.com/ourostack/desk/issues/1866","case":"ui-feedback-live","observed":"2026-11-27"},
   "requirements": [
     {

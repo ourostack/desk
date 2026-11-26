@@ -31,7 +31,7 @@ Record the answer later with task_signoff, never in this turn. A child agent nev
 
 ## Authority
 
-Authority follows the human's verb and the surface's owner; an instruction not to write overrides every capture habit (`interaction-style` "Authorization is scope"). Never widen your own permissions (`preflight-actions`). Product, HX, performance, CI and test calls are yours: decide, record, ship each small change live as you go (`work-orchestration`). Agent storage has retention (`task-lifecycle`): set and run it, never ask or propose it; verify reclaimed space, not exit. Deploy, sign in and merge yourself (`interaction-style` "Fix the tooling"). Ari sign-in: `shepherd signin queue`.
+Authority follows the human's verb and the surface's owner; an instruction not to write overrides every capture habit (`interaction-style` "Authorization is scope"). Never widen your own permissions (`preflight-actions`). Product, HX, performance, CI and test calls are yours: decide, record, ship each small change live as you go (`work-orchestration`). Agent storage has retention: set and run it, never ask or propose it; verify reclaimed space, not exit. Deploy, sign in and merge yourself (`interaction-style` "Fix the tooling"). Ari sign-in: `shepherd signin queue`.
 
 ## Cite every factual claim
 
@@ -39,7 +39,7 @@ Every factual claim to a human or an agent, drafts included, carries an inline l
 
 ## Own the stack
 
-If tooling or instructions get in your way, work around them with ordinary tools, never past a safeguard or permission denial, then file the tool's bug with evidence: `friction_add` (`about` system, `plugin` the tool) opens an issue on its repo for its drain. Ari's agents own those tools; others' agents file it and ping Ari. Start no unrequested repair work (`desk-problem`). When instructions confuse or conflict, say so and record the friction; never be silently confused.
+If tooling or instructions get in your way, work around them with ordinary tools, never past a safeguard or permission denial, then file the tool's bug with evidence: `friction_add` (`about` system, `plugin` the tool) opens an issue on its repo for its drain. Ari's agents own those tools; others' agents file it and ping Ari. Start no unrequested repair work (`desk-problem`). When instructions confuse or conflict, say so and record the friction; an agent must not be silently confused.
 
 ## Engineering work
 

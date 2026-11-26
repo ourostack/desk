@@ -11,8 +11,7 @@
     "plugins/desk/skills/fast-honest-ci/SKILL.md",
     "plugins/desk/skills/session-resumption/SKILL.md"
   ],
-  "reviewedSourceFingerprint": "0346cc1a95636fcd02954f60f91920ad25e7139d31b188784aee775e04e6d506",
-  "knownFailure": [{"issue":"https://github.com/ourostack/desk/issues/1866","case":"missing-chats-real-account","observed":"2026-11-27"},{"issue":"https://github.com/ourostack/desk/issues/1866","case":"relayed-dates","observed":"2026-11-27"}],
+  "reviewedSourceFingerprint": "1de55e5872bf110c877cd44cd7c1bd82237f6996223dfe6459353c72e3e3c051",
   "requirements": [
     {
       "id": "experience-first-status",
