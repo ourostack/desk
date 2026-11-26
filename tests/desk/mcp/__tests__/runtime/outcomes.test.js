@@ -77,3 +77,13 @@ test("drains progress counts only what GitHub confirms merged, through the real 
     assert.match(none.err + none.out, /no card was given/)
   })
 })
+
+test("odd endings and acceptance records are judged, never trusted", () => {
+  const e = (ending, card = "c") => ({ at: "2026-11-26T11:00:00Z", card, ending })
+  assert.equal(endingsDir({ HOME: "/h", XDG_STATE_HOME: "rel" }), path.join("/h", ".local", "state", "ouroboros-skills", "desk", "turn-ends"))
+  assert.deepEqual(readEndings(path.join(tmpdir(), "no-such-endings-dir")), [])
+  assert.ok(endingsDir({}).endsWith(path.join("desk", "turn-ends")))
+  const r = progressOf({ card: "c", lookup: () => null, endings: [{ card: "c" }, e({ kind: "waiting" }), e({ kind: "done" })], acceptance: [{ card: "z" }, { card: "c", passed: true, check: "x", version: "v1" }, { card: "c", passed: true, check: "x", version: "v2", at: "t" }, { card: "c", passed: true, check: "", version: "v" }, { card: "c", passed: true, check: "x", version: "" }, { card: "c", passed: false }, { card: "c", passed: true, check: 5, version: "v" }, { card: "c", passed: true, check: "x", version: 5 }] })
+  assert.equal(r.count, 2)
+  assert.equal(r.unverified.length, 6)
+})
