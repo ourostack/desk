@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.623 — 2026-11-26
+
+The four human-experience defaults behave reliably again (#1858). Agent storage retention is set and run, never asked about or proposed: `interaction-style` no longer lists agent storage as a permanent-deletion decision, `task-lifecycle` tells the human in one line what was removed and the space before and after, and `session-resumption` says a session's own folder ages out under that retention once cited evidence is kept by pointer. A date is never relayed without a measurement: the reply says a trustworthy date needs measuring and gives the clock time the numbers will be reported. A change to a human's chat or account setup ships counts-only telemetry with the fix and says so. A status answer opens with how the work feels, never the release's state or date.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.622 — 2026-11-26
 
 `drains progress --card <card>` counts what shipped for a card: pull requests GitHub says are merged (each once) and acceptance checks that passed on a named version. Messages, commits, turns and "busy" never count, and a `done` ending the turn-end gate recorded is checked against GitHub rather than taken at its word. See [keep-the-work-moving.md](docs/keep-the-work-moving.md).
