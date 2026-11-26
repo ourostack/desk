@@ -1973,3 +1973,58 @@ test("waitReadMs: a pull request waiting only on a push is read every 5 minutes 
   assert.equal(waitReadMs({ firstReadAt: new Date(first).toISOString(), waitingOn: ["it is a draft"] }, first + 60_000), 30_000)
   assert.equal(waitReadMs({ firstReadAt: new Date(first).toISOString(), waitingOn: ["typecheck: typecheck in_progress"] }, later), 60_000)
 })
+
+// ── Spend display: a read held locally under the quota floor sends nothing, so it is not a counted call ──
+
+async function spendWorld(rate, answer) {
+  const w = await setup([{ ...IMMEDIATE, account: "ari" }])
+  const { mkdirSync } = await import("node:fs")
+  const quotaDir = path.join(w.dir, "gh-quota")
+  mkdirSync(quotaDir)
+  writeFileSync(path.join(quotaDir, "personal.rate"), `${rate} ${Math.floor(Date.now() / 1000) + 3600} 5000 ${Math.floor(Date.now() / 1000)}\n`)
+  const sent = []
+  const fetchImpl = async (url) => {
+    sent.push(new URL(url).pathname)
+    return answer()
+  }
+  const connect = (account, options) => connectGithub(account, { ...options, spawn: () => ({ status: 0, stdout: "fake-token-1\n" }), fetchImpl, pauseMs: 0, env: { PATH: "/bin", MS_DESK_QUOTA_DIR: quotaDir } })
+  const poll = (at) => pollRelays({ paths: w.paths, drainFiles: w.drainFiles, connect, now: at })
+  return { ...w, sent, poll }
+}
+const reply = (status, headers = {}) => ({ status, ok: status < 400, headers: { get: (name) => headers[name.toLowerCase()] ?? null, has: (name) => name.toLowerCase() in headers }, json: async () => ({ workflow_runs: [] }), text: async () => "" })
+
+test("spend: a read held under the quota floor sent nothing, so the poll spent 0, the state counts 0 and the status says so", async () => {
+  const w = await spendWorld(100, () => reply(200))
+  const polled = await w.poll(NOW)
+  assert.deepEqual(w.sent, [], "the hold is local: no request left")
+  assert.equal(polled.errors[0].code, "drains_rate_limited")
+  assert.equal(polled.spent, 0)
+  assert.equal(w.state("data to pages").lastPoll.counted, 0)
+  assert.equal(w.state("data to pages").spend.counted, 0)
+  assert.doesNotMatch(relayStatusLines(readRelayConfig(w.paths.config), { "data to pages": w.state("data to pages") }, NOW).join("\n"), /spent 1 counted/u)
+})
+
+test("spend: a real HTTP 429 and a network failure each still count as one call", async () => {
+  for (const answer of [() => reply(429, { "retry-after": "60" }), () => { throw new Error("socket hang up") }]) {
+    const w = await spendWorld(4000, answer)
+    const polled = await w.poll(NOW)
+    assert.ok(w.sent.length >= 1, "the request was sent")
+    assert.equal(polled.errors.length, 1)
+    assert.equal(polled.spent, 1)
+    assert.equal(w.state("data to pages").spend.counted, 1)
+  }
+})
+
+test("spend: a 304 is free and a fired write is one counted call, as before", async () => {
+  const w = await setup([IMMEDIATE])
+  let runs = [run(1)]
+  w.world.on("GET", runsRoute, () => ({ workflow_runs: runs }))
+  w.world.on("GET", /\/repos\/o\/pages$/u, () => ({ default_branch: "trunk" }))
+  await w.poll(NOW)
+  assert.equal((await w.poll(NOW + 30 * SECOND)).spent, 0, "an unchanged read is a free 304")
+  assert.equal(w.state("data to pages").lastPoll.free, 1)
+  runs = [run(2), ...runs]
+  const fired = await w.poll(NOW + 60 * SECOND)
+  assert.equal(w.world.writes.length, 1)
+  assert.equal(fired.spent, 3, "the changed runs read, the default-branch read and the dispatch write each count")
+})

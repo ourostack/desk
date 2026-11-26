@@ -816,7 +816,7 @@ function safely(read, fallback) {
   }
 }
 
-/** The api a relay reads through, counting what each call costs: a 304 is free, every other answer and every write counts against the account's quota. */
+/** The api a relay reads through, counting what each call costs: a 304 is free, every other answer, failure and write counts against the account's quota, except a read held locally under the quota floor, which sent nothing. */
 function metered(api, meter) {
   return {
     ...api,
@@ -827,7 +827,8 @@ function metered(api, meter) {
         else meter.counted += 1
         return answer
       } catch (error) {
-        meter.counted += 1
+        // A read held locally under the quota floor sent no request, so it spent nothing.
+        if (!error?.held) meter.counted += 1
         throw error
       }
     },

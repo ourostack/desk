@@ -2945,3 +2945,17 @@ test("a drain with everySeconds is polled no more often than that, and a bad val
   assert.equal(opened, 2)
   assert.throws(() => parseDrainConfig(JSON.stringify({ drains: [{ repo: "o/r", session: "s", everySeconds: 5 }] })), /everySeconds/u)
 })
+
+test("a read held locally under the quota floor is marked held and keeps the rate-limit error; a real 429 is not marked held", async (t) => {
+  const quotaDir = mkdtempSync(path.join(os.tmpdir(), "held-read-"))
+  t.after(() => removeTreeSync(quotaDir))
+  const now = Math.floor(Date.now() / 1000)
+  writeFileSync(path.join(quotaDir, "personal.rate"), `100 ${now + 3600} 5000 ${now}\n`)
+  const connect = (answer, sent) => connectGithub("ari", { spawn: () => ({ status: 0, stdout: "tok\n" }), fetchImpl: async () => { sent.push(1); return answer }, login: "ari", pauseMs: 0, env: { PATH: "/bin", MS_DESK_QUOTA_DIR: quotaDir } })
+  const sent = []
+  await assert.rejects((await connect(response([]), sent)).changedIssues("o/r", "2026-11-13T00:58:00Z"), (error) => error.held === true && error.code === "drains_rate_limited" && error.status === 429 && error.rateLimited === true)
+  assert.equal(sent.length, 0, "a held read sends nothing")
+  writeFileSync(path.join(quotaDir, "personal.rate"), `4000 ${now + 3600} 5000 ${now}\n`)
+  await assert.rejects((await connect(response({}, { status: 429, headers: { "retry-after": "60" } }), sent)).changedIssues("o/r", "2026-11-13T00:58:00Z"), (error) => error.status === 429 && error.rateLimited === true && error.held === undefined)
+  assert.ok(sent.length >= 1)
+})
