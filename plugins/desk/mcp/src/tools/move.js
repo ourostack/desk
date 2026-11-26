@@ -28,6 +28,7 @@ import {
 import { deskRelativePath, resolveWriteTarget, personPrefix } from "../util/paths.js"
 import { withCreatedDirs } from "../util/created-dirs.js"
 import { isGitRepository, hasUnstagedWork, stagePaths, commitIndexPaths, indexEntries } from "../util/git-stage.js"
+import { defaultBranchForPublication, publishCardCommit } from "../util/main-publish.js"
 import { commitFailure, withNext } from "../util/route-around.js"
 import { deskFailure } from "../runtime/desk-failure.js"
 import { schedulePush as schedulePushDefault } from "../runtime/sync-worker.js"
@@ -243,6 +244,12 @@ function stageWrites({ root, files, spawnGit }) {
 function commitMove({ root, movedDirs, writtenFiles, message, spawnGit, deskRoot }) {
   if (!isGitRepository(root, spawnGit)) return undefined
   const relPaths = [...new Set([...movedDirs, ...writtenFiles].map((p) => relPath(root, p)))]
+  // A checkout on another branch (a worktree) publishes to the remote's default branch, as every other card write does; a commit on the worktree's own branch is never published (#1843).
+  const target = defaultBranchForPublication(root, spawnGit)
+  if (target !== null) {
+    const published = publishCardCommit({ root, relPaths, message, defaultBranch: target, spawnGit })
+    return published.ok ? undefined : commitFailure({ root, paths: relPaths, message, committed: published, deskRoot })
+  }
   // Commits what the index holds at those paths, through a private index: `git commit -- <paths>` leaves out a file a sparse checkout leaves out
   // (a hosted desk leaves media out), so a moved screenshot would be committed as deleted and never added at its new path.
   const entries = indexEntries(root, relPaths, spawnGit)
