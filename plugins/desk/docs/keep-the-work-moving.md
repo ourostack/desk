@@ -24,3 +24,14 @@ Any other ending is corrected once, with this text. The correction is spent once
 | Skip the gate by never declaring a card | Not caught here: a session with no focused card has no job. The runner outside agent sessions (part 4) checks sessions with open pull requests regardless |
 | Say "no ready work" to stop | Allowed and recorded with where it looked; the runner compares it against the roadmap's ready list |
 | `done` that did not really ship | The gate only checks the claim is this session's own; shipped evidence is verified against GitHub by part 2 |
+
+## 2. Progress from outcomes
+
+Code: [outcomes.js](../mcp/src/runtime/outcomes.js), tests in [outcomes.test.js](../../../tests/desk/mcp/__tests__/runtime/outcomes.test.js). `progressOf` counts, for a card, only a pull request that GitHub says is merged (each once) and an acceptance check that passed on a named version. It reads the turn-end ledger, so a `done` ending is checked against GitHub, not taken at its word.
+
+| How an agent could game it | What stops it |
+|---|---|
+| Send messages, commit, or stay "busy" | None of them is an input; the "waiting", "blocked" and "no ready work" endings add nothing either |
+| Claim an unmerged or unknown pull request, or a bare sha | Listed as `unverified` with why, count stays 0 |
+| Claim the same pull request again, or another card's | Counted once; other cards' endings are ignored |
+| Report an acceptance pass with no version | Needs a check name and a version, and `passed: true` |
