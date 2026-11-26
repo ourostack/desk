@@ -996,9 +996,13 @@ function signalledRetryAt(error, now) {
   return after === null ? reset : reset === null ? after : Math.max(after, reset)
 }
 
-/** Whatever a probe rejected with, as an Error. */
+/** Whatever a probe rejected with, as an Error with a message; a real Error keeps its code, status and transient fields, an empty message gets a stated one. */
 function asError(value) {
-  return value instanceof Error || (value && typeof value === "object") ? value : new Error(String(value ?? "the account probe failed without saying why"))
+  const message = value instanceof Error ? value.message : typeof value === "string" ? value : typeof value?.message === "string" ? value.message : ""
+  const failure = value instanceof Error ? value : new Error(message)
+  if (!failure.message) failure.message = "the account probe failed without saying why"
+  if (!(value instanceof Error) && value && typeof value === "object") for (const field of ["code", "status", "transient"]) if (value[field] !== undefined) failure[field] = value[field]
+  return failure
 }
 
 /** Identifies one account's access to one repository for one relay configuration and credential, without holding the token. */

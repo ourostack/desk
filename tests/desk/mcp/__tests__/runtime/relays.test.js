@@ -1688,11 +1688,15 @@ for (const [status, body] of [[429, ""], [403, "You have exceeded a secondary ra
   })
 }
 
-test("probes: a probe that rejects with nothing is a visible failure, never an accessible account", async () => {
-  const w = await setup([IMMEDIATE])
-  const connect = async () => ({ get: async () => Promise.reject(undefined), calls: () => ({ total: 0 }), credentialEpoch: "e" })
-  const polled = await pollRelays({ paths: w.paths, drainFiles: w.drainFiles, connect, now: NOW, signedIn: () => ["a", "b"] })
-  assert.equal(polled.errors.length, 1)
-  assert.ok(polled.errors[0].error.length > 0)
-  assert.equal(w.state("data to pages").resolvedAccount, undefined)
-})
+for (const [label, rejection] of [["nothing", undefined], ["null", null], ["an empty object", {}], ["an object with only a code", { code: "x" }]]) {
+  test(`probes: a probe that rejects with ${label} is a visible failure, never an accessible account`, async () => {
+    const w = await setup([IMMEDIATE])
+    const connect = async () => ({ get: async () => Promise.reject(rejection), calls: () => ({ total: 0 }), credentialEpoch: "e" })
+    const polled = await pollRelays({ paths: w.paths, drainFiles: w.drainFiles, connect, now: NOW, signedIn: () => ["a", "b"] })
+    assert.equal(polled.errors.length, 1)
+    assert.ok(polled.errors[0].error.length > 0)
+    assert.equal(w.state("data to pages").resolvedAccount, undefined)
+    assert.ok(w.state("data to pages").lastError.length > 0)
+    if (rejection?.code) assert.equal(polled.errors[0].code, "x", "a structured code is kept")
+  })
+}
