@@ -1,5 +1,27 @@
 # desk plugin — changelog
 
+## 3.2.619 — 2026-11-26
+
+Desk's MCP server now vendors Ouro UI v1.3.586, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.618 — 2026-11-26
+
+The work-orchestration skill now says never to wake many agent sessions at once on one machine: wake one at a time, wait for each to answer or time out, and bound the sessions a machine runs. A burst of about ten wakes on a loaded Mac made every session reload time out ("Agency startup timed out" at 60 s, git admission timeouts). Keepers and any restart watcher that wake sessions follow the same rule.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.617 — 2026-11-26
+
+### Fixed
+
+`task_update` with `into_task` (and a move with `to_track`) from a desk bound to a Git worktree now publishes the move to the remote's default branch, as every other card write already does, instead of leaving the commit only on the worktree's own branch.
+
+Staging a card no longer fails with `index.lock: File exists` when another Desk writer, such as the queued log commit, takes the index lock just before the `git add`: a lock-refused add that staged nothing is run again within the existing three-second wait. A lock that never clears still fails inside that wait and is never removed.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.616 — 2026-11-26
 
 A session with an open focused card can now end its turn only as done (with a pull request, run or commit this session produced), waiting (on a named event, with a wake it registered, an expiry within 7 days and what it blocks), blocked on a named person (with the step that resumes the work), or "no ready work" (with where it looked). The Stop hook corrects any other ending once per turn, so it cannot loop, and records every ending for the runner that checks unfinished jobs outside agent sessions. See [keep-the-work-moving.md](docs/keep-the-work-moving.md).

@@ -339,13 +339,21 @@ export function commitIndexPaths(root, relPaths, entries, message, spawnGit, sta
 export function stagePaths(root, relPaths, spawnGit, stateBranch, { all = false } = {}) {
   const refusal = commitBranchRefusal(root, spawnGit, stateBranch)
   if (refusal !== null) return { ok: false, stderr: refusal }
+  const deadline = Date.now() + LOCK_WAIT_MS
   if (!yieldsGitLock()) {
-    const deadline = Date.now() + LOCK_WAIT_MS
     while (indexLockHeld(root, spawnGit) && Date.now() < deadline) sleepSync(LOCK_RETRY_MS)
   }
   // `--sparse` stages a path a sparse checkout leaves out, such as a screenshot added in a hosted desk that excludes media; on a full checkout it
   // changes nothing, and with `-A` it never stages a left-out file as deleted.
-  const result = run(spawnGit, root, ["add", "--sparse", ...(all ? ["-A"] : []), "--", ...relPaths])
+  const add = () => run(spawnGit, root, ["add", "--sparse", ...(all ? ["-A"] : []), "--", ...relPaths])
+  let result = add()
+  // A writer can take the lock between the check above and the add. `git add` takes the index lock before it reads or filters anything, so an
+  // add refused for the lock did nothing: when nothing is staged at these paths it is run again, within the same wait. A refusal that may have
+  // landed (something is staged, or Git cannot say) is never redispatched, and any other failure is final.
+  while (!yieldsGitLock() && !result?.error && lockHeld(result) && Date.now() < deadline && stagedChanges(root, relPaths, spawnGit)?.length === 0) {
+    sleepSync(LOCK_RETRY_MS)
+    result = add()
+  }
   if (timedOut(result)) return { ok: false, stderr: "timeout" }
   return { ok: result.status === 0, stderr: result.stderr }
 }
