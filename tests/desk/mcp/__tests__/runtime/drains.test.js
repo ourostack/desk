@@ -2905,10 +2905,12 @@ test("a person's edit found early leaves no baseline that hides one that was not
   await w.poll()
   w.change(1, NOW + 360_000, personEdit("h1", iso(NOW + 360_000)))
   assert.equal((await w.poll(NOW + 360_000)).wakes.length, 1)
-  assert.equal(w.state().seen[1].edits, undefined)
+  const baseline = w.state().seen[1].edits
   h.extra.push(botEdit("b4", iso(NOW + 720_000)))
   w.change(1, NOW + 720_000, null)
+  // The missed news comes first: a baseline that hides h2 lets the later bot edit pass as quiet.
   assert.equal((await w.poll(NOW + 720_000)).wakes.length, 1)
+  assert.equal(baseline, undefined)
 })
 
 test("a person's edit with no id or time is news and leaves no baseline (#1798)", async () => {
