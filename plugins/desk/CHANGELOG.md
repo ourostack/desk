@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.616 — 2026-11-26
+
+A session with an open focused card can now end its turn only as done (with a pull request, run or commit this session produced), waiting (on a named event, with a wake it registered, an expiry within 7 days and what it blocks), blocked on a named person (with the step that resumes the work), or "no ready work" (with where it looked). The Stop hook corrects any other ending once per turn, so it cannot loop, and records every ending for the runner that checks unfinished jobs outside agent sessions. See [keep-the-work-moving.md](docs/keep-the-work-moving.md).
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.615 — 2026-11-26
 
 Desk's MCP server now vendors Ouro UI v1.3.585, moved by Ouro Current.
