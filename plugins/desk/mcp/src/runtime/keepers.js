@@ -44,6 +44,25 @@ export function beat({ dir, host, now }) {
   return file
 }
 
+const git = (repo, args, input) => spawnSync("git", ["-C", repo, ...args], { encoding: "utf8", input, timeout: 30_000, windowsHide: true })
+
+/** Publishes the heartbeat as a blob on `refs/heartbeats/<host>` of a shared remote, so a peer reads it with no inbound ssh. Returns whether it landed. */
+export function publish({ repo, host, now }) {
+  if (!repo || !/^[\w.-]+$/u.test(host)) return false
+  const made = git(repo, ["hash-object", "-w", "--stdin"], `${JSON.stringify({ host, at: new Date(now).toISOString() })}\n`)
+  if (made.status !== 0) return false
+  return git(repo, ["push", "-q", "origin", `+${made.stdout.trim()}:refs/heartbeats/${host}`]).status === 0
+}
+
+/** Reads a peer's published heartbeat; null when it cannot be fetched. */
+export function gitRead(repo, name) {
+  if (!repo || !/^[\w.-]+$/u.test(name)) return null
+  const ref = `refs/heartbeats/${name}`
+  if (git(repo, ["fetch", "-q", "origin", `+${ref}:${ref}`]).status !== 0) return null
+  const out = git(repo, ["cat-file", "-p", ref])
+  return out.status === 0 ? out.stdout : null
+}
+
 /** Reads a peer's heartbeat over ssh with no prompt; null when it cannot be read. */
 function sshRead(peer, name) {
   if (!/^[\w.@-]+$/u.test(peer.ssh ?? "") || !/^[\w.-]+$/u.test(name)) return null
@@ -52,7 +71,7 @@ function sshRead(peer, name) {
 }
 
 /** A peer is silent when its heartbeat is missing, unreadable, older than half an hour or from the future. */
-export function peerFindings({ peers = [], now, read = sshRead }) {
+export function peerFindings({ peers = [], now, read = (peer, name) => (peer.ssh ? sshRead(peer, name) : null) }) {
   const out = []
   for (const peer of peers) {
     let at = NaN
@@ -62,22 +81,24 @@ export function peerFindings({ peers = [], now, read = sshRead }) {
   return out
 }
 
-/** `keepers.json`: `{ "host": "<this host's name>", "peers": [{ "host": "<name>", "ssh": "<ssh alias>" }] }`. */
+/** `keepers.json`: `{ "host": "<this host's name>", "repo": "<clone whose origin both hosts push to>", "peers": [{ "host": "<name>" }] }`; a peer with an `ssh` alias is read over ssh instead. */
 export function readKeeperConfig(file) {
   try {
     const raw = JSON.parse(readFileSync(file, "utf8"))
-    const peers = Array.isArray(raw.peers) ? raw.peers.filter((p) => typeof p?.host === "string" && typeof p?.ssh === "string") : []
-    return { host: typeof raw.host === "string" && /^[\w.-]+$/u.test(raw.host) ? raw.host : null, peers }
+    const peers = Array.isArray(raw.peers) ? raw.peers.filter((p) => typeof p?.host === "string") : []
+    return { host: typeof raw.host === "string" && /^[\w.-]+$/u.test(raw.host) ? raw.host : null, repo: typeof raw.repo === "string" ? raw.repo : null, peers }
   } catch (error) {
-    if (error?.code === "ENOENT") return { host: null, peers: [] }
+    if (error?.code === "ENOENT") return { host: null, repo: null, peers: [] }
     throw { keepersConfigInvalid: error.message } // an unreadable config must not read as "no peers", which would switch off the peer check
   }
 }
 
 /** One keeper run: show this host's heartbeat, then list what needs a job. Idempotent, so a rerun reports the same findings until someone acts. */
-export async function keepersCheck({ config, heartbeatDir, endings, leases, now, read }) {
+export async function keepersCheck({ config, heartbeatDir, endings, leases, now, read: readSsh }) {
   const host = config.host
   if (host !== null) beat({ dir: heartbeatDir, host, now })
+  const shared = host !== null && config.repo ? publish({ repo: config.repo, host, now }) : null
+  const read = readSsh ?? ((peer, name) => (peer.ssh ? sshRead(peer, name) : gitRead(config.repo, name)))
   const all = [...findings({ endings, leases, now }), ...peerFindings({ peers: config.peers, now, read })]
-  return { host, findings: all, status: [host === null ? "this host has no name in keepers.json, so its heartbeat is not shown and its peer cannot check it" : `${host}: heartbeat shown`, `${all.length} finding${all.length === 1 ? "" : "s"}`, ...all.map((f) => `${f.kind}${f.card ? ` ${f.card}` : ""}: ${f.why}`)] }
+  return { host, findings: all, status: [host === null ? "this host has no name in keepers.json, so its heartbeat is not shown and its peer cannot check it" : `${host}: heartbeat shown${shared === false ? " locally only; publishing to the shared repo failed" : ""}`, `${all.length} finding${all.length === 1 ? "" : "s"}`, ...all.map((f) => `${f.kind}${f.card ? ` ${f.card}` : ""}: ${f.why}`)] }
 }
