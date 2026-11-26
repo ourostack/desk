@@ -131,6 +131,7 @@ async function setup({ cli = true, mode = "", npmMode, platform } = {}) {
   const options = {
     env, tmpDir: tmp, npmCli: npm, exists: onlyEdge, platform: platform ?? process.platform,
     authDriver: fakeDriver().driver,
+    keychainRun: () => { throw new Error("tests never read the keychain") },
     runtimeStateReader: () => ({ execArgv: [], inspectorActive: false }),
     profileRoots: { msedge: path.join(profiles, "edge"), chrome: path.join(profiles, "chrome") },
   }
@@ -255,6 +256,10 @@ test("copyProfile stores copied cookie values as plain values so a newer browser
   fs.writeFileSync(path.join(source, "Profile 1", "Network", "Cookies"), "not a database")
   web.copyProfile(source, path.join(root, "dest3"), "Microsoft Edge", { cookieKey: key })
   assert.equal(fs.readFileSync(path.join(root, "dest3", "Profile 1", "Network", "Cookies"), "utf8"), "not a database")
+  const unknown = web.copyProfile(source, path.join(root, "dest4"), "Microsoft Edge", { cookieKey: key })
+  assert.equal(unknown.uninspectedCookies, 1)
+  assert.equal(unknown.unreadableCookies, undefined)
+  assert.match(web.sessionWarning(undefined, 1), /^COOKIES_NOT_INSPECTED: 1 copied cookie file\(s\).*unknown\./)
 })
 
 test("copyProfile says so when encrypted cookies cannot be made readable, instead of passing off a signed-out copy as a normal one", async () => {
@@ -273,7 +278,7 @@ test("copyProfile says so when encrypted cookies cannot be made readable, instea
   let copied
   try { copied = web.copyProfile(source, path.join(root, "dest"), "Microsoft Edge", { cookieKey: null }) } finally { Object.defineProperty(process, "platform", platform) }
   assert.deepEqual(copied.unreadableCookies, { encrypted: 1, unreadable: 1, keychain: "no key" })
-  assert.match(web.sessionWarning(copied.unreadableCookies), /^SESSION_MAY_BE_MISSING: 1 of 1 cookies .*Safe Storage key: no key/)
+  assert.match(web.sessionWarning(copied.unreadableCookies, copied.uninspectedCookies), /^SESSION_MAY_BE_MISSING: 1 of 1 cookies .*Safe Storage key: no key/)
   assert.equal(web.copyProfile(source, path.join(root, "dest2"), "Microsoft Edge", { cookieKey: crypto.randomBytes(16) }).unreadableCookies.keychain, "key read")
 })
 
@@ -429,7 +434,7 @@ test("copyProfile names an operating-system read block instead of a profile poli
     }
     try {
       const dest = path.join(root, `perm${index}-copy`)
-      assert.throws(() => web.copyProfile(source, dest, "Microsoft Edge"), (error) => {
+      assert.throws(() => web.copyProfile(source, dest, "Microsoft Edge", { cookieKey: null }), (error) => {
         assert.match(error.message, /^COPY_SOURCE_PERMISSION: The operating system blocked reading your Microsoft Edge profile/u)
         assert.match(error.message, /No authenticated copy was opened\.$/u)
         return true
@@ -473,7 +478,7 @@ test("copyProfile suggests permission review without claiming a cause or grantin
       Object.defineProperty(process, "platform", { ...platform, value: os })
       const source = path.join(root, `os-${os}`)
       makeProfile(source)
-      assert.throws(() => web.copyProfile(source, path.join(root, `os-${os}-copy`), "Microsoft Edge"), (error) => {
+      assert.throws(() => web.copyProfile(source, path.join(root, `os-${os}-copy`), "Microsoft Edge", { cookieKey: null }), (error) => {
         assert.match(error.message, fix)
         assert.match(error.message, /does not identify the exact permission or policy/u)
         assert.match(error.message, /Desk cannot grant OS access/u)
@@ -561,6 +566,8 @@ test("mine open on macOS warns, through the supported entry, when the keychain r
     assert.match(reply.sessionWarning, /^SESSION_MAY_BE_MISSING: 1 of 1 cookies .*Safe Storage key: exit 51/)
     const again = JSON.parse(text(await controller.call("browser_context", { action: "open", browser: "mine" })))
     assert.match(again.sessionWarning, /exit 51/)
+    assert.match(reply.note, /if its sign-ins carried \(see sessionWarning/)
+    assert.doesNotMatch(reply.note, /GitHub shows the account that was active in the copied profile; this copy holds every/)
     await controller.closeAll()
   } finally { Object.defineProperty(process, "platform", platform) }
 })
