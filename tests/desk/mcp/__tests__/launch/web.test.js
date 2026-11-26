@@ -1681,10 +1681,11 @@ function readFixtureTable([file, args], timeout = 20000) {
 
 // A first PowerShell start on a fresh Windows runner takes 1.5 to 6.3 s, 0.1 s once warm, and is the one stage that varies
 // (#1848: 27 fresh runners, whole read 2.8 to 7.9 s). Read once before any test so no assertion's read is the cold one; the read
-// that follows still has to succeed, and a failure here is reported by it, not hidden.
+// that follows still has to succeed, and a failure here is reported by it, not hidden. The warm-up has the same 20 s bound as
+// every other read: it is a measured mitigation, not a wider wait, and the original 21 s stall is not explained by these samples.
 if (isWindows && !sourceOnly) {
   try {
-    const warm = readFixtureTable(fixtureTableCommand(), 60000)
+    const warm = readFixtureTable(fixtureTableCommand())
     console.log(`# fixture process table warm-up: ${warm.took}ms, stages ${warm.stages}`)
   } catch (error) {
     console.log(`# fixture process table warm-up did not finish: ${error.message.split("\n")[0]}`)
