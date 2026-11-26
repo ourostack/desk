@@ -1595,12 +1595,33 @@ const running = (pid) => {
   }
 }
 
+// Windows reads the table in stages, each announced on stderr with its wall-clock time, so a read that does not finish
+// says which stage it reached (shell start, CIM query or JSON) and how long each stage took.
+const WINDOWS_TABLE_SCRIPT = [
+  "$ErrorActionPreference='Stop'",
+  "function mark($n){[Console]::Error.WriteLine('stage '+$n+' '+[DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds())}",
+  "mark 'shell'",
+  "$rows=@(Get-CimInstance Win32_Process)",
+  "mark 'cim'",
+  "$json=$rows | Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress",
+  "mark 'json'",
+  "[Console]::Out.Write($json)",
+].join(";")
+const tableStages = (stderr, began) => (stderr.match(/^stage \w+ \d+$/gmu) ?? []).map((line) => {
+  const [, name, at] = line.split(" ")
+  return `${name}+${Number(at) - began}ms`
+}).join(" ")
+
 function fakeProcessTable() {
   const command = isWindows
-    ? [web.processTableCommand("win32", process.env)[0], ["-NoProfile", "-NonInteractive", "-Command", "Get-CimInstance Win32_Process | Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress"]]
+    ? [web.processTableCommand("win32", process.env)[0], ["-NoProfile", "-NonInteractive", "-Command", WINDOWS_TABLE_SCRIPT]]
     : ["ps", ["-A", "-o", "pid=", "-o", "command="]]
+  const began = Date.now()
   const result = spawnSync(command[0], command[1], { encoding: "utf8", timeout: 20000, windowsHide: true, maxBuffer: 16 * 1024 * 1024 })
-  assert.equal(result.status, 0, `fixture process table failed (${result.error?.code ?? result.signal ?? "no signal"}): ${result.stderr}`)
+  const stages = isWindows ? tableStages(result.stderr ?? "", began) : ""
+  const took = Date.now() - began
+  if (isWindows) console.log(`# fixture process table: ${took}ms, stages ${stages || "none reached"}`)
+  assert.equal(result.status, 0, `fixture process table failed (${result.error?.code ?? result.signal ?? "no signal"}) after ${took}ms; stages reached: ${stages || "none"}: ${result.stderr}`)
   if (isWindows) {
     const rows = JSON.parse(result.stdout)
     return (Array.isArray(rows) ? rows : [rows]).map((row) => ({ pid: row.ProcessId, command: row.CommandLine ?? "" }))
