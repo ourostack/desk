@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.600 — 2026-11-26
+
+Desk's MCP server now vendors Ouro UI v1.3.577, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.599 — 2026-11-26
 
 An issue drain can set `everySeconds` (60 or more) in its config to be polled less often than the drains run, so a busy repository that changes every minute costs fewer GitHub reads.
