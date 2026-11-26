@@ -39,6 +39,7 @@ test("lapsed and ownerless claims are findings", () => {
 test("two hosts check each other: a peer with a missing, old, future or unreadable heartbeat is silent", () => {
   const peers = [{ host: "mini", ssh: "m" }]
   const beatAt = (min) => () => JSON.stringify({ host: "mini", at: at(min) })
+  assert.equal(peerFindings({ now: NOW, read: beatAt(-5) }).length, 0)
   assert.equal(peerFindings({ peers, now: NOW, read: beatAt(-5) }).length, 0)
   assert.equal(peerFindings({ peers, now: NOW, read: beatAt(-30) }).length, 1)
   assert.equal(peerFindings({ peers, now: NOW, read: beatAt(+500) }).length, 1)
