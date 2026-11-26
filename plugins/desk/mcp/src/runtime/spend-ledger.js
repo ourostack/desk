@@ -176,7 +176,7 @@ function currentRate(dir, pool, own = [], retry = true) {
   return { rate: seen.length > 0 ? tightest(seen) : null, unreadable }
 }
 
-// Every observation is first appended to its window's log (one small O_APPEND write is atomic across processes; one that cannot be appended is kept in this process and warned about),
+// Every observation is first appended to its window's log (a leading newline ends any line a killed writer left unfinished, so an observation is never glued onto one; one small O_APPEND write is atomic across processes; one that cannot be appended is kept in this process and warned about),
 // then `<pool>.rate` is written once from the lowest remaining in them. That file is the shim's cache, not Desk's decision: two writers can
 // leave it a moment (or until the next observation) higher than the lowest, and the shim, which reads it, can see that. Desk's own reads
 // are not decided from it alone: they are decided from `currentRate`, so a raised file never lets one through. `fetched` moves only when `fresh` (a free
@@ -185,7 +185,7 @@ function mergeRate(dir, pool, { remaining, reset, limit }, now, fresh) {
   const file = path.join(dir, `${pool}.rate`)
   try {
     try {
-      appendFileSync(`${file}.obs.${reset}`, `${remaining} ${reset} ${limit}\n`)
+      appendFileSync(`${file}.obs.${reset}`, `\n${remaining} ${reset} ${limit}\n`)
     } catch (error) {
       // The answer is still known to this process: keep it, and say so once, rather than lose a below-floor observation silently.
       unlogged.set(`${dir}\0${pool}`, [tightest([{ remaining, reset, limit }, ...(unlogged.get(`${dir}\0${pool}`) ?? [])])])
