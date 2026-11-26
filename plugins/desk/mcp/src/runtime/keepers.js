@@ -70,7 +70,7 @@ function sshRead(peer, name) {
 }
 
 /** A peer is silent when its heartbeat is missing, unreadable, older than half an hour or from the future. */
-export function peerFindings({ peers = [], now, read = (peer, name) => (peer.ssh ? sshRead(peer, name) : null) }) {
+export function peerFindings({ peers = [], now, read }) {
   const out = []
   for (const peer of peers) {
     let at = NaN
