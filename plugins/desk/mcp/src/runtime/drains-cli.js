@@ -157,7 +157,7 @@ function drainsCli({ script, env, now, connect, listProcesses, signedIn, fetchHo
         return withDesk(await stalledStatus({ paths, now: now(), env, homeDir: os.homedir() }), { script, env })
       }),
       command("progress", { ...READ, summary: "Count what shipped for a card: merged pull requests GitHub confirms, never messages, commits or busy.", flags: { card: { type: "string", required: true, placeholder: "<card>", description: "The card as the turn-end ledger names it." } } }, (input) => {
-        if (!String(input.card ?? "").trim()) throw usageError("progress-card-missing", "no card was given, so nothing was counted", "run drains progress --card <card> with a card id from the turn-end ledger")
+        if (!String(input.card).trim()) throw usageError("progress-card-missing", "no card was given, so nothing was counted", "run drains progress --card <card> with a card id from the turn-end ledger")
         const result = progressOf({ card: input.card, endings: readEndings(endingsDir(env)) })
         return withDesk({ ...result, status: [`${input.card}: ${result.count} shipped, ${result.unverified.length} claimed but not confirmed`] }, { script, env })
       }),
@@ -165,7 +165,7 @@ function drainsCli({ script, env, now, connect, listProcesses, signedIn, fetchHo
         return withDesk(await leaseFile(() => leaseStatus({ paths: leasePaths({ env }), now: now(), env })), { script, env })
       }),
       command("leases take", { effect: "private", summary: "Claim a card for a session; a held card stays with its owner, and claiming again does not restart its lease.", flags: { card: { type: "string", required: true, placeholder: "<card>", description: "The card to claim." }, owner: { type: "string", required: true, placeholder: "<session id>", description: "The session that will own it." }, repo: { type: "string", placeholder: "<owner/name>", description: "The repository its work is pushed to." }, branch: { type: "string", placeholder: "<branch>", description: "The branch its work is pushed to." } } }, async (input) => {
-        if (!String(input.card ?? "").trim() || !String(input.owner ?? "").trim()) throw usageError("lease-owner-missing", "a claim needs both a card and the session that owns it", "run drains leases take --card <card> --owner <session id>")
+        if (!String(input.card).trim() || !String(input.owner).trim()) throw usageError("lease-owner-missing", "a claim needs both a card and the session that owns it", "run drains leases take --card <card> --owner <session id>")
         return withDesk(await leaseFile(() => claimCard({ paths: leasePaths({ env }), card: input.card, owner: input.owner, repo: input.repo, branch: input.branch, now: now(), env })), { script, env })
       }),
       command("keepers check", { effect: "private", summary: "Show this host's heartbeat and list what needs a job: expired or endlessly renewed waits, unverified endings, lapsed or ownerless claims and a silent peer.", flags: { config: CONFIG } }, async (input) => {
@@ -173,7 +173,6 @@ function drainsCli({ script, env, now, connect, listProcesses, signedIn, fetchHo
         const file = input.config ?? path.join(home, "keepers.json")
         let config
         try { config = readKeeperConfig(file) } catch (error) {
-          if (!error?.keepersConfigInvalid) throw error
           throw new AxError({ code: "keepers-config-invalid", exit: 1, thing: "keepers", problem: `${file} cannot be read (${error.keepersConfigInvalid}), so no peer was checked`, fix: "Repair keepers.json as { \"host\": \"<name>\", \"repo\": \"<clone path>\", \"peers\": [{ \"host\": \"<name>\" }] } and run drains keepers check again." })
         }
         const t = now()
