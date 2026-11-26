@@ -68,8 +68,9 @@ export function readKeeperConfig(file) {
     const raw = JSON.parse(readFileSync(file, "utf8"))
     const peers = Array.isArray(raw.peers) ? raw.peers.filter((p) => typeof p?.host === "string" && typeof p?.ssh === "string") : []
     return { host: typeof raw.host === "string" && /^[\w.-]+$/u.test(raw.host) ? raw.host : null, peers }
-  } catch {
-    return { host: null, peers: [] }
+  } catch (error) {
+    if (error?.code === "ENOENT") return { host: null, peers: [] }
+    throw { keepersConfigInvalid: error.message } // an unreadable config must not read as "no peers", which would switch off the peer check
   }
 }
 

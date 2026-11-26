@@ -170,7 +170,12 @@ function drainsCli({ script, env, now, connect, listProcesses, signedIn, fetchHo
       }),
       command("keepers check", { effect: "private", summary: "Show this host's heartbeat and list what needs a job: expired or endlessly renewed waits, unverified endings, lapsed or ownerless claims and a silent peer.", flags: { config: CONFIG } }, async (input) => {
         const home = drainsHome({ env })
-        const config = readKeeperConfig(input.config ?? path.join(home, "keepers.json"))
+        const file = input.config ?? path.join(home, "keepers.json")
+        let config
+        try { config = readKeeperConfig(file) } catch (error) {
+          if (!error?.keepersConfigInvalid) throw error
+          throw new AxError({ code: "keepers-config-invalid", exit: 1, thing: "keepers", problem: `${file} cannot be read (${error.keepersConfigInvalid}), so no peer was checked`, fix: "Repair keepers.json as { \"host\": \"<name>\", \"peers\": [{ \"host\": \"<name>\", \"ssh\": \"<alias>\" }] } and run drains keepers check again." })
+        }
         const t = now()
         const { leases } = await leaseStatus({ paths: leasePaths({ env }), now: t, env })
         const result = keepersCheck({ config, heartbeatDir: path.join(endingsDir(env), "..", "heartbeats"), endings: readEndings(endingsDir(env)), leases, now: t })
