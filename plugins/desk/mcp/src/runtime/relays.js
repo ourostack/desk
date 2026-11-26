@@ -681,7 +681,12 @@ async function deleteBranch(ctx, relay, pr) {
   return response.ok || [404, 422].includes(response.status)
 }
 
-const waitReadMs = (record, now) => Math.min(WAIT_READ_MAX_MS, Math.max(WAIT_READ_MIN_MS, (now - Date.parse(record.firstReadAt)) / 4))
+// Only a push (or a person) clears a conflict or a draft, so such a pull request is read less often than one waiting on checks.
+const PUSH_ONLY_WAIT = /^it (has merge conflicts|is a draft)$/u
+const WAIT_READ_PUSH_ONLY_MAX_MS = 300_000
+
+/** How long a waiting pull request keeps its last answers before it is read again. */
+export const waitReadMs = (record, now) => Math.min(record.waitingOn?.length > 0 && record.waitingOn.every((reason) => PUSH_ONLY_WAIT.test(reason)) ? WAIT_READ_PUSH_ONLY_MAX_MS : WAIT_READ_MAX_MS, Math.max(WAIT_READ_MIN_MS, (now - Date.parse(record.firstReadAt)) / 4))
 
 /** A waiting pull request not yet due for another read keeps its cached answers (and their tags) through this poll's cleanup. */
 function skipRead(relay, state, ctx, number) {

@@ -7,6 +7,7 @@ import * as path from "node:path"
 import { promises as fs } from "node:fs"
 import { spawnSync } from "node:child_process"
 import { desk_save } from "../../../../../plugins/desk/mcp/src/tools/desk-save.js"
+import { whyNotSaved } from "../../../../../plugins/desk/mcp/src/util/git-stage.js"
 import { mkTempDeskRoot } from "./_helpers.js"
 import { notCommitted, routedPaths } from "./_route_around.js"
 
@@ -55,7 +56,7 @@ test("desk_save stages and commits exactly the given path", async () => {
     schedulePush: () => {},
   })
 
-  assert.equal(result.status, "committed")
+  assert.equal(result.status, "committed", JSON.stringify(result))
   assert.equal(result.commit, undefined, "no commit field on a normal, silent success")
   assert.equal(gitStatus(root), "")
   assert.equal(lastCommitMessage(root), "save planning notes")
@@ -75,7 +76,7 @@ test("desk_save commits several paths together as one commit", async () => {
     schedulePush: () => {},
   })
 
-  assert.equal(result.status, "committed")
+  assert.equal(result.status, "committed", JSON.stringify(result))
   assert.equal(commitCount(root), 1)
   assert.deepEqual(
     lastCommitFiles(root),
@@ -152,7 +153,7 @@ test("desk_save commits a path inside the resolved --person write prefix", async
     schedulePush: () => {},
   })
 
-  assert.equal(result.status, "committed")
+  assert.equal(result.status, "committed", JSON.stringify(result))
   assert.deepEqual(lastCommitFiles(root), ["desks/alex/notes.md"])
 })
 
@@ -172,7 +173,7 @@ test("desk_save commits only its own paths, leaving another process's staged, un
     schedulePush: () => {},
   })
 
-  assert.equal(result.status, "committed")
+  assert.equal(result.status, "committed", JSON.stringify(result))
   assert.deepEqual(lastCommitFiles(root), ["notes.md"])
   const status = gitStatus(root)
   assert.match(status, /^A  unrelated\.txt$/m, "the unrelated path is still staged, not swept into this commit")
@@ -361,7 +362,7 @@ test("desk_save schedules a push after a successful commit", async () => {
     schedulePush,
   })
 
-  assert.equal(result.status, "committed")
+  assert.equal(result.status, "committed", JSON.stringify(result))
   assert.equal(calls.length, 1, "schedulePush is called exactly once")
   assert.deepEqual(calls[0], { root })
 })
@@ -377,7 +378,7 @@ test("desk_save accepts `paths` sent as a JSON-encoded array string", async () =
     schedulePush: () => {},
   })
 
-  assert.equal(result.status, "committed")
+  assert.equal(result.status, "committed", JSON.stringify(result))
   assert.deepEqual(lastCommitFiles(root), ["notes.md"])
 })
 
@@ -398,7 +399,7 @@ test("desk_save rejects malformed input without touching the working tree", asyn
   assert.equal(gitStatus(root).trim(), "?? notes.md", "no rejected call staged or committed anything")
 })
 
-test("desk_save commits the listed paths that changed and reports an ignored generated path instead of failing on it", async () => {
+test("desk_save commits the listed paths that changed and reports an ignored generated path as unsaved, not unchanged", async () => {
   const root = await mkTempDeskRoot()
   initGit(root)
   await fs.writeFile(path.join(root, ".gitignore"), "*.log\n", "utf8")
@@ -407,7 +408,77 @@ test("desk_save commits the listed paths that changed and reports an ignored gen
   await fs.writeFile(path.join(root, "notes.md"), "Notes.\n", "utf8")
   await fs.writeFile(path.join(root, "report.log"), "generated\n", "utf8")
   const result = await desk_save({ deskRoot: root, input: { paths: ["notes.md", "report.log"], message: "save notes" }, schedulePush: () => {} })
-  assert.equal(result.status, "committed")
+  assert.equal(result.status, "committed", JSON.stringify(result))
   assert.deepEqual(lastCommitFiles(root), ["notes.md"])
-  assert.deepEqual(result.unchanged_paths, ["report.log"])
+  assert.equal(result.unchanged_paths, undefined)
+  assert.equal(result.partial, true)
+  assert.deepEqual(result.unsaved_paths, [{ path: "report.log", reason: "ignored" }])
+  assert.match(result.desk_note, /did not commit the paths in unsaved_paths/)
+  assert.doesNotMatch(result.desk_note, /is not on the remote/)
+})
+
+test("desk_save tells a genuinely unchanged tracked file from an ignored or missing path", async () => {
+  const root = await mkTempDeskRoot()
+  initGit(root)
+  await fs.writeFile(path.join(root, ".gitignore"), "*.log\n", "utf8")
+  await fs.writeFile(path.join(root, "kept.md"), "Kept.\n", "utf8")
+  spawnSync("git", ["-C", root, "add", ".gitignore", "kept.md"])
+  spawnSync("git", ["-C", root, "commit", "-q", "-m", "init"])
+  await fs.writeFile(path.join(root, "notes.md"), "Notes.\n", "utf8")
+  await fs.writeFile(path.join(root, "a.log"), "generated\n", "utf8")
+  const mixed = await desk_save({ deskRoot: root, input: { paths: ["notes.md", "kept.md", "a.log", "typo.md"], message: "mixed" }, schedulePush: () => {} })
+  assert.equal(mixed.status, "committed", JSON.stringify(mixed))
+  assert.deepEqual(lastCommitFiles(root), ["notes.md"])
+  assert.deepEqual(mixed.unchanged_paths, ["kept.md"])
+  assert.deepEqual(mixed.unsaved_paths, [{ path: "a.log", reason: "ignored" }, { path: "typo.md", reason: "not_in_git" }])
+
+  const only = await desk_save({ deskRoot: root, input: { paths: ["a.log"], message: "only ignored" }, schedulePush: () => {} })
+  assert.equal(only.status, "nothing_to_commit")
+  assert.deepEqual(only.unsaved_paths, [{ path: "a.log", reason: "ignored" }])
+
+  const glob = await desk_save({ deskRoot: root, input: { paths: ["ke*.md"], message: "glob" }, schedulePush: () => {} })
+  assert.equal(glob.status, "nothing_to_commit")
+  assert.equal(glob.unchanged_paths, undefined, "a glob is not the tracked file it matches")
+  assert.deepEqual(glob.unsaved_paths, [{ path: "ke*.md", reason: "not_in_git" }])
+
+  const clean = await desk_save({ deskRoot: root, input: { paths: ["kept.md"], message: "clean" }, schedulePush: () => {} })
+  assert.deepEqual(clean, { status: "nothing_to_commit" })
+})
+
+test("whyNotSaved reads a glob lookalike literally and never calls an unexpected Git outcome a confident answer", async () => {
+  const root = await mkTempDeskRoot()
+  initGit(root)
+  await fs.writeFile(path.join(root, "kept.md"), "Kept.\n", "utf8")
+  spawnSync("git", ["-C", root, "add", "kept.md"])
+  spawnSync("git", ["-C", root, "commit", "-q", "-m", "init"])
+  assert.equal(whyNotSaved(root, "kept.md", spawnSync), null)
+  assert.equal(whyNotSaved(root, "ke*.md", spawnSync), "not_in_git", "a glob is not the tracked file it matches")
+
+  const outcome = (subcommand, result) => (_git, args, options) => (args.includes(subcommand) ? result : spawnSync("git", args, options))
+  for (const result of [{ status: 128, stdout: "", stderr: "fatal" }, { status: null, signal: "SIGKILL", stdout: "", stderr: "" }, { status: null, error: Object.assign(new Error("spawn"), { code: "ETIMEDOUT" }), stdout: "", stderr: "" }]) {
+    assert.equal(whyNotSaved(root, "kept.md", outcome("ls-files", result)), "unknown")
+    assert.equal(whyNotSaved(root, "nope.md", outcome("check-ignore", result)), "unknown")
+  }
+})
+
+test("desk_save commits nothing and says so when Git cannot tell whether a path is tracked or ignored", async () => {
+  const root = await mkTempDeskRoot()
+  initGit(root)
+  await fs.writeFile(path.join(root, ".gitignore"), "*.log\n", "utf8")
+  spawnSync("git", ["-C", root, "add", ".gitignore"])
+  spawnSync("git", ["-C", root, "commit", "-q", "-m", "init"])
+  await fs.writeFile(path.join(root, "notes.md"), "Notes.\n", "utf8")
+  await fs.writeFile(path.join(root, "a.log"), "generated\n", "utf8")
+  const before = spawnSync("git", ["-C", root, "rev-parse", "HEAD"], { encoding: "utf8" }).stdout
+  const broken = (_git, args, options) => (args.includes("check-ignore") ? { status: 128, stdout: "", stderr: "fatal: boom" } : spawnSync("git", args, options))
+  const mixed = await desk_save({ deskRoot: root, input: { paths: ["notes.md", "a.log"], message: "mixed" }, spawnGit: broken, schedulePush: () => {} })
+  assert.equal(mixed.status, "commit_failed")
+  assert.match(mixed.commit.reason, /could not tell whether a\.log/)
+  assert.equal(mixed.unchanged_paths, undefined)
+  assert.equal(mixed.unsaved_paths, undefined)
+  assert.equal(spawnSync("git", ["-C", root, "rev-parse", "HEAD"], { encoding: "utf8" }).stdout, before, "nothing was committed")
+
+  const only = await desk_save({ deskRoot: root, input: { paths: ["a.log"], message: "only" }, spawnGit: broken, schedulePush: () => {} })
+  assert.equal(only.status, "commit_failed")
+  assert.match(only.commit.reason, /could not tell whether a\.log/)
 })

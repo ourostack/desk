@@ -85,6 +85,9 @@ function ghFailure(args, result, host) {
   return Object.assign(new Error(`Run it again: ${what}; run the same gh command by hand to see why`), { code: "pr_publication_run_it_again_github_cli_failed" })
 }
 
+const FIRST_PUSH_MS = 60_000
+const REPEAT_PUSH_MS = 330_000
+
 /** Publishes one immutable candidate. No upstream ref is pushed; only GitHub's exact-head merge endpoint can advance it. */
 export function publishPullRequest({ git, spawnGit, root, upstream, head, onto, policy, clock = CLOCK, track }) {
   // Both candidates must be object ids: a head or base that was never read would build a branch name, and a command, with nothing in them.
@@ -164,12 +167,14 @@ export function publishPullRequest({ git, spawnGit, root, upstream, head, onto, 
     return [...new Set(names)]
   }
   const pushArgs = ["push", "--quiet", upstream.remote, `${head}:refs/heads/${branch}`]
-  let pushed = git(pushArgs, 60_000)
+  let limit = FIRST_PUSH_MS
+  let pushed = git(pushArgs, limit)
   // A push cut off or refused once may have met a slow hook or a remote mid-update; the same push is repeated once, it is idempotent for one commit and one branch.
-  if (pushed.status !== 0) pushed = git(pushArgs, 120_000)
+  // The repeat outlasts a bounded pre-push hook's worst case (CIT's publication guard: up to about 280 s), so the hook is not cut off before its own limit.
+  if (pushed.status !== 0) { limit = REPEAT_PUSH_MS; pushed = git(pushArgs, limit) }
   if (pushed.status !== 0) {
     const said = redactCredentialLikeText(String(pushed.stderr ?? "").split("\n").find((line) => line.trim() !== "") ?? "").slice(0, 200)
-    throw Object.assign(new Error(`Push ${commandArgument(`${head}:refs/heads/${branch}`)} to ${commandArgument(upstream.remote)} yourself to read its admission diagnostic: the contribution branch push was ${pushed.status === null ? "cut off" : "refused by its hook or remote"} twice${said === "" ? "" : ` (${said})`}, and the upstream branch was not pushed.`), { code: "pr_publication_push_the_branch_with_the" })
+    throw Object.assign(new Error(`Push ${commandArgument(`${head}:refs/heads/${branch}`)} to ${commandArgument(upstream.remote)} yourself to read its admission diagnostic: the contribution branch push was ${pushed.status === null ? `cut off twice, the second time at its ${limit / 1000} s limit; a pre-push hook still running at the limit is the likely cause` : "refused by its hook or remote twice"}${said === "" ? "" : ` (${said})`}, and the upstream branch was not pushed.`), { code: "pr_publication_push_the_branch_with_the" })
   }
   let pr = list()
   if (pr === undefined) {
@@ -242,6 +247,8 @@ export function publishPullRequest({ git, spawnGit, root, upstream, head, onto, 
     const target = git(["rev-parse", upstream.tracking]).stdout.trim()
     if (git(["merge-base", "--is-ancestor", head, target]).status !== 0) throw Object.assign(new Error("Run it again once the upstream has caught up: The candidate is not reachable from the actual remote upstream"), { code: "pr_publication_run_it_again_once_the" })
     receipt.merge ??= pr.mergeCommit?.oid ?? target
+    // The merge is done with the branch; a failed delete only leaves it behind.
+    try { gh(["api", "--hostname", repo.host, "--method", "DELETE", `repos/${repo.name}/git/refs/heads/${branch}`], false) } catch { /* best effort */ }
     track?.clear(receipt)
     return { head: target, receipt }
   } catch (error) {

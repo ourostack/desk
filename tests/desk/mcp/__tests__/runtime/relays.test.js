@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url"
 import { mkTempRoot } from "../_temp_roots.js"
 import { connectGithub } from "../../../../../plugins/desk/mcp/src/runtime/drains.js"
 import { runDrainsCli } from "../../../../../plugins/desk/mcp/src/runtime/drains-cli.js"
-import { parseRelayConfig, pollRelays, readRelayConfig, readRelayStates, relayPaths, relayStatusLines, relaysOfPull, waitingOnChecks, whyRelay } from "../../../../../plugins/desk/mcp/src/runtime/relays.js"
+import { parseRelayConfig, pollRelays, readRelayConfig, readRelayStates, relayPaths, relayStatusLines, relaysOfPull, waitReadMs, waitingOnChecks, whyRelay } from "../../../../../plugins/desk/mcp/src/runtime/relays.js"
 
 const SCRIPT = fileURLToPath(new URL("../../../../../plugins/desk/mcp/scripts/drains.js", import.meta.url))
 const NOW = Date.parse("2026-11-14T12:00:00Z")
@@ -1964,4 +1964,12 @@ test("conditional cache: every page of check runs and statuses is read by the re
   const writes = c.http.filter((call) => call.method !== "GET")
   assert.ok(writes.some((call) => call.method === "PUT" && call.route.endsWith("/merge")))
   assert.deepEqual(writes.filter((call) => call.who !== "writer"), [])
+})
+
+test("waitReadMs: a pull request waiting only on a push is read every 5 minutes at most, one waiting on checks every minute", () => {
+  const first = Date.parse("2026-11-14T12:00:00Z")
+  const later = first + 60 * 60_000
+  assert.equal(waitReadMs({ firstReadAt: new Date(first).toISOString(), waitingOn: ["it has merge conflicts"] }, later), 300_000)
+  assert.equal(waitReadMs({ firstReadAt: new Date(first).toISOString(), waitingOn: ["it is a draft"] }, first + 60_000), 30_000)
+  assert.equal(waitReadMs({ firstReadAt: new Date(first).toISOString(), waitingOn: ["typecheck: typecheck in_progress"] }, later), 60_000)
 })
