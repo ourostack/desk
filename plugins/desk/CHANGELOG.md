@@ -1,5 +1,13 @@
 # desk plugin — changelog
 
+## 3.2.613 — 2026-11-26
+
+Desk's MCP server now vendors Ouro UI v1.3.584, moved by Ouro Current.
+
+Desk's spend ledger no longer holds a read because another process was still writing a quota observation. A reader that met a half-written last line of a window's observation log (`35` cut from `3500 …`) took it as a real observation with an unknown ceiling and held reads under the floor; only whole, newline-terminated lines with both numbers now count. The floor itself is unchanged.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.612 — 2026-11-26
 
 Desk's MCP server now vendors Ouro UI v1.3.583, moved by Ouro Current.
