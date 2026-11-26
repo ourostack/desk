@@ -3,9 +3,17 @@
 // produce those without finishing anything. See docs/keep-the-work-moving.md.
 import { spawnSync } from "node:child_process"
 import { readFileSync, readdirSync } from "node:fs"
+import * as os from "node:os"
 import * as path from "node:path"
 
 const PR_URL = /^https:\/\/github\.com\/([^\s/]+\/[^\s/]+)\/pull\/(\d+)$/u
+
+/** Where the turn-end gate records endings (the same place its hook writes them). */
+export function endingsDir(env = process.env) {
+  const home = env.HOME || os.homedir()
+  const base = env.XDG_STATE_HOME && path.isAbsolute(env.XDG_STATE_HOME) ? env.XDG_STATE_HOME : path.join(home, ".local", "state")
+  return path.join(base, "ouroboros-skills", "desk", "turn-ends")
+}
 
 /** Reads every ending the turn-end gate recorded, oldest first. A damaged line is skipped, never counted. */
 export function readEndings(dir) {
@@ -21,7 +29,7 @@ export function readEndings(dir) {
 }
 
 /** Looks a pull request up on GitHub with the gh CLI. Returns { merged, repo, mergedAt } or null when GitHub cannot say. */
-export function ghPull(url) {
+function ghPull(url) {
   const m = PR_URL.exec(url)
   if (!m) return null
   const run = spawnSync("gh", ["pr", "view", url, "--json", "state,mergedAt", "-q", "[.state,.mergedAt]|@tsv"], { encoding: "utf8", timeout: 20_000 })

@@ -10,6 +10,7 @@ import { runCli } from "../lib/ouro-ui/registry/ouro/ax/cli.ts"
 import { allStuckSaves, stuckLine } from "./unmerged-saves.js"
 import { pollRelays, readRelayConfig, readRelayStates, relayPaths, relayStatusLines, relaysOfPull, whyRelay } from "./relays.js"
 import { findPluginlessRuntimes, listProcesses as psList, pluginlessRuntimeLines } from "./pluginless-runtimes.js"
+import { endingsDir, progressOf, readEndings } from "./outcomes.js"
 import { ackStalled, pollStalled, stalledPaths, stalledStatus } from "./stalled.js"
 import { ackHooks, createHook, deleteHook, ghToken, hookPaths, hookStatus, listHooks, pollHooks } from "./hooks.js"
 import { ackSchedule, pollSchedules, readScheduleConfig, readScheduleStates, scheduleStatusLines, schedulePaths } from "./schedules.js"
@@ -143,6 +144,10 @@ function drainsCli({ script, env, now, connect, listProcesses, signedIn, fetchHo
       command("stalled status", { effect: "private", summary: "List the nudges due and refresh the local launcher without updating nudge state.", flags: { config: CONFIG, state: STATE } }, async (input) => {
         const paths = pathsOf(stalledPaths({ env }), input)
         return withDesk(await stalledStatus({ paths, now: now(), env, homeDir: os.homedir() }), { script, env })
+      }),
+      command("progress", { ...READ, summary: "Count what shipped for a card: merged pull requests GitHub confirms, never messages, commits or busy.", flags: { card: { type: "string", required: true, placeholder: "<card>", description: "The card as the turn-end ledger names it." } } }, (input) => {
+        const result = progressOf({ card: input.card, endings: readEndings(endingsDir(env)) })
+        return withDesk({ ...result, status: [`${input.card}: ${result.count} shipped, ${result.unverified.length} claimed but not confirmed`] }, { script, env })
       }),
       command("relays poll", { effect: "private", summary: "Poll the relays in relays.json, act on what is found and print no wakes.", flags: { config: CONFIG, state: STATE } }, async (input) => {
         const paths = pathsOf(relayPaths({ env }), input)
