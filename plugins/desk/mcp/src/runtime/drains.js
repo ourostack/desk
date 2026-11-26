@@ -1085,6 +1085,13 @@ function failedAnswer(status, route) {
   return Object.assign(new Error(`Read GitHub's answer, then fix its cause: GitHub refused the request with HTTP ${status} for ${route}; that is not by itself a credential problem`), { code: "drains_github_refused", status })
 }
 
+/** What GitHub said about when to come back: its Retry-After (seconds) and its window reset, kept as milliseconds when they are numbers, with when the answer arrived. */
+function retrySignals(headers, receivedAt) {
+  const after = headers.get("retry-after")
+  const reset = Number(headers.get("x-ratelimit-reset"))
+  return { receivedAt, exhausted: headers.get("x-ratelimit-remaining") === "0", ...(after !== null && after.trim() !== "" && Number.isFinite(Number(after)) ? { retryAfterMs: Number(after) * 1000 } : {}), ...(Number.isFinite(reset) && reset > 0 ? { resetAt: reset * 1000 } : {}) }
+}
+
 // A read held under the quota floor stops the poll the way the quota running out does, and the next poll tries again.
 function heldAsRateLimit(error) {
   if (!(error instanceof SpendHeld)) throw error
@@ -1095,7 +1102,7 @@ function heldAsRateLimit(error) {
 /** A page of an oldest-first list reaches back to `since` when any of its dated items is not newer: nothing before it can be news. */
 const reachesBack = (since) => (page) => page.some((item) => typeof item.created_at === "string" && item.created_at <= since)
 
-export async function connectGithub(account, { spawn = spawnSync, fetchImpl: rawFetch = fetch, env = process.env, login: knownLogin, pauseMs = TOKEN_PAUSE_MS } = {}) {
+export async function connectGithub(account, { spawn = spawnSync, fetchImpl: rawFetch = fetch, env = process.env, login: knownLogin, pauseMs = TOKEN_PAUSE_MS, clock = Date.now } = {}) {
   const tokenArgs = ["auth", "token", "--hostname", "github.com", ...(account ? ["--user", account] : [])]
   const cleaned = { ...env, PATH: ["/opt/homebrew/bin", "/usr/local/bin", env.PATH].filter(Boolean).join(":") }
   for (const name of ["GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GH_HOST"]) delete cleaned[name]
@@ -1144,7 +1151,9 @@ export async function connectGithub(account, { spawn = spawnSync, fetchImpl: raw
       if (response.status === 429 || (response.status === 403 && (remaining === "0" || response.headers.has("retry-after") || /rate limit/iu.test(said)))) {
         const reset = Number(response.headers.get("x-ratelimit-reset"))
         const until = Number.isFinite(reset) && reset > 0 ? new Date(reset * 1000).toISOString() : "the next window"
-        throw Object.assign(new Error(`Wait for the quota to reset: GitHub's hourly API limit is used up, rate limited until ${until} (HTTP ${response.status} for ${route.split("?")[0]})`), { code: "drains_rate_limited", status: response.status, rateLimited: true })
+        const signals = retrySignals(response.headers, clock())
+        const wording = signals.exhausted ? `GitHub's hourly API limit is used up, rate limited until ${until}` : Number.isFinite(signals.retryAfterMs) ? `GitHub asked to wait ${Math.ceil(signals.retryAfterMs / 1000)}s before this read is retried` : remaining === null ? `GitHub rate limited this read, rate limited until ${until}` : "GitHub rate limited this read (not the hourly pool)"
+        throw Object.assign(new Error(`Wait for the quota to reset: ${wording} (HTTP ${response.status} for ${route.split("?")[0]})`), { code: "drains_rate_limited", status: response.status, rateLimited: true, ...signals })
       }
       throw failedAnswer(response.status, route.split("?")[0])
     }
@@ -1246,6 +1255,8 @@ export async function connectGithub(account, { spawn = spawnSync, fetchImpl: raw
   const login = knownLogin || (await get("/user").then(({ body }) => String(body.login ?? ""), () => "")) || account || ""
   return {
     login,
+    // Names this login and token together without holding the token, so a refreshed credential for the same login is told apart.
+    credentialEpoch: createHash("sha256").update(`${login}\0${token}`).digest("hex"),
     openIssues: async (repo) => (await all(`/repos/${repo}/issues?state=open&sort=updated&direction=desc`)).filter((issue) => !issue.pull_request),
     comments: (repo, issue, since, stop) => (stop ? recent : all)(`/repos/${repo}/issues/${issue}/comments?since=${encodeURIComponent(since)}`, stop),
     issueEvents: (repo, issue, since) => (since ? recent(`/repos/${repo}/issues/${issue}/events`, reachesBack(since)) : all(`/repos/${repo}/issues/${issue}/events`)),

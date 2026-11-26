@@ -1494,3 +1494,264 @@ test("updateBehind: a red head that is behind main is updated once; a pending, g
     assert.ok(!prWrites(w.world).some((write) => write.route.endsWith("/update-branch")), `a ${why} head is not updated`)
   }
 })
+
+// ── Account probes: a relay with no account asks each signed-in account for its repository, and a refusal is not asked again at every poll ──
+
+/** The real client over a fake `gh` token read and a fake GitHub, so the traffic counted is the HTTP the default client really sends. */
+async function probeWorld(relays = [IMMEDIATE]) {
+  const w = await setup(relays)
+  const tokens = { a: "fake-token-a-1", b: "fake-token-b-1" }
+  const answers = { a: { status: 403 }, b: { status: 403 } }
+  const http = []
+  const clock = { at: NOW }
+  const keyringBusy = new Set()
+  const spawn = (_command, args) => {
+    const who = args[args.indexOf("--user") + 1]
+    return keyringBusy.has(who) ? { status: 1, stdout: "", stderr: "keyring is busy" } : { status: 0, stdout: `${tokens[who]}\n` }
+  }
+  const fetchImpl = async (url, init) => {
+    const who = Object.keys(tokens).find((name) => init.headers.Authorization === `Bearer ${tokens[name]}`)
+    http.push({ who, url: new URL(url).pathname })
+    const { status, headers = {}, takes = 0, body = "" } = answers[who]
+    clock.at += takes
+    return { status, ok: status < 400, headers: { get: (name) => headers[name.toLowerCase()] ?? null, has: (name) => name.toLowerCase() in headers }, json: async () => ({ workflow_runs: [] }), text: async () => body }
+  }
+  const connect = (account, options) => connectGithub(account, { ...options, spawn, fetchImpl, pauseMs: 0, clock: () => clock.at, env: { PATH: "/bin", MS_DESK_QUOTA: "off" } })
+  const poll = (at) => pollRelays({ paths: w.paths, drainFiles: w.drainFiles, connect, now: at, signedIn: () => ["a", "b"] })
+  return { ...w, tokens, answers, http, clock, keyringBusy, poll, probes: () => http.filter((call) => call.url === "/repos/o/data").length }
+}
+
+test("probes: two refused accounts are asked once, then again only when the relay's idle pace has passed", async () => {
+  const p = await probeWorld()
+  const lastPolls = []
+  for (const at of [0, 30, 60, 90]) {
+    const polled = await p.poll(NOW + at * SECOND)
+    lastPolls.push(p.state("data to pages").lastPollAt)
+    assert.match(polled.errors[0].error, /none of the signed-in GitHub accounts \(a, b\) can reach o\/data and o\/pages/u)
+    assert.equal(polled.errors[0].code, "relays_set_account_on_relay")
+    assert.equal(p.probes(), 2, `after +${at}s`)
+  }
+  assert.deepEqual(lastPolls, Array(4).fill(new Date(NOW).toISOString()), "a skipped probe is not a poll")
+  assert.match(relayStatusLines(readRelayConfig(p.paths.config), { "data to pages": p.state("data to pages") }, NOW + 90 * SECOND)[0], /next account check in 30s/u)
+  await p.poll(NOW + 120 * SECOND)
+  assert.equal(p.probes(), 4)
+  assert.ok(!readFileSync(p.paths.state, "utf8").includes("fake-token"), "no token is kept in the state")
+})
+
+test("probes: a relay that opts out of backing off asks its refused accounts at its own interval", async () => {
+  const p = await probeWorld([{ ...IMMEDIATE, backOffWhenIdle: false }])
+  for (const at of [0, 30, 60, 90]) await p.poll(NOW + at * SECOND)
+  assert.equal(p.probes(), 8)
+})
+
+test("probes: a refreshed token for one login, or a changed relay, is asked again at once, and an unchanged account is not", async () => {
+  const p = await probeWorld()
+  await p.poll(NOW)
+  p.tokens.a = "fake-token-a-2"
+  await p.poll(NOW + 30 * SECOND)
+  assert.deepEqual(p.http.map((call) => call.who), ["a", "b", "a"])
+  writeFileSync(p.paths.config, JSON.stringify({ relays: [{ ...IMMEDIATE, settleSeconds: 1 }] }))
+  await p.poll(NOW + 60 * SECOND)
+  assert.equal(p.probes(), 5)
+})
+
+test("probes: access granted remotely is found when the pace has passed, and the relay then polls normally", async () => {
+  const p = await probeWorld()
+  await p.poll(NOW)
+  p.answers.b = { status: 200 }
+  assert.equal((await p.poll(NOW + 60 * SECOND)).errors.length, 1)
+  assert.equal(p.probes(), 2)
+  const polled = await p.poll(NOW + 120 * SECOND)
+  assert.deepEqual(polled.errors, [])
+  assert.equal(p.state("data to pages").resolvedAccount, "b")
+  assert.equal(p.state("data to pages").probes, undefined)
+})
+
+test("probes: a server error or a rate limit is never remembered as a refusal, and a reachable account after it is still chosen", async () => {
+  const p = await probeWorld()
+  p.answers.a = { status: 500 }
+  p.answers.b = { status: 200 }
+  assert.deepEqual((await p.poll(NOW)).errors, [])
+  assert.equal(p.state("data to pages").resolvedAccount, "b")
+  const q = await probeWorld()
+  q.answers.a = { status: 500 }
+  const first = await q.poll(NOW)
+  assert.equal(first.errors[0].code, "drains_github_server_error")
+  await q.poll(NOW + 30 * SECOND)
+  assert.equal(q.http.filter((call) => call.who === "a").length, 4, "a server error is asked again at the configured interval")
+})
+
+test("probes: a provider's Retry-After holds only that account's probe", async () => {
+  const p = await probeWorld()
+  p.answers.a = { status: 429, headers: { "retry-after": "90" } }
+  p.answers.b = { status: 404 }
+  await p.poll(NOW)
+  await p.poll(NOW + 30 * SECOND)
+  await p.poll(NOW + 60 * SECOND)
+  assert.equal(p.http.filter((call) => call.who === "a" && call.url === "/repos/o/data").length, 1)
+  p.answers.a = { status: 200 }
+  assert.deepEqual((await p.poll(NOW + 90 * SECOND)).errors, [])
+  assert.equal(p.state("data to pages").resolvedAccount, "a")
+})
+
+test("probes: a Retry-After holds exactly that long, however long the rest of the pool's window is, and counts from the answer's arrival", async () => {
+  const p = await probeWorld()
+  p.answers.a = { status: 429, headers: { "retry-after": "90", "x-ratelimit-remaining": "4000", "x-ratelimit-reset": String((NOW + 3600 * SECOND) / 1000) } }
+  p.answers.b = { status: 404 }
+  const first = await p.poll(NOW)
+  assert.ok(!/hourly API limit is used up/u.test(first.errors[0].error), "a healthy pool is not told its hourly limit is used up")
+  assert.match(first.errors[0].error, /asked to wait 90s/u)
+  const asked = () => p.http.filter((call) => call.who === "a" && call.url === "/repos/o/data").length
+  await p.poll(NOW + 89_999)
+  assert.equal(asked(), 1, "no send before GitHub's not-before time")
+  p.answers.a = { status: 200 }
+  await p.poll(NOW + 90 * SECOND)
+  assert.equal(asked(), 2, "sent at the exact deadline, not an hour later")
+})
+
+test("probes: a slow answer counts its Retry-After from when it arrived, not from when the poll began", async () => {
+  const p = await probeWorld()
+  p.answers.a = { status: 429, headers: { "retry-after": "90" }, takes: 20 * SECOND }
+  p.answers.b = { status: 404 }
+  await p.poll(NOW)
+  p.answers.a = { status: 200 }
+  await p.poll(NOW + 109_999)
+  assert.equal(p.http.filter((call) => call.who === "a" && call.url === "/repos/o/data").length, 1)
+  await p.poll(NOW + 110 * SECOND)
+  assert.equal(p.http.filter((call) => call.who === "a" && call.url === "/repos/o/data").length, 2)
+})
+
+test("probes: a primary quota reset with no Retry-After holds until the reset, without the cadence slack", async () => {
+  const p = await probeWorld()
+  p.answers.a = { status: 429, headers: { "x-ratelimit-remaining": "0", "x-ratelimit-reset": String((NOW + 600 * SECOND) / 1000) } }
+  p.answers.b = { status: 429, headers: { "x-ratelimit-remaining": "0", "x-ratelimit-reset": String((NOW + 3600 * SECOND) / 1000) } }
+  await p.poll(NOW)
+  p.answers.a = { status: 200 }
+  await p.poll(NOW + 599_999)
+  assert.equal(p.http.filter((call) => call.who === "a" && call.url === "/repos/o/data").length, 1)
+  await p.poll(NOW + 600 * SECOND)
+  assert.equal(p.http.filter((call) => call.who === "a" && call.url === "/repos/o/data").length, 2)
+})
+
+test("probes: a timeout or another failure that is not a refusal of access is never remembered as 'set account', and keeps its own error", async () => {
+  const p = await probeWorld()
+  p.answers.a = { status: 408 }
+  p.answers.b = { status: 422 }
+  const first = await p.poll(NOW)
+  assert.equal(first.errors[0].code, "drains_github_refused")
+  assert.ok(!/Set "account"/u.test(first.errors[0].error))
+  await p.poll(NOW + 30 * SECOND)
+  assert.equal(p.probes(), 4, "asked again at the configured interval")
+  p.answers.a = { status: 200 }
+  assert.deepEqual((await p.poll(NOW + 60 * SECOND)).errors, [])
+})
+
+test("probes: a first account whose token read gave no answer does not hide a reachable second, and is read again next poll", async () => {
+  const p = await probeWorld()
+  p.keyringBusy.add("a")
+  p.answers.b = { status: 200 }
+  assert.deepEqual((await p.poll(NOW)).errors, [])
+  assert.equal(p.state("data to pages").resolvedAccount, "b")
+  assert.ok(!p.http.some((call) => call.who === "a"))
+  const q = await probeWorld()
+  q.keyringBusy.add("a")
+  const polled = await q.poll(NOW)
+  assert.equal(polled.errors[0].code, "drains_github_cli_token_unavailable")
+  assert.equal(q.state("data to pages").probes?.["a o/data"], undefined)
+})
+
+test("probes: an exhausted primary quota with a Retry-After as well holds until its reset, not the shorter Retry-After", async () => {
+  const p = await probeWorld()
+  p.answers.a = { status: 429, headers: { "retry-after": "90", "x-ratelimit-remaining": "0", "x-ratelimit-reset": String((NOW + 3600 * SECOND) / 1000) } }
+  p.answers.b = { status: 404 }
+  const first = await p.poll(NOW)
+  assert.match(first.errors[0].error, /hourly API limit is used up/u)
+  p.answers.a = { status: 200 }
+  const asked = () => p.http.filter((call) => call.who === "a" && call.url === "/repos/o/data").length
+  await p.poll(NOW + 90 * SECOND)
+  assert.equal(asked(), 1)
+  await p.poll(NOW + 3600 * SECOND)
+  assert.equal(asked(), 2)
+})
+
+for (const [status, body] of [[429, ""], [403, "You have exceeded a secondary rate limit"]]) {
+  test(`probes: a healthy-pool ${status} with no Retry-After is not a used-up hourly pool and is not held until the unrelated reset`, async () => {
+    const p = await probeWorld()
+    const healthy = { status, body, headers: { "x-ratelimit-remaining": "4000", "x-ratelimit-reset": String((NOW + 3600 * SECOND) / 1000) } }
+    p.answers.a = healthy
+    p.answers.b = healthy
+    const first = await p.poll(NOW)
+    assert.ok(!/hourly API limit is used up|13:00:00/u.test(first.errors[0].error), first.errors[0].error)
+    assert.equal(p.state("data to pages").probes?.["a o/data"], undefined, "no memo-hold for an unknown deadline")
+    await p.poll(NOW + 30 * SECOND)
+    assert.equal(p.probes(), 4, "asked again at the configured interval")
+  })
+}
+
+for (const [label, rejection] of [["nothing", undefined], ["null", null], ["an empty object", {}], ["an object with only a code", { code: "x" }]]) {
+  test(`probes: a probe that rejects with ${label} is a visible failure, never an accessible account`, async () => {
+    const w = await setup([IMMEDIATE])
+    const connect = async () => ({ get: async () => Promise.reject(rejection), calls: () => ({ total: 0 }), credentialEpoch: "e" })
+    const polled = await pollRelays({ paths: w.paths, drainFiles: w.drainFiles, connect, now: NOW, signedIn: () => ["a", "b"] })
+    assert.equal(polled.errors.length, 1)
+    assert.ok(polled.errors[0].error.length > 0)
+    assert.equal(w.state("data to pages").resolvedAccount, undefined)
+    assert.ok(w.state("data to pages").lastError.length > 0)
+    if (rejection?.code) assert.equal(polled.errors[0].code, "x", "a structured code is kept")
+  })
+}
+
+test("probes: a structured 403 rate limit keeps its decision fields, so it is not cached as 'set account' and holds until its deadline", async () => {
+  const w = await setup([IMMEDIATE])
+  const calls = []
+  const connect = async () => ({ get: async (url) => { calls.push(url); throw { status: 403, rateLimited: true, message: "slow down", retryAfterMs: 90_000, receivedAt: NOW } }, calls: () => ({ total: 0 }), credentialEpoch: "e" })
+  const polled = await pollRelays({ paths: w.paths, drainFiles: w.drainFiles, connect, now: NOW, signedIn: () => ["a"] })
+  assert.notEqual(polled.errors[0].code, "relays_set_account_on_relay")
+  const held = Object.values(w.state("data to pages").probes)[0]
+  assert.equal(held.outcome, "transient")
+  assert.equal(Date.parse(held.retryAt), NOW + 90_000)
+})
+
+for (const [label, rejection] of [["nothing", undefined], ["null", null], ["an empty object", {}]]) {
+  test(`probes: a connection that rejects with ${label} is a visible failure, never an account selection`, async () => {
+    const w = await setup([IMMEDIATE])
+    const connect = async () => Promise.reject(rejection)
+    const polled = await pollRelays({ paths: w.paths, drainFiles: w.drainFiles, connect, now: NOW, signedIn: () => ["a"] })
+    assert.equal(polled.errors.length, 1)
+    assert.ok(polled.errors[0].error.length > 0)
+    assert.equal(w.state("data to pages").resolvedAccount, undefined)
+  })
+}
+
+for (const [label, rejection, expected] of [["a string", "plain failure", /plain failure/u], ["an object with a message", { message: "object failure" }, /object failure/u]]) {
+  test(`probes: a probe that rejects with ${label} keeps that message as the visible failure`, async () => {
+    const w = await setup([IMMEDIATE])
+    const connect = async () => ({ get: async () => Promise.reject(rejection), calls: () => ({ total: 0 }), credentialEpoch: "e" })
+    const polled = await pollRelays({ paths: w.paths, drainFiles: w.drainFiles, connect, now: NOW, signedIn: () => ["a"] })
+    assert.match(polled.errors[0].error, expected)
+  })
+}
+
+test("probes: a structured rate limit without a receipt time counts its Retry-After from the poll", async () => {
+  const w = await setup([IMMEDIATE])
+  const connect = async () => ({ get: async () => { throw { status: 429, rateLimited: true, message: "slow", retryAfterMs: 60_000 } }, calls: () => ({ total: 0 }), credentialEpoch: "e" })
+  await pollRelays({ paths: w.paths, drainFiles: w.drainFiles, connect, now: NOW, signedIn: () => ["a"] })
+  assert.equal(Date.parse(Object.values(w.state("data to pages").probes)[0].retryAt), NOW + 60_000)
+})
+
+test("probes: an account with no token, whether it fails at connection or at the probe, is a denial", async () => {
+  const noToken = () => Object.assign(new Error("sign in"), { code: "drains_sign_in_the_github_cli" })
+  for (const connect of [async () => { throw noToken() }, async () => ({ get: async () => { throw noToken() }, calls: () => ({ total: 0 }), credentialEpoch: "e" })]) {
+    const w = await setup([IMMEDIATE])
+    const polled = await pollRelays({ paths: w.paths, drainFiles: w.drainFiles, connect, now: NOW, signedIn: () => ["a"] })
+    assert.equal(polled.errors[0].code, "relays_set_account_on_relay")
+  }
+})
+
+test("probes: two relays reading the same repository share one probe per account", async () => {
+  const w = await setup([IMMEDIATE, { ...IMMEDIATE, name: "second" }])
+  const asked = []
+  const connect = async () => ({ get: async (url) => { asked.push(url); throw { status: 404, message: "gone" } }, calls: () => ({ total: 0 }), credentialEpoch: "e" })
+  await pollRelays({ paths: w.paths, drainFiles: w.drainFiles, connect, now: NOW, signedIn: () => ["a"] })
+  assert.equal(asked.filter((url) => url === "/repos/o/data").length, 1)
+})
