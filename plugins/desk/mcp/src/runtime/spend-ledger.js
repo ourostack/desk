@@ -159,9 +159,11 @@ function currentRate(dir, pool, own = [], retry = true) {
       }
     } else {
       try {
-        for (const line of readFileSync(path.join(dir, name), "utf8").split("\n")) {
+        // The last line of a log a writer is still appending can be read half-written ("35" of "3500 ..."): only whole lines are observations.
+        const text = readFileSync(path.join(dir, name), "utf8")
+        for (const line of (text.endsWith("\n") ? text : text.slice(0, text.lastIndexOf("\n") + 1)).split("\n")) {
           const [remaining, , limit] = numbers(line, " ")
-          if (remaining !== null && limit !== null) seen.push({ remaining, reset, limit })
+          if (Number.isInteger(remaining) && Number.isInteger(limit)) seen.push({ remaining, reset, limit })
         }
       } catch (error) {
         // A newer window's writer may have removed this log since the listing: look again, and the newer window is then what counts. A log
