@@ -15,6 +15,7 @@ import { assertNotRealStateUnderTest as assertNotRealRuntimeState } from "../../
 import { assertNotRealStateUnderTest as assertNotRealFactoryState } from "../../../../../plugins/desk/mcp/src/factory/test-state-guard.js"
 import { hookScript } from "../../../../../plugins/desk/mcp/src/desk/card-commit-guard.js"
 import { checkDelivery } from "../../../../../plugins/desk/hooks/lib/delivery-stop.cjs"
+import { judge } from "../../../../../plugins/desk/hooks/lib/turn-end-gate.cjs"
 import { scratch, ID, START, END } from "../factory/_session_helpers.js"
 import { removeTreeSync } from "../_remove_tree.js"
 
@@ -87,12 +88,30 @@ test("the bounded existing stop-hook correction opens with its actionable fix", 
   assertActionable(assert, result.output.reason, "delivery reply correction")
 }))
 
+test("the turn-end gate's correction opens with the fix", () => scratch(async ctx => {
+  const { checkTurnEnd } = await import("../../../../../plugins/desk/hooks/lib/turn-end-gate.cjs")
+  const payload = { sessionId: ID, cwd: ctx.desk, timestamp: Date.parse(END), transcriptPath: path.join(ctx.env.COPILOT_HOME, "session-state", ID, "events.jsonl"), stopReason: "end_turn" }
+  mkdirSync(path.dirname(payload.transcriptPath), { recursive: true })
+  writeFileSync(payload.transcriptPath, [
+    { type: "session.start", timestamp: START, data: { sessionId: ID, context: { cwd: ctx.desk } } },
+    { type: "user.message", timestamp: START, data: { content: "Go.", interactionId: "human" } },
+    { type: "tool.execution_start", timestamp: START, data: { toolCallId: "f", toolName: "desk-task_focus", arguments: { track: "t", slug: "s" } } },
+    { type: "tool.execution_complete", timestamp: START, data: { toolCallId: "f", success: true, interactionId: "human", result: { content: JSON.stringify({ status: "focused", track: "t", slug: "s", task_status: "processing" }) } } },
+    { type: "assistant.message", timestamp: END, data: { interactionId: "human", content: "Working.", toolRequests: [] } },
+  ].map(x => JSON.stringify(x)).join("\n") + "\n")
+  const result = await checkTurnEnd({ host: "copilot", payload, env: ctx.env })
+  assert.equal(result.output.decision, "block")
+  assertActionable(assert, result.output.reason, "turn-end gate correction")
+  assert.equal(judge(null, { tools: [], wakes: [] }, 0).ok, false)
+}))
+
 test("every file under plugins/desk that emits a denial is accounted for in this test", () => {
   const sites = /[^.\w]unresolved\(|decision: "block"|permissionDecision: "deny"|permissionDecisionReason: |unstage="git -C|echo "Desk refused this commit|new Error\(\s*`Resolve state/gmu
   // Files that build a denial's own text, with how many sites each has. A new guard adds its messages to the tests above
   // and its count here; a count that moves fails, so a message cannot be added or removed unnoticed.
   const expected = {
     "hooks/lib/delivery-stop.cjs": 1,
+    "hooks/lib/turn-end-gate.cjs": 1,
     "mcp/src/runtime/test-state-guard.js": 1, "mcp/src/factory/test-state-guard.js": 1,
     "mcp/src/desk/card-commit-guard.js": 2,
     // Its `unresolved` is a sync outcome, not a denial.
