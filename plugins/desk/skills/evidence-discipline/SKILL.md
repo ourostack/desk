@@ -133,7 +133,7 @@ Name tests `{Given}_{When}_{Method}_{Assertion}`, for example `GivenValidPayload
 
 ## Visual proof
 
-Visual proof, including looking at a capture before you show it, is the `visual-proof` skill.
+Checking a page, file or capture against its source or design (layout, colours against design tokens, counts, text against its data), and looking at a capture before you show it, is the `visual-proof` skill: load it before you check, then measure with a script rather than by eye.
 
 ## Delivery receipt
 
