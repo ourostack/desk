@@ -71,8 +71,14 @@ const STRIP_SCRIPT = [
  */
 function commitMsgScript() {
   return `${header("commit-msg")}chained="\${0%/*}/commit-msg${CHAINED_SUFFIX}"
-if [ -x "$chained" ] && ! grep -q '${SESSION_MARKER}' "$chained" 2>/dev/null; then
-  "$chained" "$@" || exit $?
+if [ -x "$chained" ]; then
+  grep -q '${SESSION_MARKER}' "$chained"
+  found=$?
+  if [ "$found" -gt 1 ]; then
+    echo "Desk commit-msg: could not read $chained to see whether it is Desk's own hook (grep failed), so the commit is refused." >&2
+    exit 1
+  fi
+  if [ "$found" -eq 1 ]; then "$chained" "$@" || exit $?; fi
 fi
 [ -f .github/scripts/attribution.mjs ] || exit 0
 if ! node --input-type=module -e '${STRIP_SCRIPT}' "$1"; then
