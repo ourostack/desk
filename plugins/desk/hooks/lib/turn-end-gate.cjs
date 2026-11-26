@@ -260,10 +260,11 @@ function cli(argv) {
   const [cmd, ...rest] = argv;
   const a = {};
   for (let i = 0; i < rest.length; i += 2) a[rest[i]?.replace(/^--/u, "")] = rest[i + 1];
+  const BAD_CALL = "bad-call";
   const usage = "usage: node turn-end-gate.cjs check --session <id> --evidence-file <output.txt> --pr-head <branch> --repo <owner/repo>";
-  if (cmd !== "check" || !a.session || !a["evidence-file"] || !a["pr-head"] || !/^[\w.-]+\/[\w.-]+$/u.test(a.repo ?? "")) { process.stderr.write(`${usage}\n`); return 2; }
+  if (cmd !== "check" || !a.session || !a["evidence-file"] || !a["pr-head"] || !/^[\w.-]+\/[\w.-]+$/u.test(a.repo ?? "")) { process.stderr.write(`${BAD_CALL}: ${usage}\n`); return 2; }
   let output;
-  try { output = fs.readFileSync(a["evidence-file"], "utf8"); } catch (e) { process.stderr.write(`cannot read ${a["evidence-file"]}: ${e.code}. ${usage}\n`); return 2; }
+  try { output = fs.readFileSync(a["evidence-file"], "utf8"); } catch (e) { process.stderr.write(`${BAD_CALL}: cannot read ${a["evidence-file"]}: ${e.code}. ${usage}\n`); return 2; }
   const prExists = (repo, head) => {
     const r = require("node:child_process").spawnSync("gh", ["pr", "list", "--repo", repo, "--head", head, "--state", "all", "--json", "url", "--limit", "1"], { encoding: "utf8", windowsHide: true });
     try { return JSON.parse(r.stdout)[0]?.url ?? null; } catch { return null; }
