@@ -123,6 +123,21 @@ export function hasUnstagedWork(root, relPaths, spawnGit) {
 }
 
 /**
+ * Why a path with nothing to commit was not saved, or `null` when it is genuinely unchanged: `ignored` (an untracked path an ignore rule
+ * covers, so Git never holds its bytes) or `not_in_git` (untracked and not ignored, such as a path that does not exist). A path Git tracks
+ * is the only unchanged one. Only Git's documented answers count (`ls-files --error-unmatch`: 0 tracked, 1 not tracked; `check-ignore`:
+ * 0 ignored, 1 not ignored); a launch error, timeout, signal or any other status is `unknown`, never a confident answer.
+ */
+export function whyNotSaved(root, relPath, spawnGit) {
+  const answer = (result, yes, no) => result?.error || typeof result?.status !== "number" ? "unknown" : result.status === 0 ? yes : result.status === 1 ? no : "unknown"
+  const tracked = answer(run(spawnGit, root, ["ls-files", "--error-unmatch", "--", `:(literal)${relPath}`]), "tracked", "untracked")
+  if (tracked === "tracked") return null
+  if (tracked === "unknown") return "unknown"
+  const ignored = answer(run(spawnGit, root, ["check-ignore", "-q", "--no-index", "--", relPath]), "ignored", "not_in_git")
+  return ignored
+}
+
+/**
  * Whether Git holds any of `relPaths` as a conflict (unmerged index entries): staging such a path marks the conflict resolved with its
  * markers still in the file. `false` when Git cannot say, so the caller's own stage or commit reports Git's failure.
  */
