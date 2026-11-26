@@ -398,7 +398,7 @@ test("desk_save rejects malformed input without touching the working tree", asyn
   assert.equal(gitStatus(root).trim(), "?? notes.md", "no rejected call staged or committed anything")
 })
 
-test("desk_save commits the listed paths that changed and reports an ignored generated path instead of failing on it", async () => {
+test("desk_save commits the listed paths that changed and reports an ignored generated path as unsaved, not unchanged", async () => {
   const root = await mkTempDeskRoot()
   initGit(root)
   await fs.writeFile(path.join(root, ".gitignore"), "*.log\n", "utf8")
@@ -409,5 +409,34 @@ test("desk_save commits the listed paths that changed and reports an ignored gen
   const result = await desk_save({ deskRoot: root, input: { paths: ["notes.md", "report.log"], message: "save notes" }, schedulePush: () => {} })
   assert.equal(result.status, "committed")
   assert.deepEqual(lastCommitFiles(root), ["notes.md"])
-  assert.deepEqual(result.unchanged_paths, ["report.log"])
+  assert.equal(result.unchanged_paths, undefined)
+  assert.equal(result.partial, true)
+  assert.deepEqual(result.unsaved_paths, [{ path: "report.log", reason: "ignored" }])
+  assert.match(result.desk_note, /NOT saved/)
+})
+
+test("desk_save tells a genuinely unchanged tracked file from an ignored or missing path", async () => {
+  const root = await mkTempDeskRoot()
+  initGit(root)
+  await fs.writeFile(path.join(root, ".gitignore"), "*.log\n", "utf8")
+  await fs.writeFile(path.join(root, "kept.md"), "Kept.\n", "utf8")
+  spawnSync("git", ["-C", root, "add", ".gitignore", "kept.md"])
+  spawnSync("git", ["-C", root, "commit", "-q", "-m", "init"])
+  await fs.writeFile(path.join(root, "notes.md"), "Notes.\n", "utf8")
+  await fs.writeFile(path.join(root, "a.log"), "generated\n", "utf8")
+  const mixed = await desk_save({ deskRoot: root, input: { paths: ["notes.md", "kept.md", "a.log", "typo.md"], message: "mixed" }, schedulePush: () => {} })
+  assert.equal(mixed.status, "committed")
+  assert.deepEqual(lastCommitFiles(root), ["notes.md"])
+  assert.deepEqual(mixed.unchanged_paths, ["kept.md"])
+  assert.deepEqual(mixed.unsaved_paths, [{ path: "a.log", reason: "ignored" }, { path: "typo.md", reason: "not_in_git" }])
+
+  const only = await desk_save({ deskRoot: root, input: { paths: ["a.log"], message: "only ignored" }, schedulePush: () => {} })
+  assert.equal(only.status, "nothing_to_commit")
+  assert.deepEqual(only.unsaved_paths, [{ path: "a.log", reason: "ignored" }])
+
+  const glob = await desk_save({ deskRoot: root, input: { paths: ["ke*.md"], message: "glob" }, schedulePush: () => {} }).catch((error) => error)
+  assert.equal(glob.unchanged_paths, undefined, "a glob never matches a tracked file and reports it unchanged")
+
+  const clean = await desk_save({ deskRoot: root, input: { paths: ["kept.md"], message: "clean" }, schedulePush: () => {} })
+  assert.deepEqual(clean, { status: "nothing_to_commit" })
 })

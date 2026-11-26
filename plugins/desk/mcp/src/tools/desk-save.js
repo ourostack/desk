@@ -24,7 +24,7 @@ import { personPrefix, isPathContained, resolveWriteTarget } from "../util/paths
 import { otherDeskOwning, otherDeskContaining } from "../util/desk-owner.js"
 import { isLiveCardPath } from "../desk/card-commit-guard.js"
 import { commitHashAnswer, headSha } from "./task.js"
-import { isGitRepository, hasUnmergedPath, hasUnstagedWork, stagedChanges, indexEntries, stagePaths, commitPaths, commitIndexPaths } from "../util/git-stage.js"
+import { isGitRepository, hasUnmergedPath, hasUnstagedWork, whyNotSaved, stagedChanges, indexEntries, stagePaths, commitPaths, commitIndexPaths } from "../util/git-stage.js"
 import { commitFailure, commitRoute, withNext } from "../util/route-around.js"
 import { operationAnswer } from "../util/cas-commit.js"
 import { deskFailure } from "../runtime/desk-failure.js"
@@ -326,7 +326,8 @@ async function saveDesk({ deskRoot, input, person = null, env = process.env, spa
   // empty commit. A deletion or rename already staged with `git rm` or `git mv` is a change to commit (issue #414).
   const unstaged = paths.filter((p) => hasUnstagedWork(deskRoot, [p], spawnGit))
   if (unstaged.length === 0 && (stagedChanges(deskRoot, paths, spawnGit)?.length ?? 0) === 0) {
-    return { status: "nothing_to_commit" }
+    const unsaved = unsavedPaths(deskRoot, paths, spawnGit)
+    return unsaved.length === 0 ? { status: "nothing_to_commit" } : { status: "nothing_to_commit", unsaved_paths: unsaved, desk_note: UNSAVED_NOTE }
   }
 
   // Only the listed paths that hold unstaged work are staged: the old side of a `git rm` or `git mv` is neither on disk nor in
@@ -350,9 +351,12 @@ async function saveDesk({ deskRoot, input, person = null, env = process.env, spa
     }
   }
   // A listed path with no change and no staged change (an ignored generated file, say) is not known to Git, and `git commit -- <it>`
-  // would refuse the whole commit with a pathspec error; it is left out and named in the answer.
+  // would refuse the whole commit with a pathspec error; it is left out and named in the answer: `unchanged_paths` for a tracked file
+  // already holding these bytes, `unsaved_paths` for one Git never holds (ignored, or not in Git), whose bytes are not protected.
   const changed = paths.filter((p, i) => unstaged.includes(p) || everything.some((change) => change.paths.some((q) => covered(q, listed[i]))))
-  const unchanged = paths.filter((p) => !changed.includes(p))
+  const rest = paths.filter((p) => !changed.includes(p))
+  const unsaved = unsavedPaths(deskRoot, rest, spawnGit)
+  const unchanged = rest.filter((p) => !unsaved.some((u) => u.path === p))
   const committed = commitPaths(deskRoot, changed, message, spawnGit, undefined, { keepLocal: true })
   if (!committed.ok) {
     return commitNotMade(commitFailure({ root: deskRoot, paths: listed, message, committed }))
@@ -365,6 +369,11 @@ async function saveDesk({ deskRoot, input, person = null, env = process.env, spa
     ? { status: "committed", desk_pushed: true, desk_note: "Desk published these files to the remote's default branch, so they are already on the remote. Run no git to push them." }
     : { status: "committed", ...deskPushNote({ root: deskRoot, spawnGit, note: DESK_SAVE_NOTE }), desk_pushed: false }
   if (unchanged.length > 0) answer.unchanged_paths = unchanged
+  if (unsaved.length > 0) {
+    answer.partial = true
+    answer.unsaved_paths = unsaved
+    answer.desk_note = `${answer.desk_note} ${UNSAVED_NOTE}`
+  }
   if (committed.checkout !== undefined) {
     answer.checkout = committed.checkout
     answer.checkout_note = committed.checkout_note
@@ -374,6 +383,16 @@ async function saveDesk({ deskRoot, input, person = null, env = process.env, spa
     ...answer, ...commitHashAnswer({ env, hash: deskCommit, published }),
     ...(published ? { desk_commit_note: "desk_commit identifies the published commit containing these saved paths, not this checkout's HEAD." } : {}),
   }
+}
+
+const UNSAVED_NOTE = "Each path in unsaved_paths was NOT saved and is not on the remote: Git never holds its bytes. Save a copy under a name no ignore rule covers (a .txt suffix, say), or ask the owner to change the ignore rule; do not call it saved."
+
+function unsavedPaths(deskRoot, paths, spawnGit) {
+  return paths.flatMap((p) => {
+    const rel = path.relative(deskRoot, path.resolve(deskRoot, p)).split(path.sep).join("/")
+    const reason = whyNotSaved(deskRoot, rel, spawnGit)
+    return reason === null ? [] : [{ path: p, reason }]
+  })
 }
 
 // A stage or read failure: nothing was committed, and the route finishes the commit by hand (#623).
