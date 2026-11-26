@@ -1,0 +1,3 @@
+### Relays: a cached GitHub answer is never reused across accounts, and a stray 304 no longer crashes a poll
+
+A relay's stored `ETag` and answer now belong to the credential that read them (the `readAccount`'s, not the writing account's). After the reading account changes, or the same login signs in with a new token, the old tag is not sent and the old answer is not reused. A `304` with nothing usable stored used to fail with a `TypeError`; the read is now repeated once without a tag, and a second `304` stops the poll with `relays_unexpected_304` without moving any work forward. Stored `false`, `0`, empty and `null` answers are still reused. See [relays](docs/relays.md).

@@ -201,15 +201,29 @@ function note(state, now, event) {
 /**
  * One conditional read. `reduce` turns the body into the small value kept in the state next to the ETag, so a 304 (which costs
  * nothing against the quota) still hands back what the last answer meant. A value marked `volatile` is never cached.
+ *
+ * An entry belongs to the credential epoch of the client that reads (`readApi`, else `api`), kept as `epoch`: an entry from another
+ * epoch, or a legacy entry with none, sends no validator and its body is not reused, so a switched account or refreshed token never
+ * sees another's answer. A client with no epoch of its own (an injected one) is unidentified; it reuses only entries that have no
+ * epoch either, which is that client's own caller's promise that it is one identity. Whether a stored value exists is tested by
+ * presence, so a stored `false`, `0`, `""`, `null` or `[]` is reused. A 304 with nothing usable stored is read once more without
+ * validators; a second 304 is a failure, never an empty answer.
  */
 async function cached(ctx, state, route, reduce) {
-  const hit = state.cache[route]
+  const reader = ctx.readApi ?? ctx.api
+  const epoch = typeof reader.credentialEpoch === "string" && reader.credentialEpoch !== "" ? reader.credentialEpoch : undefined
+  const stored = state.cache[route]
+  const hit = isObject(stored) && typeof stored.etag === "string" && stored.etag !== "" && "value" in stored && stored.epoch === epoch ? stored : undefined
   ctx.touched.add(route)
-  const answer = await (ctx.readApi ?? ctx.api).get(route, { etag: hit?.etag })
-  if (answer.notModified) return hit.value
+  let answer = await reader.get(route, { etag: hit?.etag })
+  if (answer.notModified && hit) return hit.value
+  if (answer.notModified) {
+    answer = await reader.get(route, {})
+    if (answer.notModified) throw Object.assign(new Error(`Try the poll again later, and report it if it keeps happening: GitHub answered 304 Not Modified to ${route.split("?")[0]} although no ETag was sent, so there is nothing stored to reuse`), { code: "relays_unexpected_304", status: 304 })
+  }
   const value = await reduce(answer.body)
   if (value?.volatile) delete state.cache[route]
-  else state.cache[route] = { etag: answer.etag, value }
+  else state.cache[route] = { etag: answer.etag, value, ...(epoch === undefined ? {} : { epoch }) }
   return value
 }
 

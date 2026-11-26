@@ -1755,3 +1755,145 @@ test("probes: two relays reading the same repository share one probe per account
   await pollRelays({ paths: w.paths, drainFiles: w.drainFiles, connect, now: NOW, signedIn: () => ["a"] })
   assert.equal(asked.filter((url) => url === "/repos/o/data").length, 1)
 })
+
+// ── Conditional reads: a validator belongs to the reading credential, and a 304 with nothing stored is never an empty answer ──
+
+const RUNS = /\/actions\/workflows\/data\.yml\/runs\?/u
+
+/**
+ * The real client over a fake `gh` token read and a fake GitHub that keeps If-None-Match semantics for the watched runs, so the
+ * Authorization and If-None-Match headers asserted are the ones the default client really sends. The relay writes as `writer` and reads as `reader`.
+ */
+async function cacheWorld({ relay = { ...IMMEDIATE, account: "writer", readAccount: "reader" } } = {}) {
+  const w = await setup([relay])
+  const tokens = { writer: "fake-token-w-1", reader: "fake-token-r-1", other: "fake-token-o-1" }
+  const http = []
+  const server = { etag: '"v1"', runs: [run(1)], defaultBranch: "main", always304: 0 }
+  const spawn = (_command, args) => ({ status: 0, stdout: `${tokens[args[args.indexOf("--user") + 1]]}\n` })
+  const fetchImpl = async (url, init) => {
+    const path = new URL(url).pathname + new URL(url).search
+    const who = Object.keys(tokens).find((name) => init.headers.Authorization === `Bearer ${tokens[name]}`)
+    http.push({ who, method: init.method ?? "GET", path, ifNoneMatch: init.headers["If-None-Match"] })
+    const common = { headers: { get: (name) => (name.toLowerCase() === "etag" ? server.etag : null), has: () => false }, text: async () => "" }
+    if (init.method === "POST") return { ...common, status: 204, ok: true, json: async () => ({}) }
+    if (server.always304 > 0 && (server.always304-- > 0)) return { ...common, status: 304, ok: false, json: async () => ({}) }
+    if (path.startsWith("/repos/o/pages")) {
+      const etag = `"b-${JSON.stringify(server.defaultBranch)}"`
+      const headers = { get: (name) => (name.toLowerCase() === "etag" ? etag : null), has: () => false }
+      return init.headers["If-None-Match"] === etag ? { ...common, headers, status: 304, ok: false, json: async () => ({}) } : { ...common, headers, status: 200, ok: true, json: async () => ({ default_branch: server.defaultBranch }) }
+    }
+    if (init.headers["If-None-Match"] === server.etag) return { ...common, status: 304, ok: false, json: async () => ({}) }
+    return { ...common, status: 200, ok: true, json: async () => ({ workflow_runs: server.runs }) }
+  }
+  const connect = (account, options) => connectGithub(account, { ...options, spawn, fetchImpl, pauseMs: 0, env: { PATH: "/bin", MS_DESK_QUOTA: "off" } })
+  const poll = (at) => pollRelays({ paths: w.paths, drainFiles: w.drainFiles, connect, now: at })
+  const runReads = () => http.filter((call) => RUNS.test(call.path))
+  const edit = (change) => {
+    const states = readRelayStates(w.paths.state)
+    change(states[relay.name])
+    writeFileSync(w.paths.state, JSON.stringify(states))
+  }
+  return { ...w, tokens, http, server, poll, runReads, edit, relay }
+}
+
+test("conditional cache: an unchanged answer is a free 304 read by the reader, a changed one is read and acted on by the writer", async () => {
+  const c = await cacheWorld()
+  await c.poll(NOW)
+  await c.poll(NOW + MIN)
+  assert.deepEqual(c.runReads().map((call) => [call.who, call.ifNoneMatch]), [["reader", undefined], ["reader", '"v1"']])
+  assert.deepEqual(c.http.filter((call) => call.method === "POST"), [])
+  c.server.etag = '"v2"'
+  c.server.runs = [run(1), run(2)]
+  await c.poll(NOW + 2 * MIN)
+  assert.deepEqual(c.runReads().at(-1), { who: "reader", method: "GET", path: c.runReads().at(-1).path, ifNoneMatch: '"v1"' })
+  assert.deepEqual(c.http.filter((call) => call.method === "POST").map((call) => call.who), ["writer"])
+  assert.equal(c.state(c.relay.name).cache[c.runReads()[0].path.replace("https://api.github.com", "")].epoch.length, 64)
+})
+
+test("conditional cache: a changed read account, or a refreshed token of the same login, sends no validator and reuses no body", async () => {
+  const c = await cacheWorld()
+  await c.poll(NOW)
+  writeFileSync(c.paths.config, JSON.stringify({ relays: [{ ...c.relay, readAccount: "other" }] }))
+  await c.poll(NOW + MIN)
+  assert.deepEqual(c.runReads().at(-1).who, "other")
+  assert.equal(c.runReads().at(-1).ifNoneMatch, undefined, "the old account's validator is not sent to another account")
+  await c.poll(NOW + 2 * MIN)
+  assert.equal(c.runReads().at(-1).ifNoneMatch, '"v1"', "the new account then has its own")
+  c.tokens.other = "fake-token-o-2"
+  await c.poll(NOW + 3 * MIN)
+  assert.equal(c.runReads().at(-1).ifNoneMatch, undefined, "the same login with a new credential is a new epoch")
+})
+
+test("conditional cache: the write client's credential never keys the reader's entry", async () => {
+  const c = await cacheWorld()
+  await c.poll(NOW)
+  c.tokens.writer = "fake-token-w-2"
+  await c.poll(NOW + MIN)
+  assert.equal(c.runReads().at(-1).ifNoneMatch, '"v1"')
+})
+
+test("conditional cache: an entry with no stored body, no ETag or no epoch is read in full instead of failing on a 304", async () => {
+  for (const [why, damage] of [["no body", (entry) => delete entry.value], ["no etag", (entry) => delete entry.etag], ["a legacy entry with no epoch", (entry) => delete entry.epoch]]) {
+    const c = await cacheWorld()
+    await c.poll(NOW)
+    c.edit((state) => Object.values(state.cache).forEach(damage))
+    const polled = await c.poll(NOW + MIN)
+    assert.deepEqual(polled.errors, [], why)
+    assert.equal(c.runReads().at(-1).ifNoneMatch, undefined, why)
+    assert.equal(c.runReads().length, 2, why)
+  }
+})
+
+test("conditional cache: a 304 to a read that sent no validator is read once more, and a second 304 is a visible failure that moves nothing", async () => {
+  const recovered = await cacheWorld()
+  recovered.server.always304 = 1
+  const polled = await recovered.poll(NOW)
+  assert.deepEqual(polled.errors, [])
+  assert.deepEqual(recovered.runReads().map((call) => call.ifNoneMatch), [undefined, undefined])
+  assert.equal(recovered.state(recovered.relay.name).seeded, true)
+
+  const c = await cacheWorld()
+  c.server.always304 = 99
+  const failed = await c.poll(NOW)
+  assert.equal(failed.errors[0].code, "relays_unexpected_304")
+  assert.match(failed.errors[0].error, /304 Not Modified .*no ETag was sent/u)
+  assert.equal(c.runReads().length, 2, "exactly one retry")
+  assert.deepEqual(c.runReads().map((call) => call.ifNoneMatch), [undefined, undefined])
+  assert.equal(c.state(c.relay.name).seeded, undefined, "the first poll's work marker is not advanced")
+  assert.equal(c.state(c.relay.name).lastErrorCode, "relays_unexpected_304")
+})
+
+test("conditional cache: a stored falsey value is reused by a 304, not read again", async () => {
+  for (const value of ["", null, false, 0]) {
+    const c = await cacheWorld({ relay: { ...IMMEDIATE, account: "writer", readAccount: "reader" } })
+    c.server.defaultBranch = value
+    await c.poll(NOW)
+    c.server.etag = '"v2"'
+    c.server.runs = [run(1), run(2)]
+    await c.poll(NOW + MIN)
+    c.server.etag = '"v3"'
+    c.server.runs = [run(1), run(2), run(3)]
+    const polled = await c.poll(NOW + 2 * MIN)
+    const branchReads = c.http.filter((call) => call.path === "/repos/o/pages")
+    assert.deepEqual(polled.errors, [], String(value))
+    assert.equal(branchReads.length, 2, `${String(value)}: read in full, then once more as a 304`)
+    assert.ok(branchReads[1].ifNoneMatch, String(value))
+    assert.equal(c.http.filter((call) => call.method === "POST").length, 2, String(value))
+  }
+})
+
+test("conditional cache: a client with no epoch of its own reuses only entries that have none, and its entries carry none", async () => {
+  const w = await setup([IMMEDIATE])
+  w.world.on("GET", runsRoute, () => ({ workflow_runs: [run(1)] }))
+  await w.poll(NOW)
+  const stored = Object.values(w.state(IMMEDIATE.name).cache)[0]
+  assert.equal("epoch" in stored, false)
+  await w.poll(NOW + MIN)
+  assert.equal(w.world.reads.at(-1).etag, stored.etag)
+  assert.equal(w.world.notModified, 1)
+  const states = readRelayStates(w.paths.state)
+  Object.values(states[IMMEDIATE.name].cache).forEach((entry) => (entry.epoch = "e".repeat(64)))
+  writeFileSync(w.paths.state, JSON.stringify(states))
+  await w.poll(NOW + 2 * MIN)
+  assert.equal(w.world.reads.at(-1).etag, undefined, "an entry of an identified credential is not offered to an unidentified client")
+})
