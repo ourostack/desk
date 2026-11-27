@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.636 — 2026-11-27
+
+Desk's MCP server now vendors Ouro UI v1.3.597, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.635 — 2026-11-27
 
 A wait on a system we own (CI, the merge queue, a release, a workflow) that passes its expiry, or is renewed three times in a row, now shows up in `drains keepers check` as `fix_system`: the job is to fix that system, not to wait again. See [keep-the-work-moving.md](docs/keep-the-work-moving.md).
