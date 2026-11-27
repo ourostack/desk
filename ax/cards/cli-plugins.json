@@ -300,6 +300,15 @@
       ]
     },
     {
+      "id": "cli:drains keepers check",
+      "group": "drains-keep-moving",
+      "when": "A scheduled run outside agent sessions that shows this host's heartbeat and lists waits, endings, claims and a peer keeper that need a job",
+      "effect": "write",
+      "errors": [
+        { "code": "keepers-config-invalid", "means": "keepers.json exists but is not valid JSON or cannot be read, so no peer was checked", "fix": "Repair keepers.json with this host's name and its peers and rerun keepers check" }
+      ]
+    },
+    {
       "id": "cli:drains hooks poll",
       "group": "drains-hooks",
       "when": "A runner cycle downloading webhook events from the receiver to local payload files and printing their wakes",

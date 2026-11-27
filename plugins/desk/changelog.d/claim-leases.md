@@ -1,0 +1,1 @@
+Card claims now expire. `drains leases take` records a claim, and `drains leases status` shows it as held, lapsed (nothing pushed to its branch for two hours, read from GitHub's push events) or ownerless (its session ended). Messages, reruns and claiming again never renew a lease. See [keep-the-work-moving.md](docs/keep-the-work-moving.md).

@@ -10,13 +10,14 @@ import { runCli } from "../lib/ouro-ui/registry/ouro/ax/cli.ts"
 import { allStuckSaves, stuckLine } from "./unmerged-saves.js"
 import { pollRelays, readRelayConfig, readRelayStates, relayPaths, relayStatusLines, relaysOfPull, whyRelay } from "./relays.js"
 import { findPluginlessRuntimes, listProcesses as psList, pluginlessRuntimeLines } from "./pluginless-runtimes.js"
+import { keepersCheck, readKeeperConfig } from "./keepers.js"
 import { claimCard, leasePaths, leaseStatus } from "./leases.js"
 import { endingsDir, progressOf, readEndings } from "./outcomes.js"
 import { ackStalled, pollStalled, stalledPaths, stalledStatus } from "./stalled.js"
 import { ackHooks, createHook, deleteHook, ghToken, hookPaths, hookStatus, listHooks, pollHooks } from "./hooks.js"
 import { ackSchedule, pollSchedules, readScheduleConfig, readScheduleStates, scheduleStatusLines, schedulePaths } from "./schedules.js"
 import { signedInAccounts } from "../factory/flush.js"
-import { ackWake, connectGithub, recoverDrainTarget, drainPaths, deskInUse, drainStatusLines, installLauncher, pollDrains, readDrainConfig, readDrainStates, whyOf, withDrainLock } from "./drains.js"
+import { ackWake, connectGithub, recoverDrainTarget, drainPaths, drainsHome, deskInUse, drainStatusLines, installLauncher, pollDrains, readDrainConfig, readDrainStates, whyOf, withDrainLock } from "./drains.js"
 
 /** The Desk a poll ran from, for the history: its version, and the release commit when the launcher's own copy ran. */
 const deskLabel = ({ version, release }) => (release ? `${version} ${release.slice(0, 8)}` : version)
@@ -98,6 +99,7 @@ function drainsCli({ script, env, now, connect, listProcesses, signedIn, fetchHo
     groups: {
       schedule: "The prompts due to a session (schedules.json), at most one per schedule however many intervals were missed; see docs/schedules.md.",
       stalled: "The nudges due to sessions that went idle with their focused task card unfinished and nothing running, once per idle stretch; see docs/stalled-nudges.md.",
+      keepers: "The check that runs outside every agent session on two hosts that watch each other; see docs/keep-the-work-moving.md.",
       leases: "Card claims that lapse after two hours with nothing pushed and have no owner once their session ends; see docs/keep-the-work-moving.md.",
       relays: "The dispatch and merge-when-green relays in relays.json: poll acts on what it finds and prints no wakes; see docs/relays.md.",
       hooks: "Webhooks: events any service posts to the hooks receiver become wakes for the session hooks.json names; see docs/webhooks.md.",
@@ -165,6 +167,18 @@ function drainsCli({ script, env, now, connect, listProcesses, signedIn, fetchHo
       command("leases take", { effect: "private", summary: "Claim a card for a session; a held card stays with its owner, and claiming again does not restart its lease.", flags: { card: { type: "string", required: true, placeholder: "<card>", description: "The card to claim." }, owner: { type: "string", required: true, placeholder: "<session id>", description: "The session that will own it." }, repo: { type: "string", placeholder: "<owner/name>", description: "The repository its work is pushed to." }, branch: { type: "string", placeholder: "<branch>", description: "The branch its work is pushed to." } } }, async (input) => {
         if (!String(input.card).trim() || !String(input.owner).trim()) throw usageError("lease-owner-missing", "a claim needs both a card and the session that owns it", "run drains leases take --card <card> --owner <session id>")
         return withDesk(await leaseFile(() => claimCard({ paths: leasePaths({ env }), card: input.card, owner: input.owner, repo: input.repo, branch: input.branch, now: now(), env })), { script, env })
+      }),
+      command("keepers check", { effect: "private", summary: "Show this host's heartbeat and list what needs a job: expired or endlessly renewed waits, unverified endings, lapsed or ownerless claims and a silent peer.", flags: { config: CONFIG } }, async (input) => {
+        const home = drainsHome({ env })
+        const file = input.config ?? path.join(home, "keepers.json")
+        let config
+        try { config = readKeeperConfig(file) } catch (error) {
+          throw new AxError({ code: "keepers-config-invalid", exit: 1, thing: "keepers", problem: `${file} cannot be read (${error.keepersConfigInvalid}), so no peer was checked`, fix: "Repair keepers.json as { \"host\": \"<name>\", \"repo\": \"<clone path>\", \"peers\": [{ \"host\": \"<name>\" }] } and run drains keepers check again." })
+        }
+        const t = now()
+        const { leases } = await leaseStatus({ paths: leasePaths({ env }), now: t, env })
+        const result = keepersCheck({ config, heartbeatDir: path.join(endingsDir(env), "..", "heartbeats"), endings: readEndings(endingsDir(env)), leases, now: t })
+        return withDesk(await result, { script, env })
       }),
       command("relays poll", { effect: "private", summary: "Poll the relays in relays.json, act on what is found and print no wakes.", flags: { config: CONFIG, state: STATE } }, async (input) => {
         const paths = pathsOf(relayPaths({ env }), input)
