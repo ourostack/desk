@@ -81,7 +81,7 @@ for (const host of ["copilot", "claude"]) {
   }))
   test(`${host}: blocked needs a named person and a resume step`, () => scratch(async ctx => {
     assert.equal((await checkTurnEnd(await fixture(ctx, host, { reply: "Ending: blocked; on: Ari; resume: say go and I rerun the release" }))).status, "complete")
-    for (const reply of ["Ending: blocked; on: CI; resume: rerun the release later", "Ending: blocked; on: me; resume: keep going", "Ending: blocked; on: Ari; resume: ok"]) {
+    for (const reply of ["Ending: blocked; on: CI; resume: rerun the release later", "Ending: blocked; on: me; resume: keep going", "Ending: blocked; on: Ari; resume: ok", "Ending: blocked; on: Ari; resume: Ari signs in and pastes the token", "Ending: blocked; on: Ari; resume: click approve in the portal"]) {
       assert.equal((await checkTurnEnd(await fixture(ctx, host, { reply }))).status, "correction", reply)
     }
   }))

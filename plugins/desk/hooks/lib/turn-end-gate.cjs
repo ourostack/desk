@@ -17,6 +17,8 @@ const DESK = /^(?:desk-|mcp__[^ ]*desk[^ ]*__)(task_create|task_focus|task_updat
 const WAKE_TOOL = /(?:schedule|automation|wake|watch|remind)/iu;
 const CLOSED = new Set(["done", "cancelled", "archived", "drafting"]);
 const NOT_A_PERSON = /^(?:me|myself|i|us|nobody|no one|none|n\/a|na|the user|user|agent|an agent|the agent|a session|session|ci|the system|system|tbd|unknown|someone|anyone)$/iu;
+// Chores a deterministic tool can do; a person is never the step that restarts them.
+const TOOLABLE = /\b(?:signs?[- ]?in|logs?[- ]?in|pastes?|clicks?|run (?:this|the following) command|set (?:the|a) (?:secret|token)|add (?:the|a) (?:secret|token))\b/iu;
 const FORM = `Ending: done; shipped: <PR or run URL or commit sha this session produced>
 Ending: waiting; on: <named event>; wake: <id of the schedule or watch you registered>; expires: <ISO time within 7 days>; blocks: <what cannot move>
 Ending: blocked; on: <named person>; resume: <exact step that restarts the work>
@@ -67,6 +69,7 @@ function judge(ending, evidence, now) {
   if (ending.kind === "blocked") {
     if (!f.on || NOT_A_PERSON.test(f.on)) return { ok: false, why: "`blocked` needs `on:` naming a person, not a system or yourself" };
     if (!f.resume || f.resume.length < 8) return { ok: false, why: "`blocked` needs `resume:` with the exact step that restarts the work" };
+    if (TOOLABLE.test(f.resume)) return { ok: false, why: "`resume:` hands the person a chore a tool can do (sign-in, token, secret, click, command); look at how it was done before, build a deterministic tool that does it, and keep going. Block on a person only for their voice, decision, money or a credential only they hold" };
     return { ok: true, record: { kind: "blocked", on: f.on, resume: f.resume } };
   }
   if (!f.checked || f.checked.length < 8) return { ok: false, why: "`no ready work` needs `checked:` naming where you looked (the roadmap's ready list, the issue queue)" };
