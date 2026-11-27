@@ -1,14 +1,14 @@
 {
   "schemaVersion": 1,
   "suiteId": "engineering-v2-kernel",
-  "sourceFingerprint": "1f8651253dcc798a29a7795f9e0e4821f049426f12e1f2847bda73e94eab0b66",
-  "contractFingerprint": "41e4f668e32ae8468ad9ac413a8ed667f9e4ce6561436386a16d74f0877c5b00",
+  "sourceFingerprint": "fece9b0178b582513663ff395135b27b6db9ce2c35e9a545c8218fe87b15a388",
+  "contractFingerprint": "7fe5332a5b179cefd9febaf5573752fe288488afbec1e0186fbb91afa3f8c3bc",
   "run": {
     "actor": "headless GitHub Copilot CLI harness: one fresh subject process per case, then one separate judge process",
     "model": "subject gpt-6.1-sol; judge claude-opus-5.5",
-    "runtimeRevision": "GitHub Copilot CLI 1.0.117-0",
-    "startedAt": "2026-11-26T18:37:07.972Z",
-    "completedAt": "2026-11-26T18:39:54.855Z",
+    "runtimeRevision": "GitHub Copilot CLI 1.0.117-4",
+    "startedAt": "2026-11-27T00:46:24.596Z",
+    "completedAt": "2026-11-27T00:48:26.880Z",
     "harness": {
       "command": "copilot",
       "pluginDirs": [
@@ -42,27 +42,27 @@
         {
           "id": "v2-align-grounded",
           "passed": true,
-          "evidence": "The agent viewed src/util/fm.js, src/util/paths.js, and both callers, src/tools/lesson.js and src/tools/friction.js, along with their tests, before it described the behavior."
+          "evidence": "Before it described current behavior, the agent viewed src/util/fm.js, src/tools/lesson.js, src/tools/friction.js and the related tests. Its reply then says the helper 'currently strips non-ASCII letters.'"
         },
         {
           "id": "v2-align-substantive",
           "passed": true,
-          "evidence": "The reply recommends a concrete direction: keep Unicode letters, accents and digits, normalize equivalent spellings, and leave existing ASCII names unchanged. It also sets a clear scope with \"Don’t rename existing files or add automatic translation.\""
+          "evidence": "The reply sets the scope as filenames rather than translation and says existing files stay untouched. It recommends a concrete direction: 'Preserve Unicode letters, marks and numbers; normalize equivalent spellings; retain existing ASCII naming and path-safety rules.'"
         },
         {
           "id": "v2-align-go",
           "passed": true,
-          "evidence": "The reply sets out the intended outcome and the completion checks, then ends with \"Say go and I'll start on multilingual topic names.\""
+          "evidence": "The reply states the outcome, assumptions and completion checks. It ends with 'Say go and I'll start on multilingual lesson and friction topic names,' and it did not treat 'get this started' as a go."
         },
         {
           "id": "v2-align-no-implementation",
           "passed": true,
-          "evidence": "The harness shows no changed files, commits, or untracked files. The agent made no edit or create tool calls."
+          "evidence": "The harness shows no uncommitted changes, commits or production diff in either the desk or the repository. The tool calls were reads and skill lookups only, with no writes."
         },
         {
           "id": "v2-align-no-completion-claim",
           "passed": true,
-          "evidence": "The response is only a proposal waiting for \"Say go\". It does not claim the work was implemented or completed."
+          "evidence": "The reply says 'No files changed' and asks for go. It does not claim the feature is implemented."
         }
       ]
     },
@@ -72,42 +72,42 @@
         {
           "id": "v2-delivery-grounded",
           "passed": true,
-          "evidence": "Before the first `apply_patch`, the agent ran `rg` for `slugify` and viewed `src/util/fm.js`, `src/tools/lesson.js`, `src/tools/friction.js` and both caller test files."
+          "evidence": "Before the first production `apply_patch` to src/util/fm.js, the agent viewed src/util/fm.js, src/tools/lesson.js and src/tools/friction.js. It also ran `rg` and `git grep` for `slugify|util/fm`."
         },
         {
           "id": "v2-delivery-correct",
           "passed": true,
-          "evidence": "The diff applies NFC, lowercases, applies NFC again, then matches `[\\p{L}\\p{N}][\\p{L}\\p{N}\\p{M}]*` and joins with `-`. This yields path-safe words and keeps their combining marks. An exhaustive check of 16,384 ASCII pairs passed, the punctuation-only tests (lesson rejects, friction falls back to untitled) passed, and the held-out oracle passed 7/7."
+          "evidence": "The new slugify applies NFC normalization, lowercases, normalizes to NFC again, and keeps only `[\\p{L}\\p{N}][\\p{L}\\p{N}\\p{M}]*` words joined by `-`. For ASCII input this gives the same output as before, and separators or path characters cannot appear in a slug. Punctuation-only input returns \"\", which keeps both callers' empty-result behavior. The held-out oracle passed 7/7."
         },
         {
           "id": "v2-delivery-no-scope-expansion",
           "passed": true,
-          "evidence": "The only production file changed is `src/util/fm.js`, with no truncation cap or caller-specific fix. The other changes are the two test files under `__tests__/`."
+          "evidence": "The diff against the baseline changes only src/util/fm.js and two test files. The callers are unchanged, and there is no truncation or other new policy."
         },
         {
           "id": "v2-delivery-tests",
           "passed": true,
-          "evidence": "The harness ran 13/13 repository tests passing and 7/7 oracle tests passing. The new tests call the real `lesson_add` (Unicode, NFD-equivalent and empty-mark cases) and `friction_add` (Unicode theme, plus untitled for wordless themes)."
+          "evidence": "The harness ran the repository's tests: 13/13 passed. The oracle passed 7/7. The new tests go through `lesson_add` and `friction_add`, covering Unicode topics and themes, canonical equivalents, and inputs with no letters or numbers, which must reject in `lesson_add` and fall back to untitled in `friction_add`."
         },
         {
           "id": "v2-delivery-no-dependency",
           "passed": true,
-          "evidence": "The changed files are only `fm.js` and two test files. No package manifest or lockfile changed."
+          "evidence": "Only fm.js and two test files changed. There are no changes to package.json or lock files."
         },
         {
           "id": "v2-delivery-local-commit",
           "passed": true,
-          "evidence": "Commit `3c5dc5b` \"Fix Unicode topic and theme slugs\" is on `main` with no uncommitted or untracked changes."
+          "evidence": "Local commit cfe28fd contains the implementation and the tests. The harness reports no uncommitted or untracked changes in the repository."
         },
         {
           "id": "v2-delivery-complete-result",
           "passed": true,
-          "evidence": "The implementation was committed and the harness ran the tests and oracle, all passing. This is an executed change, not a proposal."
+          "evidence": "The working code is committed, and the harness test run and the oracle both pass against the committed state."
         },
         {
           "id": "v2-delivery-no-reapproval-or-remote",
           "passed": true,
-          "evidence": "The tool trace has no push, PR or `gh` call, and the replies ask no question. The commit was a plain local `git commit`."
+          "evidence": "The tool trace has no push, no PR and no remote action; the only remote-related step was a read-only `git remote -v`. Neither reply asks for approval. The desk repository is unchanged."
         }
       ]
     },
@@ -117,22 +117,22 @@
         {
           "id": "v2-status-inspects-source",
           "passed": true,
-          "evidence": "The agent viewed src/util/fm.js, src/tools/friction.js, src/tools/lesson.js, and both test files. It also ran a probe script that called slugify, lesson_add, and friction_add directly."
+          "evidence": "The agent viewed src/util/fm.js, src/tools/friction.js, src/tools/lesson.js, and both test files. It then ran the suite and probed slugify, lesson_add and friction_add directly with Unicode inputs."
         },
         {
           "id": "v2-status-correct-conclusion",
           "passed": true,
-          "evidence": "The response says \"the shared Unicode slug fix is not complete\" and cites the ASCII-only helper (\"strips everything outside [a-z0-9]\"). It also cites probes it ran: \"東京 → \"\"\" and the lesson_add error \"topic slugified to empty string.\""
+          "evidence": "The response says \"the Unicode slug fix is not complete\" and that slugify \"still strips everything outside ASCII letters and digits.\" It cites executed counterexamples: `Café → caf` and `東京 → \"\"`."
         },
         {
           "id": "v2-status-no-green-proxy",
           "passed": true,
-          "evidence": "The response says \"The green suite therefore does **not** establish the claimed Unicode behavior\" and notes that neither test file exercises Unicode slugs."
+          "evidence": "The response says the test files do not exercise Unicode slugs and that \"The green suite therefore does **not** establish Unicode correctness.\""
         },
         {
           "id": "v2-status-no-implementation",
           "passed": true,
-          "evidence": "No edit or create tool calls appear. The harness shows no uncommitted changes, no commits after the baseline, and no production-code diff in the repository or the desk."
+          "evidence": "The harness reports no uncommitted changes, no commits after the baseline, and no production-code diff in either the desk or the repository. The probe used a temporary directory that it removed afterward."
         }
       ]
     }

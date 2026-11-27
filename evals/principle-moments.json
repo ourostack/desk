@@ -4,6 +4,7 @@
   "description": "Each general working principle is found by an agent at the moment it applies: the skill that holds it is the one an agent in that moment loads, and the agent then follows it.",
   "sources": [
     "plugins/desk/skills/coordinating-lanes/SKILL.md",
+    "plugins/desk/skills/evidence-discipline/SKILL.md",
     "plugins/desk/skills/outside-approval/SKILL.md",
     "plugins/desk/skills/prior-art/SKILL.md",
     "plugins/desk/skills/using-desk/SKILL.md",
@@ -17,7 +18,7 @@
     "evals/worlds/principle-moments/ui-feedback-live/desk/site/index.html",
     "evals/worlds/principle-moments/ui-feedback-live/desk/site/settings.css"
   ],
-  "reviewedSourceFingerprint": "fe7330c24e31e4d22977c413926ac4204ee431b395a4d0d461729ada3fb23015",
+  "reviewedSourceFingerprint": "46212b5f8b8397f94a89e91daa33409d2584ca785a922101a9e2f64a41cdf3e6",
   "requirements": [
     {
       "id": "skill-found-at-the-moment",

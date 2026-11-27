@@ -12,6 +12,7 @@ Iterate on a UI with the person watching it change, not by sending them screensh
 1. **Run a live mock where they already look.** Keep a hot-reload dev server running on made-up data (never their real data or account). Give each state a URL parameter, such as place, theme and chrome, so any state is one link away. If the app needs native chrome, add a dev-only stand-in so headless runs render the whole window. Open the URL in the panel beside their chat, or hand it to whoever holds their screen (a lead session opens it for a lane); each save then reaches their eyes without a message.
 2. **Keep your own run apart from their view.** Run checks on a second server and daemon with their own ports and home. Drive it headless. Never open a window on the person's screen and never click or type in the view they are watching: a headless click once typed a stray "e" into someone's live page.
 3. **Veil what isn't designed.** Cover states and widths nobody has designed with a "not designed yet" veil, so the person never judges a layout you haven't made. Fit by measurement, not breakpoints: put the veil below the narrowest designed width.
+4. **Tell them how the loop works when you hand it over.** In the same message as the live URL, say how to reach each state, that each of their notes becomes one small edit that shows up on that page, and that every decision they make becomes a deterministic check that runs on every edit instead of something you re-inspect by eye. They can't rely on a loop they were never told about.
 
 ## Run the loop
 
