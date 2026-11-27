@@ -1,5 +1,15 @@
 # desk plugin — changelog
 
+## 3.2.634 — 2026-11-27
+
+Card claims now expire. `drains leases take` records a claim, and `drains leases status` shows it as held, lapsed (nothing pushed to its branch for two hours, read from GitHub's push events) or ownerless (its session ended). Messages, reruns and claiming again never renew a lease. See [keep-the-work-moving.md](docs/keep-the-work-moving.md).
+
+`drains keepers check` is a check that runs outside every agent session and spends no model turn. It lists waits that expired or keep being renewed, endings the turn-end gate could not verify, claims that lapsed or lost their owner, and a peer keeper whose heartbeat went quiet, whatever a session's "busy" status says. Two always-on hosts each run it and read the other's heartbeat. See [keep-the-work-moving.md](docs/keep-the-work-moving.md).
+
+Keepers publish their heartbeat as a blob on `refs/heartbeats/<host>` of a shared git remote and read the peer's from there, so no host needs inbound ssh and a Dev Box can join later as a third keeper. `keepers.json` takes a `repo` clone path; a peer with an `ssh` alias is still read over ssh.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.633 — 2026-11-27
 
 Desk's always-on text now tells agents they're resourceful and never hand a tool-doable chore to a person, and the turn-end gate refuses `blocked` endings whose resume step is such a chore.
