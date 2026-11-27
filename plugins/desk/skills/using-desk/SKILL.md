@@ -51,7 +51,7 @@ Before the first write, verify the checkout matches the task's recorded source. 
 
 ## Durable context
 
-What a successor would lose lives on `main` in the desk (the card, task_update's `log`, the task's `handoffs/`) or the product repository, never in a host's memory or folders (`interaction-style`). Disable host memory (`store_memory`). Secrets and customer data stay outside Git (`session-resumption`). One outcome is one task, declared with task_focus (`task-lifecycle`).
+What a successor would lose lives on `main` in the desk (the card, task_update's `log`, the task's `handoffs/`) or the product repository, never in a host's memory or folders (`interaction-style`). Disable host memory (`store_memory`/`vote_memory`). Secrets and customer data stay outside Git (`session-resumption`). One outcome is one task, declared with task_focus (`task-lifecycle`).
 
 ## Child agents
 
