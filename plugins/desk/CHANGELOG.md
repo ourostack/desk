@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.638 — 2026-11-27
+
+Desk's MCP server now vendors Ouro UI v1.3.598, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.637 — 2026-11-27
 
 A publication pull request waiting for its checks now re-reads them after 5, 10 and 20 seconds, then every 30 seconds, instead of every 5 seconds. A full five-minute wait makes 13 passes instead of 61, so publishing spends about a quarter of the GitHub REST quota it did, a quota every agent on the same login shares. What is judged, the five-minute limit and the merge are unchanged.
