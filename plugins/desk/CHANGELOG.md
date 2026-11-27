@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.642 — 2026-11-27
+
+Desk's MCP server now vendors Ouro UI v1.3.603, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.641 — 2026-11-27
 
 Keeper heartbeats are published as a one-file commit on `refs/heartbeats/<host>`, because GitHub refuses a ref that points at a bare blob, so two hosts can check each other through a real GitHub repository.
