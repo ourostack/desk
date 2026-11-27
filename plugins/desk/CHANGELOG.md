@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.633 — 2026-11-27
+
+Desk's always-on text now tells agents they're resourceful and never hand a tool-doable chore to a person, and the turn-end gate refuses `blocked` endings whose resume step is such a chore.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.632 — 2026-11-27
 
 Desk's MCP server now vendors Ouro UI v1.3.596, moved by Ouro Current.
