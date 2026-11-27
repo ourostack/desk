@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.635 — 2026-11-27
+
+A wait on a system we own (CI, the merge queue, a release, a workflow) that passes its expiry, or is renewed three times in a row, now shows up in `drains keepers check` as `fix_system`: the job is to fix that system, not to wait again. See [keep-the-work-moving.md](docs/keep-the-work-moving.md).
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.634 — 2026-11-27
 
 Card claims now expire. `drains leases take` records a claim, and `drains leases status` shows it as held, lapsed (nothing pushed to its branch for two hours, read from GitHub's push events) or ownerless (its session ended). Messages, reruns and claiming again never renew a lease. See [keep-the-work-moving.md](docs/keep-the-work-moving.md).
