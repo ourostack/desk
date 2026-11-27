@@ -52,13 +52,20 @@ const git = (repo, args, input) => spawnSync("git", ["-C", repo, ...args], { enc
 /** Publishes the heartbeat as a one-file commit on `refs/heartbeats/<host>` of a shared remote (hosts such as GitHub refuse a bare blob there), so a peer reads it with no inbound ssh. Returns whether it landed. */
 export function publish({ repo, host, now }) {
   if (!repo || !/^[\w.-]+$/u.test(host)) return false
-  const blob = git(repo, ["hash-object", "-w", "--stdin"], `${JSON.stringify({ host, at: new Date(now).toISOString() })}\n`)
-  if (blob.status !== 0) return false
-  const tree = git(repo, ["mktree"], `100644 blob ${blob.stdout.trim()}\theartbeat.json\n`)
-  if (tree.status !== 0) return false
-  const commit = git(repo, ["-c", "user.name=keeper", "-c", "user.email=keeper@localhost", "commit-tree", tree.stdout.trim(), "-m", `heartbeat ${host}`])
-  if (commit.status !== 0) return false
-  return git(repo, ["push", "-q", "origin", `+${commit.stdout.trim()}:refs/heartbeats/${host}`]).status === 0
+  // Each step reads the one before: the heartbeat's blob, a tree holding it, a commit of that tree, then the push. Any step failing stops the publish.
+  const steps = [
+    () => [["hash-object", "-w", "--stdin"], `${JSON.stringify({ host, at: new Date(now).toISOString() })}\n`],
+    (blob) => [["mktree"], `100644 blob ${blob}\theartbeat.json\n`],
+    (tree) => [["-c", "user.name=keeper", "-c", "user.email=keeper@localhost", "commit-tree", tree, "-m", `heartbeat ${host}`]],
+    (commit) => [["push", "-q", "origin", `+${commit}:refs/heartbeats/${host}`]],
+  ]
+  let out = ""
+  for (const step of steps) {
+    const run = git(repo, ...step(out))
+    if (run.status !== 0) return false
+    out = run.stdout.trim()
+  }
+  return true
 }
 
 /** Reads a peer's published heartbeat; null when it cannot be fetched. */

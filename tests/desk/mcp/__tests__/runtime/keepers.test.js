@@ -4,7 +4,7 @@ import { mkdtempSync, readFileSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 import { execFileSync } from "node:child_process"
-import { beat, findings, keepersCheck, peerFindings, readKeeperConfig } from "../../../../../plugins/desk/mcp/src/runtime/keepers.js"
+import { beat, findings, keepersCheck, peerFindings, publish, readKeeperConfig } from "../../../../../plugins/desk/mcp/src/runtime/keepers.js"
 
 const NOW = Date.parse("2026-11-26T12:00:00Z")
 const at = (min) => new Date(NOW + min * 60_000).toISOString()
@@ -94,4 +94,11 @@ test("two hosts check each other through a shared git remote, with no ssh", asyn
   assert.equal((await run(cfg("laptop", "mini", "a"), NOW + 5 * 60_000)).findings.length, 0, "and the laptop reads the mini's")
   const quiet = await run(cfg("laptop", "mini", "a"), NOW + 60 * 60_000)
   assert.equal(quiet.findings[0].kind, "peer_silent", "a keeper that stops publishing goes quiet within half an hour")
+})
+
+test("a heartbeat that cannot be published says so and is still shown locally", async () => {
+  const notRepo = mkdtempSync(path.join(tmpdir(), "keepers-no-repo-"))
+  assert.equal(publish({ repo: notRepo, host: "mini", now: NOW }), false, "a folder that is no git repository publishes nothing")
+  const result = await keepersCheck({ config: { host: "mini", repo: notRepo, peers: [] }, heartbeatDir: mkdtempSync(path.join(tmpdir(), "hb-")), endings: [], leases: [], now: NOW })
+  assert.equal(result.status[0], "mini: heartbeat shown locally only; publishing to the shared repo failed")
 })
