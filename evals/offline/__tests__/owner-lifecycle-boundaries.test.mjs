@@ -150,7 +150,7 @@ test("reusing a carrier object cannot collapse separately acquired generations o
 test("an exhausted shared deadline still attempts every close and rejects in-budget claims from late owners", async t => {
   const f = await completedControllerFixture("review-recovery-state");
   let now = 0;
-  t.mock.method(performance, "now", () => now);
+  f.input.now = () => now;
   const closed = [];
   f.input.open = async ({ runId }) => ({ ...f.opened, close: async () => {
     closed.push(runId);
@@ -161,10 +161,22 @@ test("an exhausted shared deadline still attempts every close and rejects in-bud
   assert.equal(closed.length, 3);
 });
 
+test("cleanup verification and retention take no wall-clock budget when the injected clock does not advance", async () => {
+  const f = await completedControllerFixture("checker-is-enforced");
+  const input = options(f);
+  const write = input.output.writeArtifact;
+  input.output = { ...input.output, writeArtifact(name, bytes) {
+    // Busy-wait past the 1000 ms budget: the old real-timer deadline rejected this on slow runners.
+    if (name === "owner-1-cleanup.json") for (const end = performance.now() + f.plan.limits.cleanup.totalMs + 200; performance.now() < end;);
+    return write(name, bytes);
+  } };
+  assert.equal((await runFixedCase(input)).status, "passed");
+});
+
 for (const phase of ["raw-read", "final-retention"]) test(`review: cleanup ${phase} cannot overrun the deadline and admit the observed judge result`, async t => {
   const f = await completedControllerFixture("checker-is-enforced");
   let now = 0;
-  t.mock.method(performance, "now", () => now);
+  f.input.now = () => now;
   const close = f.opened.close;
   f.opened.close = async function () {
     const stopped = await close.call(this);

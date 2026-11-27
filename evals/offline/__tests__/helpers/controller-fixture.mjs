@@ -116,6 +116,7 @@ export async function controllerFixture(caseId = "checker-is-enforced", options 
     close: async function () { closes++; await options.close?.(); return ownerCleanup(this.runId); },
   };
   const input = {
+    now: () => 0,
     roots: roles, open: async ({ runId }) => ({ ...opened, runId }), assertConfinement: async () => { await options.confinement?.(); },
     createDeskCallbacks: async () => callbacks, withPermission: async (name, invoke) => invoke(),
     subjectBeforeSend: async context => { await options.beforeSend?.(context); },

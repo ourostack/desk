@@ -164,23 +164,25 @@ export async function runFixedCase({ cell, plan, input, output, outputRoot, bind
   finally {
     // Judge artifacts are provisional case evidence until every acquisition has closed.
     const errors = [];
-    const deadline = performance.now() + plan.limits.cleanup.totalMs;
+    // Tests inject the clock so the shared deadline is driven deterministically; production uses the monotonic clock.
+    const now = input.now ?? (() => performance.now());
+    const deadline = now() + plan.limits.cleanup.totalMs;
     for (const [index, owner] of owners.entries()) {
       let timer;
       try {
         const stopped = await Promise.race([
           Promise.resolve().then(owner.close),
-          new Promise((_, reject) => { timer = setTimeout(() => reject(Object.assign(new Error("The owned close exceeded the shared cleanup deadline"), { code: "NATIVE_OWNER_STOP_UNVERIFIED" })), Math.max(0, deadline - performance.now())); }),
+          new Promise((_, reject) => { timer = setTimeout(() => reject(Object.assign(new Error("The owned close exceeded the shared cleanup deadline"), { code: "NATIVE_OWNER_STOP_UNVERIFIED" })), Math.max(0, deadline - now())); }),
         ]);
         const receipt = structuredClone(stopped?.receipt);
-        requireCondition(performance.now() <= deadline && stopped?.runId === owner.runId && validateCleanupReceipt(receipt, { runId: owner.runId, readArtifact: stopped.readArtifact, requireRunId: true }).ok, "NATIVE_OWNER_STOP_UNVERIFIED", "Every acquisition requires its own generation-bound, within-budget stopped-writer receipt");
+        requireCondition(now() <= deadline && stopped?.runId === owner.runId && validateCleanupReceipt(receipt, { runId: owner.runId, readArtifact: stopped.readArtifact, requireRunId: true }).ok, "NATIVE_OWNER_STOP_UNVERIFIED", "Every acquisition requires its own generation-bound, within-budget stopped-writer receipt");
         const captured = structuredClone(receipt);
         for (const key of ["ownedSpawns", "exitObservations"]) for (const [rowIndex, row] of captured[key].entries()) {
           const bytes = readRawReference(row.rawRef, stopped.readArtifact);
           row.rawRef = { ...row.rawRef, ...retain(`owner-${index + 1}-${key}-${rowIndex + 1}.json`, bytes), byteLength: bytes.length };
         }
         retain(`owner-${index + 1}-cleanup.json`, { runId: owner.runId, receipt: captured });
-        requireCondition(performance.now() <= deadline, "NATIVE_OWNER_STOP_UNVERIFIED", "Owned cleanup verification and retention exceeded the shared deadline");
+        requireCondition(now() <= deadline, "NATIVE_OWNER_STOP_UNVERIFIED", "Owned cleanup verification and retention exceeded the shared deadline");
         owner.stopped = { runId: owner.runId, receipt, readArtifact: stopped.readArtifact };
       }
       catch (error) { errors.push(error); }
