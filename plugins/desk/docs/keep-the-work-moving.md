@@ -66,7 +66,7 @@ Code: [keepers.js](../mcp/src/runtime/keepers.js), tests in [keepers.test.js](..
 | Look busy | Busy is not an input; findings come from the ledger and leases alone (test: a running session hides nothing) |
 | Renew a wait again and again | Three in a row on the same thing is a finding even while unexpired |
 | Replace an expired wait with a later ending | Only a later `done`, `blocked` or `no ready work` clears it, each with its own checks from parts 1 and 2 |
-| Stop the keeper or fake a peer's heartbeat | Each keeper publishes its heartbeat as a blob on `refs/heartbeats/<host>` of the shared remote and reads the other's from there, so no host needs inbound ssh and a Dev Box can join as a third (a peer with an `ssh` alias is still read over ssh); a missing, old or future heartbeat is `peer_silent` |
+| Stop the keeper or fake a peer's heartbeat | Each keeper publishes its heartbeat as a one-file commit on `refs/heartbeats/<host>` of the shared remote and reads the other's from there, so no host needs inbound ssh and a Dev Box can join as a third (a peer with an `ssh` alias is still read over ssh); a missing, old or future heartbeat is `peer_silent` |
 | Delete its own ledger file | Not caught by one host; the ledger is outside the agent's tools, and a missing ledger leaves leases (GitHub pushes) and the peer's view to catch the card |
 
 The keeper only lists findings and wakes no session. A runner that delivers findings by waking sessions must wake them one at a time and bound the sessions a machine runs at once, as the `work-orchestration` skill requires.

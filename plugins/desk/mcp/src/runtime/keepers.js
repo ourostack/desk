@@ -49,12 +49,23 @@ export function beat({ dir, host, now }) {
 
 const git = (repo, args, input) => spawnSync("git", ["-C", repo, ...args], { encoding: "utf8", input, timeout: 30_000, windowsHide: true })
 
-/** Publishes the heartbeat as a blob on `refs/heartbeats/<host>` of a shared remote, so a peer reads it with no inbound ssh. Returns whether it landed. */
+/** Publishes the heartbeat as a one-file commit on `refs/heartbeats/<host>` of a shared remote (hosts such as GitHub refuse a bare blob there), so a peer reads it with no inbound ssh. Returns whether it landed. */
 export function publish({ repo, host, now }) {
   if (!repo || !/^[\w.-]+$/u.test(host)) return false
-  const made = git(repo, ["hash-object", "-w", "--stdin"], `${JSON.stringify({ host, at: new Date(now).toISOString() })}\n`)
-  if (made.status !== 0) return false
-  return git(repo, ["push", "-q", "origin", `+${made.stdout.trim()}:refs/heartbeats/${host}`]).status === 0
+  // Each step reads the one before: the heartbeat's blob, a tree holding it, a commit of that tree, then the push. Any step failing stops the publish.
+  const steps = [
+    () => [["hash-object", "-w", "--stdin"], `${JSON.stringify({ host, at: new Date(now).toISOString() })}\n`],
+    (blob) => [["mktree"], `100644 blob ${blob}\theartbeat.json\n`],
+    (tree) => [["-c", "user.name=keeper", "-c", "user.email=keeper@localhost", "commit-tree", tree, "-m", `heartbeat ${host}`]],
+    (commit) => [["push", "-q", "origin", `+${commit}:refs/heartbeats/${host}`]],
+  ]
+  let out = ""
+  for (const step of steps) {
+    const run = git(repo, ...step(out))
+    if (run.status !== 0) return false
+    out = run.stdout.trim()
+  }
+  return true
 }
 
 /** Reads a peer's published heartbeat; null when it cannot be fetched. */
@@ -62,7 +73,7 @@ function gitRead(repo, name) {
   if (!repo || !/^[\w.-]+$/u.test(name)) return null
   const ref = `refs/heartbeats/${name}`
   if (git(repo, ["fetch", "-q", "origin", `+${ref}:${ref}`]).status !== 0) return null
-  return git(repo, ["cat-file", "-p", ref]).stdout
+  return git(repo, ["cat-file", "-p", `${ref}:heartbeat.json`]).stdout
 }
 
 /** Reads a peer's heartbeat over ssh with no prompt; null when it cannot be read. */
