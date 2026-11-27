@@ -16,6 +16,12 @@ const CLOCK = {
   sleep: (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms),
 }
 
+// Each pass re-reads the PR and its checks over REST, a quota every agent on the login shares:
+// wait 5 s, 10 s, 20 s, then 30 s between passes, so a quick check is seen soon and a long wait reads little.
+export function checkPollDelay(pass) {
+  return Math.min(30_000, 5000 * 2 ** pass)
+}
+
 export function publicationPolicy(git, commit) {
   const listed = git(["ls-tree", "--full-tree", "--name-only", commit, "--", POLICY])
   if (listed.status !== 0) throw Object.assign(new Error(`Check the published publication policy, then try again: Could not read the published ${POLICY}`), { code: "pr_publication_check_the_published_publication_policy_2" })
@@ -197,7 +203,7 @@ export function publishPullRequest({ git, spawnGit, root, upstream, head, onto, 
     const ruled = pr.state === "MERGED" ? [] : loadRuledChecks()
     if (pr.state !== "MERGED") for (const check of loadChecks()) observed.set(check.id, check.name)
     const deadline = clock.now() + WAIT_MS
-    for (;;) {
+    for (let pass = 0; ; pass++) {
       pr = view()
       verify(pr)
       if (pr.state === "MERGED") break
@@ -240,7 +246,7 @@ export function publishPullRequest({ git, spawnGit, root, upstream, head, onto, 
         receipt.pending_checks = true
         throw Object.assign(new Error(`Wait for the checks to finish, then run it again: PR checks still missing or pending: ${waiting.join(", ")}${unreported.length === 0 ? "" : `. Never reported on ${head}: ${unreported.join(", ")}. GitHub Actions will not supply a check that is only posted by running it against this exact commit (for example CIT's cit-check, which runs on a writer's machine); run it on branch ${branch}`}`), { code: "pr_publication_wait_for_the_checks_to" })
       }
-      clock.sleep(Math.min(5000, deadline - clock.now()))
+      clock.sleep(Math.min(checkPollDelay(pass), deadline - clock.now()))
     }
     const fetched = git(["fetch", "--quiet", "--no-tags", upstream.remote, `+${upstream.merge}:${upstream.tracking}`], 60_000)
     if (fetched.status !== 0) throw Object.assign(new Error("Run it again: The PR merge could not be fetched for verification"), { code: "pr_publication_run_it_again_the_pr" })
