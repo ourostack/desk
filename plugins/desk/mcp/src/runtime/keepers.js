@@ -8,6 +8,8 @@ import * as path from "node:path"
 
 const PEER_QUIET_MS = 30 * 60_000
 const RENEWED_WAITS = 3
+// Systems we own. A wait on one that ran past its expiry is a defect in that system, so the job is to fix it, not to wait again.
+const OWNED_SYSTEM = /\b(ci|checks?|actions?|workflows?|merge[- ]?queue|auto[- ]?merge|release|releases|publish|pipeline|runner|keeper)\b/iu
 
 /** The last ending of each card, plus how many waits on the same thing it chained in a row. Order comes from the ledger's own times. */
 function lastPerCard(endings) {
@@ -26,8 +28,9 @@ export function findings({ endings = [], leases = [], now }) {
   const out = []
   for (const [card, e] of lastPerCard(endings)) {
     const { kind, on, blocks, expires } = e.ending
-    if (kind === "waiting" && Date.parse(expires) <= now) out.push({ kind: "wait_expired", card, on, blocks, why: `its wait on ${on} expired ${expires}` })
-    else if (kind === "waiting" && e.chained >= RENEWED_WAITS) out.push({ kind: "wait_renewed", card, on, blocks, why: `it has waited on ${on} ${e.chained} times in a row; a wait that keeps moving is not a wait` })
+    const owned = kind === "waiting" && OWNED_SYSTEM.test(String(on))
+    if (kind === "waiting" && Date.parse(expires) <= now) out.push(owned ? { kind: "fix_system", card, on, blocks, why: `its wait on ${on} expired ${expires}; ${on} is ours, so the job is to fix it` } : { kind: "wait_expired", card, on, blocks, why: `its wait on ${on} expired ${expires}` })
+    else if (kind === "waiting" && e.chained >= RENEWED_WAITS) out.push(owned ? { kind: "fix_system", card, on, blocks, why: `it has waited on ${on} ${e.chained} times in a row; ${on} is ours, so the job is to fix it` } : { kind: "wait_renewed", card, on, blocks, why: `it has waited on ${on} ${e.chained} times in a row; a wait that keeps moving is not a wait` })
     else if (kind === "unverified") out.push({ kind: "unverified_end", card, why: e.ending.why ?? "its last ending could not be verified" })
   }
   for (const l of leases) if (l.state !== "held") out.push({ kind: l.state === "ownerless" ? "no_owner" : "lease_lapsed", card: l.card, why: `${l.state}: ${l.why}` })
