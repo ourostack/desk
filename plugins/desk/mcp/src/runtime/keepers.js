@@ -49,12 +49,16 @@ export function beat({ dir, host, now }) {
 
 const git = (repo, args, input) => spawnSync("git", ["-C", repo, ...args], { encoding: "utf8", input, timeout: 30_000, windowsHide: true })
 
-/** Publishes the heartbeat as a blob on `refs/heartbeats/<host>` of a shared remote, so a peer reads it with no inbound ssh. Returns whether it landed. */
+/** Publishes the heartbeat as a one-file commit on `refs/heartbeats/<host>` of a shared remote (hosts such as GitHub refuse a bare blob there), so a peer reads it with no inbound ssh. Returns whether it landed. */
 export function publish({ repo, host, now }) {
   if (!repo || !/^[\w.-]+$/u.test(host)) return false
-  const made = git(repo, ["hash-object", "-w", "--stdin"], `${JSON.stringify({ host, at: new Date(now).toISOString() })}\n`)
-  if (made.status !== 0) return false
-  return git(repo, ["push", "-q", "origin", `+${made.stdout.trim()}:refs/heartbeats/${host}`]).status === 0
+  const blob = git(repo, ["hash-object", "-w", "--stdin"], `${JSON.stringify({ host, at: new Date(now).toISOString() })}\n`)
+  if (blob.status !== 0) return false
+  const tree = git(repo, ["mktree"], `100644 blob ${blob.stdout.trim()}\theartbeat.json\n`)
+  if (tree.status !== 0) return false
+  const commit = git(repo, ["-c", "user.name=keeper", "-c", "user.email=keeper@localhost", "commit-tree", tree.stdout.trim(), "-m", `heartbeat ${host}`])
+  if (commit.status !== 0) return false
+  return git(repo, ["push", "-q", "origin", `+${commit.stdout.trim()}:refs/heartbeats/${host}`]).status === 0
 }
 
 /** Reads a peer's published heartbeat; null when it cannot be fetched. */
@@ -62,7 +66,7 @@ function gitRead(repo, name) {
   if (!repo || !/^[\w.-]+$/u.test(name)) return null
   const ref = `refs/heartbeats/${name}`
   if (git(repo, ["fetch", "-q", "origin", `+${ref}:${ref}`]).status !== 0) return null
-  return git(repo, ["cat-file", "-p", ref]).stdout
+  return git(repo, ["cat-file", "-p", `${ref}:heartbeat.json`]).stdout
 }
 
 /** Reads a peer's heartbeat over ssh with no prompt; null when it cannot be read. */

@@ -83,6 +83,9 @@ test("two hosts check each other through a shared git remote, with no ssh", asyn
   const root = mkdtempSync(path.join(tmpdir(), "keepers-git-"))
   const git = (cwd, ...a) => execFileSync("git", a, { cwd, stdio: "pipe" })
   git(root, "init", "-q", "--bare", "origin.git")
+  // GitHub refuses a ref that points at a bare blob; the same rule here keeps the publish honest.
+  const hook = path.join(root, "origin.git", "hooks", "pre-receive")
+  writeFileSync(hook, '#!/bin/sh\nwhile read old new ref; do [ "$(git cat-file -t "$new")" = commit ] || { echo "not a commit" >&2; exit 1; }; done\n', { mode: 0o755 })
   for (const n of ["a", "b"]) git(root, "clone", "-q", "origin.git", n)
   const cfg = (host, peer, n) => ({ host, repo: path.join(root, n), peers: [{ host: peer }] })
   const run = (config, now) => keepersCheck({ config, heartbeatDir: mkdtempSync(path.join(tmpdir(), "hb-")), endings: [], leases: [], now })

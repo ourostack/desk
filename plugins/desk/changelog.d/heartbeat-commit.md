@@ -1,0 +1,1 @@
+Keeper heartbeats are published as a one-file commit on `refs/heartbeats/<host>`, because GitHub refuses a ref that points at a bare blob, so two hosts can check each other through a real GitHub repository.
