@@ -1,5 +1,41 @@
 # desk plugin — changelog
 
+## 3.2.632 — 2026-11-27
+
+Desk's MCP server now vendors Ouro UI v1.3.596, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.631 — 2026-11-27
+
+Desk's MCP server now vendors Ouro UI v1.3.595, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.630 — 2026-11-27
+
+Desk's MCP server now vendors Ouro UI v1.3.594, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.629 — 2026-11-27
+
+Desk's MCP server now vendors Ouro UI v1.3.593, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.628 — 2026-11-26
+
+Desk's MCP server now vendors Ouro UI v1.3.592, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.627 — 2026-11-26
+
+Desk's MCP server now vendors Ouro UI v1.3.591, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.626 — 2026-11-26
 
 Card claims now expire. `drains leases take` records a claim, and `drains leases status` shows it as held, lapsed (nothing pushed to its branch for two hours, read from GitHub's push events) or ownerless (its session ended). Messages, reruns and claiming again never renew a lease. See [keep-the-work-moving.md](docs/keep-the-work-moving.md).
