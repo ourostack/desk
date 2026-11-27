@@ -1,7 +1,7 @@
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import { spawnSync } from "node:child_process"
-import { publicationPolicy, publicationRecovery, publishPullRequest } from "../../../../../plugins/desk/mcp/src/runtime/pr-publication.js"
+import { checkPollDelay, publicationPolicy, publicationRecovery, publishPullRequest } from "../../../../../plugins/desk/mcp/src/runtime/pr-publication.js"
 
 const head = "a".repeat(40)
 const onto = "b".repeat(40)
@@ -328,6 +328,21 @@ test("recovery commands preserve simple and metacharacter paths in POSIX shells 
       assert.match(actual[0], /sync-push\.js$/u)
     }
   }
+})
+
+test("a pending check is re-read after 5 s, then less often, at most 13 times in the 300 s wait", () => {
+  assert.deepEqual([0, 1, 2, 3, 9].map(checkPollDelay), [5000, 10_000, 20_000, 30_000, 30_000])
+  const f = fixture({ pr: { statusCheckRollup: [{ name: "workspace-policy", status: "IN_PROGRESS" }] } })
+  const sleeps = []
+  const { sleep } = f.request.clock
+  f.request.clock.sleep = (ms) => { sleeps.push(ms); sleep(ms) }
+  assert.throws(() => publishPullRequest(f.request), /still missing or pending: workspace-policy/u)
+  assert.equal(sleeps[0], 5000)
+  assert.equal(sleeps.reduce((sum, ms) => sum + ms, 0), 300_000)
+  const reads = (operation) => f.calls.filter((call) => call[1] === operation || call.some((arg) => arg.includes(operation))).length
+  assert.equal(reads("view"), 13)
+  assert.equal(reads("/check-runs?"), 14)
+  assert.equal(reads("/status?"), 14)
 })
 
 test("the production clock waits once for a pending check before exact-head publication", () => {
