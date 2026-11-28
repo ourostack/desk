@@ -82,6 +82,37 @@ test("the results are on disk while a file runs, so a cancelled shard still repo
   }
 })
 
+test("a finished file's result is on disk by the time the runner reports it, not only when the next file starts", async () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "desk-suite-boundary-"))
+  try {
+    const tests = path.join(dir, "tests")
+    mkdirSync(tests)
+    const names = ["a", "b", "c", "d", "e", "f", "g", "h"]
+    for (const name of names) writeFileSync(path.join(tests, `${name}.test.js`), PASSING)
+    const out = path.join(dir, "results.json")
+    const env = { ...process.env }
+    delete env.NODE_TEST_CONTEXT
+    const child = spawn(process.execPath, [runner, "--shard", "1/1", "--out", out, "--tests-root", tests], { env, stdio: ["ignore", "pipe", "ignore"] })
+    const stale = []
+    let pending = ""
+    child.stdout.on("data", (chunk) => {
+      pending += chunk
+      const lines = pending.split("\n")
+      pending = lines.pop()
+      for (const line of lines) {
+        const file = /^ok\s+(\S+\.test\.js) /u.exec(line)?.[1]
+        if (!file) continue
+        const body = JSON.parse(readFileSync(out, "utf8"))
+        if (!body.results.some((r) => r.file === file)) stale.push({ file, running: body.running?.file ?? null })
+      }
+    })
+    await new Promise((resolve) => child.on("close", resolve))
+    assert.deepEqual(stale, [])
+  } finally {
+    removeTreeSync(dir)
+  }
+})
+
 test("a finished run marks its results complete with no running file", () => {
   const dir = mkdtempSync(path.join(os.tmpdir(), "desk-suite-complete-"))
   try {
