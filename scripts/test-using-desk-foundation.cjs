@@ -603,12 +603,12 @@ function main() {
   assert.doesNotMatch(skill, /approv\w* (?:of )?(?:that |the )?content|in the (?:human's|operator's) (?:name|voice)/iu, "send approval belongs to operator-voice-comments");
 
   // Injected at every startup, so it stays compact: each rule is a sentence or two and procedure lives in the owning
-  // skill. The ceiling rose from 6500 to 7500 bytes for the four collaboration rules Ari approved on 2026-09-25, and
+  // skill. The ceiling rose from 5300 to 5450 bytes for the new-work-waits-for-go carve-out in Human and agent (desk#1944), which the engineering-v2-kernel eval's v2-new-work-alignment case needs to keep "never hands the human a chore" from reading as licence to start. It earlier rose from 6500 to 7500 bytes for the four collaboration rules Ari approved on 2026-09-25, and
   // from 7500 to 7900 bytes for the durable-output-first sentence and the desk-problem pointer (Part 9 of the
   // agents-never-fight-the-desk plan, 2026-09-28), then from 7900 to 8000 bytes for the child-agent stand-down
   // sentence in "Child agents" (2026-09-29), then from 8000 to 8150 bytes for the two declared-focus sentences (2026-10-05), which the factory's binding rests on; then from 8150 to 8600 bytes for the delivery and sign-off section (2026-10-05), whose sentences the sign-off record rests on; then down to 8000 bytes (round AJ): the whole SessionStart context has to stay under Claude Code's 10,000-character limit, and `start_hook.test.js` holds it to 9,500 with long paths, so a further addition has to justify its size and make room by moving a procedure to the skill that owns it. The aim-at-what-the-human-feels paragraph in Human and agent and its clauses in Authority and Waste judgment (2026-11-09) paid for themselves by moving sentences the owning skills already carry word for word: the peer-handoff rule and the model choice to `work-orchestration`, the CI-download grant to `fast-honest-ci`, and the child sign-off duplicate to Delivery and sign-off; "no second lifecycle policy" and "folds returned evidence into the same task" went too, since `task-lifecycle` and `work-orchestration` own both. "Durable context" shrank to a trigger line (2026-11-11): its uncovered sentences moved word for word to `interaction-style` and `task-lifecycle`, and the rest were already stated in `session-resumption`, `interaction-style` and `git-hygiene`.
   const skillBytes = Buffer.byteLength(skill, "utf8");
-  assert.ok(skillBytes >= 2500 && skillBytes <= 5300, `using-desk should stay about 2.5-5.3 KB; found ${skillBytes} bytes`);
+  assert.ok(skillBytes >= 2500 && skillBytes <= 5450, `using-desk should stay about 2.5-5.45 KB; found ${skillBytes} bytes`);
 
   assert.doesNotMatch(
     skill,
