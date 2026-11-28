@@ -23,8 +23,7 @@
     "evals/fixtures/unicode-slug/__tests__/tools/friction_add.test.js",
     "evals/worlds/engineering-v2-kernel/v2-approved-local-delivery/held-out/oracle.test.js"
   ],
-  "reviewedSourceFingerprint": "3383bc750e9c122524dd287d5a268e46cbb8271424cb644e5b63b8b6533868fa",
-  "knownFailure": {"issue": "https://github.com/ourostack/desk/issues/1944", "case": "v2-new-work-alignment", "observed": "2026-11-28"},
+  "reviewedSourceFingerprint": "49d71d7e312c0984f40f883747753cc603113a3f11ee1616b86d6db882849890",
   "requirements": [
     {"id": "v2-substantive-alignment", "description": "Ground the first conversation in current behavior and material choices rather than silently choosing the outcome."},
     {"id": "v2-explicit-go", "description": "New engineering work needs explicit agreement and go before implementation; contribution permission is not enough."},
