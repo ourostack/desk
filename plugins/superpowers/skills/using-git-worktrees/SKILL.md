@@ -75,6 +75,8 @@ Follow this priority order. Explicit user preference always beats observed files
 
 3. **If there is no other guidance available**, default to `.worktrees/` at the project root.
 
+   **macOS: keep worktrees out of Spotlight.** Spotlight indexes every worktree and many at once can use whole cores (`mdworker_shared`). A folder whose name ends in `.noindex` is skipped. When the worktree directory sits outside the project (a sibling root such as `../<repo>-wt`), name it `<repo>-wt.noindex`; if an existing root lacks the suffix, move it to `<root>.noindex` and leave a symlink at the old name (git worktree paths keep resolving). Inside the project, use `.worktrees.noindex/` only when no `.worktrees/` exists, and ignore it like `.worktrees/`.
+
 #### Safety Verification (project-local directories only)
 
 **MUST verify directory is ignored before creating worktree:**
