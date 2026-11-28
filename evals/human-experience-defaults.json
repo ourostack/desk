@@ -11,7 +11,7 @@
     "plugins/desk/skills/fast-honest-ci/SKILL.md",
     "plugins/desk/skills/session-resumption/SKILL.md"
   ],
-  "reviewedSourceFingerprint": "633ebb77261dcabcb215f58db887105f8c679f1ecdb07816a7ce08e1694b3e83",
+  "reviewedSourceFingerprint": "57bc6c7bb9f08548cac884e7089311b415e1e3a700298e27ada6655326b299b0",
   "requirements": [
     {
       "id": "experience-first-status",
