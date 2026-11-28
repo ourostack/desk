@@ -28,7 +28,9 @@ export function verdict(root, expected, testsRoot = defaultTests, only = "") {
   const reported = new Map()
   const numbers = new Set()
   for (const folder of folders) {
-    const { shard, results } = JSON.parse(fs.readFileSync(path.join(root, folder.name, "results.json"), "utf8"))
+    const { shard, results, complete, running } = JSON.parse(fs.readFileSync(path.join(root, folder.name, "results.json"), "utf8"))
+    // A shard the job cancelled uploads what it had: the finished files stay judged, and the file it was running is named.
+    if (complete === false) problems.push(`${folder.name}: the shard did not finish (${results.length} files reported${running ? `, ${running.file} was running since ${running.startedAt}` : ""})`)
     const named = /(\d+)(?:-attempt-\d+)?$/u.exec(folder.name)?.[1]
     if (shard !== `${named}/${expected}`) problems.push(`${folder.name}: its results say shard ${shard}, not ${named}/${expected}`)
     numbers.add(named)

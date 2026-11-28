@@ -59,9 +59,27 @@ $err = Join-Path $LogDir 'stderr.log'
 $exitCode = 1
 try {
 $p = Start-Process -FilePath "$env:SystemRoot\System32\cmd.exe" -ArgumentList '/d', '/c', "`"$wrapper`"" `
-  -Credential $cred -WorkingDirectory $WorkDir -LoadUserProfile -PassThru -Wait `
+  -Credential $cred -WorkingDirectory $WorkDir -LoadUserProfile -PassThru `
   -RedirectStandardOutput $out -RedirectStandardError $err
-Get-Content $out
+# Keeps the exit code readable after the wait.
+$null = $p.Handle
+# The job log shows the run as it happens, so a job that is cancelled or stuck still shows the file it was on. Only whole lines are printed while it runs.
+$printed = 0L
+function Show-NewOutput([bool]$final) {
+  if (-not (Test-Path $out)) { return }
+  $stream = [IO.File]::Open($out, 'Open', 'Read', 'ReadWrite')
+  try {
+    $stream.Seek($printed, 'Begin') | Out-Null
+    $bytes = New-Object byte[] ($stream.Length - $printed)
+    $count = $stream.Read($bytes, 0, $bytes.Length)
+    if ($count -eq 0) { return }
+    $end = $count
+    if (-not $final) { $end = [Array]::LastIndexOf($bytes, [byte]10, [Math]::Max($count - 1, 0)) + 1 }
+    if ($end -gt 0) { Write-Host -NoNewline ([Text.Encoding]::UTF8.GetString($bytes, 0, $end)); $script:printed += $end }
+  } finally { $stream.Dispose() }
+}
+while (-not $p.WaitForExit(2000)) { Show-NewOutput $false }
+Show-NewOutput $true
 Get-Content $err | ForEach-Object { Write-Host "[stderr] $_" }
 $exitCode = $p.ExitCode
 } finally {
