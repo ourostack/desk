@@ -1,8 +1,8 @@
 // The Windows suite job is a pull-request gate, so the runner must exit non-zero for a failed test, a failed file or a timeout, and zero only for a clean run.
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { spawnSync } from "node:child_process"
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from "node:fs"
+import { spawn, spawnSync } from "node:child_process"
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
@@ -48,6 +48,56 @@ test("a file that hangs past its time limit makes the job exit non-zero", () => 
   const { status, results } = run({ "a.test.js": HANGING }, ["--timeout-ms", "1500"])
   assert.equal(status, 1)
   assert.equal(results[0].timedOut, true)
+})
+
+test("the results are on disk while a file runs, so a cancelled shard still reports what finished and names the file it was on", async () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "desk-suite-progress-"))
+  const env = { ...process.env }
+  delete env.NODE_TEST_CONTEXT
+  let child
+  try {
+    const tests = path.join(dir, "tests")
+    mkdirSync(tests)
+    writeFileSync(path.join(tests, "a.test.js"), PASSING)
+    writeFileSync(path.join(tests, "b.test.js"), HANGING)
+    const out = path.join(dir, "results.json")
+    child = spawn(process.execPath, [runner, "--shard", "1/1", "--out", out, "--tests-root", tests], { env, stdio: "ignore", detached: process.platform !== "win32" })
+    const deadline = Date.now() + 60000
+    let seen
+    while (Date.now() < deadline) {
+      if (existsSync(out)) { const body = JSON.parse(readFileSync(out, "utf8")); if (body.running?.file === "b.test.js") { seen = body; break } }
+      await new Promise((resolve) => setTimeout(resolve, 100))
+    }
+    assert.ok(seen, "no results were written while the second file was running")
+    assert.equal(seen.complete, false)
+    assert.deepEqual(seen.expectedFiles, ["a.test.js", "b.test.js"])
+    assert.deepEqual(seen.results.map((r) => r.file), ["a.test.js"])
+  } finally {
+    // The runner's own child is hanging by design: end the whole tree, not just the runner.
+    if (child?.pid) {
+      if (process.platform === "win32") spawnSync("taskkill", ["/pid", String(child.pid), "/T", "/F"], { stdio: "ignore" })
+      else try { process.kill(-child.pid, "SIGKILL") } catch { /* already gone */ }
+    }
+    removeTreeSync(dir)
+  }
+})
+
+test("a finished run marks its results complete with no running file", () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "desk-suite-complete-"))
+  try {
+    const tests = path.join(dir, "tests")
+    mkdirSync(tests)
+    writeFileSync(path.join(tests, "a.test.js"), PASSING)
+    const out = path.join(dir, "results.json")
+    const env = { ...process.env }
+    delete env.NODE_TEST_CONTEXT
+    spawnSync(process.execPath, [runner, "--shard", "1/1", "--out", out, "--tests-root", tests], { env, timeout: 120000 })
+    const body = JSON.parse(readFileSync(out, "utf8"))
+    assert.equal(body.complete, true)
+    assert.equal(body.running, undefined)
+  } finally {
+    removeTreeSync(dir)
+  }
 })
 
 // The aggregate "Windows suite" job counts the uploaded per-file results against the suite's own file list, so it is red for a failure the shard jobs did not report, for a shard that ran nothing and for a file no shard ran.
@@ -132,6 +182,14 @@ test("each shard is judged by its latest run attempt, so a passing rerun of a fa
   assert.equal(tenth.status, 0, tenth.out)
   const wrong = verdictOf({ ...shard1, "windows-standard-shard-2-attempt-3": { shard: "1/2", results: [ok("b.test.js")] } }, 2)
   assert.match(wrong.out, /windows-standard-shard-2-attempt-3: its results say shard 1\/2, not 2\/2/u)
+})
+
+test("a shard whose results say it did not finish fails and names the file it was running, while its finished files stay judged", () => {
+  const unfinished = { shard: "2/2", complete: false, running: { file: "b.test.js", startedAt: "2026-11-28T04:50:00.000Z" }, results: [] }
+  const result = verdictOf({ "windows-standard-shard-1": { shard: "1/2", results: [ok("a.test.js")] }, "windows-standard-shard-2": unfinished }, 2)
+  assert.equal(result.status, 1)
+  assert.match(result.out, /windows-standard-shard-2: the shard did not finish \(0 files reported, b\.test\.js was running since 2026-11-28T04:50:00\.000Z\)/u)
+  assert.match(result.out, /b\.test\.js: no shard reported it/u)
 })
 
 test("a file that ran no tests fails, and a file whose tests were all skipped does not", () => {
