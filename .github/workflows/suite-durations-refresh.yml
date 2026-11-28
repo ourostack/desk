@@ -1,0 +1,73 @@
+name: Refresh Windows shard durations
+
+# Keeps .github/scripts/suite-durations.json, the weights that balance the 26 Windows shards, current without a person remembering.
+# Weekly (and on demand) it takes the median per-file time of the last four full main runs of the Windows suite
+# (.github/scripts/refresh-suite-durations.mjs, which uses suite-durations.mjs's own `refresh`) and, only when a file's weight moved
+# by 2 seconds and 25% or more, pushes the suite-durations-refresh branch, opens or updates its one pull request and turns on auto-merge (squash).
+# A token-made push starts no pull_request run, so the required checks are dispatched on the branch (a dispatch does start them, and they report on the
+# same commit); auto-merge then merges the pull request when they are green. A quiet week changes nothing and opens nothing.
+
+on:
+  schedule:
+    - cron: "41 6 * * 1"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: suite-durations-refresh
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    name: Refresh the shard duration table
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      actions: write
+      contents: write
+      pull-requests: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      BRANCH: suite-durations-refresh
+      # Every CI workflow that gates a pull request; each also accepts workflow_dispatch (the same list the Superpowers refresh dispatches).
+      CI_WORKFLOWS: ax-xray.yml,desk-mcp-tests.yml,desk-windows-suite.yml,hosted-tests.yml,validate-skills.yml
+    steps:
+      - name: Check out main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Refresh the table from the last main runs
+        id: refresh
+        run: node .github/scripts/refresh-suite-durations.mjs
+
+      - name: Push the branch and open or update the pull request
+        if: steps.refresh.outputs.changed == 'true'
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch --create "$BRANCH"
+          git add .github/scripts/suite-durations.json
+          git commit --quiet --message "Refresh the Windows shard duration table" --message "Median per-file time of the last four full main runs, by $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID."
+          # The branch belongs to this workflow and is rebuilt from main every run.
+          git push --force origin "HEAD:refs/heads/$BRANCH"
+          body="The [scheduled refresh]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID) took the median per-file time of the last four full main runs of the Windows suite (\`node .github/scripts/suite-durations.mjs refresh\`), because a file's weight had moved by 2 seconds and 25% or more. CI is dispatched on this branch and auto-merge (squash) merges it when the required checks pass."
+          number="$(gh pr list --head "$BRANCH" --base main --state open --json number --jq '.[0].number // empty')"
+          if [ -z "$number" ]; then
+            url="$(gh pr create --head "$BRANCH" --base main --title "Refresh the Windows shard duration table" --body "$body")"
+            number="${url##*/}"
+          else
+            gh pr edit "$number" --body "$body"
+          fi
+          for workflow in ${CI_WORKFLOWS//,/ }; do
+            gh workflow run "$workflow" --ref "$BRANCH"
+          done
+          gh pr merge "$number" --auto --squash
+          echo "Pull request #$number: auto-merge (squash) is on." >> "$GITHUB_STEP_SUMMARY"
