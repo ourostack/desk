@@ -90,6 +90,8 @@ The discipline:
 
 4. **Spend disk like money.** Reuse one clone per repository and a worktree per unit of work; never make a fresh full clone for each review, fix or child session. For a large repository, use a partial clone (`--filter=blob:none`) and a sparse checkout of only the folders the work touches. Remove a worktree as soon as its endpoint is reached (step 3), and stop any preview or dev server you started, by its process ID, when its review ends.
 
+5. **On macOS, keep worktrees out of Spotlight.** Spotlight indexes every worktree, and many at once can use whole cores (16 `mdworker_shared` processes, about 2 cores, on 2026-11-27). It skips any folder whose name ends in `.noindex`. Put a sibling worktree root outside the project at `<repo>-wt.noindex`, not `<repo>-wt`. Move an existing root without the suffix to `<root>.noindex` and leave a symlink at the old name, so registered worktree paths keep resolving. Inside a project, use `.worktrees.noindex/` only when no `.worktrees/` exists, and ignore it like `.worktrees/`. This overrides `superpowers:using-git-worktrees`'s directory defaults on macOS; the vendored skill itself is pinned upstream and stays unchanged.
+
 **Why:** the clone's checked-out state is cattle, not a pet — only `main` and the remote are durable. This is the working-copy layer of "Never leave state behind" (below) and the branch → PR → merge drive-to-merge motion: branch in a worktree → PR → merge → delete branch → remove worktree → clone back on clean `main`, no residue at any layer.
 
 ### Verify before delete — cleanup is not destroy
