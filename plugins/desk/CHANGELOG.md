@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.704 — 2026-11-28
+
+Desk's MCP server now vendors Ouro UI v1.3.672, moved by Ouro Current.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.703 — 2026-11-28
 
 Desk's MCP server now vendors Ouro UI v1.3.671, moved by Ouro Current.
