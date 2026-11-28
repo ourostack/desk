@@ -1,16 +1,15 @@
 // The weekly shard-duration refresh picks only full main runs, leaves a quiet table alone, and runs as a locked-down Linux workflow.
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { spawnSync } from "node:child_process"
 import { createRequire } from "node:module"
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import { removeTreeSync } from "../_remove_tree.js"
 
 const scripts = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "..", "..", ".github", "scripts")
-const { pickRuns, movedFiles } = await import(pathToFileURL(path.join(scripts, "refresh-suite-durations.mjs")).href)
+const { pickRuns, movedFiles, main } = await import(pathToFileURL(path.join(scripts, "refresh-suite-durations.mjs")).href)
 const require = createRequire(import.meta.url)
 const { load } = require("js-yaml")
 
@@ -37,38 +36,29 @@ test("a run whose medians match the table changes nothing and reports changed=fa
     const table = path.join(dir, "table.json")
     const original = JSON.stringify({ note: "n", generated: "2020-01-01", inputs: 1, defaultSeconds: 10, files: { "a.test.js": 10 } }, null, 1) + "\n"
     writeFileSync(table, original)
-    // A stand-in gh: lists two main runs and "downloads" a results file that says a.test.js took 10.4 seconds.
-    const bin = path.join(dir, "bin")
-    mkdirSync(bin)
-    const fake = path.join(bin, "gh")
-    writeFileSync(fake, `#!/usr/bin/env node
-const args = process.argv.slice(2)
-if (args[0] === "run" && args[1] === "list") {
-  console.log(JSON.stringify([{ databaseId: 2, displayTitle: "Merge", headBranch: "main", conclusion: "success" }, { databaseId: 1, displayTitle: "Merge", headBranch: "main", conclusion: "success" }]))
-} else if (args[0] === "run" && args[1] === "download") {
-  const fs = require("node:fs"), path = require("node:path")
-  const dir = path.join(args[args.indexOf("--dir") + 1], "windows-standard-shard-1")
-  fs.mkdirSync(dir, { recursive: true })
-  fs.writeFileSync(path.join(dir, "results.json"), JSON.stringify({ results: [{ file: "a.test.js", ms: 10400 }] }))
-} else process.exit(1)
-`)
-    chmodSync(fake, 0o755)
+    // A stand-in gh: lists two main runs and "downloads" a results file with the given time for a.test.js.
+    const fakeGh = (ms) => (...args) => {
+      if (args[0] === "run" && args[1] === "list") return JSON.stringify([{ databaseId: 2, displayTitle: "Merge", headBranch: "main", conclusion: "success" }, { databaseId: 1, displayTitle: "Merge", headBranch: "main", conclusion: "success" }])
+      assert.deepEqual(args.slice(0, 2), ["run", "download"])
+      const target = path.join(args[args.indexOf("--dir") + 1], "windows-standard-shard-1")
+      mkdirSync(target, { recursive: true })
+      writeFileSync(path.join(target, "results.json"), JSON.stringify({ results: [{ file: "a.test.js", ms }] }))
+      return ""
+    }
     const output = path.join(dir, "output.txt")
-    const run = spawnSync(process.execPath, [path.join(scripts, "refresh-suite-durations.mjs"), "--table", table, "--tests-root", tests], {
-      encoding: "utf8",
-      env: { ...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH}`, GITHUB_REPOSITORY: "o/r", GITHUB_OUTPUT: output },
-    })
-    assert.equal(run.status, 0, run.stderr)
+    const run = (ms) => {
+      const log = console.log
+      console.log = () => {}
+      try {
+        main(["--table", table, "--tests-root", tests], { gh: fakeGh(ms), env: { GITHUB_REPOSITORY: "o/r", GITHUB_OUTPUT: output } })
+      } finally {
+        console.log = log
+      }
+    }
+    run(10400)
     assert.equal(readFileSync(output, "utf8"), "changed=false\n")
     assert.equal(readFileSync(table, "utf8"), original, "the date-only difference must not rewrite the table")
-
-    const slower = readFileSync(fake, "utf8").replace("ms: 10400", "ms: 30000")
-    writeFileSync(fake, slower)
-    const again = spawnSync(process.execPath, [path.join(scripts, "refresh-suite-durations.mjs"), "--table", table, "--tests-root", tests], {
-      encoding: "utf8",
-      env: { ...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH}`, GITHUB_REPOSITORY: "o/r", GITHUB_OUTPUT: output },
-    })
-    assert.equal(again.status, 0, again.stderr)
+    run(30000)
     assert.match(readFileSync(output, "utf8"), /changed=true\n$/u)
     assert.equal(JSON.parse(readFileSync(table, "utf8")).files["a.test.js"], 30)
   } finally {

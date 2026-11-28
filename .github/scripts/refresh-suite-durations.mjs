@@ -34,20 +34,21 @@ export function movedFiles(previous, next) {
   return moved.sort()
 }
 
-const gh = (...args) => execFileSync("gh", args, { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 })
+const realGh = (...args) => execFileSync("gh", args, { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 })
 
-function main(argv) {
+// `gh` and `env` are injectable so a test can drive the whole run without the network.
+export function main(argv, { gh = realGh, env = process.env } = {}) {
   const flag = (name, fallback) => (argv.includes(name) ? argv[argv.indexOf(name) + 1] : fallback)
   const count = Number(flag("--runs", "4"))
-  const repo = process.env.GITHUB_REPOSITORY
+  const repo = env.GITHUB_REPOSITORY
   const tablePath = path.resolve(flag("--table", defaultTablePath))
   const testsRoot = flag("--tests-root", undefined)
   const listed = JSON.parse(gh("run", "list", "--repo", repo, "--workflow", WORKFLOW, "--branch", "main", "--event", "push", "--status", "success", "--limit", "30", "--json", "databaseId,displayTitle,headBranch,conclusion"))
   const ids = pickRuns(listed, count)
   const output = (changed, summary) => {
     console.log(summary)
-    if (process.env.GITHUB_OUTPUT) fs.appendFileSync(process.env.GITHUB_OUTPUT, `changed=${changed}\n`)
-    if (process.env.GITHUB_STEP_SUMMARY) fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `## Suite duration refresh\n${summary}\n`)
+    if (env.GITHUB_OUTPUT) fs.appendFileSync(env.GITHUB_OUTPUT, `changed=${changed}\n`)
+    if (env.GITHUB_STEP_SUMMARY) fs.appendFileSync(env.GITHUB_STEP_SUMMARY, `## Suite duration refresh\n${summary}\n`)
   }
   if (ids.length === 0) return output(false, "No successful full main run of the Windows suite to measure; the table is unchanged.")
   const work = fs.mkdtempSync(path.join(os.tmpdir(), "suite-durations-"))
