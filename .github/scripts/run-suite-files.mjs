@@ -142,6 +142,7 @@ for (const file of mine) {
   for (let i = 0; i < repeat; i += 1) runs.push(await runFile(file))
   const result = { ...(runs.find((r) => r.exitCode !== 0) ?? runs.at(-1)), ...(repeat > 1 ? { runs: runs.map(({ exitCode, timedOut, ms, fail, failedTests }) => ({ exitCode, timedOut, ms, fail, failedTests })) } : {}) }
   results.push(result)
+  writeProgress({ complete: false, expectedFiles, results })
   if (repeat > 1) console.log(`        ${result.file}: ${runs.filter((r) => r.exitCode === 0).length} of ${repeat} runs passed`)
   console.log(`${result.timedOut ? "TIMEOUT" : result.exitCode === 0 ? "ok     " : "FAIL   "} ${result.file} pass=${result.pass} fail=${result.fail} ${result.ms}ms`)
   // The failure itself goes in the log too: a full rerun replaces the run's artifacts, and with them the earlier attempt's results.json.
