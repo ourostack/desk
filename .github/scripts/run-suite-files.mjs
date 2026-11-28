@@ -71,6 +71,19 @@ const writeResults = (body) => {
   fs.renameSync(staged, out)
 }
 
+// A progress write that fails (a scanner holding the file on Windows) must not stop the remaining files from running, but it is an error: the shard exits non-zero and the final write is not allowed to fail.
+let progressFailures = 0
+const writeProgress = (body) => {
+  for (let attempt = 1; ; attempt += 1) {
+    try { writeResults(body); return } catch (error) {
+      if (attempt < 3) { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 200); continue }
+      progressFailures += 1
+      console.log(`::error::could not write progress to ${out}: ${error.message}`)
+      return
+    }
+  }
+}
+
 const runFile = (file) => new Promise((resolve) => {
   const started = Date.now()
   const relativeFile = path.relative(testsRoot, file).split(path.sep).join("/")
@@ -123,7 +136,7 @@ const results = []
 const expectedFiles = mine.map((file) => path.relative(testsRoot, file).split(path.sep).join("/"))
 for (const file of mine) {
   const relative = path.relative(testsRoot, file).split(path.sep).join("/")
-  writeResults({ complete: false, expectedFiles, running: { file: relative, startedAt: new Date().toISOString() }, results })
+  writeProgress({ complete: false, expectedFiles, running: { file: relative, startedAt: new Date().toISOString() }, results })
   console.log(`start   ${relative} (${results.length + 1} of ${mine.length})`)
   const runs = []
   for (let i = 0; i < repeat; i += 1) runs.push(await runFile(file))
@@ -150,4 +163,4 @@ const lines = [
 if (timeouts.length > 0) lines.push(`Timed out: ${timeouts.map((r) => `\`${r.file}\``).join(", ")}`, "")
 fs.writeFileSync(out.replace(/\.json$/u, "") + "-summary.md", lines.join("\n") + "\n")
 // The job result is the gate: any failing file, timeout or failed test makes it red. The results and summary are written first so a red job still shows what failed.
-process.exit(bad.length > 0 || timeouts.length > 0 || sum("fail") > 0 ? 1 : 0)
+process.exit(bad.length > 0 || timeouts.length > 0 || sum("fail") > 0 || progressFailures > 0 ? 1 : 0)
