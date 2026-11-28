@@ -39,6 +39,15 @@ export function checkTable(table, testsRoot = defaultTests) {
   }
 }
 
+// Files whose measured time is far off the table's weight (twice or half, and by at least `minSeconds`): the table has drifted and the shards will no longer finish together. The runner warns with this list so a stale table shows in the run, not weeks later in the pull request time.
+export function driftedFiles(results, table, { factor = 2, minSeconds = 20 } = {}) {
+  return results
+    .filter((r) => !r.timedOut)
+    .map((r) => ({ file: r.file, actual: r.ms / 1000, weight: table.files?.[r.file] ?? table.defaultSeconds }))
+    .filter(({ actual, weight }) => Math.abs(actual - weight) >= minSeconds && (actual >= weight * factor || actual * factor <= weight))
+    .sort((a, b) => Math.abs(b.actual - b.weight) - Math.abs(a.actual - a.weight))
+}
+
 // Median seconds per file over every results.json under the folders, for files that still exist.
 export function refreshTable(folders, testsRoot = defaultTests, previous = { files: {} }) {
   const suite = new Set(suiteFiles(testsRoot))

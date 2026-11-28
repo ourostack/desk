@@ -10,6 +10,7 @@ import path from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import { suiteFiles } from "./suite-files.mjs"
 import { assignShards, loadDurations } from "./suite-shards.mjs"
+import { driftedFiles } from "./suite-durations.mjs"
 
 const args = process.argv.slice(2)
 const arg = (name, fallback) => (args.includes(name) ? args[args.indexOf(name) + 1] : fallback)
@@ -149,6 +150,8 @@ for (const file of mine) {
   for (const f of result.failures) console.log(`        not ok: ${f.name}\n          ${f.error.replace(/\s+/gu, " ").slice(0, 800)}\n          at ${f.stack}`)
 }
 writeResults({ complete: true, expectedFiles, results })
+const drifted = driftedFiles(results, durations)
+if (drifted.length > 0) console.log(`::warning::${drifted.length} files took far longer or shorter than their weight in suite-durations.json, so the shards no longer finish together; refresh the table: ${drifted.slice(0, 5).map((d) => `${d.file} ${Math.round(d.actual)}s vs ${Math.round(d.weight)}s`).join(", ")}`)
 const bad = results.filter((r) => r.exitCode !== 0)
 const timeouts = results.filter((r) => r.timedOut)
 const sum = (key) => results.reduce((n, r) => n + r[key], 0)

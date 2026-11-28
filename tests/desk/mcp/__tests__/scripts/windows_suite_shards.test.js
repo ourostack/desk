@@ -11,7 +11,7 @@ import { removeTreeSync } from "../_remove_tree.js"
 
 const scripts = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "..", "..", ".github", "scripts")
 const { assignShards, shardFiles, loadDurations, defaultTablePath, WINDOWS_SHARDS, SHARD_TARGET_SECONDS } = await import(pathToFileURL(path.join(scripts, "suite-shards.mjs")).href)
-const { checkTable, refreshTable } = await import(pathToFileURL(path.join(scripts, "suite-durations.mjs")).href)
+const { checkTable, refreshTable, driftedFiles } = await import(pathToFileURL(path.join(scripts, "suite-durations.mjs")).href)
 const { suiteFiles } = await import(pathToFileURL(path.join(scripts, "suite-files.mjs")).href)
 const require = createRequire(import.meta.url)
 const { load } = require("js-yaml")
@@ -144,6 +144,23 @@ test("refresh takes the median of the runs, drops files that are gone and keeps 
   } finally {
     removeTreeSync(dir)
   }
+})
+
+test("driftedFiles names files far off their weight, worst first, and ignores small or unlisted-but-near ones", () => {
+  const table = { defaultSeconds: 12, files: { "a.test.js": 50, "b.test.js": 100, "c.test.js": 5, "d.test.js": 60 } }
+  const results = [
+    { file: "a.test.js", ms: 165000 },
+    { file: "b.test.js", ms: 30000 },
+    { file: "c.test.js", ms: 15000 },
+    { file: "d.test.js", ms: 70000 },
+    { file: "new.test.js", ms: 54000 },
+    { file: "slow.test.js", ms: 900000, timedOut: true },
+  ]
+  assert.deepEqual(driftedFiles(results, table).map((d) => d.file), ["a.test.js", "b.test.js", "new.test.js"])
+})
+
+test("the shard runner warns when files drift from the table", () => {
+  assert.match(readFileSync(path.join(scripts, "run-suite-files.mjs"), "utf8"), /driftedFiles\(results, durations\)/u)
 })
 
 test("refresh takes the median per file, so one outlier run does not set the weight", () => {
