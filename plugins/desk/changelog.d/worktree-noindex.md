@@ -1,1 +1,0 @@
-On macOS, worktree roots now go in a `.noindex` folder, so Spotlight skips them. Spotlight had been indexing many worktrees at once, with 16 `mdworker_shared` processes using about 2 cores. The rule lives in [`git-hygiene`](skills/git-hygiene/SKILL.md) as Desk's override of `superpowers:using-git-worktrees`, which is pinned to upstream and stays unchanged.
