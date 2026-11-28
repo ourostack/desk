@@ -10,7 +10,7 @@
     "plugins/desk/hooks/lib/child-agent.cjs",
     "plugins/plain-language/skills/plain-language/SKILL.md"
   ],
-  "reviewedSourceFingerprint": "85aa6cfb17895b70be764864f41c0bb7f30f59e526b39ce13e70bad1459dc006",
+  "reviewedSourceFingerprint": "89f8107d03ee24aa2f0d5663e6b09038ec884fe78cc5a0b128e887d3176b5051",
   "requirements": [
     {
       "id": "report-returned-as-text",
